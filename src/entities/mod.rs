@@ -1,0 +1,9 @@
+pub mod platform;
+pub mod model_template;
+pub mod vehicle;
+pub mod vehicle_attribute;
+pub mod mileage_log;
+pub mod maintenance_schedule_item;
+pub mod service_record;
+pub mod service_schedule_link;
+pub mod settings;
