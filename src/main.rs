@@ -72,10 +72,15 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/vehicles/{vehicle_id}/mileage", get(api::mileage::list).post(api::mileage::create))
         .route("/api/vehicles/{vehicle_id}/services", get(api::services::list).post(api::services::create))
         .route("/api/vehicles/{vehicle_id}/services/{id}", get(api::services::get_one).put(api::services::update))
+        .route("/api/vehicles/{vehicle_id}/schedule", get(api::schedules::resolve))
+        // VIN decode
+        .route("/api/vin/{vin}", get(api::vin::decode))
+        .route("/api/vehicles/{vehicle_id}/vin-decode/{vin}", axum::routing::post(api::vin::decode_and_store))
         // Top-level resources
         .nest("/api/vehicles", api::vehicles::router())
         .nest("/api/platforms", api::platforms::router())
         .nest("/api/model-templates", api::model_templates::router())
+        .nest("/api/schedules", api::schedules::router())
         .nest("/api/settings", api::settings::router())
         .nest_service("/files", ServeDir::new(&files_dir))
         .fallback_service(spa_fallback)

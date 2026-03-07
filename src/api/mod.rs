@@ -3,6 +3,8 @@ pub mod health;
 pub mod mileage;
 pub mod model_templates;
 pub mod platforms;
+pub mod schedules;
 pub mod services;
 pub mod settings;
 pub mod vehicles;
+pub mod vin;

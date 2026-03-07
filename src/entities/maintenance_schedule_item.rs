@@ -17,6 +17,13 @@ pub struct Model {
     pub labor_categories: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    // Added by migration 10 (ALTER TABLE appends to end)
+    pub warning_miles: Option<i32>,
+    pub warning_days: Option<i32>,
+    pub enabled: bool,
+    pub source: Option<String>,
+    pub notes: Option<String>,
+    pub is_factory_recommended: Option<bool>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
