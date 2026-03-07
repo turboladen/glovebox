@@ -73,6 +73,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/vehicles/{vehicle_id}/services", get(api::services::list).post(api::services::create))
         .route("/api/vehicles/{vehicle_id}/services/{id}", get(api::services::get_one).put(api::services::update))
         .route("/api/vehicles/{vehicle_id}/schedule", get(api::schedules::resolve))
+        .route("/api/vehicles/{vehicle_id}/reminders", get(api::reminders::get_reminders))
         // VIN decode
         .route("/api/vin/{vin}", get(api::vin::decode))
         .route("/api/vehicles/{vehicle_id}/vin-decode/{vin}", axum::routing::post(api::vin::decode_and_store))

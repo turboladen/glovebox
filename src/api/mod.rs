@@ -3,6 +3,7 @@ pub mod health;
 pub mod mileage;
 pub mod model_templates;
 pub mod platforms;
+pub mod reminders;
 pub mod schedules;
 pub mod services;
 pub mod settings;

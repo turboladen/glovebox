@@ -10,6 +10,7 @@ mod m20260301_000007_create_service_records;
 mod m20260301_000008_create_service_schedule_links;
 mod m20260301_000009_create_settings;
 mod m20260301_000010_add_schedule_item_fields;
+mod m20260301_000011_seed_vw_mqb_data;
 
 pub struct Migrator;
 
@@ -27,6 +28,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260301_000008_create_service_schedule_links::Migration),
             Box::new(m20260301_000009_create_settings::Migration),
             Box::new(m20260301_000010_add_schedule_item_fields::Migration),
+            Box::new(m20260301_000011_seed_vw_mqb_data::Migration),
         ]
     }
 }
