@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "server",
+  "dolt_database": "glovebox",
+  "project_id": "1204d918-9040-41cd-bc29-2d3c5d4d75ca"
+}
