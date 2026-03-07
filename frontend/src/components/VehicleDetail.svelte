@@ -8,7 +8,7 @@
   import MileageEntry from './MileageEntry.svelte'
   import ServiceForm from './ServiceForm.svelte'
 
-  let { params } = $props<{ params: { id: string } }>()
+  let { routeParams = {} }: { routeParams?: Record<string, string> } = $props()
 
   let vehicle: Vehicle | null = $state(null)
   let reminderData: RemindersResponse | null = $state(null)
@@ -20,7 +20,7 @@
 
   async function loadData() {
     try {
-      const id = parseInt(params.id)
+      const id = parseInt(routeParams.id)
       vehicle = await vehiclesApi.get(id)
       reminderData = await remindersApi.get(id)
     } catch (e: any) {
