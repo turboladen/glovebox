@@ -68,6 +68,15 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/api/health", get(api::health::health_check))
+        // Vehicle sub-resources (flat routes for correct path param extraction)
+        .route("/api/vehicles/{vehicle_id}/mileage", get(api::mileage::list).post(api::mileage::create))
+        .route("/api/vehicles/{vehicle_id}/services", get(api::services::list).post(api::services::create))
+        .route("/api/vehicles/{vehicle_id}/services/{id}", get(api::services::get_one).put(api::services::update))
+        // Top-level resources
+        .nest("/api/vehicles", api::vehicles::router())
+        .nest("/api/platforms", api::platforms::router())
+        .nest("/api/model-templates", api::model_templates::router())
+        .nest("/api/settings", api::settings::router())
         .nest_service("/files", ServeDir::new(&files_dir))
         .fallback_service(spa_fallback)
         .layer(CorsLayer::permissive())
