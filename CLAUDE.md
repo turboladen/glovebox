@@ -24,3 +24,13 @@ just test-e2e    # Run Playwright e2e tests (needs `just dev` running)
 - **Currency**: Stored as cents (`i32`), displayed as dollars in frontend
 - **DB datetimes**: `String` type at SeaORM boundary (SQLite TEXT)
 - **Migrations**: Use `Expr::cust()` for SQL expressions, not string literals
+- **Entity field order**: Must match physical DB column order. ALTER TABLE appends columns to the end, so new fields go after `created_at`/`updated_at` in the entity struct
+- **Axum routing**: Vehicle sub-resources use flat routes in `main.rs` (not nested), so `Path((vehicle_id, id))` tuple extraction works correctly
+- **Update DTOs**: Use `Option<Option<T>>` (double-option) to distinguish "not sent" vs "explicitly set to null"
+
+## Playwright Patterns
+
+- Always wait for async loading before asserting (e.g., `await expect(locator).toBeVisible()` not `count()` immediately)
+- Use `{ exact: true }` on `getByText` when the text is a substring of another element (e.g., "receipt" inside "Test Receipt")
+- Use `getByRole('textbox', { name })` instead of `getByLabel` when labels are ambiguous (e.g., "Model" vs "Model Template")
+- Tests sharing a vehicle via `beforeAll` must not depend on prior test state — each test should set up what it needs
