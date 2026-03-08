@@ -147,4 +147,29 @@ For more details, see README.md and docs/QUICKSTART.md.
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
 
+## Testing
+
+### Test Plan
+`TEST_PLAN.md` is the living test plan. It contains manual smoke test steps (TP-01
+through TP-12) and maps to Playwright e2e tests in `frontend/e2e/`.
+
+**When adding or changing features:**
+1. Update the relevant `TP-XX` section in `TEST_PLAN.md`
+2. Add or update the corresponding Playwright test in `frontend/e2e/`
+3. If adding a new feature area, create a new `TP-XX` section and spec file
+
+### Running Tests
+```bash
+just test-e2e          # headless (requires `just dev` in another terminal)
+just test-e2e-ui       # headed browser for debugging
+cargo test             # backend unit tests
+```
+
+### Playwright Conventions
+- Tests live in `frontend/e2e/*.spec.ts`
+- Config at `frontend/playwright.config.ts`
+- Tests run against `http://localhost:5173` (Vite dev server proxies API to backend)
+- Use `test.beforeAll` to create test fixtures (vehicles, etc.) via the UI
+- Prefer `getByRole`, `getByLabel`, `getByText` selectors over CSS selectors
+
 <!-- END BEADS INTEGRATION -->

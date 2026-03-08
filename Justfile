@@ -1,3 +1,11 @@
+# Run Playwright e2e tests (requires `just dev` running in another terminal)
+test-e2e:
+    cd frontend && bunx playwright test
+
+# Run Playwright e2e tests with visible browser
+test-e2e-ui:
+    cd frontend && bunx playwright test --headed
+
 # Run backend and frontend together for development
 dev:
     #!/usr/bin/env bash
