@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { RemindersResponse, ReminderStatus } from '../lib/types'
+  import SuggestionsCard from './SuggestionsCard.svelte'
 
   let { reminderData, vehicleId }: { reminderData: RemindersResponse | null; vehicleId: number } = $props()
 
@@ -19,6 +20,8 @@
     return d ?? '—'
   }
 </script>
+
+<SuggestionsCard {vehicleId} />
 
 {#if !reminderData}
   <p>No reminder data available.</p>

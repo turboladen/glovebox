@@ -25,7 +25,7 @@ A personal car maintenance tracker and ownership record system. Built to solve t
 | Database | **SQLite** | Single file, via SeaORM's SQLite backend |
 | Currency | **rusty-money** | Proper currency types instead of raw integer cents |
 | File storage | **Local filesystem** | Structured directory: `{DATA_DIR}/files/{vehicle_id}/{record_type}/` |
-| AI layer | **Pluggable trait** | Anthropic Claude API primary, local LLM (Ollama) as fallback. Not needed for MVP |
+| AI layer | **Pluggable trait** | Anthropic Claude API primary, OpenAI-compatible API (Ollama, LM Studio, OpenRouter, etc.) as fallback. Not needed for MVP |
 | Deployment | **Native ARM64 binary** | Single compiled binary on Odroid N2+ running DietPi |
 | Design | **Function-first** | Style/theming TBD. Focus on usability, not aesthetics, in early phases |
 
@@ -81,7 +81,7 @@ glovebox/
 │   │   └── ai/                 # AI abstraction (post-MVP)
 │   │       ├── mod.rs          # Trait definition
 │   │       ├── claude.rs       # Anthropic API implementation
-│   │       └── ollama.rs       # Local LLM implementation
+│   │       └── openai_compat.rs # OpenAI-compatible API (Ollama, LM Studio, etc.)
 │   └── config.rs               # App configuration
 ├── frontend/                   # Svelte 5 SPA
 │   ├── package.json
@@ -749,7 +749,7 @@ Free, no auth. Returns active recalls for the vehicle. Can be checked periodical
 
 - Pluggable AI trait: `trait AiProvider { async fn complete(&self, prompt: &str, context: &str) -> Result<String>; }`
 - Claude API implementation (primary)
-- Ollama implementation (fallback)
+- OpenAI-compatible API implementation (Ollama, LM Studio, OpenRouter, etc.)
 - **Invoice parsing:** Upload a PDF → AI extracts date, shop, mileage, line items, costs → Pre-fills a service record form for review
 - **Chat interface:** Natural language queries against your data ("when did I last change tires?", "how much have I spent on the GTI this year?")
 - **Vehicle attribute population:** Feed owner's manual PDF → AI extracts maintenance schedule, specs, capacities
@@ -850,11 +850,12 @@ CREATE TABLE settings (
 | `reminders.default_warning_days` | `30` | Default days-before-due reminder threshold |
 | `reminders.mileage_extrapolation_lookback_days` | `90` | How many days of mileage history to use for extrapolation |
 | `reminders.bundling_window_miles` | `5000` | Suggest bundling items due within this many miles of each other |
-| `ai.provider` | `none` | AI provider: `none`, `claude`, `ollama` |
+| `ai.provider` | `none` | AI provider: `none`, `claude`, `openai_compat` |
 | `ai.claude_api_key` | *(empty)* | Anthropic API key (Phase 4) |
 | `ai.claude_model` | `claude-sonnet-4-6` | Claude model to use |
-| `ai.ollama_url` | `http://localhost:11434` | Ollama server URL |
-| `ai.ollama_model` | `llama3` | Ollama model name |
+| `ai.openai_api_base` | `http://localhost:11434/v1` | OpenAI-compatible API base URL (works with Ollama, LM Studio, OpenRouter, etc.) |
+| `ai.openai_api_key` | *(empty)* | API key (optional — not needed for local providers like Ollama) |
+| `ai.openai_model` | `llama3` | Model name for OpenAI-compatible provider |
 
 ---
 

@@ -11,6 +11,7 @@
   import DocumentsTab from './DocumentsTab.svelte'
   import PartsTab from './PartsTab.svelte'
   import CostsTab from './CostsTab.svelte'
+  import ChatTab from './ChatTab.svelte'
 
   let { routeParams = {} }: { routeParams?: Record<string, string> } = $props()
 
@@ -163,6 +164,9 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
       <button class="tab" class:active={activeTab === 'costs'} onclick={() => (activeTab = 'costs')}>
         Costs
       </button>
+      <button class="tab" class:active={activeTab === 'ai'} onclick={() => (activeTab = 'ai')}>
+        AI
+      </button>
     </div>
 
     <div class="tab-content">
@@ -178,6 +182,8 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
         <DocumentsTab vehicleId={vehicle.id} />
       {:else if activeTab === 'costs'}
         <CostsTab vehicleId={vehicle.id} />
+      {:else if activeTab === 'ai'}
+        <ChatTab vehicleId={vehicle.id} />
       {/if}
     </div>
   </div>

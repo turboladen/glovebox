@@ -231,6 +231,47 @@ Playwright e2e tests. Keep it updated as features are added.
 | 2 | Select parts and save service | Parts marked as "installed" with service date/mileage |
 | 3 | Parts status updated | On Parts tab, linked parts show "installed" badge |
 
+## TP-22: AI Status & Configuration
+
+| # | Step | Expected |
+|---|------|----------|
+| 1 | `GET /api/ai/status` with default settings | Returns `{ provider: "none", configured: false }` |
+| 2 | Set `ai.provider` to `claude` without API key | `configured: false` |
+| 3 | Set `ai.provider` to `claude` with API key | `configured: true, provider: "claude"` |
+| 4 | AI-dependent endpoints when not configured | Return 400 with "AI is not configured" message |
+
+## TP-23: AI Chat
+
+| # | Step | Expected |
+|---|------|----------|
+| 1 | Click "AI" tab on vehicle detail | Chat tab visible with message input |
+| 2 | AI not configured | "AI is not configured" message shown, input disabled |
+| 3 | Send a chat message (AI configured) | Message appears right-aligned, loading spinner shown, assistant response appears left-aligned |
+| 4 | Chat history persists | Reload page, previous messages still shown |
+| 5 | `GET /api/ai/chat/history?vehicle_id=N` | Returns messages ordered by created_at |
+| 6 | `POST /api/ai/chat` without vehicle_id | Works for general (non-vehicle) chat |
+
+## TP-24: Invoice PDF Parsing
+
+| # | Step | Expected |
+|---|------|----------|
+| 1 | Upload a PDF document | "Parse with AI" button appears on PDF documents |
+| 2 | Non-PDF documents | No "Parse with AI" button shown |
+| 3 | Click "Parse with AI" (AI not configured) | Error message shown |
+| 4 | Click "Parse with AI" (AI configured) | Loading state, then parsed results shown in review modal |
+| 5 | Review modal shows extracted fields | Date, shop, mileage, line items, costs editable |
+| 6 | Click "Create Service Record" | Service created with parsed/edited data, redirects to history |
+
+## TP-25: Proactive Suggestions
+
+| # | Step | Expected |
+|---|------|----------|
+| 1 | Schedule tab with AI configured | Suggestions card shown with AI-generated recommendations |
+| 2 | AI not configured | Suggestions card not shown (or shows setup prompt) |
+| 3 | Each suggestion shows | Title, reason, urgency badge (high/medium/low) |
+| 4 | `GET /api/vehicles/:id/suggestions` | Returns JSON array of suggestions with title, reason, urgency |
+| 5 | Suggestions cached | Second request within 24h returns same results without AI call |
+
 ---
 
 ## Playwright Test Structure
@@ -248,6 +289,9 @@ frontend/e2e/
   observations.spec.ts  # TP-14
   documents.spec.ts     # TP-15
   parts.spec.ts         # TP-18, TP-19, TP-21
+  chat.spec.ts          # TP-22, TP-23
+  invoice-parse.spec.ts # TP-24
+  suggestions.spec.ts   # TP-25
 ```
 
 Run: `just test-e2e`

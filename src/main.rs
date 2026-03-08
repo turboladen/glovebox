@@ -4,23 +4,26 @@ mod entities;
 mod migration;
 mod services;
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
 use axum::{Router, routing::get};
 use clap::Parser;
-use sea_orm::{ConnectOptions, Database, DatabaseConnection};
+use sea_orm::{ConnectOptions, Database, DatabaseConnection, EntityTrait};
 use sea_orm_migration::MigratorTrait;
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 
 use config::AppConfig;
 use migration::Migrator;
+use services::ai::AiProvider;
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: DatabaseConnection,
     pub config: Arc<AppConfig>,
+    pub ai: Arc<dyn AiProvider>,
 }
 
 #[tokio::main]
@@ -55,9 +58,29 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("Database ready at {}", &config.db_path);
 
+    // Load AI settings from the database to construct the provider
+    let ai_settings: HashMap<String, String> = entities::settings::Entity::find()
+        .all(&db)
+        .await?
+        .into_iter()
+        .filter(|s| s.key.starts_with("ai."))
+        .map(|s| (s.key, s.value))
+        .collect();
+
+    let ai_provider_name = ai_settings
+        .get("ai.provider")
+        .map(|s| s.as_str())
+        .unwrap_or("none");
+
+    let ai: Arc<dyn AiProvider> =
+        Arc::from(services::ai::create_provider(ai_provider_name, &ai_settings));
+
+    tracing::info!("AI provider: {} (configured: {})", ai.provider_name(), ai.is_configured());
+
     let state = AppState {
         db,
         config: Arc::new(config),
+        ai,
     };
 
     let listen_addr = state.config.listen.clone();
@@ -68,6 +91,12 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/api/health", get(api::health::health_check))
+        // AI endpoints
+        .route("/api/ai/status", get(api::ai::status))
+        .route("/api/ai/parse-invoice", axum::routing::post(api::ai::parse_invoice))
+        .route("/api/ai/chat", axum::routing::post(api::ai::chat))
+        .route("/api/ai/chat/history", get(api::ai::chat_history))
+        .route("/api/vehicles/{vehicle_id}/suggestions", get(api::ai::get_suggestions))
         // Vehicle sub-resources (flat routes for correct path param extraction)
         .route("/api/vehicles/{vehicle_id}/mileage", get(api::mileage::list).post(api::mileage::create))
         .route("/api/vehicles/{vehicle_id}/services", get(api::services::list).post(api::services::create))

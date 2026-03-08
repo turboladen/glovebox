@@ -428,3 +428,42 @@ export interface Setting {
   created_at: string
   updated_at: string
 }
+
+// AI types
+export interface AiStatus {
+  provider: string
+  configured: boolean
+}
+
+export interface ChatMessage {
+  id: number
+  vehicle_id: number | null
+  role: 'user' | 'assistant'
+  content: string
+  created_at: string
+}
+
+export interface ChatResponse {
+  message: ChatMessage
+  input_tokens: number | null
+  output_tokens: number | null
+}
+
+export interface ParsedInvoice {
+  service_date: string | null
+  shop_name: string | null
+  mileage: number | null
+  description: string | null
+  line_items: { description: string; cost_cents: number | null }[]
+  parts_cost_cents: number | null
+  labor_cost_cents: number | null
+  total_cost_cents: number | null
+  notes: string | null
+}
+
+export interface AiSuggestion {
+  title: string
+  reason: string
+  urgency: 'high' | 'medium' | 'low'
+  estimated_cost_range: string | null
+}

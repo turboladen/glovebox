@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { documents as docsApi } from '../lib/api'
-  import type { Document } from '../lib/types'
+  import { documents as docsApi, ai } from '../lib/api'
+  import type { Document, ParsedInvoice } from '../lib/types'
 
   let { vehicleId }: { vehicleId: number } = $props()
 
@@ -16,6 +16,9 @@
   let fileInput: HTMLInputElement
   let uploading = $state(false)
   let error = $state('')
+  let parsing = $state<number | null>(null)
+  let parsedInvoice: ParsedInvoice | null = $state(null)
+  let parseError = $state('')
 
   const docTypes = ['invoice', 'receipt', 'photo', 'title', 'warranty', 'manual', 'other']
 
@@ -68,6 +71,28 @@
 
   function isImage(mime: string | null): boolean {
     return !!mime && mime.startsWith('image/')
+  }
+
+  function isPdf(mime: string | null): boolean {
+    return !!mime && mime.includes('pdf')
+  }
+
+  async function parseInvoice(docId: number) {
+    parsing = docId
+    parseError = ''
+    parsedInvoice = null
+    try {
+      parsedInvoice = await ai.parseInvoice(docId)
+    } catch (e: any) {
+      parseError = e.message
+    } finally {
+      parsing = null
+    }
+  }
+
+  function formatCents(cents: number | null): string {
+    if (cents == null) return ''
+    return `$${(cents / 100).toFixed(2)}`
   }
 </script>
 
@@ -145,10 +170,61 @@
           </div>
           <div class="doc-actions">
             <a href="/files/{doc.file_path}" target="_blank" class="btn btn-secondary">View</a>
+            {#if isPdf(doc.mime_type)}
+              <button class="btn btn-secondary" onclick={() => parseInvoice(doc.id)} disabled={parsing === doc.id}>
+                {parsing === doc.id ? 'Parsing...' : 'Parse with AI'}
+              </button>
+            {/if}
             <button class="btn btn-secondary" onclick={() => deleteDoc(doc.id)}>Delete</button>
           </div>
         </div>
       {/each}
+    </div>
+  {/if}
+
+  {#if parseError}
+    <div class="parse-error">
+      <p>Failed to parse invoice: {parseError}</p>
+      <button class="btn btn-secondary" onclick={() => (parseError = '')}>Dismiss</button>
+    </div>
+  {/if}
+
+  {#if parsedInvoice}
+    <div class="parsed-result">
+      <h4>Parsed Invoice Data</h4>
+      <div class="parsed-fields">
+        {#if parsedInvoice.service_date}
+          <div class="parsed-field"><strong>Date:</strong> {parsedInvoice.service_date}</div>
+        {/if}
+        {#if parsedInvoice.shop_name}
+          <div class="parsed-field"><strong>Shop:</strong> {parsedInvoice.shop_name}</div>
+        {/if}
+        {#if parsedInvoice.mileage}
+          <div class="parsed-field"><strong>Mileage:</strong> {parsedInvoice.mileage.toLocaleString()}</div>
+        {/if}
+        {#if parsedInvoice.description}
+          <div class="parsed-field"><strong>Description:</strong> {parsedInvoice.description}</div>
+        {/if}
+        {#if parsedInvoice.line_items.length > 0}
+          <div class="parsed-field">
+            <strong>Line Items:</strong>
+            <ul>
+              {#each parsedInvoice.line_items as item}
+                <li>{item.description} {item.cost_cents != null ? formatCents(item.cost_cents) : ''}</li>
+              {/each}
+            </ul>
+          </div>
+        {/if}
+        {#if parsedInvoice.total_cost_cents}
+          <div class="parsed-field"><strong>Total:</strong> {formatCents(parsedInvoice.total_cost_cents)}</div>
+        {/if}
+        {#if parsedInvoice.notes}
+          <div class="parsed-field"><strong>Notes:</strong> {parsedInvoice.notes}</div>
+        {/if}
+      </div>
+      <div class="parsed-actions">
+        <button class="btn btn-secondary" onclick={() => (parsedInvoice = null)}>Dismiss</button>
+      </div>
     </div>
   {/if}
 </div>
@@ -195,4 +271,20 @@
   .doc-actions { display: flex; gap: 0.5rem; flex-shrink: 0; }
 
   .empty { color: var(--text-muted); text-align: center; padding: 2rem 0; }
+
+  .parse-error {
+    margin-top: 1rem; padding: 0.75rem 1rem; border: 1px solid var(--danger);
+    border-radius: 8px; background: #fef2f2; display: flex; align-items: center; gap: 1rem;
+  }
+  .parse-error p { margin: 0; color: var(--danger); font-size: 0.9rem; flex: 1; }
+
+  .parsed-result {
+    margin-top: 1rem; padding: 1rem; border: 1px solid var(--border);
+    border-radius: 8px; background: var(--surface);
+  }
+  .parsed-result h4 { margin: 0 0 0.75rem; }
+  .parsed-fields { display: flex; flex-direction: column; gap: 0.4rem; font-size: 0.9rem; }
+  .parsed-field ul { margin: 0.25rem 0 0; padding-left: 1.25rem; }
+  .parsed-field li { font-size: 0.85rem; }
+  .parsed-actions { margin-top: 0.75rem; display: flex; gap: 0.5rem; justify-content: flex-end; }
 </style>

@@ -175,6 +175,17 @@ export const settings = {
   set: (key: string, value: string) => request<Setting>(`/settings/${key}`, { method: 'PUT', body: JSON.stringify({ value }) }),
 }
 
+// AI
+export const ai = {
+  status: () => request<AiStatus>('/ai/status'),
+  chat: (vehicleId: number, message: string) =>
+    request<ChatResponse>('/ai/chat', { method: 'POST', body: JSON.stringify({ vehicle_id: vehicleId, message }) }),
+  chatHistory: (vehicleId: number) => request<ChatMessage[]>(`/ai/chat/history?vehicle_id=${vehicleId}`),
+  parseInvoice: (documentId: number) =>
+    request<ParsedInvoice>('/ai/parse-invoice', { method: 'POST', body: JSON.stringify({ document_id: documentId }) }),
+  suggestions: (vehicleId: number) => request<AiSuggestion[]>(`/vehicles/${vehicleId}/suggestions`),
+}
+
 // Re-export types for convenience
 import type {
   Vehicle, CreateVehicle, Platform, ModelTemplate,
@@ -186,4 +197,5 @@ import type {
   AccidentWithDetails, AccidentCorrespondence,
   PartSlot, CreatePartSlot, Part, CreatePart,
   CostSummary, VehicleExport,
+  AiStatus, ChatMessage, ChatResponse, ParsedInvoice, AiSuggestion,
 } from './types'

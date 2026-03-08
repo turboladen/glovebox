@@ -81,7 +81,7 @@ impl MigrationTrait for Migration {
             ("reminders.default_warning_days", "30", "Default days-before-due reminder threshold"),
             ("reminders.mileage_extrapolation_lookback_days", "90", "Days of mileage history for extrapolation"),
             ("reminders.bundling_window_miles", "5000", "Suggest bundling items due within this many miles"),
-            ("ai.provider", "none", "AI provider: none, claude, ollama"),
+            ("ai.provider", "none", "AI provider: none, claude, openai_compat"),
         ];
 
         for (key, value, _description) in &settings {

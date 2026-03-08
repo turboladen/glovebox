@@ -16,6 +16,7 @@ mod m20260301_000013_create_observations;
 mod m20260301_000014_create_documents;
 mod m20260301_000015_create_accidents;
 mod m20260301_000016_create_parts;
+mod m20260301_000017_create_chat_messages;
 
 pub struct Migrator;
 
@@ -39,6 +40,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260301_000014_create_documents::Migration),
             Box::new(m20260301_000015_create_accidents::Migration),
             Box::new(m20260301_000016_create_parts::Migration),
+            Box::new(m20260301_000017_create_chat_messages::Migration),
         ]
     }
 }
