@@ -7,6 +7,8 @@
   import HistoryTab from './HistoryTab.svelte'
   import MileageEntry from './MileageEntry.svelte'
   import ServiceForm from './ServiceForm.svelte'
+  import ObservationsTab from './ObservationsTab.svelte'
+  import DocumentsTab from './DocumentsTab.svelte'
 
   let { routeParams = {} }: { routeParams?: Record<string, string> } = $props()
 
@@ -92,6 +94,12 @@
       <button class="tab" class:active={activeTab === 'history'} onclick={() => (activeTab = 'history')}>
         History
       </button>
+      <button class="tab" class:active={activeTab === 'observations'} onclick={() => (activeTab = 'observations')}>
+        Obs.
+      </button>
+      <button class="tab" class:active={activeTab === 'documents'} onclick={() => (activeTab = 'documents')}>
+        Docs
+      </button>
     </div>
 
     <div class="tab-content">
@@ -99,6 +107,10 @@
         <ScheduleTab {reminderData} vehicleId={vehicle.id} />
       {:else if activeTab === 'history'}
         <HistoryTab vehicleId={vehicle.id} />
+      {:else if activeTab === 'observations'}
+        <ObservationsTab vehicleId={vehicle.id} />
+      {:else if activeTab === 'documents'}
+        <DocumentsTab vehicleId={vehicle.id} />
       {/if}
     </div>
   </div>

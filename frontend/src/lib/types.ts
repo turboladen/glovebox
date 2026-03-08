@@ -211,6 +211,103 @@ export interface VinDecodeResponse {
   all_attributes: Record<string, string>
 }
 
+export interface Shop {
+  id: number
+  name: string
+  address: string | null
+  phone: string | null
+  website: string | null
+  specialty: string | null
+  notes: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface Observation {
+  id: number
+  vehicle_id: number
+  category: string
+  title: string
+  description: string | null
+  odometer: number | null
+  observed_at: string
+  obd_codes: string | null
+  resolved: boolean
+  resolved_service_id: number | null
+  notes: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateObservation {
+  category: string
+  title: string
+  description?: string
+  odometer?: number
+  observed_at?: string
+  obd_codes?: string
+  notes?: string
+}
+
+export interface Document {
+  id: number
+  vehicle_id: number | null
+  title: string
+  file_path: string
+  file_name: string
+  mime_type: string | null
+  file_size_bytes: number | null
+  doc_type: string | null
+  linked_entity_type: string | null
+  linked_entity_id: number | null
+  notes: string | null
+  extracted_text: string | null
+  created_at: string
+}
+
+export interface Accident {
+  id: number
+  vehicle_id: number
+  occurred_at: string
+  odometer: number | null
+  description: string
+  fault: string | null
+  other_party_name: string | null
+  other_party_phone: string | null
+  other_party_email: string | null
+  other_party_insurance: string | null
+  other_party_policy_number: string | null
+  insurance_claim_number: string | null
+  insurance_adjuster: string | null
+  insurance_adjuster_phone: string | null
+  total_repair_cost_cents: number | null
+  total_repair_cost_currency: string | null
+  deductible_cents: number | null
+  deductible_currency: string | null
+  insurance_payout_cents: number | null
+  insurance_payout_currency: string | null
+  resolved: boolean
+  notes: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface AccidentCorrespondence {
+  id: number
+  accident_id: number
+  occurred_at: string
+  contact_method: string | null
+  contact_with: string | null
+  summary: string
+  notes: string | null
+  created_at: string
+}
+
+export interface AccidentWithDetails extends Accident {
+  correspondence: AccidentCorrespondence[]
+  service_record_ids: number[]
+}
+
 export interface Setting {
   key: string
   value: string

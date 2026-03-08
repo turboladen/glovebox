@@ -77,6 +77,57 @@ export const vin = {
     request<VinDecodeResponse>(`/vehicles/${vehicleId}/vin-decode/${vinCode}`, { method: 'POST' }),
 }
 
+// Shops
+export const shops = {
+  list: () => request<Shop[]>('/shops'),
+  get: (id: number) => request<Shop>(`/shops/${id}`),
+  create: (data: { name: string; address?: string; phone?: string; website?: string; specialty?: string; notes?: string }) =>
+    request<Shop>('/shops', { method: 'POST', body: JSON.stringify(data) }),
+}
+
+// Observations
+export const observations = {
+  list: (vehicleId: number) => request<Observation[]>(`/vehicles/${vehicleId}/observations`),
+  get: (vehicleId: number, id: number) => request<Observation>(`/vehicles/${vehicleId}/observations/${id}`),
+  create: (vehicleId: number, data: CreateObservation) =>
+    request<Observation>(`/vehicles/${vehicleId}/observations`, { method: 'POST', body: JSON.stringify(data) }),
+  update: (vehicleId: number, id: number, data: Partial<Observation>) =>
+    request<Observation>(`/vehicles/${vehicleId}/observations/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+}
+
+// Documents
+export const documents = {
+  list: (params?: { vehicle_id?: number; linked_entity_type?: string; linked_entity_id?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.vehicle_id) qs.set('vehicle_id', String(params.vehicle_id))
+    if (params?.linked_entity_type) qs.set('linked_entity_type', params.linked_entity_type)
+    if (params?.linked_entity_id) qs.set('linked_entity_id', String(params.linked_entity_id))
+    const query = qs.toString()
+    return request<Document[]>(`/documents${query ? '?' + query : ''}`)
+  },
+  upload: async (data: FormData): Promise<Document> => {
+    const res = await fetch(`${BASE}/documents`, { method: 'POST', body: data })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ error: res.statusText }))
+      throw new Error(body.error || `HTTP ${res.status}`)
+    }
+    return res.json()
+  },
+  delete: (id: number) => request<{ deleted: number }>(`/documents/${id}`, { method: 'DELETE' }),
+}
+
+// Accidents
+export const accidents = {
+  list: (vehicleId: number) => request<AccidentWithDetails[]>(`/vehicles/${vehicleId}/accidents`),
+  get: (vehicleId: number, id: number) => request<AccidentWithDetails>(`/vehicles/${vehicleId}/accidents/${id}`),
+  create: (vehicleId: number, data: any) =>
+    request<AccidentWithDetails>(`/vehicles/${vehicleId}/accidents`, { method: 'POST', body: JSON.stringify(data) }),
+  update: (vehicleId: number, id: number, data: any) =>
+    request<AccidentWithDetails>(`/vehicles/${vehicleId}/accidents/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  addCorrespondence: (vehicleId: number, accidentId: number, data: any) =>
+    request<AccidentCorrespondence>(`/vehicles/${vehicleId}/accidents/${accidentId}/correspondence`, { method: 'POST', body: JSON.stringify(data) }),
+}
+
 // Settings
 export const settings = {
   list: () => request<Setting[]>('/settings'),
@@ -91,4 +142,6 @@ import type {
   ServiceRecordWithLinks, CreateServiceRecord,
   ScheduleItem, CreateScheduleItem, ResolvedScheduleItem,
   RemindersResponse, VinDecodeResponse, Setting,
+  Shop, Observation, CreateObservation, Document,
+  AccidentWithDetails, AccidentCorrespondence,
 } from './types'
