@@ -231,60 +231,55 @@
 
 <style>
   .docs-header {
-    display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;
+    display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-4);
   }
   .docs-header h3 { margin: 0; }
 
-  .form-card {
-    padding: 1rem; border: 1px solid var(--border); border-radius: 8px;
-    margin-bottom: 1rem; background: var(--surface);
-  }
-  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
-  .field { margin-bottom: 0.75rem; }
-  .field label { display: block; font-size: 0.85rem; margin-bottom: 0.25rem; color: var(--text-muted); }
-  .field input, .field select {
-    width: 100%; padding: 0.4rem 0.6rem; border: 1px solid var(--border);
-    border-radius: 4px; font-size: 0.9rem; background: var(--bg); color: var(--text);
-  }
-  .form-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
   .error { color: var(--danger); font-size: 0.85rem; }
 
-  .docs-list { display: flex; flex-direction: column; gap: 0.5rem; }
+  .docs-list { display: flex; flex-direction: column; gap: var(--sp-2); }
 
   .doc-card {
-    padding: 0.75rem 1rem; border: 1px solid var(--border); border-radius: 4px;
-    display: flex; align-items: center; gap: 1rem;
+    padding: var(--sp-3) var(--sp-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+    background: var(--bg-raised);
+    display: flex; align-items: center; gap: var(--sp-4);
+    transition: border-color var(--duration-base) var(--ease-out);
+  }
+
+  .doc-card:hover {
+    border-color: var(--border);
   }
 
   .doc-preview { width: 60px; height: 60px; flex-shrink: 0; }
-  .doc-preview img { width: 100%; height: 100%; object-fit: cover; border-radius: 4px; }
+  .doc-preview img { width: 100%; height: 100%; object-fit: cover; border-radius: var(--radius-sm); }
 
   .doc-info { flex: 1; }
   .doc-title { font-weight: 600; }
-  .doc-meta { font-size: 0.8rem; color: var(--text-muted); display: flex; gap: 0.5rem; flex-wrap: wrap; }
+  .doc-meta { font-size: 0.8rem; color: var(--text-muted); display: flex; gap: var(--sp-2); flex-wrap: wrap; }
   .doc-type-badge {
-    background: var(--surface); border: 1px solid var(--border); border-radius: 3px;
-    padding: 0 0.3rem; text-transform: uppercase; font-size: 0.7rem; font-weight: 500;
+    background: var(--surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
+    padding: 0 var(--sp-1); text-transform: uppercase; font-size: 0.7rem; font-weight: 500;
+    font-family: var(--font-display);
   }
-  .doc-notes { font-size: 0.85rem; color: var(--text-muted); margin: 0.25rem 0 0; }
+  .doc-notes { font-size: 0.85rem; color: var(--text-muted); margin: var(--sp-1) 0 0; }
 
-  .doc-actions { display: flex; gap: 0.5rem; flex-shrink: 0; }
+  .doc-actions { display: flex; gap: var(--sp-2); flex-shrink: 0; }
 
-  .empty { color: var(--text-muted); text-align: center; padding: 2rem 0; }
+  .empty { color: var(--text-muted); text-align: center; padding: var(--sp-8) 0; }
 
   .parse-error {
-    margin-top: 1rem; padding: 0.75rem 1rem; border: 1px solid var(--danger);
-    border-radius: 8px; background: #fef2f2; display: flex; align-items: center; gap: 1rem;
+    margin-top: var(--sp-4); padding: var(--sp-3) var(--sp-4); border: 1px solid var(--danger-border);
+    border-radius: var(--radius-md); background: var(--danger-bg); display: flex; align-items: center; gap: var(--sp-4);
   }
   .parse-error p { margin: 0; color: var(--danger); font-size: 0.9rem; flex: 1; }
 
   .parsed-result {
-    margin-top: 1rem; padding: 1rem; border: 1px solid var(--border);
-    border-radius: 8px; background: var(--surface);
+    margin-top: var(--sp-4); padding: var(--sp-4); border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md); background: var(--bg-raised);
   }
-  .parsed-result h4 { margin: 0 0 0.75rem; }
-  .parsed-fields { display: flex; flex-direction: column; gap: 0.4rem; font-size: 0.9rem; }
-  .parsed-field ul { margin: 0.25rem 0 0; padding-left: 1.25rem; }
+  .parsed-result h4 { margin: 0 0 var(--sp-3); }
+  .parsed-fields { display: flex; flex-direction: column; gap: var(--sp-2); font-size: 0.9rem; }
+  .parsed-field ul { margin: var(--sp-1) 0 0; padding-left: var(--sp-5); }
   .parsed-field li { font-size: 0.85rem; }
-  .parsed-actions { margin-top: 0.75rem; display: flex; gap: 0.5rem; justify-content: flex-end; }
+  .parsed-actions { margin-top: var(--sp-3); display: flex; gap: var(--sp-2); justify-content: flex-end; }
 </style>

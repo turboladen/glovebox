@@ -137,11 +137,12 @@
 
   .not-configured {
     text-align: center;
-    padding: 3rem 1rem;
+    padding: var(--sp-12) var(--sp-4);
     color: var(--text-muted);
   }
 
   .not-configured p:first-child {
+    font-family: var(--font-display);
     font-size: 1.1rem;
     font-weight: 600;
   }
@@ -153,16 +154,16 @@
   .chat-messages {
     flex: 1;
     overflow-y: auto;
-    padding: 1rem 0;
+    padding: var(--sp-4) 0;
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    gap: var(--sp-3);
   }
 
   .empty {
     text-align: center;
     color: var(--text-muted);
-    padding: 2rem 0;
+    padding: var(--sp-8) 0;
   }
 
   .message {
@@ -179,22 +180,23 @@
 
   .message-bubble {
     max-width: 75%;
-    padding: 0.6rem 1rem;
-    border-radius: 12px;
+    padding: var(--sp-3) var(--sp-4);
+    border-radius: var(--radius-lg);
     font-size: 0.9rem;
     line-height: 1.4;
+    box-shadow: var(--shadow-sm);
   }
 
   .message.user .message-bubble {
     background: var(--primary);
-    color: white;
-    border-bottom-right-radius: 4px;
+    color: var(--primary-text);
+    border-bottom-right-radius: var(--radius-sm);
   }
 
   .message.assistant .message-bubble {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-bottom-left-radius: 4px;
+    background: var(--bg-raised);
+    border: 1px solid var(--border-subtle);
+    border-bottom-left-radius: var(--radius-sm);
   }
 
   .thinking {
@@ -209,21 +211,14 @@
 
   .chat-input {
     display: flex;
-    gap: 0.5rem;
-    padding-top: 0.75rem;
-    border-top: 1px solid var(--border);
+    gap: var(--sp-2);
+    padding-top: var(--sp-3);
+    border-top: 1px solid var(--border-subtle);
   }
 
   .chat-input textarea {
     flex: 1;
     resize: none;
-    padding: 0.5rem 0.75rem;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    font-size: 0.9rem;
-    background: var(--bg);
-    color: var(--text);
-    font-family: inherit;
   }
 
   .chat-input button {

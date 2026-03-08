@@ -25,6 +25,6 @@ test.describe('AI Suggestions', () => {
   test('schedule tab loads without errors', async ({ page }) => {
     await page.goto(vehicleUrl)
     // Schedule tab is the default — verify it renders (mileage bar is present)
-    await expect(page.getByText('mi (est.)')).toBeVisible()
+    await expect(page.getByText('mi est.')).toBeVisible()
   })
 })

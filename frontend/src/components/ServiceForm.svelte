@@ -160,69 +160,32 @@
 </div>
 
 <style>
-  .form-card {
-    padding: 1rem;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    margin-bottom: 1rem;
-    background: var(--surface);
-  }
-
   .form-card h3 {
-    margin: 0 0 0.75rem;
-  }
-
-  .form-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.75rem;
-  }
-
-  .field {
-    margin-bottom: 0.75rem;
-  }
-
-  .field label {
-    display: block;
-    font-size: 0.85rem;
-    margin-bottom: 0.25rem;
-    color: var(--text-muted);
-  }
-
-  .field input, .field textarea {
-    width: 100%;
-    padding: 0.4rem 0.6rem;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    font-size: 0.9rem;
-    background: var(--bg);
-    color: var(--text);
-    font-family: inherit;
+    margin: 0 0 var(--sp-3);
   }
 
   .checkbox-list {
     display: flex;
     flex-direction: column;
-    gap: 0.25rem;
+    gap: var(--sp-1);
     max-height: 200px;
     overflow-y: auto;
-    padding: 0.5rem;
+    padding: var(--sp-2);
     border: 1px solid var(--border);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
+    background: var(--bg);
   }
 
   .checkbox-item {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--sp-2);
     font-size: 0.85rem;
     cursor: pointer;
   }
 
-  .form-actions {
-    display: flex;
-    gap: 0.5rem;
-    justify-content: flex-end;
+  .checkbox-item input[type="checkbox"] {
+    width: auto;
   }
 
   .error {

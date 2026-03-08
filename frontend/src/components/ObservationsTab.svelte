@@ -159,60 +159,45 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 1rem;
+    margin-bottom: var(--sp-4);
   }
 
   .obs-header h3 { margin: 0; }
 
-  .form-card {
-    padding: 1rem;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    margin-bottom: 1rem;
-    background: var(--surface);
-  }
-
-  .form-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.75rem;
-  }
-
-  .field { margin-bottom: 0.75rem; }
-  .field label { display: block; font-size: 0.85rem; margin-bottom: 0.25rem; color: var(--text-muted); }
-  .field input, .field textarea, .field select {
-    width: 100%; padding: 0.4rem 0.6rem; border: 1px solid var(--border);
-    border-radius: 4px; font-size: 0.9rem; background: var(--bg); color: var(--text); font-family: inherit;
-  }
-
-  .form-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
   .error { color: var(--danger); font-size: 0.85rem; }
 
-  .obs-list { display: flex; flex-direction: column; gap: 0.5rem; }
+  .obs-list { display: flex; flex-direction: column; gap: var(--sp-2); }
 
   .obs-card {
-    padding: 0.75rem 1rem;
-    border: 1px solid var(--border);
-    border-radius: 4px;
+    padding: var(--sp-3) var(--sp-4);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--bg-raised);
+    transition: border-color var(--duration-base) var(--ease-out);
+  }
+
+  .obs-card:hover {
+    border-color: var(--border);
   }
 
   .obs-card.resolved { opacity: 0.6; }
 
   .obs-card-header {
     display: flex; justify-content: space-between; align-items: center;
-    margin-bottom: 0.25rem;
+    margin-bottom: var(--sp-1);
   }
 
   .obs-category {
+    font-family: var(--font-display);
     font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;
     color: var(--primary); font-weight: 500;
   }
 
   .obs-date { font-size: 0.85rem; color: var(--text-muted); }
   .obs-title { font-weight: 600; }
-  .obs-desc { font-size: 0.85rem; color: var(--text-muted); margin: 0.25rem 0; }
-  .obs-meta { font-size: 0.8rem; color: var(--text-muted); margin-right: 0.5rem; }
-  .obs-meta.obd { font-family: monospace; }
-  .obs-actions { margin-top: 0.5rem; }
-  .empty { color: var(--text-muted); text-align: center; padding: 2rem 0; }
+  .obs-desc { font-size: 0.85rem; color: var(--text-muted); margin: var(--sp-1) 0; }
+  .obs-meta { font-size: 0.8rem; color: var(--text-muted); margin-right: var(--sp-2); }
+  .obs-meta.obd { font-family: var(--font-mono); }
+  .obs-actions { margin-top: var(--sp-2); }
+  .empty { color: var(--text-muted); text-align: center; padding: var(--sp-8) 0; }
 </style>

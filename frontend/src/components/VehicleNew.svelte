@@ -207,47 +207,17 @@
   }
 
   .step {
-    margin-top: 1rem;
+    margin-top: var(--sp-4);
   }
 
   .hint {
     font-size: 0.85rem;
     color: var(--text-muted);
-    margin-bottom: 1rem;
-  }
-
-  .form-row {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 0.75rem;
-  }
-
-  .field {
-    margin-bottom: 0.75rem;
-  }
-
-  .field label {
-    display: block;
-    font-size: 0.85rem;
-    margin-bottom: 0.25rem;
-    color: var(--text-muted);
-  }
-
-  .field input, .field select {
-    width: 100%;
-    padding: 0.4rem 0.6rem;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    font-size: 0.9rem;
-    background: var(--bg);
-    color: var(--text);
+    margin-bottom: var(--sp-4);
   }
 
   .form-actions {
-    display: flex;
-    gap: 0.5rem;
-    justify-content: flex-end;
-    margin-top: 1rem;
+    margin-top: var(--sp-4);
   }
 
   .error {

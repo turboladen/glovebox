@@ -61,15 +61,16 @@
 
 <style>
   .suggestions-card {
-    margin-bottom: 1.5rem;
-    padding: 1rem;
+    margin-bottom: var(--sp-6);
+    padding: var(--sp-4);
     border: 1px dashed var(--border);
-    border-radius: 8px;
-    background: var(--surface);
+    border-radius: var(--radius-md);
+    background: var(--bg-raised);
   }
 
   .suggestions-card h4 {
-    margin: 0 0 0.75rem;
+    margin: 0 0 var(--sp-3);
+    font-family: var(--font-display);
     font-size: 0.95rem;
   }
 
@@ -87,20 +88,25 @@
   .suggestions-list {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    gap: var(--sp-2);
   }
 
   .suggestion {
-    padding: 0.6rem;
-    border: 1px solid var(--border);
-    border-radius: 6px;
+    padding: var(--sp-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    transition: border-color var(--duration-base) var(--ease-out);
+  }
+
+  .suggestion:hover {
+    border-color: var(--border);
   }
 
   .suggestion-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 0.25rem;
+    margin-bottom: var(--sp-1);
   }
 
   .suggestion-title {
@@ -109,29 +115,30 @@
   }
 
   .urgency-badge {
+    font-family: var(--font-display);
     font-size: 0.7rem;
     font-weight: 600;
     text-transform: uppercase;
     padding: 0.1rem 0.4rem;
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
   }
 
   .urgency-high {
-    background: #fef2f2;
-    color: #dc2626;
-    border: 1px solid #fecaca;
+    background: var(--danger-bg);
+    color: var(--danger);
+    border: 1px solid var(--danger-border);
   }
 
   .urgency-medium {
-    background: #fffbeb;
-    color: #d97706;
-    border: 1px solid #fde68a;
+    background: var(--warning-bg);
+    color: var(--warning);
+    border: 1px solid var(--warning-border);
   }
 
   .urgency-low {
-    background: #f0fdf4;
-    color: #16a34a;
-    border: 1px solid #bbf7d0;
+    background: var(--success-bg);
+    color: var(--success);
+    border: 1px solid var(--success-border);
   }
 
   .suggestion-reason {
@@ -144,7 +151,7 @@
   .cost-range {
     font-size: 0.8rem;
     color: var(--text-muted);
-    margin-top: 0.25rem;
+    margin-top: var(--sp-1);
     display: inline-block;
   }
 </style>

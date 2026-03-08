@@ -11,12 +11,13 @@
 <style>
   .not-found {
     text-align: center;
-    padding: 4rem 0;
+    padding: var(--sp-12) 0;
     color: var(--text-muted);
   }
 
   .not-found h1 {
+    font-family: var(--font-display);
     font-size: 3rem;
-    margin-bottom: 0.5rem;
+    margin-bottom: var(--sp-2);
   }
 </style>

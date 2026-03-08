@@ -11,9 +11,9 @@ test.describe('Garage', () => {
   test('shows vehicles or empty state after loading', async ({ page }) => {
     await page.goto('/')
     // Wait for loading to finish
-    await expect(page.getByText('Loading...')).not.toBeVisible({ timeout: 10_000 })
+    await expect(page.getByText('Loading garage...')).not.toBeVisible({ timeout: 10_000 })
     // Now one of these should be true
-    const hasEmpty = await page.getByText('No vehicles yet.').isVisible().catch(() => false)
+    const hasEmpty = await page.getByText('Your garage is empty').isVisible().catch(() => false)
     const hasCards = (await page.locator('.vehicle-card').count()) > 0
     expect(hasEmpty || hasCards).toBe(true)
   })

@@ -130,14 +130,15 @@
 
 <style>
   .reminder-group {
-    margin-bottom: 1.5rem;
+    margin-bottom: var(--sp-6);
   }
 
   .group-label {
+    font-family: var(--font-display);
     font-size: 0.85rem;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    margin-bottom: 0.5rem;
+    margin-bottom: var(--sp-2);
   }
 
   .overdue-label { color: var(--danger); }
@@ -146,11 +147,12 @@
   .bundle-label { color: var(--primary); }
 
   .reminder-card {
-    padding: 0.75rem 1rem;
-    border-left: 3px solid var(--border);
-    margin-bottom: 0.5rem;
-    background: var(--surface);
-    border-radius: 0 4px 4px 0;
+    padding: var(--sp-3) var(--sp-4);
+    border-left: 3px solid var(--border-subtle);
+    margin-bottom: var(--sp-2);
+    background: var(--bg-raised);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    transition: border-color var(--duration-fast) var(--ease-out);
   }
 
   .reminder-card.overdue { border-left-color: var(--danger); }
@@ -171,13 +173,13 @@
   .reminder-details, .reminder-meta, .last-service {
     font-size: 0.85rem;
     color: var(--text-muted);
-    margin-top: 0.25rem;
+    margin-top: var(--sp-1);
   }
 
   .bundle-card {
-    padding: 0.75rem 1rem;
-    background: var(--surface);
-    border-radius: 4px;
+    padding: var(--sp-3) var(--sp-4);
+    background: var(--bg-raised);
+    border-radius: var(--radius-sm);
     border: 1px dashed var(--primary);
     font-size: 0.85rem;
   }

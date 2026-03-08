@@ -92,26 +92,32 @@
 </div>
 
 <style>
-  .costs-tab h3 { margin: 0 0 1rem; }
-  .costs-tab h4 { margin: 1.5rem 0 0.5rem; }
+  .costs-tab h3 { margin: 0 0 var(--sp-4); }
+  .costs-tab h4 { margin: var(--sp-6) 0 var(--sp-2); font-family: var(--font-display); }
 
   .summary-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-    gap: 0.75rem;
-    margin-bottom: 1rem;
+    gap: var(--sp-3);
+    margin-bottom: var(--sp-4);
   }
 
   .summary-card {
-    padding: 0.75rem 1rem;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--surface);
+    padding: var(--sp-3) var(--sp-4);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--bg-raised);
     display: flex;
     flex-direction: column;
+    transition: border-color var(--duration-base) var(--ease-out);
+  }
+
+  .summary-card:hover {
+    border-color: var(--border);
   }
 
   .card-label {
+    font-family: var(--font-display);
     font-size: 0.8rem;
     color: var(--text-muted);
     text-transform: uppercase;
@@ -119,9 +125,10 @@
   }
 
   .card-value {
+    font-family: var(--font-display);
     font-size: 1.3rem;
     font-weight: 600;
-    margin-top: 0.25rem;
+    margin-top: var(--sp-1);
   }
 
   .card-sub {
@@ -136,12 +143,13 @@
   }
 
   .cost-table th, .cost-table td {
-    padding: 0.4rem 0.75rem;
+    padding: var(--sp-2) var(--sp-3);
     text-align: left;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--border-subtle);
   }
 
   .cost-table th {
+    font-family: var(--font-display);
     font-weight: 600;
     font-size: 0.8rem;
     text-transform: uppercase;
@@ -150,5 +158,5 @@
 
   .cost-table .total { font-weight: 600; }
 
-  .empty { color: var(--text-muted); text-align: center; padding: 2rem 0; }
+  .empty { color: var(--text-muted); text-align: center; padding: var(--sp-8) 0; }
 </style>

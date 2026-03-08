@@ -115,34 +115,42 @@
 
 <style>
   .filter-bar {
-    display: flex; gap: 0.25rem; margin-bottom: 1rem;
-    border: 1px solid var(--border); border-radius: 4px; overflow: hidden; width: fit-content;
+    display: flex; gap: var(--sp-1); margin-bottom: var(--sp-4);
+    border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; width: fit-content;
   }
 
   .filter-btn {
-    padding: 0.3rem 0.75rem; border: none; background: none;
-    font-size: 0.85rem; cursor: pointer; color: var(--text-muted);
+    padding: var(--sp-1) var(--sp-3); border: none; background: none;
+    font-family: var(--font-display); font-size: 0.85rem; cursor: pointer; color: var(--text-muted);
+    transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
   }
 
   .filter-btn.active {
-    background: var(--primary); color: white;
+    background: var(--primary); color: var(--primary-text);
   }
 
-  .history-list { display: flex; flex-direction: column; gap: 0.5rem; }
+  .history-list { display: flex; flex-direction: column; gap: var(--sp-2); }
 
   .history-card {
-    padding: 0.75rem 1rem; border: 1px solid var(--border); border-radius: 4px;
+    padding: var(--sp-3) var(--sp-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+    background: var(--bg-raised);
+    transition: border-color var(--duration-base) var(--ease-out);
+  }
+
+  .history-card:hover {
+    border-color: var(--border);
   }
 
   .history-card.resolved { opacity: 0.6; }
 
   .history-header {
-    display: flex; align-items: center; gap: 0.5rem;
+    display: flex; align-items: center; gap: var(--sp-2);
   }
 
   .type-badge {
+    font-family: var(--font-display);
     font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em;
-    padding: 0.1rem 0.4rem; border-radius: 3px; font-weight: 600;
+    padding: 0.1rem 0.4rem; border-radius: var(--radius-sm); font-weight: 600;
   }
 
   .service-badge { background: var(--success-bg); color: var(--success); }
@@ -151,9 +159,9 @@
 
   .date { font-weight: 600; }
   .cost { margin-left: auto; font-weight: 600; }
-  .description { margin: 0.25rem 0; }
-  .meta { font-size: 0.85rem; color: var(--text-muted); display: flex; gap: 0.75rem; }
+  .description { margin: var(--sp-1) 0; }
+  .meta { font-size: 0.85rem; color: var(--text-muted); display: flex; gap: var(--sp-3); }
   .category { text-transform: capitalize; }
-  .notes { font-size: 0.85rem; color: var(--text-muted); margin: 0.25rem 0 0; font-style: italic; }
-  .empty { color: var(--text-muted); text-align: center; padding: 2rem 0; }
+  .notes { font-size: 0.85rem; color: var(--text-muted); margin: var(--sp-1) 0 0; font-style: italic; }
+  .empty { color: var(--text-muted); text-align: center; padding: var(--sp-8) 0; }
 </style>

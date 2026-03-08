@@ -122,7 +122,10 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
 
     <div class="status-bar">
       {#if reminderData}
-        <span class="est-mileage">{formatMileage(reminderData.estimated_mileage)} mi (est.)</span>
+        <div class="mileage-readout">
+          <span class="est-mileage">{formatMileage(reminderData.estimated_mileage)}</span>
+          <span class="mileage-unit">mi est.</span>
+        </div>
         <span class="mileage-date">as of {reminderData.mileage_as_of}</span>
       {/if}
       <div class="actions">
@@ -197,83 +200,151 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
 
 <style>
   .detail-header {
-    margin-bottom: 1rem;
+    margin-bottom: var(--sp-4);
   }
 
   .back-link {
-    font-size: 0.85rem;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-1);
+    font-size: 0.8rem;
+    font-weight: 500;
     color: var(--text-muted);
     text-decoration: none;
+    letter-spacing: 0.02em;
+    transition: color var(--duration-fast) var(--ease-out);
   }
 
   .back-link:hover {
-    color: var(--text);
+    color: var(--primary);
   }
 
   .detail-header h1 {
-    margin: 0.25rem 0 0;
+    margin: var(--sp-2) 0 0;
+    font-family: var(--font-display);
+    font-size: 1.6rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
   }
 
+  /* --- Instrument cluster status bar --- */
   .status-bar {
     display: flex;
     align-items: center;
-    gap: 1rem;
+    gap: var(--sp-4);
     flex-wrap: wrap;
-    margin-bottom: 1rem;
-    padding: 0.75rem 1rem;
-    background: var(--surface);
-    border-radius: 8px;
+    margin-bottom: var(--sp-5);
+    padding: var(--sp-4) var(--sp-5);
+    background: var(--bg-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+  }
+
+  .mileage-readout {
+    display: flex;
+    align-items: baseline;
+    gap: var(--sp-2);
   }
 
   .est-mileage {
-    font-weight: 600;
-    font-size: 1.1rem;
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 1.35rem;
+    letter-spacing: -0.02em;
+    color: var(--text);
+  }
+
+  .mileage-unit {
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
   }
 
   .mileage-date {
-    font-size: 0.85rem;
+    font-size: 0.8rem;
     color: var(--text-muted);
   }
 
   .actions {
     margin-left: auto;
     display: flex;
-    gap: 0.5rem;
+    gap: var(--sp-2);
   }
 
+  /* --- Tab navigation --- */
   .tabs {
     display: flex;
     gap: 0;
-    border-bottom: 2px solid var(--border);
-    margin-bottom: 1rem;
+    border-bottom: 1px solid var(--border-subtle);
+    margin-bottom: var(--sp-5);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .tabs::-webkit-scrollbar {
+    display: none;
   }
 
   .tab {
-    padding: 0.5rem 1rem;
+    position: relative;
+    padding: var(--sp-3) var(--sp-4);
     background: none;
     border: none;
-    border-bottom: 2px solid transparent;
-    margin-bottom: -2px;
     cursor: pointer;
-    font-size: 0.9rem;
+    font-family: var(--font-display);
+    font-size: 0.85rem;
+    font-weight: 500;
     color: var(--text-muted);
+    white-space: nowrap;
+    transition:
+      color var(--duration-fast) var(--ease-out);
+  }
+
+  .tab::after {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    left: var(--sp-4);
+    right: var(--sp-4);
+    height: 2px;
+    background: var(--primary);
+    border-radius: 1px;
+    transform: scaleX(0);
+    transition: transform var(--duration-base) var(--ease-out);
   }
 
   .tab.active {
-    color: var(--text);
-    border-bottom-color: var(--primary);
+    color: var(--primary);
     font-weight: 600;
+  }
+
+  .tab.active::after {
+    transform: scaleX(1);
   }
 
   .tab:hover:not(.active) {
     color: var(--text);
   }
 
-  .loading, .error {
-    padding: 2rem 0;
+  .tab:hover:not(.active)::after {
+    transform: scaleX(0.5);
+    background: var(--text-muted);
+  }
+
+  /* --- States --- */
+  .loading {
+    text-align: center;
+    padding: var(--sp-12) 0;
+    color: var(--text-muted);
   }
 
   .error {
     color: var(--danger);
+    padding: var(--sp-4);
+    background: var(--danger-bg);
+    border: 1px solid var(--danger-border);
+    border-radius: var(--radius-md);
   }
 </style>

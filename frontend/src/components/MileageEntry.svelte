@@ -57,43 +57,8 @@
 </div>
 
 <style>
-  .form-card {
-    padding: 1rem;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    margin-bottom: 1rem;
-    background: var(--surface);
-  }
-
   .form-card h3 {
-    margin: 0 0 0.75rem;
-  }
-
-  .field {
-    margin-bottom: 0.75rem;
-  }
-
-  .field label {
-    display: block;
-    font-size: 0.85rem;
-    margin-bottom: 0.25rem;
-    color: var(--text-muted);
-  }
-
-  .field input {
-    width: 100%;
-    padding: 0.4rem 0.6rem;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    font-size: 0.9rem;
-    background: var(--bg);
-    color: var(--text);
-  }
-
-  .form-actions {
-    display: flex;
-    gap: 0.5rem;
-    justify-content: flex-end;
+    margin: 0 0 var(--sp-3);
   }
 
   .error {
