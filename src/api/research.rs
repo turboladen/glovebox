@@ -127,30 +127,29 @@ pub async fn generate_report(
     }
 
     // If AI is configured and report type includes community wisdom, query AI
-    if state.ai.is_configured()
-        && (report_type == "full_check" || report_type == "community_wisdom")
-    {
-        let prompt = build_community_wisdom_prompt(&vehicle);
-        match state
-            .ai
-            .complete(crate::services::ai::AiRequest {
-                system_prompt: "You are a knowledgeable automotive expert. Provide findings as a JSON array of objects with fields: title, description, severity (critical/recommended/optional/informational), category (one of: forum_report, suggested_maintenance, upgrade_idea).".to_string(),
-                messages: vec![crate::services::ai::ChatMessage {
-                    role: crate::services::ai::Role::User,
-                    content: prompt,
-                }],
-                attachments: vec![],
-                max_tokens: None,
-            })
-            .await
-        {
-            Ok(response) => {
-                if let Ok(ai_findings) = parse_ai_findings(&response.content) {
-                    all_findings.extend(ai_findings);
+    if report_type == "full_check" || report_type == "community_wisdom" {
+        if let Ok(provider) = state.ai.resolve(None).await {
+            let prompt = build_community_wisdom_prompt(&vehicle);
+            match provider
+                .complete(crate::services::ai::AiRequest {
+                    system_prompt: "You are a knowledgeable automotive expert. Provide findings as a JSON array of objects with fields: title, description, severity (critical/recommended/optional/informational), category (one of: forum_report, suggested_maintenance, upgrade_idea).".to_string(),
+                    messages: vec![crate::services::ai::ChatMessage {
+                        role: crate::services::ai::Role::User,
+                        content: prompt,
+                    }],
+                    attachments: vec![],
+                    max_tokens: None,
+                })
+                .await
+            {
+                Ok(response) => {
+                    if let Ok(ai_findings) = parse_ai_findings(&response.content) {
+                        all_findings.extend(ai_findings);
+                    }
                 }
-            }
-            Err(e) => {
-                tracing::warn!("AI community wisdom query failed: {:?}", e);
+                Err(e) => {
+                    tracing::warn!("AI community wisdom query failed: {:?}", e);
+                }
             }
         }
     }

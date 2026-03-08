@@ -195,12 +195,31 @@ export const settings = {
 // AI
 export const ai = {
   status: () => request<AiStatus>('/ai/status'),
-  chat: (vehicleId: number, message: string) =>
-    request<ChatResponse>('/ai/chat', { method: 'POST', body: JSON.stringify({ vehicle_id: vehicleId, message }) }),
+  chat: (vehicleId: number, message: string, providerId?: number) =>
+    request<ChatResponse>('/ai/chat', { method: 'POST', body: JSON.stringify({ vehicle_id: vehicleId, message, provider_id: providerId }) }),
   chatHistory: (vehicleId: number) => request<ChatMessage[]>(`/ai/chat/history?vehicle_id=${vehicleId}`),
-  parseInvoice: (documentId: number) =>
-    request<ParsedInvoice>('/ai/parse-invoice', { method: 'POST', body: JSON.stringify({ document_id: documentId }) }),
-  suggestions: (vehicleId: number) => request<AiSuggestion[]>(`/vehicles/${vehicleId}/suggestions`),
+  parseInvoice: (documentId: number, providerId?: number) =>
+    request<ParsedInvoice>('/ai/parse-invoice', { method: 'POST', body: JSON.stringify({ document_id: documentId, provider_id: providerId }) }),
+  suggestions: (vehicleId: number, providerId?: number) => {
+    const qs = providerId ? `?provider_id=${providerId}` : ''
+    return request<AiSuggestion[]>(`/vehicles/${vehicleId}/suggestions${qs}`)
+  },
+  fetchModels: (provider: string, apiKey: string, apiBase?: string) =>
+    request<ModelInfo[]>('/ai/models', {
+      method: 'POST',
+      body: JSON.stringify({ provider, api_key: apiKey, api_base: apiBase }),
+    }),
+}
+
+// AI Providers
+export const aiProviders = {
+  list: () => request<AiProvider[]>('/ai/providers'),
+  create: (data: CreateAiProvider) =>
+    request<AiProvider>('/ai/providers', { method: 'POST', body: JSON.stringify(data) }),
+  update: (id: number, data: UpdateAiProvider) =>
+    request<AiProvider>(`/ai/providers/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  delete: (id: number) =>
+    request<{ deleted: number }>(`/ai/providers/${id}`, { method: 'DELETE' }),
 }
 
 // Re-export types for convenience
@@ -214,6 +233,7 @@ import type {
   AccidentWithDetails, AccidentCorrespondence,
   PartSlot, CreatePartSlot, Part, CreatePart,
   CostSummary, VehicleExport,
-  AiStatus, ChatMessage, ChatResponse, ParsedInvoice, AiSuggestion,
+  AiStatus, AiProvider, CreateAiProvider, UpdateAiProvider, ProviderSummary,
+  ChatMessage, ChatResponse, ParsedInvoice, AiSuggestion, ModelInfo,
   RecallCheckResult, ResearchReport, ReportWithFindings, ResearchFinding,
 } from './types'

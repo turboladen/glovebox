@@ -429,10 +429,54 @@ export interface Setting {
   updated_at: string
 }
 
+// AI Provider types
+export interface AiProvider {
+  id: number
+  name: string
+  provider_type: string
+  api_key_set: boolean
+  api_base: string | null
+  model: string | null
+  is_default: boolean
+  enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateAiProvider {
+  name: string
+  provider_type: string
+  api_key?: string | null
+  api_base?: string | null
+  model?: string | null
+  is_default?: boolean
+  enabled?: boolean
+}
+
+export interface UpdateAiProvider {
+  name?: string
+  provider_type?: string
+  api_key?: string | null
+  api_base?: string | null
+  model?: string | null
+  is_default?: boolean
+  enabled?: boolean
+}
+
+export interface ProviderSummary {
+  id: number
+  name: string
+  provider_type: string
+  is_default: boolean
+  enabled: boolean
+}
+
 // AI types
 export interface AiStatus {
   provider: string
   configured: boolean
+  default_provider_id: number | null
+  providers: ProviderSummary[]
 }
 
 export interface ChatMessage {
@@ -510,6 +554,11 @@ export interface ResearchFinding {
 
 export interface ReportWithFindings extends ResearchReport {
   findings: ResearchFinding[]
+}
+
+export interface ModelInfo {
+  id: string
+  display_name: string | null
 }
 
 export interface AiSuggestion {

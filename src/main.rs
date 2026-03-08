@@ -4,26 +4,25 @@ mod entities;
 mod migration;
 mod services;
 
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
 use axum::{Router, routing::get};
 use clap::Parser;
-use sea_orm::{ConnectOptions, Database, DatabaseConnection, EntityTrait};
+use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 use sea_orm_migration::MigratorTrait;
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 
 use config::AppConfig;
 use migration::Migrator;
-use services::ai::AiProvider;
+use services::ai::registry::AiProviderRegistry;
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: DatabaseConnection,
     pub config: Arc<AppConfig>,
-    pub ai: Arc<dyn AiProvider>,
+    pub ai: Arc<AiProviderRegistry>,
 }
 
 #[tokio::main]
@@ -58,24 +57,10 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("Database ready at {}", &config.db_path);
 
-    // Load AI settings from the database to construct the provider
-    let ai_settings: HashMap<String, String> = entities::settings::Entity::find()
-        .all(&db)
-        .await?
-        .into_iter()
-        .filter(|s| s.key.starts_with("ai."))
-        .map(|s| (s.key, s.value))
-        .collect();
+    let ai = Arc::new(AiProviderRegistry::new(db.clone()));
 
-    let ai_provider_name = ai_settings
-        .get("ai.provider")
-        .map(|s| s.as_str())
-        .unwrap_or("none");
-
-    let ai: Arc<dyn AiProvider> =
-        Arc::from(services::ai::create_provider(ai_provider_name, &ai_settings));
-
-    tracing::info!("AI provider: {} (configured: {})", ai.provider_name(), ai.is_configured());
+    let has_provider = ai.any_configured().await.unwrap_or(false);
+    tracing::info!("AI providers configured: {has_provider}");
 
     let state = AppState {
         db,
@@ -95,7 +80,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/ai/status", get(api::ai::status))
         .route("/api/ai/parse-invoice", axum::routing::post(api::ai::parse_invoice))
         .route("/api/ai/chat", axum::routing::post(api::ai::chat))
+        .route("/api/ai/models", axum::routing::post(api::ai::fetch_models))
         .route("/api/ai/chat/history", get(api::ai::chat_history))
+        .route("/api/ai/providers", get(api::ai::list_providers).post(api::ai::create_provider))
+        .route("/api/ai/providers/{id}", axum::routing::put(api::ai::update_provider).delete(api::ai::delete_provider))
         .route("/api/vehicles/{vehicle_id}/suggestions", get(api::ai::get_suggestions))
         // Vehicle sub-resources (flat routes for correct path param extraction)
         .route("/api/vehicles/{vehicle_id}/mileage", get(api::mileage::list).post(api::mileage::create))

@@ -12,7 +12,7 @@
   onMount(async () => {
     try {
       const status = await ai.status()
-      configured = status.configured
+      configured = status.providers.some(p => p.enabled)
       if (configured) {
         suggestions = await ai.suggestions(vehicleId)
       }

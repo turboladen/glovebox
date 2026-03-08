@@ -18,3 +18,4 @@ pub mod part;
 pub mod chat_message;
 pub mod research_report;
 pub mod research_finding;
+pub mod ai_provider_config;

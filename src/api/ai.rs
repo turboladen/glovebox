@@ -6,20 +6,66 @@ use serde::{Deserialize, Serialize};
 
 use crate::AppState;
 use crate::api::error::ApiError;
-use crate::entities::{chat_message, document};
+use crate::entities::{ai_provider_config, chat_message, document};
 use crate::services::ai::{AiRequest, Attachment, ChatMessage, Role};
 
 #[derive(Serialize)]
 pub struct AiStatusResponse {
     pub provider: String,
     pub configured: bool,
+    pub default_provider_id: Option<i32>,
+    pub providers: Vec<ProviderSummary>,
 }
 
-pub async fn status(State(state): State<AppState>) -> Json<AiStatusResponse> {
-    Json(AiStatusResponse {
-        provider: state.ai.provider_name().to_string(),
-        configured: state.ai.is_configured(),
-    })
+#[derive(Serialize)]
+pub struct ProviderSummary {
+    pub id: i32,
+    pub name: String,
+    pub provider_type: String,
+    pub is_default: bool,
+    pub enabled: bool,
+}
+
+pub async fn status(
+    State(state): State<AppState>,
+) -> Result<Json<AiStatusResponse>, ApiError> {
+    let all_providers = ai_provider_config::Entity::find()
+        .all(&state.db)
+        .await?;
+
+    let default_provider_id = all_providers
+        .iter()
+        .find(|p| p.is_default && p.enabled)
+        .map(|p| p.id);
+
+    let configured = state
+        .ai
+        .any_configured()
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    let provider = match state.ai.resolve(None).await {
+        Ok(p) => p.provider_name().to_string(),
+        Err(_) => "none".to_string(),
+    };
+
+    let providers = all_providers
+        .into_iter()
+        .map(|p| ProviderSummary {
+            id: p.id,
+            name: p.name,
+            provider_type: p.provider_type,
+            is_default: p.is_default,
+            enabled: p.enabled,
+        })
+        .collect();
+
+    Ok(Json(AiStatusResponse {
+        provider,
+        configured,
+        default_provider_id,
+        providers,
+    }))
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -41,13 +87,21 @@ pub fn strip_code_fences(s: &str) -> &str {
     s.trim()
 }
 
+#[derive(Debug, Deserialize)]
+pub struct SuggestionsQuery {
+    pub provider_id: Option<i32>,
+}
+
 pub async fn get_suggestions(
     State(state): State<AppState>,
     Path(vehicle_id): Path<i32>,
+    Query(query): Query<SuggestionsQuery>,
 ) -> Result<Json<Vec<AiSuggestion>>, ApiError> {
-    if !state.ai.is_configured() {
-        return Err(ApiError::BadRequest("AI is not configured".to_string()));
-    }
+    let provider = state
+        .ai
+        .resolve(query.provider_id)
+        .await
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
     let context = crate::services::ai::context::build_vehicle_context(&state.db, vehicle_id)
         .await
@@ -70,8 +124,7 @@ pub async fn get_suggestions(
         max_tokens: None,
     };
 
-    let response = state
-        .ai
+    let response = provider
         .complete(request)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -86,6 +139,7 @@ pub async fn get_suggestions(
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ParseInvoiceRequest {
     pub document_id: i32,
+    pub provider_id: Option<i32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -125,9 +179,11 @@ pub async fn parse_invoice(
     State(state): State<AppState>,
     Json(body): Json<ParseInvoiceRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !state.ai.is_configured() {
-        return Err(ApiError::BadRequest("AI is not configured".to_string()));
-    }
+    let provider = state
+        .ai
+        .resolve(body.provider_id)
+        .await
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
     // Look up document
     let doc = document::Entity::find_by_id(body.document_id)
@@ -171,8 +227,7 @@ pub async fn parse_invoice(
         max_tokens: Some(4096),
     };
 
-    let response = state
-        .ai
+    let response = provider
         .complete(request)
         .await
         .map_err(|e| ApiError::Internal(format!("AI error: {}", e)))?;
@@ -189,12 +244,120 @@ pub async fn parse_invoice(
     Ok(Json(parsed))
 }
 
+// --- Fetch models endpoint ---
+
+#[derive(Debug, Deserialize)]
+pub struct FetchModelsRequest {
+    pub api_key: String,
+    pub provider: String,
+    pub api_base: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ModelInfo {
+    pub id: String,
+    pub display_name: Option<String>,
+}
+
+pub async fn fetch_models(
+    Json(body): Json<FetchModelsRequest>,
+) -> Result<Json<Vec<ModelInfo>>, ApiError> {
+    let client = reqwest::Client::new();
+
+    match body.provider.as_str() {
+        "claude" => {
+            if body.api_key.is_empty() {
+                return Err(ApiError::BadRequest("API key is required".to_string()));
+            }
+            let resp = client
+                .get("https://api.anthropic.com/v1/models")
+                .header("x-api-key", &body.api_key)
+                .header("anthropic-version", "2023-06-01")
+                .send()
+                .await
+                .map_err(|e| ApiError::Internal(format!("Request failed: {e}")))?;
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let body_text = resp.text().await.unwrap_or_default();
+                tracing::error!("Anthropic models API returned {status}: {body_text}");
+                return Err(ApiError::Internal(format!(
+                    "Anthropic API returned status {status}"
+                )));
+            }
+
+            let json: serde_json::Value = resp
+                .json()
+                .await
+                .map_err(|e| ApiError::Internal(format!("Failed to parse response: {e}")))?;
+
+            let models = json["data"]
+                .as_array()
+                .unwrap_or(&vec![])
+                .iter()
+                .map(|m| ModelInfo {
+                    id: m["id"].as_str().unwrap_or("").to_string(),
+                    display_name: m["display_name"].as_str().map(|s| s.to_string()),
+                })
+                .filter(|m| !m.id.is_empty())
+                .collect();
+
+            Ok(Json(models))
+        }
+        "openai_compat" => {
+            let base = body
+                .api_base
+                .as_deref()
+                .unwrap_or("http://localhost:11434/v1");
+            let url = format!("{}/models", base.trim_end_matches('/'));
+
+            let mut req = client.get(&url);
+            if !body.api_key.is_empty() {
+                req = req.header("Authorization", format!("Bearer {}", body.api_key));
+            }
+
+            let resp = req
+                .send()
+                .await
+                .map_err(|e| ApiError::Internal(format!("Request failed: {e}")))?;
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                return Err(ApiError::Internal(format!("API returned status {status}")));
+            }
+
+            let json: serde_json::Value = resp
+                .json()
+                .await
+                .map_err(|e| ApiError::Internal(format!("Failed to parse response: {e}")))?;
+
+            let models = json["data"]
+                .as_array()
+                .unwrap_or(&vec![])
+                .iter()
+                .map(|m| ModelInfo {
+                    id: m["id"].as_str().unwrap_or("").to_string(),
+                    display_name: None,
+                })
+                .filter(|m| !m.id.is_empty())
+                .collect();
+
+            Ok(Json(models))
+        }
+        _ => Err(ApiError::BadRequest(format!(
+            "Unknown provider: {}",
+            body.provider
+        ))),
+    }
+}
+
 // --- Chat endpoints ---
 
 #[derive(Debug, Deserialize)]
 pub struct ChatRequest {
     pub vehicle_id: Option<i32>,
     pub message: String,
+    pub provider_id: Option<i32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -213,9 +376,11 @@ pub async fn chat(
     State(state): State<AppState>,
     Json(body): Json<ChatRequest>,
 ) -> Result<Json<ChatResponseBody>, ApiError> {
-    if !state.ai.is_configured() {
-        return Err(ApiError::BadRequest("AI is not configured".to_string()));
-    }
+    let provider = state
+        .ai
+        .resolve(body.provider_id)
+        .await
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
     // Build vehicle context if vehicle_id is provided
     let system_prompt = if let Some(vid) = body.vehicle_id {
@@ -272,8 +437,7 @@ pub async fn chat(
         max_tokens: None,
     };
 
-    let response = state
-        .ai
+    let response = provider
         .complete(request)
         .await
         .map_err(|e| ApiError::Internal(format!("AI error: {e}")))?;
@@ -320,6 +484,180 @@ pub async fn chat_history(
         .all(&state.db)
         .await?;
     Ok(Json(messages))
+}
+
+// --- AI Provider CRUD ---
+
+#[derive(Serialize)]
+pub struct ProviderResponse {
+    pub id: i32,
+    pub name: String,
+    pub provider_type: String,
+    pub api_key_set: bool,
+    pub api_base: Option<String>,
+    pub model: Option<String>,
+    pub is_default: bool,
+    pub enabled: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl From<ai_provider_config::Model> for ProviderResponse {
+    fn from(p: ai_provider_config::Model) -> Self {
+        Self {
+            id: p.id,
+            name: p.name,
+            provider_type: p.provider_type,
+            api_key_set: p.api_key.is_some() && !p.api_key.as_ref().unwrap().is_empty(),
+            api_base: p.api_base,
+            model: p.model,
+            is_default: p.is_default,
+            enabled: p.enabled,
+            created_at: p.created_at,
+            updated_at: p.updated_at,
+        }
+    }
+}
+
+pub async fn list_providers(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<ProviderResponse>>, ApiError> {
+    let providers = ai_provider_config::Entity::find()
+        .all(&state.db)
+        .await?;
+    Ok(Json(providers.into_iter().map(ProviderResponse::from).collect()))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateProvider {
+    pub name: String,
+    pub provider_type: String,
+    pub api_key: Option<String>,
+    pub api_base: Option<String>,
+    pub model: Option<String>,
+    pub is_default: Option<bool>,
+    pub enabled: Option<bool>,
+}
+
+pub async fn create_provider(
+    State(state): State<AppState>,
+    Json(body): Json<CreateProvider>,
+) -> Result<Json<ProviderResponse>, ApiError> {
+    let is_default = body.is_default.unwrap_or(false);
+    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+    let txn = state.db.begin().await?;
+
+    // If setting as default, clear any existing default
+    if is_default {
+        clear_default_provider(&txn).await?;
+    }
+
+    let model = ai_provider_config::ActiveModel {
+        name: Set(body.name),
+        provider_type: Set(body.provider_type),
+        api_key: Set(body.api_key),
+        api_base: Set(body.api_base),
+        model: Set(body.model),
+        is_default: Set(is_default),
+        enabled: Set(body.enabled.unwrap_or(true)),
+        created_at: Set(now.clone()),
+        updated_at: Set(now),
+        ..Default::default()
+    };
+
+    let saved = model.insert(&txn).await?;
+    txn.commit().await?;
+
+    Ok(Json(ProviderResponse::from(saved)))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateProvider {
+    pub name: Option<String>,
+    pub provider_type: Option<String>,
+    pub api_key: Option<Option<String>>,
+    pub api_base: Option<Option<String>>,
+    pub model: Option<Option<String>>,
+    pub is_default: Option<bool>,
+    pub enabled: Option<bool>,
+}
+
+pub async fn update_provider(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+    Json(body): Json<UpdateProvider>,
+) -> Result<Json<ProviderResponse>, ApiError> {
+    let txn = state.db.begin().await?;
+
+    let existing = ai_provider_config::Entity::find_by_id(id)
+        .one(&txn)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("AI provider {id} not found")))?;
+
+    // If setting as default, clear any existing default
+    if body.is_default == Some(true) {
+        clear_default_provider(&txn).await?;
+    }
+
+    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let mut active: ai_provider_config::ActiveModel = existing.into();
+
+    if let Some(name) = body.name {
+        active.name = Set(name);
+    }
+    if let Some(provider_type) = body.provider_type {
+        active.provider_type = Set(provider_type);
+    }
+    if let Some(api_key) = body.api_key {
+        active.api_key = Set(api_key);
+    }
+    if let Some(api_base) = body.api_base {
+        active.api_base = Set(api_base);
+    }
+    if let Some(model) = body.model {
+        active.model = Set(model);
+    }
+    if let Some(is_default) = body.is_default {
+        active.is_default = Set(is_default);
+    }
+    if let Some(enabled) = body.enabled {
+        active.enabled = Set(enabled);
+    }
+    active.updated_at = Set(now);
+
+    let updated = active.update(&txn).await?;
+    txn.commit().await?;
+
+    Ok(Json(ProviderResponse::from(updated)))
+}
+
+pub async fn delete_provider(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = ai_provider_config::Entity::delete_by_id(id)
+        .exec(&state.db)
+        .await?;
+
+    if result.rows_affected == 0 {
+        return Err(ApiError::NotFound(format!("AI provider {id} not found")));
+    }
+
+    Ok(Json(serde_json::json!({ "deleted": id })))
+}
+
+async fn clear_default_provider(
+    txn: &sea_orm::DatabaseTransaction,
+) -> Result<(), ApiError> {
+    use sea_orm::sea_query::Expr;
+
+    ai_provider_config::Entity::update_many()
+        .col_expr(ai_provider_config::Column::IsDefault, Expr::value(false))
+        .filter(ai_provider_config::Column::IsDefault.eq(true))
+        .exec(txn)
+        .await?;
+    Ok(())
 }
 
 #[cfg(test)]

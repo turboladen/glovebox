@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import { ai } from '../lib/api'
   import type { ChatMessage, AiStatus } from '../lib/types'
+  import AiProviderSelect from './AiProviderSelect.svelte'
 
   let { vehicleId }: { vehicleId: number } = $props()
 
@@ -11,11 +12,12 @@
   let aiStatus: AiStatus | null = $state(null)
   let loading = $state(true)
   let messagesContainer: HTMLElement
+  let selectedProviderId: number | undefined = $state(undefined)
 
   onMount(async () => {
     try {
       aiStatus = await ai.status()
-      if (aiStatus.configured) {
+      if (aiStatus.providers.some(p => p.enabled)) {
         messages = await ai.chatHistory(vehicleId)
       }
     } catch (e) {
@@ -50,7 +52,7 @@
     scrollToBottom()
 
     try {
-      const resp = await ai.chat(vehicleId, msg)
+      const resp = await ai.chat(vehicleId, msg, selectedProviderId)
       // Replace optimistic messages with real data
       messages = [...messages.slice(0, -1), {
         id: resp.message.id - 1,
@@ -87,7 +89,7 @@
 <div class="chat-tab">
   {#if loading}
     <p>Loading...</p>
-  {:else if !aiStatus?.configured}
+  {:else if !aiStatus?.providers.some(p => p.enabled)}
     <div class="not-configured">
       <p>AI is not configured.</p>
       <p class="hint">Set an AI provider in Settings to enable chat.</p>
@@ -113,6 +115,9 @@
       {/if}
     </div>
 
+    <div class="chat-controls">
+      <AiProviderSelect bind:selectedProviderId />
+    </div>
     <div class="chat-input">
       <textarea
         bind:value={input}
@@ -209,11 +214,16 @@
     word-break: break-word;
   }
 
+  .chat-controls {
+    display: flex;
+    justify-content: flex-end;
+    padding: var(--sp-2) 0;
+    border-top: 1px solid var(--border-subtle);
+  }
+
   .chat-input {
     display: flex;
     gap: var(--sp-2);
-    padding-top: var(--sp-3);
-    border-top: 1px solid var(--border-subtle);
   }
 
   .chat-input textarea {

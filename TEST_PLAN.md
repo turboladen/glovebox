@@ -231,25 +231,42 @@ Playwright e2e tests. Keep it updated as features are added.
 | 2 | Select parts and save service | Parts marked as "installed" with service date/mileage |
 | 3 | Parts status updated | On Parts tab, linked parts show "installed" badge |
 
-## TP-22: AI Status & Configuration
+## TP-22: AI Provider Management
 
 | # | Step | Expected |
 |---|------|----------|
-| 1 | `GET /api/ai/status` with default settings | Returns `{ provider: "none", configured: false }` |
-| 2 | Set `ai.provider` to `claude` without API key | `configured: false` |
-| 3 | Set `ai.provider` to `claude` with API key | `configured: true, provider: "claude"` |
-| 4 | AI-dependent endpoints when not configured | Return 400 with "AI is not configured" message |
+| 1 | Navigate to Settings page | "AI Providers" section visible with "Add Provider" button |
+| 2 | No providers initially | "No AI providers configured." hint message |
+| 3 | Click "Add Provider" | Form appears with name, type, API key, model fields |
+| 4 | Select type "Claude" | API key field shown (required), model field shown |
+| 5 | Select type "OpenAI-Compatible" | API base URL field shown, API key marked optional |
+| 6 | Click "Fetch Models" with valid API key | Models dropdown populated from provider API |
+| 7 | Submit with name and API key | Provider created, appears in list with type and model |
+| 8 | First provider auto-checked as default | "Default" badge shown next to provider name |
+| 9 | Click "Edit" on a provider | Edit form pre-filled (API key blank for security) |
+| 10 | Click "Set Default" on non-default provider | Provider becomes default, previous default cleared |
+| 11 | Click "Disable" on a provider | Provider row dimmed, not available for AI features |
+| 12 | Click "Delete" on a provider | Provider removed from list |
+| 13 | `GET /api/ai/status` | Returns providers array, default_provider_id, configured flag |
+| 14 | `GET /api/ai/providers` | Returns list with api_key masked (api_key_set boolean) |
+| 15 | `POST /api/ai/providers` | Creates provider, enforces is_default uniqueness |
+| 16 | `PUT /api/ai/providers/:id` | Updates provider, double-option for nullable fields |
+| 17 | `DELETE /api/ai/providers/:id` | Deletes provider |
+| 18 | AI-dependent endpoints with no providers | Return 400 with "AI is not configured" message |
 
 ## TP-23: AI Chat
 
 | # | Step | Expected |
 |---|------|----------|
 | 1 | Click "AI" tab on vehicle detail | Chat tab visible with message input |
-| 2 | AI not configured | "AI is not configured" message shown, input disabled |
-| 3 | Send a chat message (AI configured) | Message appears right-aligned, loading spinner shown, assistant response appears left-aligned |
-| 4 | Chat history persists | Reload page, previous messages still shown |
-| 5 | `GET /api/ai/chat/history?vehicle_id=N` | Returns messages ordered by created_at |
-| 6 | `POST /api/ai/chat` without vehicle_id | Works for general (non-vehicle) chat |
+| 2 | No AI providers enabled | "AI is not configured" message shown, input disabled |
+| 3 | Send a chat message (provider configured) | Message appears right-aligned, loading spinner shown, assistant response appears left-aligned |
+| 4 | Provider selector (multiple providers) | Dropdown appears above chat input to select provider |
+| 5 | Provider selector (single provider) | Dropdown hidden (only shown with 2+ providers) |
+| 6 | Send message with non-default provider | Request uses selected provider_id |
+| 7 | Chat history persists | Reload page, previous messages still shown |
+| 8 | `GET /api/ai/chat/history?vehicle_id=N` | Returns messages ordered by created_at |
+| 9 | `POST /api/ai/chat` with provider_id | Uses specified provider instead of default |
 
 ## TP-24: Invoice PDF Parsing
 
@@ -257,20 +274,22 @@ Playwright e2e tests. Keep it updated as features are added.
 |---|------|----------|
 | 1 | Upload a PDF document | "Parse with AI" button appears on PDF documents |
 | 2 | Non-PDF documents | No "Parse with AI" button shown |
-| 3 | Click "Parse with AI" (AI not configured) | Error message shown |
-| 4 | Click "Parse with AI" (AI configured) | Loading state, then parsed results shown in review modal |
-| 5 | Review modal shows extracted fields | Date, shop, mileage, line items, costs editable |
-| 6 | Click "Create Service Record" | Service created with parsed/edited data, redirects to history |
+| 3 | Provider selector next to Parse button | Dropdown shown when multiple providers exist |
+| 4 | Click "Parse with AI" (no providers) | Error message shown |
+| 5 | Click "Parse with AI" (provider configured) | Loading state, then parsed results shown in review modal |
+| 6 | Review modal shows extracted fields | Date, shop, mileage, line items, costs editable |
+| 7 | Click "Create Service Record" | Service created with parsed/edited data, redirects to history |
 
 ## TP-25: Proactive Suggestions
 
 | # | Step | Expected |
 |---|------|----------|
 | 1 | Schedule tab with AI configured | Suggestions card shown with AI-generated recommendations |
-| 2 | AI not configured | Suggestions card not shown (or shows setup prompt) |
-| 3 | Each suggestion shows | Title, reason, urgency badge (high/medium/low) |
-| 4 | `GET /api/vehicles/:id/suggestions` | Returns JSON array of suggestions with title, reason, urgency |
-| 5 | Suggestions cached | Second request within 24h returns same results without AI call |
+| 2 | No AI providers enabled | Suggestions card not shown |
+| 3 | Provider selector in card header | Dropdown shown when multiple providers exist |
+| 4 | Each suggestion shows | Title, reason, urgency badge (high/medium/low) |
+| 5 | `GET /api/vehicles/:id/suggestions` | Returns JSON array of suggestions with title, reason, urgency |
+| 6 | `GET /api/vehicles/:id/suggestions?provider_id=N` | Uses specified provider |
 
 ## TP-26: NHTSA Recall Check
 
@@ -316,7 +335,8 @@ frontend/e2e/
   observations.spec.ts  # TP-14
   documents.spec.ts     # TP-15
   parts.spec.ts         # TP-18, TP-19, TP-21
-  chat.spec.ts          # TP-22, TP-23
+  ai-providers.spec.ts  # TP-22
+  chat.spec.ts          # TP-23
   invoice-parse.spec.ts # TP-24
   suggestions.spec.ts   # TP-25
   research.spec.ts      # TP-26, TP-27

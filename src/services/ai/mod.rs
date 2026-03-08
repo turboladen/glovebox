@@ -3,6 +3,7 @@ pub mod context;
 pub mod mock;
 pub mod noop;
 pub mod openai_compat;
+pub mod registry;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

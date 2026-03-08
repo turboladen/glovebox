@@ -2,8 +2,10 @@
   import { onMount } from 'svelte'
   import { documents as docsApi, ai } from '../lib/api'
   import type { Document, ParsedInvoice } from '../lib/types'
+  import AiProviderSelect from './AiProviderSelect.svelte'
 
   let { vehicleId }: { vehicleId: number } = $props()
+  let selectedProviderId: number | undefined = $state(undefined)
 
   let docs: Document[] = $state([])
   let loading = $state(true)
@@ -82,7 +84,7 @@
     parseError = ''
     parsedInvoice = null
     try {
-      parsedInvoice = await ai.parseInvoice(docId)
+      parsedInvoice = await ai.parseInvoice(docId, selectedProviderId)
     } catch (e: any) {
       parseError = e.message
     } finally {
@@ -146,6 +148,12 @@
   {:else if docs.length === 0}
     <p class="empty">No documents yet.</p>
   {:else}
+    {#if docs.some(d => isPdf(d.mime_type))}
+      <div class="ai-provider-row">
+        <span class="ai-provider-label">AI Provider:</span>
+        <AiProviderSelect bind:selectedProviderId />
+      </div>
+    {/if}
     <div class="docs-list">
       {#each docs as doc (doc.id)}
         <div class="doc-card">
@@ -236,6 +244,19 @@
   .docs-header h3 { margin: 0; }
 
   .error { color: var(--danger); font-size: 0.85rem; }
+
+  .ai-provider-row {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    margin-bottom: var(--sp-3);
+    font-size: 0.8rem;
+    color: var(--text-muted);
+  }
+
+  .ai-provider-label {
+    font-weight: 500;
+  }
 
   .docs-list { display: flex; flex-direction: column; gap: var(--sp-2); }
 
