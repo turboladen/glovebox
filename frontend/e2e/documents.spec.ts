@@ -55,12 +55,11 @@ test.describe('Documents', () => {
   test('delete a document', async ({ page }) => {
     await page.goto(vehicleUrl)
     await page.getByRole('button', { name: 'Docs' }).click()
-    // There should be at least one doc from the upload test
+    // Wait for docs to load — at least one Delete button from the upload test
     const deleteButtons = page.getByRole('button', { name: 'Delete' })
+    await expect(deleteButtons.first()).toBeVisible({ timeout: 10_000 })
     const countBefore = await deleteButtons.count()
-    expect(countBefore).toBeGreaterThan(0)
     await deleteButtons.first().click()
-    // One fewer delete button after deletion
     await expect(deleteButtons).toHaveCount(countBefore - 1)
   })
 })
