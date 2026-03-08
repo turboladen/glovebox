@@ -1,5 +1,14 @@
 import { test, expect } from '@playwright/test'
 
+// Helper: delete all AI providers to simulate "not configured" state
+async function clearProviders(page: import('@playwright/test').Page) {
+  const res = await page.request.get('/api/ai/providers')
+  const providers = await res.json()
+  for (const p of providers) {
+    await page.request.delete(`/api/ai/providers/${p.id}`)
+  }
+}
+
 // TP-23: AI Chat
 test.describe('AI Chat Tab', () => {
   let vehicleUrl: string
@@ -21,6 +30,7 @@ test.describe('AI Chat Tab', () => {
   })
 
   test('shows not-configured message when AI is not set up', async ({ page }) => {
+    await clearProviders(page)
     await page.goto(vehicleUrl)
     await page.getByRole('button', { name: 'AI' }).click()
     await expect(page.getByText('AI is not configured')).toBeVisible()
@@ -28,6 +38,7 @@ test.describe('AI Chat Tab', () => {
   })
 
   test('chat input is not shown when AI is not configured', async ({ page }) => {
+    await clearProviders(page)
     await page.goto(vehicleUrl)
     await page.getByRole('button', { name: 'AI' }).click()
     await expect(page.getByText('AI is not configured')).toBeVisible()

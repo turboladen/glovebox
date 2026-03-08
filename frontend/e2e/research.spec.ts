@@ -37,14 +37,14 @@ test.describe('Research', () => {
     await page.getByRole('button', { name: 'Run Full Check' }).click()
     await expect(page.getByRole('button', { name: 'Generating...' })).toBeVisible()
     // Wait for report to load (may fail NHTSA check due to missing vehicle info, but report still created)
-    await expect(page.getByText(/Found \d+ items|No findings/)).toBeVisible({ timeout: 15000 })
+    await expect(page.getByText(/Found \d+ items|No findings/).first()).toBeVisible({ timeout: 15000 })
   })
 
   test('report appears in reports list', async ({ page }) => {
     await page.goto(vehicleUrl)
     await page.getByRole('button', { name: 'Research' }).click()
     // Wait for reports to load
-    await expect(page.getByText('Full Check', { exact: true })).toBeVisible({ timeout: 5000 })
+    await expect(page.locator('.report-type', { hasText: 'Full Check' })).toBeVisible({ timeout: 5000 })
   })
 })
 

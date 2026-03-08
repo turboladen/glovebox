@@ -1,6 +1,5 @@
 pub mod claude;
 pub mod context;
-pub mod mock;
 pub mod noop;
 pub mod openai_compat;
 pub mod registry;
@@ -160,54 +159,4 @@ mod tests {
         assert!(matches!(result.unwrap_err(), AiError::NotConfigured));
     }
 
-    #[tokio::test]
-    async fn mock_returns_configured_response() {
-        let provider = mock::MockProvider::new("test response");
-        assert!(provider.is_configured());
-        assert_eq!(provider.provider_name(), "mock");
-
-        let req = AiRequest {
-            system_prompt: "system".into(),
-            messages: vec![ChatMessage {
-                role: Role::User,
-                content: "hello".into(),
-            }],
-            attachments: vec![],
-            max_tokens: None,
-        };
-        let resp = provider.complete(req).await.unwrap();
-        assert_eq!(resp.content, "test response");
-    }
-
-    #[tokio::test]
-    async fn mock_records_calls() {
-        let provider = mock::MockProvider::new("response");
-        let req = AiRequest {
-            system_prompt: "sys".into(),
-            messages: vec![ChatMessage {
-                role: Role::User,
-                content: "msg1".into(),
-            }],
-            attachments: vec![],
-            max_tokens: None,
-        };
-        provider.complete(req).await.unwrap();
-
-        let calls = provider.calls();
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].messages[0].content, "msg1");
-    }
-
-    #[tokio::test]
-    async fn mock_with_error() {
-        let provider = mock::MockProvider::with_error(AiError::ProviderError("fail".into()));
-        let req = AiRequest {
-            system_prompt: "sys".into(),
-            messages: vec![],
-            attachments: vec![],
-            max_tokens: None,
-        };
-        let result = provider.complete(req).await;
-        assert!(result.is_err());
-    }
 }

@@ -246,21 +246,9 @@ async fn write_reminders(
     Ok(())
 }
 
-/// Format cents as a dollar string (e.g., 4999 -> "$49.99").
-pub fn format_cents(cents: i32) -> String {
-    format!("${:.2}", cents as f64 / 100.0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn format_cents_positive() {
-        assert_eq!(format_cents(4999), "$49.99");
-        assert_eq!(format_cents(100), "$1.00");
-        assert_eq!(format_cents(0), "$0.00");
-    }
 
     #[test]
     fn write_vehicle_info_full() {
