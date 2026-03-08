@@ -22,6 +22,7 @@ pub struct CreateServiceRecord {
     pub total_cost_cents: Option<i32>,
     pub total_cost_currency: Option<String>,
     pub shop_name: Option<String>,
+    pub shop_id: Option<i32>,
     pub notes: Option<String>,
     pub schedule_item_ids: Option<Vec<i32>>,
 }
@@ -38,6 +39,7 @@ pub struct UpdateServiceRecord {
     pub total_cost_cents: Option<Option<i32>>,
     pub total_cost_currency: Option<Option<String>>,
     pub shop_name: Option<Option<String>>,
+    pub shop_id: Option<Option<i32>>,
     pub notes: Option<Option<String>>,
     pub schedule_item_ids: Option<Vec<i32>>,
 }
@@ -125,6 +127,7 @@ pub async fn create(
         total_cost_cents: Set(input.total_cost_cents),
         total_cost_currency: Set(input.total_cost_currency),
         shop_name: Set(input.shop_name),
+        shop_id: Set(input.shop_id),
         notes: Set(input.notes),
         ..Default::default()
     };
@@ -185,6 +188,7 @@ pub async fn update(
     if let Some(v) = input.total_cost_cents { active.total_cost_cents = Set(v); }
     if let Some(v) = input.total_cost_currency { active.total_cost_currency = Set(v); }
     if let Some(v) = input.shop_name { active.shop_name = Set(v); }
+    if let Some(v) = input.shop_id { active.shop_id = Set(v); }
     if let Some(v) = input.notes { active.notes = Set(v); }
 
     let record = active.update(&txn).await?;

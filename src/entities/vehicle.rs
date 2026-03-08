@@ -49,6 +49,12 @@ pub enum Relation {
     ServiceRecord,
     #[sea_orm(has_many = "super::maintenance_schedule_item::Entity")]
     MaintenanceScheduleItem,
+    #[sea_orm(has_many = "super::observation::Entity")]
+    Observation,
+    #[sea_orm(has_many = "super::document::Entity")]
+    Document,
+    #[sea_orm(has_many = "super::accident::Entity")]
+    Accident,
 }
 
 impl Related<super::model_template::Entity> for Entity {
@@ -78,6 +84,24 @@ impl Related<super::service_record::Entity> for Entity {
 impl Related<super::maintenance_schedule_item::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::MaintenanceScheduleItem.def()
+    }
+}
+
+impl Related<super::observation::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Observation.def()
+    }
+}
+
+impl Related<super::document::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Document.def()
+    }
+}
+
+impl Related<super::accident::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Accident.def()
     }
 }
 

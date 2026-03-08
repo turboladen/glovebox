@@ -9,3 +9,7 @@ pub mod services;
 pub mod settings;
 pub mod vehicles;
 pub mod vin;
+pub mod shops;
+pub mod observations;
+pub mod documents;
+pub mod accidents;

@@ -11,6 +11,10 @@ mod m20260301_000008_create_service_schedule_links;
 mod m20260301_000009_create_settings;
 mod m20260301_000010_add_schedule_item_fields;
 mod m20260301_000011_seed_vw_mqb_data;
+mod m20260301_000012_create_shops;
+mod m20260301_000013_create_observations;
+mod m20260301_000014_create_documents;
+mod m20260301_000015_create_accidents;
 
 pub struct Migrator;
 
@@ -29,6 +33,10 @@ impl MigratorTrait for Migrator {
             Box::new(m20260301_000009_create_settings::Migration),
             Box::new(m20260301_000010_add_schedule_item_fields::Migration),
             Box::new(m20260301_000011_seed_vw_mqb_data::Migration),
+            Box::new(m20260301_000012_create_shops::Migration),
+            Box::new(m20260301_000013_create_observations::Migration),
+            Box::new(m20260301_000014_create_documents::Migration),
+            Box::new(m20260301_000015_create_accidents::Migration),
         ]
     }
 }
