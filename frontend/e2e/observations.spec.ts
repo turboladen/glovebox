@@ -43,6 +43,6 @@ test.describe('Observations', () => {
     await page.goto(vehicleUrl)
     await page.getByRole('button', { name: 'History' }).click()
     await expect(page.getByText('Rattle on cold start')).toBeVisible()
-    await expect(page.getByText('Observation')).toBeVisible()
+    await expect(page.getByText('Observation', { exact: true })).toBeVisible()
   })
 })

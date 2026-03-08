@@ -49,13 +49,19 @@ test.describe('Documents', () => {
 
     // Document should appear
     await expect(page.getByText('Test Receipt')).toBeVisible()
-    await expect(page.getByText('receipt')).toBeVisible()
+    await expect(page.getByText('receipt', { exact: true })).toBeVisible()
   })
 
   test('delete a document', async ({ page }) => {
+    // Upload a doc first so this test is independent
     await page.goto(vehicleUrl)
     await page.getByRole('button', { name: 'Docs' }).click()
-    await expect(page.getByText('Test Receipt')).toBeVisible()
+    await page.getByRole('button', { name: '+ Upload' }).click()
+    const fileInput = page.locator('input[type="file"]')
+    await fileInput.setInputFiles(testFilePath)
+    await page.getByLabel('Title').fill('Delete Me')
+    await page.getByRole('button', { name: 'Upload' }).click()
+    await expect(page.getByText('Delete Me')).toBeVisible()
     await page.getByRole('button', { name: 'Delete' }).click()
     await expect(page.getByText('No documents yet.')).toBeVisible()
   })
