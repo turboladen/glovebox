@@ -131,6 +131,61 @@ Playwright e2e tests. Keep it updated as features are added.
 | 4 | `POST /api/vehicles` with empty body | 400/422 error |
 | 5 | `GET /api/settings` | Returns settings list (seeded defaults) |
 
+## TP-13: Shops
+
+| # | Step | Expected |
+|---|------|----------|
+| 1 | `GET /api/shops` with empty DB | Returns `[]` |
+| 2 | `POST /api/shops` with name | Shop created, returned with id |
+| 3 | `GET /api/shops/:id` | Returns shop details |
+| 4 | `PUT /api/shops/:id` | Updates shop fields |
+| 5 | Service record with shop_id | Links service to a shop entity |
+
+## TP-14: Observations
+
+| # | Step | Expected |
+|---|------|----------|
+| 1 | Click "Obs." tab on vehicle detail | Observations tab visible with "Add Observation" button |
+| 2 | No observations | "No observations yet." message |
+| 3 | Add observation (fill title, category) | Form submits, observation appears in list |
+| 4 | Observation shows category badge and date | Category in uppercase, date formatted |
+| 5 | OBD code category shows code input | Extra field for JSON array of codes |
+| 6 | "Mark Resolved" button | Toggles resolved state, card becomes dimmed |
+| 7 | Observations appear in History tab | Interleaved with services, tagged "Observation" |
+
+## TP-15: Documents & Upload
+
+| # | Step | Expected |
+|---|------|----------|
+| 1 | Click "Docs" tab on vehicle detail | Documents tab visible with "Upload" button |
+| 2 | No documents | "No documents yet." message |
+| 3 | Upload a file (select file, set type) | File uploaded, appears in list with filename and size |
+| 4 | Image document | Shows inline thumbnail preview |
+| 5 | "View" button | Opens file in new tab via `/files/` path |
+| 6 | "Delete" button | Removes document from list and deletes file from disk |
+| 7 | Document with doc_type | Type badge shown (invoice, receipt, photo, etc.) |
+
+## TP-16: Accidents
+
+| # | Step | Expected |
+|---|------|----------|
+| 1 | `POST /api/vehicles/:id/accidents` | Creates accident with description and fault |
+| 2 | `GET /api/vehicles/:id/accidents` | Returns list with correspondence and service_record_ids |
+| 3 | Add correspondence to accident | Correspondence entry created with contact method and summary |
+| 4 | Update accident with cost/resolution | Fields updated, resolved flag toggled |
+| 5 | Link service records to accident | service_record_ids populated in response |
+
+## TP-17: Interleaved Timeline
+
+| # | Step | Expected |
+|---|------|----------|
+| 1 | History tab with both services and observations | Both types shown, sorted by date descending |
+| 2 | Service entries | Tagged "Service" (green badge), show cost and mileage |
+| 3 | Observation entries | Tagged "Observation" (yellow badge), show resolved status |
+| 4 | Filter: "All" | Shows both types |
+| 5 | Filter: "Services" | Shows only service records |
+| 6 | Filter: "Observations" | Shows only observations |
+
 ---
 
 ## Playwright Test Structure
@@ -145,6 +200,8 @@ frontend/e2e/
   schedule.spec.ts      # TP-07
   history.spec.ts       # TP-08
   navigation.spec.ts    # TP-10
+  observations.spec.ts  # TP-14
+  documents.spec.ts     # TP-15
 ```
 
 Run: `just test-e2e`
