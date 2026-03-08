@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════
-   GLOVEBOX — "Workshop Manual" Design System
-   Dark-first. Warm. Automotive. Precise.
+   GLOVEBOX — "Porsche Design" Design System
+   Dark-first. Cool. Precision. Guards Red.
    ═══════════════════════════════════════════════ */
 
 /* --- Fonts ----------------------------------- */
@@ -8,31 +8,31 @@
 
 /* --- Design Tokens --------------------------- */
 :root {
-  /* — Palette: warm charcoal + amber accent — */
-  --bg:             #141416;
-  --bg-raised:      #1c1c1e;
-  --surface:        #2c2c2e;
-  --surface-hover:  #3a3a3c;
-  --border:         #3a3a3c;
-  --border-subtle:  #2c2c2e;
+  /* — Palette: cool matte black + Guards Red — */
+  --bg:             #0a0a0c;
+  --bg-raised:      #141418;
+  --surface:        #1e1e24;
+  --surface-hover:  #2a2a32;
+  --border:         #2e2e36;
+  --border-subtle:  #1e1e24;
 
-  --text:           #f0ece4;
-  --text-secondary: #a8a29e;
-  --text-muted:     #78716c;
+  --text:           #e8e8ec;
+  --text-secondary: #9a9aa4;
+  --text-muted:     #62626c;
 
-  /* — Accent: amber / copper — */
-  --primary:        #e5a84b;
-  --primary-hover:  #d4963a;
-  --primary-muted:  rgba(229, 168, 75, 0.15);
-  --primary-text:   #141416;
+  /* — Accent: Guards Red — */
+  --primary:        #d4000d;
+  --primary-hover:  #b8000b;
+  --primary-muted:  rgba(212, 0, 13, 0.12);
+  --primary-text:   #ffffff;
 
   /* — Semantic — */
-  --danger:         #ef6b6b;
-  --danger-bg:      rgba(239, 107, 107, 0.12);
-  --danger-border:  rgba(239, 107, 107, 0.25);
+  --danger:         #ff6b6b;
+  --danger-bg:      rgba(255, 107, 107, 0.12);
+  --danger-border:  rgba(255, 107, 107, 0.25);
 
   --warning:        #e5a84b;
-  --warning-bg:     rgba(229, 168, 75, 0.12);
+  --warning-bg:     rgba(229, 168, 75, 0.15);
   --warning-border: rgba(229, 168, 75, 0.25);
 
   --success:        #6bca8a;
@@ -60,15 +60,15 @@
 
   /* — Radii — */
   --radius-sm:  4px;
-  --radius-md:  8px;
-  --radius-lg:  12px;
-  --radius-xl:  16px;
+  --radius-md:  6px;
+  --radius-lg:  8px;
+  --radius-xl:  10px;
 
   /* — Shadows — */
   --shadow-sm:  0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-md:  0 4px 12px rgba(0, 0, 0, 0.4);
   --shadow-lg:  0 8px 24px rgba(0, 0, 0, 0.5);
-  --shadow-glow: 0 0 20px rgba(229, 168, 75, 0.15);
+  --shadow-glow: 0 0 20px rgba(212, 0, 13, 0.10);
 
   /* — Transitions — */
   --ease-out:   cubic-bezier(0.16, 1, 0.3, 1);
@@ -90,25 +90,25 @@
 /* --- Light mode override --------------------- */
 @media (prefers-color-scheme: light) {
   :root {
-    --bg:             #f5f0ea;
-    --bg-raised:      #ebe5dc;
-    --surface:        #e0d8cd;
-    --surface-hover:  #d5ccbf;
-    --border:         #cdc4b5;
-    --border-subtle:  #ddd5c8;
+    --bg:             #f0f0f2;
+    --bg-raised:      #e6e6ea;
+    --surface:        #dcdce2;
+    --surface-hover:  #d0d0d8;
+    --border:         #c4c4cc;
+    --border-subtle:  #d8d8e0;
 
-    --text:           #1c1917;
-    --text-secondary: #57534e;
-    --text-muted:     #a8a29e;
+    --text:           #18181c;
+    --text-secondary: #52525c;
+    --text-muted:     #9a9aa4;
 
-    --primary:        #b8861e;
-    --primary-hover:  #a3760f;
-    --primary-muted:  rgba(184, 134, 30, 0.12);
+    --primary:        #b8000b;
+    --primary-hover:  #9e0009;
+    --primary-muted:  rgba(184, 0, 11, 0.10);
     --primary-text:   #ffffff;
 
-    --danger:         #dc3545;
-    --danger-bg:      rgba(220, 53, 69, 0.1);
-    --danger-border:  rgba(220, 53, 69, 0.25);
+    --danger:         #e04520;
+    --danger-bg:      rgba(224, 69, 32, 0.1);
+    --danger-border:  rgba(224, 69, 32, 0.25);
 
     --warning:        #b45309;
     --warning-bg:     rgba(180, 83, 9, 0.1);
@@ -124,7 +124,7 @@
     --shadow-sm:  0 1px 2px rgba(0, 0, 0, 0.08);
     --shadow-md:  0 4px 12px rgba(0, 0, 0, 0.1);
     --shadow-lg:  0 8px 24px rgba(0, 0, 0, 0.12);
-    --shadow-glow: 0 0 20px rgba(184, 134, 30, 0.1);
+    --shadow-glow: 0 0 20px rgba(184, 0, 11, 0.08);
   }
 }
 
@@ -174,14 +174,14 @@ body::before {
   inset: 0;
   pointer-events: none;
   z-index: 9999;
-  opacity: 0.025;
+  opacity: 0.012;
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   background-size: 256px 256px;
 }
 
 @media (prefers-color-scheme: light) {
   body::before {
-    opacity: 0.04;
+    opacity: 0.02;
   }
 }
 

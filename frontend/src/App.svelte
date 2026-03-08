@@ -41,7 +41,7 @@
     margin-bottom: var(--sp-6);
   }
 
-  /* Amber accent line along top of page */
+  /* Guards Red accent line along top of page */
   header::before {
     content: '';
     position: fixed;
