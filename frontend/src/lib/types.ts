@@ -105,6 +105,7 @@ export interface ServiceRecord {
   total_cost_cents: number | null
   total_cost_currency: string | null
   shop_name: string | null
+  shop_id: number | null
   notes: string | null
   created_at: string
   updated_at: string
@@ -126,6 +127,7 @@ export interface CreateServiceRecord {
   total_cost_cents?: number | null
   total_cost_currency?: string | null
   shop_name?: string | null
+  shop_id?: number | null
   notes?: string | null
   schedule_item_ids?: number[]
   part_ids?: number[]
@@ -420,13 +422,6 @@ export interface VehicleExport {
   total_parts_cost: string
   total_cost: string
   record_count: number
-}
-
-export interface Setting {
-  key: string
-  value: string
-  created_at: string
-  updated_at: string
 }
 
 // AI Provider types

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { services as servicesApi, schedules as schedulesApi, parts as partsApi } from '../lib/api'
-  import type { ResolvedScheduleItem, Part } from '../lib/types'
+  import { services as servicesApi, schedules as schedulesApi, parts as partsApi, shops as shopsApi } from '../lib/api'
+  import type { ResolvedScheduleItem, Part, Shop } from '../lib/types'
 
   let { vehicleId, onComplete, onCancel }: {
     vehicleId: number
@@ -14,6 +14,15 @@
   let description = $state('')
   let totalCostDollars = $state('')
   let shopName = $state('')
+  let shopList: Shop[] = $state([])
+  let selectedShopId: number | null = $state(null)
+  let shopDropdownOpen = $state(false)
+  let highlightedIndex = $state(-1)
+  let filteredShops = $derived(
+    shopName.trim()
+      ? shopList.filter(s => s.name.toLowerCase().includes(shopName.trim().toLowerCase()))
+      : shopList
+  )
   let notes = $state('')
   let isDiy = $state(false)
   let selectedScheduleIds: number[] = $state([])
@@ -25,12 +34,14 @@
 
   onMount(async () => {
     try {
-      const [items, purchasedParts] = await Promise.all([
+      const [items, purchasedParts, allShops] = await Promise.all([
         schedulesApi.resolve(vehicleId),
         partsApi.list(vehicleId, { status: 'purchased' }),
+        shopsApi.list(),
       ])
       scheduleItems = items
       availableParts = purchasedParts
+      shopList = allShops
     } catch (e) {
       console.error('Failed to load form data:', e)
     }
@@ -52,6 +63,55 @@
     }
   }
 
+  function selectShop(shop: Shop) {
+    shopName = shop.name
+    selectedShopId = shop.id
+    shopDropdownOpen = false
+  }
+
+  function handleShopInput() {
+    selectedShopId = null
+    highlightedIndex = -1
+    shopDropdownOpen = true
+  }
+
+  function handleShopBlur() {
+    // Delay to allow click on dropdown item
+    setTimeout(() => { shopDropdownOpen = false }, 150)
+  }
+
+  function handleShopKeydown(e: KeyboardEvent) {
+    if (!shopDropdownOpen || filteredShops.length === 0) {
+      if (e.key === 'ArrowDown' && filteredShops.length > 0) {
+        shopDropdownOpen = true
+        highlightedIndex = 0
+        e.preventDefault()
+      }
+      return
+    }
+
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault()
+        highlightedIndex = (highlightedIndex + 1) % filteredShops.length
+        break
+      case 'ArrowUp':
+        e.preventDefault()
+        highlightedIndex = highlightedIndex <= 0 ? filteredShops.length - 1 : highlightedIndex - 1
+        break
+      case 'Enter':
+        e.preventDefault()
+        if (highlightedIndex >= 0 && highlightedIndex < filteredShops.length) {
+          selectShop(filteredShops[highlightedIndex])
+        }
+        break
+      case 'Escape':
+        shopDropdownOpen = false
+        highlightedIndex = -1
+        break
+    }
+  }
+
   async function submit() {
     saving = true
     error = ''
@@ -63,6 +123,7 @@
         description: description || undefined,
         total_cost_cents: costCents,
         shop_name: shopName || undefined,
+        shop_id: selectedShopId ?? undefined,
         notes: notes || undefined,
         schedule_item_ids: selectedScheduleIds.length > 0 ? selectedScheduleIds : undefined,
         part_ids: selectedPartIds.length > 0 ? selectedPartIds : undefined,
@@ -100,9 +161,44 @@
         <label for="svc-cost">Total Cost ($)</label>
         <input id="svc-cost" type="number" step="0.01" min="0" bind:value={totalCostDollars} />
       </div>
-      <div class="field">
+      <div class="field shop-autocomplete">
         <label for="svc-shop">Shop</label>
-        <input id="svc-shop" type="text" bind:value={shopName} placeholder="Shop name" />
+        <input
+          id="svc-shop"
+          type="text"
+          role="combobox"
+          aria-haspopup="listbox"
+          aria-expanded={shopDropdownOpen && filteredShops.length > 0}
+          aria-controls="shop-listbox"
+          aria-autocomplete="list"
+          aria-activedescendant={highlightedIndex >= 0 ? `shop-option-${filteredShops[highlightedIndex]?.id}` : undefined}
+          bind:value={shopName}
+          oninput={handleShopInput}
+          onfocus={() => { shopDropdownOpen = true }}
+          onblur={handleShopBlur}
+          onkeydown={handleShopKeydown}
+          placeholder="Search or type shop name"
+          autocomplete="off"
+        />
+        {#if shopDropdownOpen && filteredShops.length > 0}
+          <ul id="shop-listbox" class="shop-dropdown" role="listbox">
+            {#each filteredShops as shop, i (shop.id)}
+              <li
+                id="shop-option-{shop.id}"
+                role="option"
+                aria-selected={selectedShopId === shop.id}
+                class:highlighted={i === highlightedIndex}
+              >
+                <button type="button" onmousedown={() => selectShop(shop)}>
+                  <span class="shop-name">{shop.name}</span>
+                  {#if shop.specialty}
+                    <span class="shop-detail">{shop.specialty}</span>
+                  {/if}
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
       </div>
     </div>
 
@@ -186,6 +282,49 @@
 
   .checkbox-item input[type="checkbox"] {
     width: auto;
+  }
+
+  .shop-autocomplete {
+    position: relative;
+  }
+
+  .shop-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 10;
+    margin: 2px 0 0;
+    padding: 0;
+    list-style: none;
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    max-height: 180px;
+    overflow-y: auto;
+  }
+
+  .shop-dropdown li button {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    padding: var(--sp-2) var(--sp-3);
+    background: none;
+    border: none;
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+    font-size: 0.85rem;
+  }
+
+  .shop-dropdown li button:hover,
+  .shop-dropdown li.highlighted button {
+    background: var(--surface-hover);
+  }
+
+  .shop-detail {
+    font-size: 0.75rem;
+    color: var(--text-muted);
   }
 
   .error {
