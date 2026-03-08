@@ -32,8 +32,8 @@ test.describe('Vehicle Detail', () => {
 
   test('can switch to history tab', async ({ page }) => {
     await page.goto(vehicleUrl)
-    await page.getByRole('button', { name: 'History' }).click()
-    const historyTab = page.getByRole('button', { name: 'History' })
+    await page.getByRole('button', { name: 'History', exact: true }).click()
+    const historyTab = page.getByRole('button', { name: 'History', exact: true })
     await expect(historyTab).toHaveClass(/active/)
   })
 
@@ -110,7 +110,7 @@ test.describe('Log Service', () => {
     // Form should close
     await expect(page.getByLabel('Description')).not.toBeVisible()
     // Check history tab
-    await page.getByRole('button', { name: 'History' }).click()
+    await page.getByRole('button', { name: 'History', exact: true }).click()
     await expect(page.getByText('Oil Change')).toBeVisible()
     await expect(page.getByText('$49.99')).toBeVisible()
   })

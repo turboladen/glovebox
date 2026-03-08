@@ -128,6 +128,46 @@ export const accidents = {
     request<AccidentCorrespondence>(`/vehicles/${vehicleId}/accidents/${accidentId}/correspondence`, { method: 'POST', body: JSON.stringify(data) }),
 }
 
+// Part Slots
+export const partSlots = {
+  list: (vehicleId: number) => request<PartSlot[]>(`/vehicles/${vehicleId}/part-slots`),
+  get: (vehicleId: number, id: number) => request<PartSlot>(`/vehicles/${vehicleId}/part-slots/${id}`),
+  create: (vehicleId: number, data: CreatePartSlot) =>
+    request<PartSlot>(`/vehicles/${vehicleId}/part-slots`, { method: 'POST', body: JSON.stringify(data) }),
+  update: (vehicleId: number, id: number, data: Partial<CreatePartSlot>) =>
+    request<PartSlot>(`/vehicles/${vehicleId}/part-slots/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  delete: (vehicleId: number, id: number) =>
+    request<{ deleted: boolean }>(`/vehicles/${vehicleId}/part-slots/${id}`, { method: 'DELETE' }),
+}
+
+// Parts
+export const parts = {
+  list: (vehicleId: number, params?: { slot_id?: number; status?: string }) => {
+    const qs = new URLSearchParams()
+    if (params?.slot_id) qs.set('slot_id', String(params.slot_id))
+    if (params?.status) qs.set('status', params.status)
+    const query = qs.toString()
+    return request<Part[]>(`/vehicles/${vehicleId}/parts${query ? '?' + query : ''}`)
+  },
+  get: (vehicleId: number, id: number) => request<Part>(`/vehicles/${vehicleId}/parts/${id}`),
+  create: (vehicleId: number, data: CreatePart) =>
+    request<Part>(`/vehicles/${vehicleId}/parts`, { method: 'POST', body: JSON.stringify(data) }),
+  update: (vehicleId: number, id: number, data: Partial<Part>) =>
+    request<Part>(`/vehicles/${vehicleId}/parts/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  delete: (vehicleId: number, id: number) =>
+    request<{ deleted: boolean }>(`/vehicles/${vehicleId}/parts/${id}`, { method: 'DELETE' }),
+}
+
+// Costs
+export const costs = {
+  get: (vehicleId: number) => request<CostSummary>(`/vehicles/${vehicleId}/costs`),
+}
+
+// Export
+export const vehicleExport = {
+  get: (vehicleId: number) => request<VehicleExport>(`/vehicles/${vehicleId}/export`),
+}
+
 // Settings
 export const settings = {
   list: () => request<Setting[]>('/settings'),
@@ -144,4 +184,6 @@ import type {
   RemindersResponse, VinDecodeResponse, Setting,
   Shop, Observation, CreateObservation, Document,
   AccidentWithDetails, AccidentCorrespondence,
+  PartSlot, CreatePartSlot, Part, CreatePart,
+  CostSummary, VehicleExport,
 } from './types'

@@ -13,3 +13,5 @@ pub mod document;
 pub mod accident;
 pub mod accident_correspondence;
 pub mod accident_service_link;
+pub mod part_slot;
+pub mod part;

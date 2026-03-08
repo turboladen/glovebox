@@ -41,7 +41,7 @@ test.describe('Observations', () => {
 
   test('observation appears in history tab', async ({ page }) => {
     await page.goto(vehicleUrl)
-    await page.getByRole('button', { name: 'History' }).click()
+    await page.getByRole('button', { name: 'History', exact: true }).click()
     await expect(page.getByText('Rattle on cold start')).toBeVisible()
     await expect(page.getByText('Observation', { exact: true })).toBeVisible()
   })

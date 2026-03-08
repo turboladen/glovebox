@@ -81,6 +81,14 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/vehicles/{vehicle_id}/accidents", get(api::accidents::list).post(api::accidents::create))
         .route("/api/vehicles/{vehicle_id}/accidents/{id}", get(api::accidents::get_one).put(api::accidents::update))
         .route("/api/vehicles/{vehicle_id}/accidents/{accident_id}/correspondence", get(api::accidents::list_correspondence).post(api::accidents::create_correspondence))
+        // Part slots and parts (per vehicle)
+        .route("/api/vehicles/{vehicle_id}/part-slots", get(api::part_slots::list).post(api::part_slots::create))
+        .route("/api/vehicles/{vehicle_id}/part-slots/{id}", get(api::part_slots::get_one).put(api::part_slots::update).delete(api::part_slots::delete))
+        .route("/api/vehicles/{vehicle_id}/parts", get(api::parts::list).post(api::parts::create))
+        .route("/api/vehicles/{vehicle_id}/parts/{id}", get(api::parts::get_one).put(api::parts::update).delete(api::parts::delete))
+        // Cost of ownership
+        .route("/api/vehicles/{vehicle_id}/costs", get(api::costs::get_costs))
+        .route("/api/vehicles/{vehicle_id}/export", get(api::export::export_history))
         // VIN decode
         .route("/api/vin/{vin}", get(api::vin::decode))
         .route("/api/vehicles/{vehicle_id}/vin-decode/{vin}", axum::routing::post(api::vin::decode_and_store))

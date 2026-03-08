@@ -1,0 +1,154 @@
+<script lang="ts">
+  import { onMount } from 'svelte'
+  import { costs as costsApi } from '../lib/api'
+  import type { CostSummary } from '../lib/types'
+
+  let { vehicleId }: { vehicleId: number } = $props()
+
+  let data: CostSummary | null = $state(null)
+  let loading = $state(true)
+
+  onMount(async () => {
+    try {
+      data = await costsApi.get(vehicleId)
+    } catch (e) {
+      console.error(e)
+    } finally {
+      loading = false
+    }
+  })
+
+  function fmt(cents: number): string {
+    return `$${(cents / 100).toFixed(2)}`
+  }
+
+  function fmtLong(cents: number | null): string {
+    if (cents === null) return 'N/A'
+    return `$${(cents / 100).toFixed(2)}`
+  }
+</script>
+
+<div class="costs-tab">
+  <h3>Cost of Ownership</h3>
+
+  {#if loading}
+    <p>Loading cost data...</p>
+  {:else if !data}
+    <p class="empty">Could not load cost data.</p>
+  {:else if data.total_cost_cents === 0 && data.part_count === 0}
+    <p class="empty">No cost data yet. Log services or add parts to see ownership costs.</p>
+  {:else}
+    <div class="summary-grid">
+      <div class="summary-card">
+        <span class="card-label">Total Spent</span>
+        <span class="card-value">{fmt(data.total_cost_cents)}</span>
+      </div>
+      <div class="summary-card">
+        <span class="card-label">Services</span>
+        <span class="card-value">{fmt(data.total_service_cost_cents)}</span>
+        <span class="card-sub">{data.service_count} service{data.service_count !== 1 ? 's' : ''}</span>
+      </div>
+      <div class="summary-card">
+        <span class="card-label">Parts</span>
+        <span class="card-value">{fmt(data.total_parts_cost_cents)}</span>
+        <span class="card-sub">{data.part_count} part{data.part_count !== 1 ? 's' : ''}</span>
+      </div>
+      <div class="summary-card">
+        <span class="card-label">Labor</span>
+        <span class="card-value">{fmt(data.total_labor_cost_cents)}</span>
+      </div>
+      {#if data.cost_per_mile_cents !== null}
+        <div class="summary-card">
+          <span class="card-label">Cost per Mile</span>
+          <span class="card-value">{fmtLong(data.cost_per_mile_cents)}</span>
+        </div>
+      {/if}
+    </div>
+
+    {#if data.monthly_costs.length > 0}
+      <h4>Monthly Breakdown</h4>
+      <table class="cost-table">
+        <thead>
+          <tr>
+            <th>Month</th>
+            <th>Services</th>
+            <th>Parts</th>
+            <th>Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each data.monthly_costs as mc (mc.month)}
+            <tr>
+              <td>{mc.month}</td>
+              <td>{fmt(mc.service_cost_cents)}</td>
+              <td>{fmt(mc.parts_cost_cents)}</td>
+              <td class="total">{fmt(mc.total_cents)}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    {/if}
+  {/if}
+</div>
+
+<style>
+  .costs-tab h3 { margin: 0 0 1rem; }
+  .costs-tab h4 { margin: 1.5rem 0 0.5rem; }
+
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+  }
+
+  .summary-card {
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    display: flex;
+    flex-direction: column;
+  }
+
+  .card-label {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .card-value {
+    font-size: 1.3rem;
+    font-weight: 600;
+    margin-top: 0.25rem;
+  }
+
+  .card-sub {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+  }
+
+  .cost-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+  }
+
+  .cost-table th, .cost-table td {
+    padding: 0.4rem 0.75rem;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .cost-table th {
+    font-weight: 600;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .cost-table .total { font-weight: 600; }
+
+  .empty { color: var(--text-muted); text-align: center; padding: 2rem 0; }
+</style>

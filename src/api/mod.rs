@@ -13,3 +13,7 @@ pub mod shops;
 pub mod observations;
 pub mod documents;
 pub mod accidents;
+pub mod part_slots;
+pub mod parts;
+pub mod costs;
+pub mod export;

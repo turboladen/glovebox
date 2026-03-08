@@ -186,6 +186,51 @@ Playwright e2e tests. Keep it updated as features are added.
 | 5 | Filter: "Services" | Shows only service records |
 | 6 | Filter: "Observations" | Shows only observations |
 
+## TP-18: Parts Tab
+
+| # | Step | Expected |
+|---|------|----------|
+| 1 | Click "Parts" tab on vehicle detail | Parts tab visible with "+ Add Slot" and "+ Add Part" buttons |
+| 2 | No slots or parts | "No parts or slots yet." message |
+| 3 | Add a slot (name, category, OE spec) | Slot appears grouped under category heading |
+| 4 | Slot with no part installed | "No part installed" shown in slot card |
+| 5 | Add a part to a slot (name, manufacturer, cost) | Part appears under slot, status badge "purchased" |
+| 6 | Edit part status to "installed" | Status badge changes, install date/odometer shown |
+| 7 | Expand part history on slot | Shows all parts for that slot with status, cost |
+| 8 | Add unslotted part | Part appears under "Unslotted Parts" heading |
+| 9 | Edit a slot | Updates slot name, category, OE spec |
+| 10 | Delete a slot | Slot removed, parts become unslotted |
+| 11 | Delete a part | Part removed from list |
+
+## TP-19: Cost of Ownership
+
+| # | Step | Expected |
+|---|------|----------|
+| 1 | Click "Costs" tab on vehicle detail | Cost of Ownership heading visible |
+| 2 | No service records or parts | "No cost data yet." message |
+| 3 | With services and parts | Summary cards: Total Spent, Services, Parts, Labor |
+| 4 | Cost per mile | Shown when vehicle has purchase_mileage and service mileage |
+| 5 | Monthly breakdown table | Rows with month, service cost, parts cost, total |
+
+## TP-20: Export Service History
+
+| # | Step | Expected |
+|---|------|----------|
+| 1 | Click "Export History" on vehicle detail | New window/tab opens with printable history |
+| 2 | Export includes vehicle info | Name, year/make/model, VIN shown at top |
+| 3 | Service records table | Date, mileage, description, cost, shop columns |
+| 4 | Installed parts table | Part name, manufacturer, part #, install date, mileage, cost |
+| 5 | Totals section | Services total, parts total, grand total |
+| 6 | Print button | Window.print() triggered, @media print hides button |
+
+## TP-21: Link Parts to Services
+
+| # | Step | Expected |
+|---|------|----------|
+| 1 | Log Service with purchased parts available | "Parts installed during this service" checkbox list shown |
+| 2 | Select parts and save service | Parts marked as "installed" with service date/mileage |
+| 3 | Parts status updated | On Parts tab, linked parts show "installed" badge |
+
 ---
 
 ## Playwright Test Structure
@@ -202,6 +247,7 @@ frontend/e2e/
   navigation.spec.ts    # TP-10
   observations.spec.ts  # TP-14
   documents.spec.ts     # TP-15
+  parts.spec.ts         # TP-18, TP-19, TP-21
 ```
 
 Run: `just test-e2e`

@@ -3,7 +3,7 @@ use axum::Json;
 use sea_orm::*;
 use serde::{Deserialize, Serialize};
 
-use crate::entities::{mileage_log, service_record, service_schedule_link, vehicle};
+use crate::entities::{mileage_log, part, service_record, service_schedule_link, vehicle};
 use crate::AppState;
 
 use super::error::ApiError;
@@ -25,6 +25,7 @@ pub struct CreateServiceRecord {
     pub shop_id: Option<i32>,
     pub notes: Option<String>,
     pub schedule_item_ids: Option<Vec<i32>>,
+    pub part_ids: Option<Vec<i32>>,
 }
 
 #[derive(Deserialize)]
@@ -42,6 +43,7 @@ pub struct UpdateServiceRecord {
     pub shop_id: Option<Option<i32>>,
     pub notes: Option<Option<String>>,
     pub schedule_item_ids: Option<Vec<i32>>,
+    pub part_ids: Option<Vec<i32>>,
 }
 
 #[derive(Serialize)]
@@ -49,6 +51,7 @@ pub struct ServiceRecordWithLinks {
     #[serde(flatten)]
     pub record: service_record::Model,
     pub schedule_item_ids: Vec<i32>,
+    pub part_ids: Vec<i32>,
 }
 
 pub async fn list(
@@ -73,9 +76,15 @@ pub async fn list(
             .all(&state.db)
             .await?;
         let schedule_item_ids = links.into_iter().map(|l| l.schedule_item_id).collect();
+        let parts = part::Entity::find()
+            .filter(part::Column::InstalledServiceId.eq(record.id))
+            .all(&state.db)
+            .await?;
+        let part_ids = parts.into_iter().map(|p| p.id).collect();
         results.push(ServiceRecordWithLinks {
             record,
             schedule_item_ids,
+            part_ids,
         });
     }
     Ok(Json(results))
@@ -96,10 +105,16 @@ pub async fn get_one(
         .all(&state.db)
         .await?;
     let schedule_item_ids = links.into_iter().map(|l| l.schedule_item_id).collect();
+    let parts = part::Entity::find()
+        .filter(part::Column::InstalledServiceId.eq(record.id))
+        .all(&state.db)
+        .await?;
+    let part_ids = parts.into_iter().map(|p| p.id).collect();
 
     Ok(Json(ServiceRecordWithLinks {
         record,
         schedule_item_ids,
+        part_ids,
     }))
 }
 
@@ -142,6 +157,25 @@ pub async fn create(
         link.insert(&txn).await?;
     }
 
+    // Mark linked parts as installed
+    let part_ids = input.part_ids.unwrap_or_default();
+    for part_id in &part_ids {
+        let existing_part = part::Entity::find_by_id(*part_id)
+            .filter(part::Column::VehicleId.eq(vehicle_id))
+            .one(&txn)
+            .await?
+            .ok_or_else(|| ApiError::NotFound(format!("Part {part_id} not found")))?;
+
+        let mut active_part: part::ActiveModel = existing_part.into();
+        active_part.status = Set("installed".to_string());
+        active_part.installed_service_id = Set(Some(record.id));
+        active_part.installed_date = Set(Some(input.service_date.clone()));
+        if let Some(miles) = record.mileage {
+            active_part.installed_odometer = Set(Some(miles));
+        }
+        active_part.update(&txn).await?;
+    }
+
     // Also create a mileage log entry if mileage was provided
     if let Some(miles) = record.mileage {
         let mileage_entry = mileage_log::ActiveModel {
@@ -160,6 +194,7 @@ pub async fn create(
     Ok(Json(ServiceRecordWithLinks {
         record,
         schedule_item_ids,
+        part_ids,
     }))
 }
 
@@ -215,10 +250,55 @@ pub async fn update(
         links.into_iter().map(|l| l.schedule_item_id).collect()
     };
 
+    // Handle part linking on update
+    let part_ids = if let Some(new_part_ids) = input.part_ids {
+        // Unlink previously linked parts
+        let old_parts = part::Entity::find()
+            .filter(part::Column::InstalledServiceId.eq(record.id))
+            .all(&txn)
+            .await?;
+        for old_part in old_parts {
+            if !new_part_ids.contains(&old_part.id) {
+                let mut active_part: part::ActiveModel = old_part.clone().into();
+                // Only revert to purchased if the part was installed (not replaced/returned)
+                if old_part.status == "installed" {
+                    active_part.status = Set("purchased".to_string());
+                }
+                active_part.installed_service_id = Set(None);
+                active_part.installed_date = Set(None);
+                active_part.installed_odometer = Set(None);
+                active_part.update(&txn).await?;
+            }
+        }
+        // Link new parts
+        for part_id in &new_part_ids {
+            let existing_part = part::Entity::find_by_id(*part_id)
+                .filter(part::Column::VehicleId.eq(vehicle_id))
+                .one(&txn)
+                .await?
+                .ok_or_else(|| ApiError::NotFound(format!("Part {part_id} not found")))?;
+
+            let mut active_part: part::ActiveModel = existing_part.into();
+            active_part.status = Set("installed".to_string());
+            active_part.installed_service_id = Set(Some(record.id));
+            active_part.installed_date = Set(Some(record.service_date.clone()));
+            active_part.installed_odometer = Set(record.mileage);
+            active_part.update(&txn).await?;
+        }
+        new_part_ids
+    } else {
+        let parts = part::Entity::find()
+            .filter(part::Column::InstalledServiceId.eq(record.id))
+            .all(&txn)
+            .await?;
+        parts.into_iter().map(|p| p.id).collect()
+    };
+
     txn.commit().await?;
 
     Ok(Json(ServiceRecordWithLinks {
         record,
         schedule_item_ids,
+        part_ids,
     }))
 }

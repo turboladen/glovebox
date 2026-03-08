@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { services as servicesApi, schedules as schedulesApi } from '../lib/api'
-  import type { ResolvedScheduleItem } from '../lib/types'
+  import { services as servicesApi, schedules as schedulesApi, parts as partsApi } from '../lib/api'
+  import type { ResolvedScheduleItem, Part } from '../lib/types'
 
   let { vehicleId, onComplete, onCancel }: {
     vehicleId: number
@@ -18,16 +18,31 @@
   let isDiy = $state(false)
   let selectedScheduleIds: number[] = $state([])
   let scheduleItems: ResolvedScheduleItem[] = $state([])
+  let availableParts: Part[] = $state([])
+  let selectedPartIds: number[] = $state([])
   let saving = $state(false)
   let error = $state('')
 
   onMount(async () => {
     try {
-      scheduleItems = await schedulesApi.resolve(vehicleId)
+      const [items, purchasedParts] = await Promise.all([
+        schedulesApi.resolve(vehicleId),
+        partsApi.list(vehicleId, { status: 'purchased' }),
+      ])
+      scheduleItems = items
+      availableParts = purchasedParts
     } catch (e) {
-      console.error('Failed to load schedule items:', e)
+      console.error('Failed to load form data:', e)
     }
   })
+
+  function togglePartId(id: number) {
+    if (selectedPartIds.includes(id)) {
+      selectedPartIds = selectedPartIds.filter((i) => i !== id)
+    } else {
+      selectedPartIds = [...selectedPartIds, id]
+    }
+  }
 
   function toggleScheduleItem(id: number) {
     if (selectedScheduleIds.includes(id)) {
@@ -50,6 +65,7 @@
         shop_name: shopName || undefined,
         notes: notes || undefined,
         schedule_item_ids: selectedScheduleIds.length > 0 ? selectedScheduleIds : undefined,
+        part_ids: selectedPartIds.length > 0 ? selectedPartIds : undefined,
       })
       onComplete()
     } catch (e: any) {
@@ -107,6 +123,24 @@
                 onchange={() => toggleScheduleItem(item.effective_item.id)}
               />
               {item.effective_item.name}
+            </label>
+          {/each}
+        </div>
+      </div>
+    {/if}
+
+    {#if availableParts.length > 0}
+      <div class="field">
+        <label>Parts installed during this service</label>
+        <div class="checkbox-list">
+          {#each availableParts as p (p.id)}
+            <label class="checkbox-item">
+              <input
+                type="checkbox"
+                checked={selectedPartIds.includes(p.id)}
+                onchange={() => togglePartId(p.id)}
+              />
+              {p.name}{p.manufacturer ? ` (${p.manufacturer})` : ''}
             </label>
           {/each}
         </div>

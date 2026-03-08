@@ -112,6 +112,7 @@ export interface ServiceRecord {
 
 export interface ServiceRecordWithLinks extends ServiceRecord {
   schedule_item_ids: number[]
+  part_ids: number[]
 }
 
 export interface CreateServiceRecord {
@@ -127,6 +128,7 @@ export interface CreateServiceRecord {
   shop_name?: string | null
   notes?: string | null
   schedule_item_ids?: number[]
+  part_ids?: number[]
 }
 
 export interface ScheduleItem {
@@ -306,6 +308,118 @@ export interface AccidentCorrespondence {
 export interface AccidentWithDetails extends Accident {
   correspondence: AccidentCorrespondence[]
   service_record_ids: number[]
+}
+
+export interface PartSlot {
+  id: number
+  vehicle_id: number
+  name: string
+  category: string | null
+  oe_spec: string | null
+  oe_part_number: string | null
+  notes: string | null
+  created_at: string
+}
+
+export interface CreatePartSlot {
+  name: string
+  category?: string | null
+  oe_spec?: string | null
+  oe_part_number?: string | null
+  notes?: string | null
+}
+
+export interface Part {
+  id: number
+  slot_id: number | null
+  vehicle_id: number
+  name: string
+  manufacturer: string | null
+  part_number: string | null
+  oe_part_number_replaced: string | null
+  seller: string | null
+  purchase_date: string | null
+  cost_cents: number | null
+  cost_currency: string | null
+  invoice_url: string | null
+  status: string
+  installed_date: string | null
+  installed_odometer: number | null
+  installed_service_id: number | null
+  replaced_date: string | null
+  replaced_odometer: number | null
+  notes: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface CreatePart {
+  slot_id?: number | null
+  name: string
+  manufacturer?: string | null
+  part_number?: string | null
+  oe_part_number_replaced?: string | null
+  seller?: string | null
+  purchase_date?: string | null
+  cost_cents?: number | null
+  cost_currency?: string | null
+  invoice_url?: string | null
+  status?: string
+  installed_date?: string | null
+  installed_odometer?: number | null
+  installed_service_id?: number | null
+  notes?: string | null
+}
+
+export interface MonthlyCost {
+  month: string
+  service_cost_cents: number
+  parts_cost_cents: number
+  total_cents: number
+}
+
+export interface CostSummary {
+  vehicle_id: number
+  total_service_cost_cents: number
+  total_parts_cost_cents: number
+  total_labor_cost_cents: number
+  total_cost_cents: number
+  service_count: number
+  part_count: number
+  cost_per_mile_cents: number | null
+  monthly_costs: MonthlyCost[]
+}
+
+export interface ExportRecord {
+  date: string
+  mileage: number | null
+  description: string | null
+  total_cost: string | null
+  shop: string | null
+  notes: string | null
+}
+
+export interface ExportPart {
+  name: string
+  manufacturer: string | null
+  part_number: string | null
+  installed_date: string | null
+  installed_odometer: number | null
+  cost: string | null
+}
+
+export interface VehicleExport {
+  vehicle_name: string
+  year: number | null
+  make: string | null
+  model: string | null
+  vin: string | null
+  service_records: ExportRecord[]
+  installed_parts: ExportPart[]
+  total_service_cost: string
+  total_parts_cost: string
+  total_cost: string
+  record_count: number
 }
 
 export interface Setting {

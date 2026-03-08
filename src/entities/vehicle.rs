@@ -55,6 +55,10 @@ pub enum Relation {
     Document,
     #[sea_orm(has_many = "super::accident::Entity")]
     Accident,
+    #[sea_orm(has_many = "super::part_slot::Entity")]
+    PartSlot,
+    #[sea_orm(has_many = "super::part::Entity")]
+    Part,
 }
 
 impl Related<super::model_template::Entity> for Entity {
@@ -102,6 +106,18 @@ impl Related<super::document::Entity> for Entity {
 impl Related<super::accident::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Accident.def()
+    }
+}
+
+impl Related<super::part_slot::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::PartSlot.def()
+    }
+}
+
+impl Related<super::part::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Part.def()
     }
 }
 
