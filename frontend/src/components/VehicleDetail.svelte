@@ -176,25 +176,27 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
       </button>
     </div>
 
-    <div class="tab-content">
-      {#if activeTab === 'schedule'}
-        <ScheduleTab {reminderData} vehicleId={vehicle.id} />
-      {:else if activeTab === 'history'}
-        <HistoryTab vehicleId={vehicle.id} />
-      {:else if activeTab === 'parts'}
-        <PartsTab vehicleId={vehicle.id} />
-      {:else if activeTab === 'observations'}
-        <ObservationsTab vehicleId={vehicle.id} />
-      {:else if activeTab === 'documents'}
-        <DocumentsTab vehicleId={vehicle.id} />
-      {:else if activeTab === 'costs'}
-        <CostsTab vehicleId={vehicle.id} />
-      {:else if activeTab === 'research'}
-        <ResearchTab vehicleId={vehicle.id} />
-      {:else if activeTab === 'ai'}
-        <ChatTab vehicleId={vehicle.id} />
-      {/if}
-    </div>
+    {#key activeTab}
+      <div class="tab-content tab-content-enter">
+        {#if activeTab === 'schedule'}
+          <ScheduleTab {reminderData} vehicleId={vehicle.id} />
+        {:else if activeTab === 'history'}
+          <HistoryTab vehicleId={vehicle.id} />
+        {:else if activeTab === 'parts'}
+          <PartsTab vehicleId={vehicle.id} />
+        {:else if activeTab === 'observations'}
+          <ObservationsTab vehicleId={vehicle.id} />
+        {:else if activeTab === 'documents'}
+          <DocumentsTab vehicleId={vehicle.id} />
+        {:else if activeTab === 'costs'}
+          <CostsTab vehicleId={vehicle.id} />
+        {:else if activeTab === 'research'}
+          <ResearchTab vehicleId={vehicle.id} />
+        {:else if activeTab === 'ai'}
+          <ChatTab vehicleId={vehicle.id} />
+        {/if}
+      </div>
+    {/key}
   </div>
 {/if}
 
@@ -346,5 +348,48 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
     background: var(--danger-bg);
     border: 1px solid var(--danger-border);
     border-radius: var(--radius-md);
+  }
+
+  /* --- Mobile --- */
+  @media (max-width: 640px) {
+    .detail-header h1 {
+      font-size: 1.3rem;
+    }
+
+    .status-bar {
+      padding: var(--sp-3) var(--sp-4);
+      gap: var(--sp-2);
+    }
+
+    .est-mileage {
+      font-size: 1.15rem;
+    }
+
+    .actions {
+      width: 100%;
+      margin-left: 0;
+    }
+
+    .actions .btn {
+      flex: 1;
+      justify-content: center;
+      font-size: 0.8rem;
+      padding: var(--sp-2) var(--sp-2);
+    }
+
+    .tabs {
+      margin-left: calc(-1 * var(--sp-4));
+      margin-right: calc(-1 * var(--sp-4));
+      padding-left: var(--sp-4);
+      padding-right: var(--sp-4);
+      /* Fade hint for scroll */
+      mask-image: linear-gradient(to right, black 90%, transparent 100%);
+      -webkit-mask-image: linear-gradient(to right, black 90%, transparent 100%);
+    }
+
+    .tab {
+      padding: var(--sp-2) var(--sp-3);
+      font-size: 0.8rem;
+    }
   }
 </style>

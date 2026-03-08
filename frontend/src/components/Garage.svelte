@@ -55,9 +55,19 @@
   </div>
 
   {#if loading}
-    <div class="loading-state">
-      <div class="loading-spinner"></div>
-      <p>Loading garage...</p>
+    <div class="vehicle-grid">
+      {#each Array(6) as _, i}
+        <div class="vehicle-card skeleton-card-wrap" style="--delay: {i * 80}ms">
+          <div class="card-photo skeleton"></div>
+          <div class="card-body">
+            <div class="skeleton skeleton-heading"></div>
+            <div class="skeleton skeleton-text"></div>
+            <div style="margin-top: var(--sp-3); padding-top: var(--sp-3); border-top: 1px solid var(--border-subtle);">
+              <div class="skeleton skeleton-text-short"></div>
+            </div>
+          </div>
+        </div>
+      {/each}
     </div>
   {:else if error}
     <p class="error">{error}</p>
@@ -284,21 +294,15 @@
     font-size: 0.9rem;
   }
 
-  /* --- Loading state --- */
-  .loading-state {
-    text-align: center;
-    padding: var(--sp-12) 0;
-    color: var(--text-muted);
+  /* --- Skeleton loading --- */
+  .skeleton-card-wrap {
+    pointer-events: none;
+    animation: fade-in var(--duration-slow) var(--ease-out) both;
+    animation-delay: var(--delay, 0ms);
   }
 
-  .loading-spinner {
-    width: 32px;
-    height: 32px;
-    border: 2px solid var(--border);
-    border-top-color: var(--primary);
-    border-radius: 50%;
-    margin: 0 auto var(--sp-4);
-    animation: spin 0.8s linear infinite;
+  .skeleton-card-wrap .card-body {
+    padding: var(--sp-4);
   }
 
   .error {
@@ -321,18 +325,9 @@
     }
   }
 
-  @keyframes spin {
-    to { transform: rotate(360deg); }
-  }
-
   @media (prefers-reduced-motion: reduce) {
-    .vehicle-card {
+    .vehicle-card, .skeleton-card-wrap {
       animation: none;
-    }
-    .loading-spinner {
-      animation: none;
-      border-top-color: var(--border);
-      opacity: 0.5;
     }
   }
 </style>

@@ -152,7 +152,15 @@
     margin-bottom: var(--sp-2);
     background: var(--bg-raised);
     border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-    transition: border-color var(--duration-fast) var(--ease-out);
+    transition:
+      border-color var(--duration-fast) var(--ease-out),
+      background var(--duration-fast) var(--ease-out),
+      transform var(--duration-fast) var(--ease-out);
+  }
+
+  .reminder-card:hover {
+    background: var(--surface);
+    transform: translateX(2px);
   }
 
   .reminder-card.overdue { border-left-color: var(--danger); }

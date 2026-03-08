@@ -90,4 +90,19 @@
   main {
     padding-bottom: var(--sp-12);
   }
+
+  @media (max-width: 640px) {
+    .app {
+      padding: 0 var(--sp-3);
+    }
+
+    header {
+      padding: var(--sp-3) 0;
+      margin-bottom: var(--sp-4);
+    }
+
+    .logo {
+      font-size: 1.05rem;
+    }
+  }
 </style>

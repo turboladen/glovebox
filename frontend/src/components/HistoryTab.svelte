@@ -134,11 +134,16 @@
   .history-card {
     padding: var(--sp-3) var(--sp-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
     background: var(--bg-raised);
-    transition: border-color var(--duration-base) var(--ease-out);
+    transition:
+      border-color var(--duration-base) var(--ease-out),
+      box-shadow var(--duration-base) var(--ease-out),
+      transform var(--duration-base) var(--ease-out);
   }
 
   .history-card:hover {
     border-color: var(--border);
+    box-shadow: var(--shadow-sm);
+    transform: translateY(-1px);
   }
 
   .history-card.resolved { opacity: 0.6; }
