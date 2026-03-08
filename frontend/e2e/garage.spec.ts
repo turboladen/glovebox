@@ -8,14 +8,13 @@ test.describe('Garage', () => {
     await expect(page.getByRole('link', { name: '+ Add Car' })).toBeVisible()
   })
 
-  test('shows empty state when no vehicles', async ({ page }) => {
+  test('shows vehicles or empty state after loading', async ({ page }) => {
     await page.goto('/')
-    // If DB is empty, we expect the empty message
-    const empty = page.getByText('No vehicles yet.')
-    const cards = page.locator('.vehicle-card')
-    // One of these should be true
-    const hasEmpty = await empty.isVisible().catch(() => false)
-    const hasCards = (await cards.count()) > 0
+    // Wait for loading to finish
+    await expect(page.getByText('Loading...')).not.toBeVisible({ timeout: 10_000 })
+    // Now one of these should be true
+    const hasEmpty = await page.getByText('No vehicles yet.').isVisible().catch(() => false)
+    const hasCards = (await page.locator('.vehicle-card').count()) > 0
     expect(hasEmpty || hasCards).toBe(true)
   })
 

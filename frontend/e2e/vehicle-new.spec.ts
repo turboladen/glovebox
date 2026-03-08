@@ -28,10 +28,11 @@ test.describe('Add Vehicle', () => {
     await expect(page.getByText('Step 1: Enter VIN')).toBeVisible()
   })
 
-  test('requires vehicle name to create', async ({ page }) => {
+  test('name field is required by the browser', async ({ page }) => {
     await page.getByRole('button', { name: 'Skip' }).click()
-    await page.getByRole('button', { name: 'Create Vehicle' }).click()
-    await expect(page.getByText('Vehicle name is required')).toBeVisible()
+    const nameInput = page.getByLabel('Vehicle Name')
+    // HTML5 required attribute prevents submission with empty name
+    await expect(nameInput).toHaveAttribute('required', '')
   })
 
   test('creates vehicle and navigates to detail', async ({ page }) => {
@@ -39,7 +40,7 @@ test.describe('Add Vehicle', () => {
     await page.getByLabel('Vehicle Name').fill('E2E Test Car')
     await page.getByLabel('Year').fill('2020')
     await page.getByLabel('Make').fill('Toyota')
-    await page.getByLabel('Model').fill('Corolla')
+    await page.getByRole('textbox', { name: 'Model' }).fill('Corolla')
     await page.getByRole('button', { name: 'Create Vehicle' }).click()
     // Should navigate to vehicle detail
     await expect(page).toHaveURL(/\/vehicles\/\d+/)

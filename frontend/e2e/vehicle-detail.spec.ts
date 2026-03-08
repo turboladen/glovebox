@@ -95,7 +95,7 @@ test.describe('Log Service', () => {
   test('toggle service form', async ({ page }) => {
     await page.goto(vehicleUrl)
     await page.getByRole('button', { name: 'Log Service' }).click()
-    await expect(page.getByText('Log Service', { exact: false })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Log Service' })).toBeVisible()
     await page.getByRole('button', { name: 'Cancel' }).click()
   })
 
