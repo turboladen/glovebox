@@ -272,6 +272,33 @@ Playwright e2e tests. Keep it updated as features are added.
 | 4 | `GET /api/vehicles/:id/suggestions` | Returns JSON array of suggestions with title, reason, urgency |
 | 5 | Suggestions cached | Second request within 24h returns same results without AI call |
 
+## TP-26: NHTSA Recall Check
+
+| # | Step | Expected |
+|---|------|----------|
+| 1 | Click "Research" tab on vehicle detail | Research tab visible with "Check Recalls" and "Run Full Check" buttons |
+| 2 | No data initially | "No research reports yet." message |
+| 3 | Click "Check Recalls" | Loading state, then recall results or "No open recalls found" message |
+| 4 | Vehicle missing make/model/year | Error message about missing required fields |
+| 5 | `GET /api/vehicles/:id/recalls` | Returns recall data with campaign numbers, subjects, remedies |
+
+## TP-27: Research Reports
+
+| # | Step | Expected |
+|---|------|----------|
+| 1 | Click "Run Full Check" | Loading state ("Generating..."), then report with findings shown |
+| 2 | Report shows summary | Summary text describes number of findings |
+| 3 | Each finding shows | Category badge, severity badge, status badge, title, description |
+| 4 | Finding status actions | "Dismiss", "Plan", "Complete" buttons update status |
+| 5 | Dismissed findings | Card becomes dimmed |
+| 6 | Completed findings | Card border turns green, opacity reduced |
+| 7 | Reports list | Previous reports shown with type, date, and summary preview |
+| 8 | Click a report row | Expands to show findings for that report |
+| 9 | `POST /api/vehicles/:id/research` | Creates report with findings from NHTSA + AI |
+| 10 | `GET /api/vehicles/:id/research` | Returns list of reports ordered by generated_at desc |
+| 11 | `GET /api/vehicles/:id/research/:id` | Returns report with findings array |
+| 12 | `PUT /api/vehicles/:id/research/:rid/findings/:id` | Updates finding status and linked entity |
+
 ---
 
 ## Playwright Test Structure
@@ -292,6 +319,7 @@ frontend/e2e/
   chat.spec.ts          # TP-22, TP-23
   invoice-parse.spec.ts # TP-24
   suggestions.spec.ts   # TP-25
+  research.spec.ts      # TP-26, TP-27
 ```
 
 Run: `just test-e2e`

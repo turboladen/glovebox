@@ -16,3 +16,5 @@ pub mod accident_service_link;
 pub mod part_slot;
 pub mod part;
 pub mod chat_message;
+pub mod research_report;
+pub mod research_finding;

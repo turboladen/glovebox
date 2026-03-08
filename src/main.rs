@@ -115,6 +115,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/vehicles/{vehicle_id}/part-slots/{id}", get(api::part_slots::get_one).put(api::part_slots::update).delete(api::part_slots::delete))
         .route("/api/vehicles/{vehicle_id}/parts", get(api::parts::list).post(api::parts::create))
         .route("/api/vehicles/{vehicle_id}/parts/{id}", get(api::parts::get_one).put(api::parts::update).delete(api::parts::delete))
+        // Research & recalls
+        .route("/api/vehicles/{vehicle_id}/recalls", get(api::research::check_recalls))
+        .route("/api/vehicles/{vehicle_id}/research", get(api::research::list_reports).post(api::research::generate_report))
+        .route("/api/vehicles/{vehicle_id}/research/{id}", get(api::research::get_report))
+        .route("/api/vehicles/{vehicle_id}/research/{report_id}/findings/{id}", axum::routing::put(api::research::update_finding_with_body))
         // Cost of ownership
         .route("/api/vehicles/{vehicle_id}/costs", get(api::costs::get_costs))
         .route("/api/vehicles/{vehicle_id}/export", get(api::export::export_history))

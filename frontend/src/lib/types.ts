@@ -461,6 +461,57 @@ export interface ParsedInvoice {
   notes: string | null
 }
 
+// Research types
+export interface RecallInfo {
+  campaign_number: string
+  manufacturer: string | null
+  subject: string
+  summary: string | null
+  consequence: string | null
+  remedy: string | null
+  report_date: string | null
+  component: string | null
+  action_number: string | null
+}
+
+export interface RecallCheckResult {
+  make: string
+  model: string
+  model_year: number
+  recall_count: number
+  recalls: RecallInfo[]
+}
+
+export interface ResearchReport {
+  id: number
+  vehicle_id: number
+  report_type: string | null
+  summary: string | null
+  raw_data: string | null
+  notes: string | null
+  generated_at: string
+  created_at: string
+}
+
+export interface ResearchFinding {
+  id: number
+  report_id: number
+  category: string
+  title: string
+  description: string | null
+  source_url: string | null
+  severity: string | null
+  status: string
+  linked_entity_type: string | null
+  linked_entity_id: number | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ReportWithFindings extends ResearchReport {
+  findings: ResearchFinding[]
+}
+
 export interface AiSuggestion {
   title: string
   reason: string

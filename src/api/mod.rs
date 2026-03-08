@@ -18,3 +18,4 @@ pub mod part_slots;
 pub mod parts;
 pub mod costs;
 pub mod export;
+pub mod research;
