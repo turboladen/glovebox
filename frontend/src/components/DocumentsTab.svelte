@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { documents as docsApi, ai } from '../lib/api'
-  import type { Document, ParsedInvoice } from '../lib/types'
+  import { documents as docsApi, ai, services as servicesApi, parts as partsApi, accidents as accidentsApi } from '../lib/api'
+  import type { Document, ParsedInvoice, ServiceRecordWithLinks, Part, AccidentWithDetails } from '../lib/types'
   import { formatDate } from '../lib/dates'
   import AiProviderSelect from './AiProviderSelect.svelte'
 
@@ -16,9 +16,16 @@
   let title = $state('')
   let docType = $state('other')
   let notes = $state('')
+  let linkedEntityType = $state('')
+  let linkedEntityId: number | null = $state(null)
   let fileInput: HTMLInputElement | undefined = $state(undefined)
   let uploading = $state(false)
   let error = $state('')
+
+  // Linkable entities
+  let serviceRecords: ServiceRecordWithLinks[] = $state([])
+  let partsList: Part[] = $state([])
+  let accidentsList: AccidentWithDetails[] = $state([])
   let parsing = $state<number | null>(null)
   let parsedInvoice: ParsedInvoice | null = $state(null)
   let parseError = $state('')
@@ -29,7 +36,12 @@
 
   async function loadData() {
     try {
-      docs = await docsApi.list({ vehicle_id: vehicleId })
+      ;[docs, serviceRecords, partsList, accidentsList] = await Promise.all([
+        docsApi.list({ vehicle_id: vehicleId }),
+        servicesApi.list(vehicleId),
+        partsApi.list(vehicleId),
+        accidentsApi.list(vehicleId),
+      ])
     } catch (e) {
       console.error(e)
     } finally {
@@ -49,9 +61,13 @@
       formData.append('title', title || file.name)
       formData.append('doc_type', docType)
       if (notes) formData.append('notes', notes)
+      if (linkedEntityType && linkedEntityId) {
+        formData.append('linked_entity_type', linkedEntityType)
+        formData.append('linked_entity_id', String(linkedEntityId))
+      }
       await docsApi.upload(formData)
       showUpload = false
-      title = ''; notes = ''
+      title = ''; notes = ''; linkedEntityType = ''; linkedEntityId = null
       await loadData()
     } catch (e: any) {
       error = e.message
@@ -93,6 +109,23 @@
     }
   }
 
+  function linkedEntityLabel(doc: Document): string {
+    if (!doc.linked_entity_type || !doc.linked_entity_id) return ''
+    if (doc.linked_entity_type === 'service') {
+      const svc = serviceRecords.find(s => s.id === doc.linked_entity_id)
+      return svc ? `Service: ${svc.service_date}${svc.description ? ' — ' + svc.description : ''}` : `Service #${doc.linked_entity_id}`
+    }
+    if (doc.linked_entity_type === 'part') {
+      const part = partsList.find(p => p.id === doc.linked_entity_id)
+      return part ? `Part: ${part.name}` : `Part #${doc.linked_entity_id}`
+    }
+    if (doc.linked_entity_type === 'accident') {
+      const acc = accidentsList.find(a => a.id === doc.linked_entity_id)
+      return acc ? `Accident: ${acc.occurred_at.split('T')[0].split(' ')[0]}${acc.description ? ' — ' + acc.description.slice(0, 40) : ''}` : `Accident #${doc.linked_entity_id}`
+    }
+    return `${doc.linked_entity_type} #${doc.linked_entity_id}`
+  }
+
   function formatCents(cents: number | null): string {
     if (cents == null) return ''
     return `$${(cents / 100).toFixed(2)}`
@@ -127,6 +160,48 @@
               {/each}
             </select>
           </div>
+        </div>
+        <div class="form-row">
+          <div class="field">
+            <label for="doc-link-type">Link to</label>
+            <select id="doc-link-type" bind:value={linkedEntityType} onchange={() => { linkedEntityId = null }}>
+              <option value="">None</option>
+              <option value="service">Service Record</option>
+              <option value="part">Part</option>
+              <option value="accident">Accident</option>
+            </select>
+          </div>
+          {#if linkedEntityType === 'service'}
+            <div class="field">
+              <label for="doc-link-id">Service</label>
+              <select id="doc-link-id" bind:value={linkedEntityId}>
+                <option value={null}>-- Select --</option>
+                {#each serviceRecords as svc (svc.id)}
+                  <option value={svc.id}>{svc.service_date}{svc.description ? ` — ${svc.description}` : ''}</option>
+                {/each}
+              </select>
+            </div>
+          {:else if linkedEntityType === 'part'}
+            <div class="field">
+              <label for="doc-link-id">Part</label>
+              <select id="doc-link-id" bind:value={linkedEntityId}>
+                <option value={null}>-- Select --</option>
+                {#each partsList as p (p.id)}
+                  <option value={p.id}>{p.name}{p.manufacturer ? ` (${p.manufacturer})` : ''}</option>
+                {/each}
+              </select>
+            </div>
+          {:else if linkedEntityType === 'accident'}
+            <div class="field">
+              <label for="doc-link-id">Accident</label>
+              <select id="doc-link-id" bind:value={linkedEntityId}>
+                <option value={null}>-- Select --</option>
+                {#each accidentsList as acc (acc.id)}
+                  <option value={acc.id}>{acc.occurred_at.split('T')[0].split(' ')[0]} — {acc.description.slice(0, 50)}</option>
+                {/each}
+              </select>
+            </div>
+          {/if}
         </div>
         <div class="field">
           <label for="doc-notes">Notes</label>
@@ -173,6 +248,9 @@
               {/if}
               <span>{formatDate(doc.created_at)}</span>
             </div>
+            {#if doc.linked_entity_type}
+              <div class="doc-link-badge">{linkedEntityLabel(doc)}</div>
+            {/if}
             {#if doc.notes}
               <p class="doc-notes">{doc.notes}</p>
             {/if}
@@ -282,6 +360,11 @@
     background: var(--surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
     padding: 0 var(--sp-1); text-transform: uppercase; font-size: 0.7rem; font-weight: 500;
     font-family: var(--font-display);
+  }
+  .doc-link-badge {
+    font-size: 0.75rem;
+    color: var(--primary);
+    margin-top: var(--sp-1);
   }
   .doc-notes { font-size: 0.85rem; color: var(--text-muted); margin: var(--sp-1) 0 0; }
 

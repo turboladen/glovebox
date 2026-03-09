@@ -95,12 +95,22 @@ async fn update(
         active.notes = Set(v);
     }
 
+    active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
+
     let result = active.update(&state.db).await?;
     Ok(Json(result))
+}
+
+async fn delete(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+) -> Result<Json<serde_json::Value>> {
+    let result = shop::Entity::delete_by_id(id).exec(&state.db).await?;
+    Ok(Json(serde_json::json!({ "deleted": result.rows_affected })))
 }
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list).post(create))
-        .route("/{id}", get(get_one).put(update))
+        .route("/{id}", get(get_one).put(update).delete(delete))
 }

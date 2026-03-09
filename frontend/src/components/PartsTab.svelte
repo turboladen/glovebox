@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { partSlots as slotsApi, parts as partsApi } from '../lib/api'
-  import type { PartSlot, Part } from '../lib/types'
+  import { partSlots as slotsApi, parts as partsApi, services as servicesApi } from '../lib/api'
+  import type { PartSlot, Part, ServiceRecordWithLinks } from '../lib/types'
   import { formatDate } from '../lib/dates'
 
   let { vehicleId }: { vehicleId: number } = $props()
@@ -42,6 +42,14 @@
   let partSaving = $state(false)
   let partError = $state('')
 
+  // Service linking for installed parts
+  let serviceRecords: ServiceRecordWithLinks[] = $state([])
+  let partServiceOption: 'none' | 'link' | 'create' = $state('none')
+  let partLinkedServiceId: number | null = $state(null)
+  // Inline service creation fields
+  let newServiceDate = $state(new Date().toISOString().split('T')[0])
+  let newServiceDescription = $state('')
+
   // Link-existing-part picker
   let linkingSlotId: number | null = $state(null)
 
@@ -52,9 +60,10 @@
 
   async function loadData() {
     try {
-      ;[slots, allParts] = await Promise.all([
+      ;[slots, allParts, serviceRecords] = await Promise.all([
         slotsApi.list(vehicleId),
         partsApi.list(vehicleId),
+        servicesApi.list(vehicleId),
       ])
     } catch (e) {
       console.error(e)
@@ -198,6 +207,10 @@
     partReplacedDate = part?.replaced_date || ''
     partReplacedOdometer = part?.replaced_odometer ?? undefined
     partNotes = part?.notes || ''
+    partLinkedServiceId = part?.installed_service_id ?? null
+    partServiceOption = part?.installed_service_id ? 'link' : 'none'
+    newServiceDate = new Date().toISOString().split('T')[0]
+    newServiceDescription = ''
     partError = ''
     showPartForm = true
     showSlotForm = false
@@ -213,6 +226,19 @@
     partSaving = true
     partError = ''
     try {
+      // If creating a new service, do it first
+      let serviceId: number | null | undefined = undefined
+      if ((partStatus === 'installed' || partStatus === 'replaced') && partServiceOption === 'create') {
+        if (!newServiceDate) { partError = 'Service date is required'; partSaving = false; return }
+        const svc = await servicesApi.create(vehicleId, {
+          service_date: newServiceDate,
+          description: newServiceDescription || `Installed ${partName.trim()}`,
+        })
+        serviceId = svc.id
+      } else if ((partStatus === 'installed' || partStatus === 'replaced') && partServiceOption === 'link') {
+        serviceId = partLinkedServiceId
+      }
+
       const costCents = partCost ? Math.round(parseFloat(partCost) * 100) : undefined
       const data: any = {
         slot_id: partSlotId,
@@ -226,6 +252,7 @@
         status: partStatus,
         installed_date: partInstalledDate || undefined,
         installed_odometer: partInstalledOdometer,
+        installed_service_id: serviceId,
         replaced_date: partReplacedDate || undefined,
         replaced_odometer: partReplacedOdometer,
         notes: partNotes || undefined,
@@ -399,16 +426,63 @@
           </div>
         </div>
         {#if partStatus === 'installed' || partStatus === 'replaced'}
-          <div class="form-row">
-            <div class="field">
-              <label for="part-installed-date">Installed Date</label>
-              <input id="part-installed-date" type="date" bind:value={partInstalledDate} />
+          <fieldset class="service-link-fieldset">
+            <legend>Service Record</legend>
+            <div class="service-options">
+              <label class="radio-label">
+                <input type="radio" name="service-option" value="none" bind:group={partServiceOption} />
+                No service record
+              </label>
+              <label class="radio-label">
+                <input type="radio" name="service-option" value="link" bind:group={partServiceOption} />
+                Link to existing service
+              </label>
+              <label class="radio-label">
+                <input type="radio" name="service-option" value="create" bind:group={partServiceOption} />
+                Create new service
+              </label>
             </div>
-            <div class="field">
-              <label for="part-installed-odo">Installed Odometer</label>
-              <input id="part-installed-odo" type="number" min="0" bind:value={partInstalledOdometer} />
-            </div>
-          </div>
+
+            {#if partServiceOption === 'link'}
+              <div class="field">
+                <label for="part-service-link">Service</label>
+                <select id="part-service-link" bind:value={partLinkedServiceId}>
+                  <option value={null}>-- Select a service --</option>
+                  {#each serviceRecords as svc (svc.id)}
+                    <option value={svc.id}>
+                      {svc.service_date}{svc.description ? ` — ${svc.description}` : ''}{svc.shop_name ? ` (${svc.shop_name})` : ''}
+                    </option>
+                  {/each}
+                </select>
+              </div>
+            {/if}
+
+            {#if partServiceOption === 'create'}
+              <div class="form-row">
+                <div class="field">
+                  <label for="new-svc-date">Service Date</label>
+                  <input id="new-svc-date" type="date" bind:value={newServiceDate} required />
+                </div>
+                <div class="field">
+                  <label for="new-svc-desc">Description</label>
+                  <input id="new-svc-desc" type="text" bind:value={newServiceDescription} placeholder="e.g., Diverter valve install" />
+                </div>
+              </div>
+            {/if}
+
+            {#if partServiceOption === 'none'}
+              <div class="form-row">
+                <div class="field">
+                  <label for="part-installed-date">Installed Date</label>
+                  <input id="part-installed-date" type="date" bind:value={partInstalledDate} />
+                </div>
+                <div class="field">
+                  <label for="part-installed-odo">Installed Odometer</label>
+                  <input id="part-installed-odo" type="number" min="0" bind:value={partInstalledOdometer} />
+                </div>
+              </div>
+            {/if}
+          </fieldset>
         {/if}
         {#if partStatus === 'replaced'}
           <div class="form-row">
@@ -652,6 +726,39 @@
   .part-row-actions { margin-left: auto; display: flex; gap: var(--sp-1); }
 
   .empty { color: var(--text-muted); text-align: center; padding: var(--sp-8) 0; }
+
+  .service-link-fieldset {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: var(--sp-3) var(--sp-4);
+    margin: var(--sp-2) 0;
+  }
+
+  .service-link-fieldset legend {
+    font-size: 0.85rem;
+    font-weight: 600;
+    padding: 0 var(--sp-1);
+  }
+
+  .service-options {
+    display: flex;
+    gap: var(--sp-4);
+    margin-bottom: var(--sp-3);
+    flex-wrap: wrap;
+  }
+
+  .radio-label {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-1);
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+
+  .radio-label input[type="radio"] {
+    width: auto;
+    margin: 0;
+  }
 
   .link-prompt {
     font-size: 0.85rem;

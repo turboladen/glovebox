@@ -83,6 +83,10 @@ export const shops = {
   get: (id: number) => request<Shop>(`/shops/${id}`),
   create: (data: { name: string; address?: string; phone?: string; website?: string; specialty?: string; notes?: string }) =>
     request<Shop>('/shops', { method: 'POST', body: JSON.stringify(data) }),
+  update: (id: number, data: Partial<Shop>) =>
+    request<Shop>(`/shops/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  delete: (id: number) =>
+    request<{ deleted: number }>(`/shops/${id}`, { method: 'DELETE' }),
 }
 
 // Observations
