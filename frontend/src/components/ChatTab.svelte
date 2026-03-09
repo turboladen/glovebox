@@ -1,8 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { marked } from 'marked'
   import { ai } from '../lib/api'
   import type { ChatMessage, AiStatus } from '../lib/types'
   import AiProviderSelect from './AiProviderSelect.svelte'
+
+  // Configure marked for safe, synchronous rendering
+  marked.setOptions({ async: false, breaks: true })
 
   let { vehicleId }: { vehicleId: number } = $props()
 
@@ -102,7 +106,11 @@
       {#each messages as msg (msg.id + msg.created_at)}
         <div class="message {msg.role}">
           <div class="message-bubble">
-            <div class="message-content">{msg.content}</div>
+            {#if msg.role === 'assistant'}
+              <div class="message-content markdown">{@html marked.parse(msg.content)}</div>
+            {:else}
+              <div class="message-content">{msg.content}</div>
+            {/if}
           </div>
         </div>
       {/each}
@@ -212,6 +220,66 @@
   .message-content {
     white-space: pre-wrap;
     word-break: break-word;
+  }
+
+  .message-content.markdown {
+    white-space: normal;
+  }
+
+  .message-content.markdown :global(p) {
+    margin: 0 0 0.5em;
+  }
+
+  .message-content.markdown :global(p:last-child) {
+    margin-bottom: 0;
+  }
+
+  .message-content.markdown :global(ul),
+  .message-content.markdown :global(ol) {
+    margin: 0.25em 0;
+    padding-left: 1.5em;
+  }
+
+  .message-content.markdown :global(li) {
+    margin: 0.15em 0;
+  }
+
+  .message-content.markdown :global(code) {
+    background: var(--bg-sunken, rgba(0, 0, 0, 0.08));
+    padding: 0.1em 0.35em;
+    border-radius: var(--radius-sm);
+    font-size: 0.85em;
+  }
+
+  .message-content.markdown :global(pre) {
+    background: var(--bg-sunken, rgba(0, 0, 0, 0.08));
+    padding: var(--sp-2) var(--sp-3);
+    border-radius: var(--radius-md);
+    overflow-x: auto;
+    margin: 0.5em 0;
+  }
+
+  .message-content.markdown :global(pre code) {
+    background: none;
+    padding: 0;
+  }
+
+  .message-content.markdown :global(h1),
+  .message-content.markdown :global(h2),
+  .message-content.markdown :global(h3) {
+    font-size: 1em;
+    font-weight: 700;
+    margin: 0.75em 0 0.25em;
+  }
+
+  .message-content.markdown :global(h1:first-child),
+  .message-content.markdown :global(h2:first-child),
+  .message-content.markdown :global(h3:first-child) {
+    margin-top: 0;
+  }
+
+  .message-content.markdown :global(strong) {
+    font-weight: 600;
   }
 
   .chat-controls {
