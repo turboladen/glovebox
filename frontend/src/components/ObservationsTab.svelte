@@ -18,7 +18,6 @@
   let description = $state('')
   let odometer = $state<number | undefined>()
   let obdCodes = $state('')
-  let notes = $state('')
   let saving = $state(false)
   let error = $state('')
 
@@ -52,10 +51,9 @@
         description: description || undefined,
         odometer,
         obd_codes: obdCodes || undefined,
-        notes: notes || undefined,
       })
       showForm = false
-      title = ''; description = ''; odometer = undefined; obdCodes = ''; notes = ''
+      title = ''; description = ''; odometer = undefined; obdCodes = ''
       await loadData()
     } catch (e: any) {
       error = e.message
@@ -116,8 +114,8 @@
           <input id="obs-title" type="text" bind:value={title} required placeholder="e.g., Rattle on cold start" />
         </div>
         <div class="field">
-          <label for="obs-desc">Description</label>
-          <textarea id="obs-desc" bind:value={description} rows="2"></textarea>
+          <label for="obs-desc">Details</label>
+          <textarea id="obs-desc" bind:value={description} rows="3" placeholder="What did you notice? Include any follow-up thoughts or action items..."></textarea>
         </div>
         {#if category === 'obd_code'}
           <div class="field">
@@ -125,10 +123,6 @@
             <input id="obs-obd" type="text" bind:value={obdCodes} placeholder='["P0301","P0302"]' />
           </div>
         {/if}
-        <div class="field">
-          <label for="obs-notes">Notes</label>
-          <input id="obs-notes" type="text" bind:value={notes} />
-        </div>
         {#if error}
           <p class="error">{error}</p>
         {/if}
@@ -154,8 +148,8 @@
             <span class="obs-date">{formatDate(obs.observed_at)}</span>
           </div>
           <div class="obs-title">{obs.title}</div>
-          {#if obs.description}
-            <p class="obs-desc">{obs.description}</p>
+          {#if obs.description || obs.notes}
+            <p class="obs-desc">{[obs.description, obs.notes].filter(Boolean).join(' — ')}</p>
           {/if}
           {#if obs.odometer}
             <span class="obs-meta">{obs.odometer.toLocaleString()} mi</span>
