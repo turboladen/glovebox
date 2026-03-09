@@ -18,6 +18,13 @@
   let description = $state('')
   let observedAt = $state(new Date().toISOString().slice(0, 10))
   let odometer = $state<number | undefined>(estimatedMileage)
+  // If estimatedMileage arrives after mount and odometer hasn't been manually set, update it
+  let odometerTouched = $state(false)
+  $effect(() => {
+    if (estimatedMileage !== undefined && !odometerTouched) {
+      odometer = estimatedMileage
+    }
+  })
   let obdCodes = $state('')
   let saving = $state(false)
   let error = $state('')
@@ -55,7 +62,7 @@
         obd_codes: obdCodes || undefined,
       })
       showForm = false
-      title = ''; description = ''; odometer = estimatedMileage; obdCodes = ''
+      title = ''; description = ''; odometer = estimatedMileage; odometerTouched = false; obdCodes = ''
       observedAt = new Date().toISOString().slice(0, 10)
       await loadData()
     } catch (e: any) {
@@ -122,7 +129,7 @@
           </div>
           <div class="field">
             <label for="obs-odometer">Odometer</label>
-            <input id="obs-odometer" type="number" bind:value={odometer} min="0" />
+            <input id="obs-odometer" type="number" bind:value={odometer} min="0" oninput={() => { odometerTouched = true }} />
           </div>
         </div>
         <div class="field">

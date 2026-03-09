@@ -381,6 +381,8 @@ pub async fn update_finding_with_body(
         active.linked_entity_id = Set(linked_id);
     }
 
+    active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
+
     let updated = active.update(&state.db).await?;
     Ok(Json(updated))
 }
