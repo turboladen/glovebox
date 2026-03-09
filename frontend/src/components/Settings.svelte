@@ -177,6 +177,11 @@
 
 <div class="settings">
   <div class="settings-header">
+    <button class="btn-back" onclick={() => history.back()} aria-label="Go back">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 4l-6 6 6 6"/>
+      </svg>
+    </button>
     <h1>Settings</h1>
   </div>
 
@@ -348,11 +353,35 @@
 
 <style>
   .settings-header {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
     margin-bottom: var(--sp-6);
   }
 
   .settings-header h1 {
     margin: 0;
+  }
+
+  .btn-back {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all var(--duration-fast) var(--ease-out);
+  }
+
+  .btn-back:hover {
+    background: var(--bg-hover, var(--surface));
+    border-color: var(--border);
+    color: var(--text-primary);
   }
 
   .form-card {
