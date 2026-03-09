@@ -185,13 +185,6 @@ export const research = {
     }),
 }
 
-// Settings
-export const settings = {
-  list: () => request<Setting[]>('/settings'),
-  get: (key: string) => request<Setting>(`/settings/${key}`),
-  set: (key: string, value: string) => request<Setting>(`/settings/${key}`, { method: 'PUT', body: JSON.stringify({ value }) }),
-}
-
 // AI
 export const ai = {
   status: () => request<AiStatus>('/ai/status'),
@@ -228,7 +221,7 @@ import type {
   MileageEntry, CreateMileageEntry,
   ServiceRecordWithLinks, CreateServiceRecord,
   ScheduleItem, CreateScheduleItem, ResolvedScheduleItem,
-  RemindersResponse, VinDecodeResponse, Setting,
+  RemindersResponse, VinDecodeResponse,
   Shop, Observation, CreateObservation, Document,
   AccidentWithDetails, AccidentCorrespondence,
   PartSlot, CreatePartSlot, Part, CreatePart,

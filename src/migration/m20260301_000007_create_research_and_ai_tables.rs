@@ -6,6 +6,7 @@ pub struct Migration;
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        // research_reports
         manager
             .create_table(
                 Table::create()
@@ -39,6 +40,7 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
+        // research_findings
         manager
             .create_table(
                 Table::create()
@@ -74,10 +76,31 @@ impl MigrationTrait for Migration {
                     .col(ResearchFindings::ReportId)
                     .to_owned(),
             )
+            .await?;
+
+        // ai_providers
+        manager
+            .create_table(
+                Table::create()
+                    .table(AiProviders::Table)
+                    .if_not_exists()
+                    .col(ColumnDef::new(AiProviders::Id).integer().not_null().auto_increment().primary_key())
+                    .col(ColumnDef::new(AiProviders::Name).text().not_null())
+                    .col(ColumnDef::new(AiProviders::ProviderType).text().not_null())
+                    .col(ColumnDef::new(AiProviders::ApiKey).text())
+                    .col(ColumnDef::new(AiProviders::ApiBase).text())
+                    .col(ColumnDef::new(AiProviders::Model).text())
+                    .col(ColumnDef::new(AiProviders::IsDefault).boolean().not_null().default(false))
+                    .col(ColumnDef::new(AiProviders::Enabled).boolean().not_null().default(true))
+                    .col(ColumnDef::new(AiProviders::CreatedAt).text().not_null().default(Expr::cust("(datetime('now'))")))
+                    .col(ColumnDef::new(AiProviders::UpdatedAt).text().not_null().default(Expr::cust("(datetime('now'))")))
+                    .to_owned(),
+            )
             .await
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager.drop_table(Table::drop().table(AiProviders::Table).to_owned()).await?;
         manager.drop_table(Table::drop().table(ResearchFindings::Table).to_owned()).await?;
         manager.drop_table(Table::drop().table(ResearchReports::Table).to_owned()).await
     }
@@ -109,6 +132,21 @@ enum ResearchFindings {
     Status,
     LinkedEntityType,
     LinkedEntityId,
+    CreatedAt,
+    UpdatedAt,
+}
+
+#[derive(DeriveIden)]
+enum AiProviders {
+    Table,
+    Id,
+    Name,
+    ProviderType,
+    ApiKey,
+    ApiBase,
+    Model,
+    IsDefault,
+    Enabled,
     CreatedAt,
     UpdatedAt,
 }

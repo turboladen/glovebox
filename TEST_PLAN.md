@@ -17,14 +17,32 @@ Playwright e2e tests. Keep it updated as features are added.
 
 ## TP-01: Garage (Home Page)
 
+### With vehicles (populated DB)
+
 | # | Step | Expected |
 |---|------|----------|
 | 1 | Navigate to `/` | "Garage" heading visible, "+ Add Car" button present |
-| 2 | With no vehicles | "No vehicles yet." message and "Add your first car" link shown |
-| 3 | With vehicles | Vehicle cards shown in grid with name, year/make/model, est. mileage |
-| 4 | Vehicle card badges | Overdue (red), upcoming (yellow), or "All good" (green) badge per card |
-| 5 | Click a vehicle card | Navigates to `/vehicles/:id` and shows vehicle detail |
-| 6 | Click "+ Add Car" | Navigates to `/vehicles/new` |
+| 2 | Vehicle cards | Vehicle cards shown in grid with name, year/make/model, est. mileage |
+| 3 | Vehicle card badges | Overdue (red), upcoming (yellow), or "All good" (green) badge per card |
+| 4 | Click a vehicle card | Navigates to `/vehicles/:id` and shows vehicle detail |
+| 5 | Click "+ Add Car" | Navigates to `/vehicles/new` |
+
+### With no vehicles (fresh DB — Welcome Dashboard)
+
+| # | Step | Expected |
+|---|------|----------|
+| 1 | Navigate to `/` with empty DB | Welcome dashboard shown (not "Your garage is empty") |
+| 2 | Hero banner | "Welcome to Glovebox" heading, "Your precision maintenance tracker" subtitle, Guards Red accent line |
+| 3 | Primary CTA | "Add Your First Vehicle" button visible, links to `/vehicles/new` via SPA navigation |
+| 4 | Feature showcase grid | Three cards: "Track Maintenance", "AI-Powered Insights", "Complete History" |
+| 5 | Feature card hover | Border turns Guards Red, shadow appears, subtle lift |
+| 6 | AI card settings link | "Configure in Settings" link navigates to `/settings` |
+| 7 | Quick-start checklist | Four steps shown: "Add your first vehicle" (active), "Configure an AI provider" (active, optional tag), "Add a trusted shop" (greyed), "Log your first service" (greyed) |
+| 8 | Checklist active links | Steps 1 and 2 are clickable, navigate via SPA routing |
+| 9 | Checklist greyed items | Steps 3 and 4 are visually muted, not interactive |
+| 10 | Responsive layout | Feature cards stack to single column below 640px |
+| 11 | Staggered animations | Cards animate in with increasing delay (respects prefers-reduced-motion) |
+| 12 | Add a vehicle, return to `/` | Normal vehicle grid shown instead of welcome dashboard |
 
 ## TP-02: Add Vehicle (VIN Flow)
 
@@ -108,7 +126,7 @@ Playwright e2e tests. Keep it updated as features are added.
 
 | # | Step | Expected |
 |---|------|----------|
-| 1 | Click "Glovebox" logo | Returns to `/` |
+| 1 | Click "Glovebox" logo | Returns to `/` via SPA navigation (no full page reload) |
 | 2 | Navigate to `/nonexistent` | 404 page: "Page not found." with "Back to Garage" link |
 | 3 | Direct URL `/vehicles/1` | Loads vehicle detail (no 404 flash) |
 | 4 | Browser back/forward | SPA routing works without full page reload |
@@ -129,7 +147,7 @@ Playwright e2e tests. Keep it updated as features are added.
 | 2 | `GET /api/vehicles` with empty DB | Returns `[]` |
 | 3 | `GET /api/vehicles/99999` | 404 error |
 | 4 | `POST /api/vehicles` with empty body | 400/422 error |
-| 5 | `GET /api/settings` | Returns settings list (seeded defaults) |
+| 5 | `GET /api/ai/status` | Returns AI configuration status |
 
 ## TP-13: Shops
 

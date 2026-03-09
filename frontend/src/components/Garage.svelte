@@ -44,15 +44,17 @@
 </script>
 
 <div class="garage">
-  <div class="garage-header">
-    <div>
-      <h1>Garage</h1>
-      {#if !loading && vehicleList.length > 0}
-        <p class="garage-count">{vehicleList.length} vehicle{vehicleList.length !== 1 ? 's' : ''}</p>
-      {/if}
+  {#if loading || vehicleList.length > 0}
+    <div class="garage-header">
+      <div>
+        <h1>Garage</h1>
+        {#if !loading && vehicleList.length > 0}
+          <p class="garage-count">{vehicleList.length} vehicle{vehicleList.length !== 1 ? 's' : ''}</p>
+        {/if}
+      </div>
+      <a href="/vehicles/new" use:link class="btn btn-primary">+ Add Car</a>
     </div>
-    <a href="/vehicles/new" use:link class="btn btn-primary">+ Add Car</a>
-  </div>
+  {/if}
 
   {#if loading}
     <div class="vehicle-grid">
@@ -72,11 +74,90 @@
   {:else if error}
     <p class="error">{error}</p>
   {:else if vehicleList.length === 0}
-    <div class="empty">
-      <div class="empty-icon">⬡</div>
-      <h2>Your garage is empty</h2>
-      <p>Add your first vehicle to start tracking maintenance.</p>
-      <a href="/vehicles/new" use:link class="btn btn-primary">Add your first car</a>
+    <div class="welcome">
+      <!-- Hero Banner -->
+      <div class="welcome-hero" style="--delay: 0ms">
+        <h2>Welcome to Glovebox</h2>
+        <p class="welcome-subtitle">Your precision maintenance tracker</p>
+        <div class="welcome-accent"></div>
+        <a href="/vehicles/new" use:link class="btn btn-primary welcome-cta">Add Your First Vehicle</a>
+      </div>
+
+      <!-- Feature Showcase -->
+      <div class="feature-grid">
+        <div class="feature-card" style="--delay: 80ms">
+          <div class="feature-icon">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+            </svg>
+          </div>
+          <h3>Track Maintenance</h3>
+          <p>Log services, track costs, and never miss scheduled maintenance.</p>
+          <div class="feature-tags">
+            <span class="tag">Services</span>
+            <span class="tag">Schedules</span>
+            <span class="tag">Costs</span>
+          </div>
+        </div>
+
+        <div class="feature-card" style="--delay: 160ms">
+          <div class="feature-icon">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 3l1.912 5.813a2 2 0 0 0 1.275 1.275L21 12l-5.813 1.912a2 2 0 0 0-1.275 1.275L12 21l-1.912-5.813a2 2 0 0 0-1.275-1.275L3 12l5.813-1.912a2 2 0 0 0 1.275-1.275L12 3z" />
+            </svg>
+          </div>
+          <h3>AI-Powered Insights</h3>
+          <p>Chat about your vehicle, get suggestions, and auto-parse invoices.</p>
+          <div class="feature-tags">
+            <span class="tag">Chat</span>
+            <span class="tag">Suggestions</span>
+            <span class="tag">Research</span>
+          </div>
+        </div>
+
+        <div class="feature-card" style="--delay: 240ms">
+          <div class="feature-icon">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z" />
+              <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+              <path d="M10 13H8" />
+              <path d="M16 17H8" />
+              <path d="M16 13h-2" />
+            </svg>
+          </div>
+          <h3>Complete History</h3>
+          <p>Documents, observations, accidents, and parts &mdash; all in one place.</p>
+          <div class="feature-tags">
+            <span class="tag">Documents</span>
+            <span class="tag">Parts</span>
+            <span class="tag">Observations</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quick Start Checklist -->
+      <div class="setup-card" style="--delay: 320ms">
+        <h3 class="setup-heading">Get Started</h3>
+        <div class="setup-checklist">
+          <a href="/vehicles/new" use:link class="setup-step">
+            <span class="step-indicator"></span>
+            <span class="step-label">Add your first vehicle</span>
+          </a>
+          <a href="/settings" use:link class="setup-step">
+            <span class="step-indicator"></span>
+            <span class="step-label">Configure an AI provider</span>
+            <span class="tag tag-muted">Optional</span>
+          </a>
+          <div class="setup-step disabled">
+            <span class="step-indicator"></span>
+            <span class="step-label">Add a trusted shop</span>
+          </div>
+          <div class="setup-step disabled">
+            <span class="step-indicator"></span>
+            <span class="step-label">Log your first service</span>
+          </div>
+        </div>
+      </div>
     </div>
   {:else}
     <div class="vehicle-grid">
@@ -269,29 +350,185 @@
     flex-wrap: wrap;
   }
 
-  /* --- Empty state --- */
-  .empty {
+  /* --- Welcome Dashboard --- */
+  .welcome {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-8);
+  }
+
+  .welcome-hero {
     text-align: center;
-    padding: var(--sp-12) 0;
+    padding: var(--sp-10) 0 var(--sp-6);
+    animation: card-enter var(--duration-slow) var(--ease-out) both;
+    animation-delay: var(--delay, 0ms);
+  }
+
+  .welcome-hero h2 {
+    font-family: var(--font-display);
+    font-size: 1.8rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--text);
+    margin: 0 0 var(--sp-2);
+  }
+
+  .welcome-subtitle {
+    font-size: 1rem;
+    color: var(--text-muted);
+    margin: 0 0 var(--sp-6);
+  }
+
+  .welcome-accent {
+    width: 60px;
+    height: 2px;
+    background: var(--primary);
+    margin: 0 auto var(--sp-6);
+    border-radius: 1px;
+  }
+
+  .welcome-cta {
+    font-size: 0.95rem;
+    padding: var(--sp-3) var(--sp-6);
+  }
+
+  /* --- Feature Grid --- */
+  .feature-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: var(--sp-4);
+  }
+
+  .feature-card {
+    background: var(--bg-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    padding: var(--sp-6) var(--sp-5);
+    transition:
+      border-color var(--duration-base) var(--ease-out),
+      box-shadow var(--duration-base) var(--ease-out),
+      transform var(--duration-base) var(--ease-out);
+    animation: card-enter var(--duration-slow) var(--ease-out) both;
+    animation-delay: var(--delay, 0ms);
+  }
+
+  .feature-card:hover {
+    border-color: var(--primary);
+    box-shadow: var(--shadow-md), 0 0 0 1px var(--primary-muted);
+    transform: translateY(-2px);
+  }
+
+  .feature-icon {
+    color: var(--primary);
+    opacity: 0.7;
+    margin-bottom: var(--sp-3);
+  }
+
+  .feature-card h3 {
+    font-family: var(--font-display);
+    font-size: 1rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin: 0 0 var(--sp-2);
+    color: var(--text);
+  }
+
+  .feature-card p {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    margin: 0 0 var(--sp-4);
+  }
+
+  .feature-tags {
+    display: flex;
+    gap: var(--sp-2);
+    flex-wrap: wrap;
+  }
+
+  .tag {
+    font-size: 0.7rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 2px var(--sp-2);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
     color: var(--text-muted);
   }
 
-  .empty-icon {
-    font-size: 3rem;
-    color: var(--primary);
-    opacity: 0.3;
-    margin-bottom: var(--sp-4);
+  .tag-muted {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
   }
 
-  .empty h2 {
+  /* --- Setup Checklist --- */
+  .setup-card {
+    background: var(--bg-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    padding: var(--sp-5) var(--sp-6);
+    animation: card-enter var(--duration-slow) var(--ease-out) both;
+    animation-delay: var(--delay, 0ms);
+  }
+
+  .setup-heading {
     font-family: var(--font-display);
+    font-size: 0.9rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
     color: var(--text-secondary);
-    margin-bottom: var(--sp-2);
+    margin: 0 0 var(--sp-4);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
   }
 
-  .empty p {
-    margin-bottom: var(--sp-6);
+  .setup-checklist {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-1);
+  }
+
+  .setup-step {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    padding: var(--sp-2) var(--sp-3);
+    border-radius: var(--radius-md);
+    text-decoration: none;
+    color: var(--text);
     font-size: 0.9rem;
+    transition:
+      background var(--duration-fast) var(--ease-out),
+      color var(--duration-fast) var(--ease-out);
+  }
+
+  a.setup-step:hover {
+    background: var(--surface);
+    color: var(--primary);
+  }
+
+  .setup-step.disabled {
+    opacity: 0.35;
+    pointer-events: none;
+  }
+
+  .step-indicator {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: 2px solid var(--border);
+    flex-shrink: 0;
+    transition: border-color var(--duration-fast) var(--ease-out);
+  }
+
+  a.setup-step:hover .step-indicator {
+    border-color: var(--primary);
+  }
+
+  .step-label {
+    flex: 1;
   }
 
   /* --- Skeleton loading --- */
@@ -326,8 +563,18 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .vehicle-card, .skeleton-card-wrap {
+    .vehicle-card, .skeleton-card-wrap, .welcome-hero, .feature-card, .setup-card {
       animation: none;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .welcome-hero h2 {
+      font-size: 1.4rem;
+    }
+
+    .feature-grid {
+      grid-template-columns: 1fr;
     }
   }
 </style>

@@ -119,7 +119,6 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/platforms", api::platforms::router())
         .nest("/api/model-templates", api::model_templates::router())
         .nest("/api/schedules", api::schedules::router())
-        .nest("/api/settings", api::settings::router())
         .nest("/api/shops", api::shops::router())
         // Documents (top-level, query-filtered)
         .route("/api/documents", get(api::documents::list).post(api::documents::upload))

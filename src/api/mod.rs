@@ -7,7 +7,6 @@ pub mod platforms;
 pub mod reminders;
 pub mod schedules;
 pub mod services;
-pub mod settings;
 pub mod vehicles;
 pub mod vin;
 pub mod shops;

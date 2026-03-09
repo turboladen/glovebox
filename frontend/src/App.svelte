@@ -18,7 +18,7 @@
 
 <div class="app">
   <header>
-    <a href="/" class="logo">
+    <a href="/" use:link class="logo">
       <span class="logo-icon" aria-hidden="true">⬡</span>
       Glovebox
     </a>

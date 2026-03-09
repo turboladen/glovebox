@@ -6,6 +6,11 @@ test-e2e:
 test-e2e-ui:
     cd frontend && bunx playwright test --headed
 
+# Delete the SQLite database (migrations will recreate it on next run)
+reset-db:
+    rm -f data/glovebox.db data/glovebox.db-shm data/glovebox.db-wal
+    @echo "Database deleted. It will be recreated on next 'cargo run'."
+
 # Run backend and frontend together for development
 dev:
     #!/usr/bin/env bash

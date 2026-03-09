@@ -36,17 +36,17 @@ cd frontend && bun run check  # svelte-check + TypeScript check
 
 **AppState** (`main.rs`): Axum shared state holds `DatabaseConnection`, `Arc<AppConfig>`, and `Arc<dyn AiProvider>`. All handlers extract `State(state)`.
 
-**Routing split**: Top-level CRUD resources (`vehicles`, `platforms`, `model_templates`, `schedules`, `settings`, `shops`) use `.nest()` with their own `Router`. Vehicle sub-resources (`mileage`, `services`, `observations`, `accidents`, `parts`, `documents`, `research`, etc.) use flat `.route()` calls directly in `main.rs` so `Path((vehicle_id, id))` tuple extraction works correctly.
+**Routing split**: Top-level CRUD resources (`vehicles`, `platforms`, `model_templates`, `schedules`, `shops`) use `.nest()` with their own `Router`. Vehicle sub-resources (`mileage`, `services`, `observations`, `accidents`, `parts`, `documents`, `research`, etc.) use flat `.route()` calls directly in `main.rs` so `Path((vehicle_id, id))` tuple extraction works correctly.
 
 **API handlers** (`src/api/`): Each module defines `Create*`/`Update*` DTOs, uses `Result<T> = std::result::Result<T, ApiError>`, and returns `Json<>`. Errors go through `ApiError` enum → `IntoResponse`.
 
-**Entities** (`src/entities/`): Hand-written `DeriveEntityModel` structs (not generated). Parent entities declare `has_many` relations; junction tables have `via()` impls. 19 entity files.
+**Entities** (`src/entities/`): Hand-written `DeriveEntityModel` structs (not generated). Parent entities declare `has_many` relations; junction tables have `via()` impls. 20 entity files.
 
 **Services** (`src/services/`): Business logic — `ai/` (pluggable provider trait), `reminders`, `vin_decode`, `nhtsa`.
 
-**AI layer** (`src/services/ai/`): `AiProvider` trait with implementations for Claude API, OpenAI-compatible (Ollama/LM Studio), mock (testing), and noop. Provider is selected at startup from `settings` table (`ai.*` keys). Context builder in `context.rs` assembles vehicle data into system prompts.
+**AI layer** (`src/services/ai/`): `AiProvider` trait with implementations for Claude API, OpenAI-compatible (Ollama/LM Studio), mock (testing), and noop. Provider is selected at startup from `ai_providers` table. Context builder in `context.rs` assembles vehicle data into system prompts.
 
-**Migrations** (`src/migration/`): 18 migration files, auto-run on startup via `Migrator::up()`.
+**Migrations** (`src/migration/`): 8 consolidated migration files, auto-run on startup via `Migrator::up()`.
 
 ### Frontend (`frontend/`)
 

@@ -75,21 +75,6 @@ impl MigrationTrait for Migration {
             )).await?;
         }
 
-        // Seed default settings
-        let settings = [
-            ("reminders.default_warning_miles", "1000", "Default miles-before-due reminder threshold"),
-            ("reminders.default_warning_days", "30", "Default days-before-due reminder threshold"),
-            ("reminders.mileage_extrapolation_lookback_days", "90", "Days of mileage history for extrapolation"),
-            ("reminders.bundling_window_miles", "5000", "Suggest bundling items due within this many miles"),
-            ("ai.provider", "none", "AI provider: none, claude, openai_compat"),
-        ];
-
-        for (key, value, _description) in &settings {
-            db.execute_unprepared(&format!(
-                "INSERT OR IGNORE INTO settings (key, value) VALUES ('{key}', '{value}')"
-            )).await?;
-        }
-
         Ok(())
     }
 
@@ -98,7 +83,6 @@ impl MigrationTrait for Migration {
         db.execute_unprepared("DELETE FROM maintenance_schedule_items").await?;
         db.execute_unprepared("DELETE FROM model_templates").await?;
         db.execute_unprepared("DELETE FROM platforms").await?;
-        db.execute_unprepared("DELETE FROM settings WHERE key LIKE 'reminders.%' OR key LIKE 'ai.%'").await?;
         Ok(())
     }
 }
