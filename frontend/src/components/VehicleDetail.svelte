@@ -93,15 +93,15 @@
 <div class="meta">
   ${[data.year, data.make, data.model].filter(Boolean).map(v => esc(v)).join(' ')}
   ${data.vin ? `<br>VIN: ${esc(data.vin)}` : ''}
-  <br>Generated: ${esc(new Date().toLocaleDateString())}
+  <br>Generated: ${esc(formatDate(new Date().toISOString()))}
 </div>
 <h2>Service Records (${data.record_count})</h2>
 <table><thead><tr><th>Date</th><th>Mileage</th><th>Description</th><th>Cost</th><th>Shop</th></tr></thead><tbody>
-${data.service_records.map(r => `<tr><td>${esc(r.date)}</td><td>${r.mileage?.toLocaleString() ?? ''}</td><td>${esc(r.description)}</td><td>${esc(r.total_cost)}</td><td>${esc(r.shop)}</td></tr>`).join('')}
+${data.service_records.map(r => `<tr><td>${esc(formatDate(r.date))}</td><td>${r.mileage?.toLocaleString() ?? ''}</td><td>${esc(r.description)}</td><td>${esc(r.total_cost)}</td><td>${esc(r.shop)}</td></tr>`).join('')}
 </tbody></table>
 ${data.installed_parts.length ? `<h2>Installed Parts</h2>
 <table><thead><tr><th>Part</th><th>Manufacturer</th><th>Part #</th><th>Installed</th><th>Mileage</th><th>Cost</th></tr></thead><tbody>
-${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufacturer)}</td><td>${esc(p.part_number)}</td><td>${esc(p.installed_date)}</td><td>${p.installed_odometer?.toLocaleString() ?? ''}</td><td>${esc(p.cost)}</td></tr>`).join('')}
+${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufacturer)}</td><td>${esc(p.part_number)}</td><td>${esc(formatDate(p.installed_date))}</td><td>${p.installed_odometer?.toLocaleString() ?? ''}</td><td>${esc(p.cost)}</td></tr>`).join('')}
 </tbody></table>` : ''}
 <div class="totals">
   <strong>Services:</strong> ${esc(data.total_service_cost)}<br>
