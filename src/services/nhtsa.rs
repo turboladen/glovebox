@@ -57,22 +57,29 @@ pub async fn check_recalls(
     // Try the full model name first. If the API returns 400, retry with progressively
     // shorter prefixes (e.g., "Golf GTI" -> "Golf"). The NHTSA Recalls API uses coarser
     // model names than the VIN decode API, so "Golf GTI" fails but "Golf" succeeds.
+    let words: Vec<&str> = model.split_whitespace().collect();
     match fetch_recalls(make, model, model_year).await {
         Ok(result) => return Ok(result),
-        Err(NhtsaError::BadRequest(url)) => {
-            tracing::warn!("NHTSA 400 for {url}, retrying with shorter model name");
+        Err(NhtsaError::BadRequest(_)) if words.len() > 1 => {
+            let fallback = words[..words.len() - 1].join(" ");
+            tracing::warn!("NHTSA 400 for model '{model}', retrying with '{fallback}'");
+        }
+        Err(NhtsaError::BadRequest(_)) => {
+            return Err(format!(
+                "NHTSA Recalls API does not recognize model '{model}' for {make} {model_year}"
+            ));
         }
         Err(e) => return Err(e.to_string()),
     }
 
     // Retry with progressively shorter model names by dropping words from the right
-    let words: Vec<&str> = model.split_whitespace().collect();
     for end in (1..words.len()).rev() {
         let shorter = words[..end].join(" ");
         match fetch_recalls(make, &shorter, model_year).await {
             Ok(result) => return Ok(result),
-            Err(NhtsaError::BadRequest(url)) => {
-                tracing::warn!("NHTSA 400 for {url}, trying shorter model name");
+            Err(NhtsaError::BadRequest(_)) => {
+                let next = if end > 1 { words[..end - 1].join(" ") } else { "none".to_string() };
+                tracing::warn!("NHTSA 400 for model '{shorter}', retrying with '{next}'");
             }
             Err(e) => return Err(e.to_string()),
         }
