@@ -374,12 +374,25 @@ fn build_community_wisdom_prompt(vehicle: &vehicle::Model) -> String {
         prompt.push_str(trim);
         prompt.push(' ');
     }
+    if let Some(ref drivetrain) = vehicle.drivetrain {
+        prompt.push_str(drivetrain);
+        prompt.push(' ');
+    }
+    if let Some(ref body_style) = vehicle.body_style {
+        prompt.push_str(body_style);
+        prompt.push(' ');
+    }
     if let Some(ref engine) = vehicle.engine {
         prompt.push_str("with ");
         prompt.push_str(engine);
         prompt.push_str(" engine ");
     }
-    prompt.push_str("— what are the most common issues, recommended preventive maintenance items beyond factory schedule, and popular upgrades reported by owners? Return as JSON array.");
+    if let Some(ref transmission) = vehicle.transmission {
+        prompt.push_str("and ");
+        prompt.push_str(transmission);
+        prompt.push_str(" transmission ");
+    }
+    prompt.push_str("— what are the most common issues, recommended preventive maintenance items beyond factory schedule, and popular upgrades reported by owners? Only include issues that apply to this exact configuration (e.g., do not include AWD-specific issues for a FWD vehicle, or manual transmission issues for an automatic). Return as JSON array.");
     prompt
 }
 
@@ -402,10 +415,10 @@ mod tests {
             make: Some("Volkswagen".to_string()),
             model: Some("Golf GTI".to_string()),
             trim_level: Some("SE".to_string()),
-            body_style: None,
+            body_style: Some("Hatchback".to_string()),
             engine: Some("2.0L TSI".to_string()),
-            transmission: None,
-            drivetrain: None,
+            transmission: Some("6-speed DSG".to_string()),
+            drivetrain: Some("FWD".to_string()),
             vin: None,
             license_plate: None,
             color: None,
@@ -427,7 +440,11 @@ mod tests {
         assert!(prompt.contains("Volkswagen"));
         assert!(prompt.contains("Golf GTI"));
         assert!(prompt.contains("SE"));
+        assert!(prompt.contains("FWD"));
+        assert!(prompt.contains("Hatchback"));
         assert!(prompt.contains("2.0L TSI"));
+        assert!(prompt.contains("6-speed DSG"));
+        assert!(prompt.contains("exact configuration"));
     }
 
     #[test]

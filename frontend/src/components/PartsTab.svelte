@@ -42,6 +42,9 @@
   let partSaving = $state(false)
   let partError = $state('')
 
+  // Link-existing-part picker
+  let linkingSlotId: number | null = $state(null)
+
   const categories = ['engine', 'suspension', 'brakes', 'wheels_tires', 'interior', 'exterior', 'electrical', 'drivetrain', 'exhaust', 'other']
   const statuses = ['purchased', 'installed', 'replaced', 'returned']
 
@@ -155,8 +158,31 @@
     }
   }
 
+  // Slot "+Part" button handler: show picker if unslotted parts exist, else go straight to form
+  function handleAddPartToSlot(slotId: number) {
+    const unslotted = unslottedParts()
+    if (unslotted.length > 0) {
+      linkingSlotId = slotId
+      showPartForm = false
+      showSlotForm = false
+    } else {
+      openPartForm(slotId)
+    }
+  }
+
+  async function linkPartToSlot(part: Part, slotId: number) {
+    try {
+      await partsApi.update(vehicleId, part.id, { slot_id: slotId })
+      linkingSlotId = null
+      await loadData()
+    } catch (e: any) {
+      alert(`Failed to link part: ${e.message}`)
+    }
+  }
+
   // Part form handlers
   function openPartForm(slotId: number | null, part?: Part) {
+    linkingSlotId = null
     editingPart = part || null
     partSlotId = slotId
     partName = part?.name || ''
@@ -284,6 +310,35 @@
     </div>
   {/if}
 
+  {#if linkingSlotId !== null}
+    {@const targetSlot = slots.find(s => s.id === linkingSlotId)}
+    <div class="form-card">
+      <h4>Add Part to {targetSlot?.name ?? 'Slot'}</h4>
+      <p class="link-prompt">Link an existing unslotted part or create a new one.</p>
+      <div class="link-part-list">
+        {#each unslottedParts() as part (part.id)}
+          <div class="link-part-row">
+            <div class="link-part-info">
+              <span class="part-name">{part.name}</span>
+              {#if part.manufacturer}
+                <span class="part-meta">by {part.manufacturer}</span>
+              {/if}
+              <span class="badge {statusBadgeClass(part.status)}">{part.status}</span>
+              {#if part.cost_cents !== null}
+                <span class="part-meta">{formatCost(part.cost_cents)}</span>
+              {/if}
+            </div>
+            <button class="btn btn-sm btn-primary" onclick={() => linkPartToSlot(part, linkingSlotId!)}>Link</button>
+          </div>
+        {/each}
+      </div>
+      <div class="form-actions">
+        <button type="button" class="btn btn-secondary" onclick={() => { linkingSlotId = null }}>Cancel</button>
+        <button type="button" class="btn btn-primary" onclick={() => openPartForm(linkingSlotId)}>Create New Part</button>
+      </div>
+    </div>
+  {/if}
+
   {#if showPartForm}
     <div class="form-card">
       <h4>{editingPart ? 'Edit Part' : 'New Part'}</h4>
@@ -404,7 +459,7 @@
                 {/if}
               </div>
               <div class="slot-actions">
-                <button class="btn btn-sm btn-secondary" onclick={() => openPartForm(slot.id)}>+ Part</button>
+                <button class="btn btn-sm btn-secondary" onclick={() => handleAddPartToSlot(slot.id)}>+ Part</button>
                 <button class="btn btn-sm btn-secondary" onclick={() => openSlotForm(slot)}>Edit</button>
                 <button class="btn btn-sm btn-danger" onclick={() => deleteSlot(slot)}>Delete</button>
               </div>
@@ -597,4 +652,34 @@
   .part-row-actions { margin-left: auto; display: flex; gap: var(--sp-1); }
 
   .empty { color: var(--text-muted); text-align: center; padding: var(--sp-8) 0; }
+
+  .link-prompt {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin: 0 0 var(--sp-3);
+  }
+
+  .link-part-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+    margin-bottom: var(--sp-4);
+  }
+
+  .link-part-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--sp-2) var(--sp-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+  }
+
+  .link-part-info {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    flex-wrap: wrap;
+  }
 </style>
