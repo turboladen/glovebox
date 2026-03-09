@@ -33,7 +33,99 @@ pub async fn check_recalls(
         .await
         .map_err(ApiError::Internal)?;
 
+    // Persist recalls as research findings (deduplicating by campaign number)
+    if !result.recalls.is_empty() {
+        persist_recall_findings(&state.db, vehicle_id, &result.recalls).await?;
+    }
+
     Ok(Json(result))
+}
+
+/// Persist NHTSA recalls as research findings, skipping any already saved for this vehicle.
+async fn persist_recall_findings(
+    db: &DatabaseConnection,
+    vehicle_id: i32,
+    recalls: &[crate::services::nhtsa::RecallInfo],
+) -> Result<(), ApiError> {
+    // Collect existing recall source_urls for this vehicle to deduplicate
+    let existing_reports = research_report::Entity::find()
+        .filter(research_report::Column::VehicleId.eq(vehicle_id))
+        .all(db)
+        .await?;
+    let report_ids: Vec<i32> = existing_reports.iter().map(|r| r.id).collect();
+
+    let existing_urls: std::collections::HashSet<String> = if report_ids.is_empty() {
+        std::collections::HashSet::new()
+    } else {
+        research_finding::Entity::find()
+            .filter(research_finding::Column::ReportId.is_in(report_ids))
+            .filter(research_finding::Column::Category.eq("recall"))
+            .all(db)
+            .await?
+            .into_iter()
+            .filter_map(|f| f.source_url)
+            .collect()
+    };
+
+    let new_findings: Vec<NewFinding> = recalls
+        .iter()
+        .filter(|recall| {
+            let url = format!(
+                "https://www.nhtsa.gov/recalls?nhtsaId={}",
+                recall.campaign_number
+            );
+            !existing_urls.contains(&url)
+        })
+        .map(|recall| NewFinding {
+            category: "recall".to_string(),
+            title: recall.subject.clone(),
+            description: recall.summary.clone(),
+            source_url: Some(format!(
+                "https://www.nhtsa.gov/recalls?nhtsaId={}",
+                recall.campaign_number
+            )),
+            severity: Some("critical".to_string()),
+        })
+        .collect();
+
+    if new_findings.is_empty() {
+        return Ok(());
+    }
+
+    let summary = format!(
+        "Found {} new recall{} from NHTSA.",
+        new_findings.len(),
+        if new_findings.len() == 1 { "" } else { "s" }
+    );
+    let raw_data = serde_json::to_string(&new_findings).ok();
+
+    let txn = db.begin().await?;
+
+    let report = research_report::ActiveModel {
+        vehicle_id: Set(vehicle_id),
+        report_type: Set(Some("recalls_only".to_string())),
+        summary: Set(Some(summary)),
+        raw_data: Set(raw_data),
+        ..Default::default()
+    };
+    let report = report.insert(&txn).await?;
+
+    for f in new_findings {
+        let finding = research_finding::ActiveModel {
+            report_id: Set(report.id),
+            category: Set(f.category),
+            title: Set(f.title),
+            description: Set(f.description),
+            source_url: Set(f.source_url),
+            severity: Set(f.severity),
+            status: Set("new".to_string()),
+            ..Default::default()
+        };
+        finding.insert(&txn).await?;
+    }
+
+    txn.commit().await?;
+    Ok(())
 }
 
 // --- Research reports ---
