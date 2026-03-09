@@ -4,7 +4,7 @@
   import type { Observation, ServiceRecordWithLinks } from '../lib/types'
   import { formatDate } from '../lib/dates'
 
-  let { vehicleId }: { vehicleId: number } = $props()
+  let { vehicleId, estimatedMileage }: { vehicleId: number; estimatedMileage?: number } = $props()
 
   let items: Observation[] = $state([])
   let serviceRecords: ServiceRecordWithLinks[] = $state([])
@@ -17,7 +17,7 @@
   let title = $state('')
   let description = $state('')
   let observedAt = $state(new Date().toISOString().slice(0, 10))
-  let odometer = $state<number | undefined>()
+  let odometer = $state<number | undefined>(estimatedMileage)
   let obdCodes = $state('')
   let saving = $state(false)
   let error = $state('')
@@ -55,7 +55,7 @@
         obd_codes: obdCodes || undefined,
       })
       showForm = false
-      title = ''; description = ''; odometer = undefined; obdCodes = ''
+      title = ''; description = ''; odometer = estimatedMileage; obdCodes = ''
       observedAt = new Date().toISOString().slice(0, 10)
       await loadData()
     } catch (e: any) {

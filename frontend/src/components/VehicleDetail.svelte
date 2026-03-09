@@ -219,7 +219,7 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
         {:else if activeTab === 'parts'}
           <PartsTab vehicleId={vehicle.id} />
         {:else if activeTab === 'observations'}
-          <ObservationsTab vehicleId={vehicle.id} />
+          <ObservationsTab vehicleId={vehicle.id} estimatedMileage={reminderData?.estimated_mileage} />
         {:else if activeTab === 'documents'}
           <DocumentsTab vehicleId={vehicle.id} />
         {:else if activeTab === 'accidents'}
