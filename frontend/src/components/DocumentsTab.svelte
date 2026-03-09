@@ -126,6 +126,31 @@
     return `${doc.linked_entity_type} #${doc.linked_entity_id}`
   }
 
+  let creatingService = $state(false)
+  let serviceCreated = $state(false)
+
+  async function createServiceFromInvoice() {
+    if (!parsedInvoice) return
+    creatingService = true
+    try {
+      await servicesApi.create(vehicleId, {
+        service_date: parsedInvoice.service_date || new Date().toISOString().split('T')[0],
+        mileage: parsedInvoice.mileage ?? undefined,
+        description: parsedInvoice.description ?? undefined,
+        parts_cost_cents: parsedInvoice.parts_cost_cents ?? undefined,
+        labor_cost_cents: parsedInvoice.labor_cost_cents ?? undefined,
+        total_cost_cents: parsedInvoice.total_cost_cents ?? undefined,
+        shop_name: parsedInvoice.shop_name ?? undefined,
+        notes: parsedInvoice.notes ?? undefined,
+      })
+      serviceCreated = true
+    } catch (e: any) {
+      parseError = e.message
+    } finally {
+      creatingService = false
+    }
+  }
+
   function formatCents(cents: number | null): string {
     if (cents == null) return ''
     return `$${(cents / 100).toFixed(2)}`
@@ -310,7 +335,14 @@
         {/if}
       </div>
       <div class="parsed-actions">
-        <button class="btn btn-secondary" onclick={() => (parsedInvoice = null)}>Dismiss</button>
+        {#if serviceCreated}
+          <span class="service-created-notice">Service record created! View it in the History tab.</span>
+        {:else}
+          <button class="btn btn-primary" onclick={createServiceFromInvoice} disabled={creatingService}>
+            {creatingService ? 'Creating...' : 'Create Service Record'}
+          </button>
+        {/if}
+        <button class="btn btn-secondary" onclick={() => { parsedInvoice = null; serviceCreated = false }}>Dismiss</button>
       </div>
     </div>
   {/if}
@@ -386,5 +418,6 @@
   .parsed-fields { display: flex; flex-direction: column; gap: var(--sp-2); font-size: 0.9rem; }
   .parsed-field ul { margin: var(--sp-1) 0 0; padding-left: var(--sp-5); }
   .parsed-field li { font-size: 0.85rem; }
-  .parsed-actions { margin-top: var(--sp-3); display: flex; gap: var(--sp-2); justify-content: flex-end; }
+  .parsed-actions { margin-top: var(--sp-3); display: flex; gap: var(--sp-2); justify-content: flex-end; align-items: center; }
+  .service-created-notice { font-size: 0.85rem; color: var(--success); font-weight: 500; }
 </style>
