@@ -70,8 +70,8 @@ Playwright e2e tests. Keep it updated as features are added.
 | # | Step | Expected |
 |---|------|----------|
 | 1 | Navigate to `/vehicles/:id` | Vehicle name in heading, back link "← Garage" |
-| 2 | Status bar (estimated) | Shows mileage with "mi est." and "as of" date when last entry is older than today |
-| 2a | Status bar (exact) | Shows mileage with "mi" (no "est.") and no "as of" date when last entry is from today |
+| 2 | Status bar (estimated) | Shows mileage with "mi est." and "as of" date (of last reading) when last entry is older than today |
+| 2a | Status bar (exact) | Shows mileage with "mi" (no "est.") and "as of" date when last entry is from today |
 | 3 | "Update Mileage" button | Toggles mileage entry form inline |
 | 4 | "Log Service" button | Toggles service form inline |
 | 5 | Schedule tab (default) | Active, shows reminder groups (overdue/upcoming/ok) |

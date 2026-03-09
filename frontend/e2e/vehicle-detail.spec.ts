@@ -87,8 +87,8 @@ test.describe('Update Mileage', () => {
     const mileageUnit = page.locator('.mileage-unit')
     await expect(mileageUnit).toBeVisible()
     await expect(mileageUnit).toHaveText('mi')
-    // Should not show "as of" date for exact mileage
-    await expect(page.locator('.mileage-date')).not.toBeVisible()
+    // Date should still be visible (shows when reading was taken)
+    await expect(page.locator('.mileage-date')).toBeVisible()
   })
 })
 
