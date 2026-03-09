@@ -33,6 +33,11 @@
     recallError = ''
     try {
       recalls = await researchApi.checkRecalls(vehicleId)
+      // Recall results are now persisted as findings — reload reports and expand the latest
+      await loadReports()
+      if (reports.length > 0 && reports[0].report_type === 'recalls_only') {
+        await viewReport(reports[0].id)
+      }
     } catch (e: any) {
       recallError = e.message
     } finally {
@@ -137,29 +142,7 @@
         <div class="recall-warning">
           {recalls.recall_count} recall(s) found for {recalls.model_year} {recalls.make} {recalls.model}
         </div>
-        <div class="recall-list">
-          {#each recalls.recalls as recall}
-            <div class="recall-card">
-              <div class="recall-header">
-                <span class="campaign-number">{recall.campaign_number}</span>
-                <span class="recall-component">{recall.component ?? ''}</span>
-              </div>
-              <h4>{recall.subject}</h4>
-              {#if recall.summary}
-                <p class="recall-summary">{recall.summary}</p>
-              {/if}
-              {#if recall.consequence}
-                <p class="recall-consequence"><strong>Consequence:</strong> {recall.consequence}</p>
-              {/if}
-              {#if recall.remedy}
-                <p class="recall-remedy"><strong>Remedy:</strong> {recall.remedy}</p>
-              {/if}
-              {#if recall.report_date}
-                <p class="recall-date">Reported: {formatDate(recall.report_date)}</p>
-              {/if}
-            </div>
-          {/each}
-        </div>
+        <p class="recall-hint">Recalls are saved as findings below. Use Plan/Complete/Dismiss to track status.</p>
       {/if}
     {/if}
   </div>
@@ -289,31 +272,12 @@
     font-size: 0.9rem;
   }
 
-  .recall-card {
-    padding: var(--sp-3);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    margin-bottom: var(--sp-2);
-    background: var(--bg-raised);
-  }
 
-  .recall-header {
-    display: flex;
-    gap: var(--sp-2);
-    font-size: 0.8rem;
-    color: var(--text-muted);
-    margin-bottom: var(--sp-1);
-  }
-
-  .recall-card h4 {
-    margin: var(--sp-1) 0 var(--sp-2);
-    font-size: 0.95rem;
-  }
-
-  .recall-summary, .recall-consequence, .recall-remedy, .recall-date {
+  .recall-hint {
     font-size: 0.85rem;
-    margin: var(--sp-1) 0;
     color: var(--text-muted);
+    margin: var(--sp-2) 0 0;
+    font-style: italic;
   }
 
   .expanded-report {
