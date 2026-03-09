@@ -1,4 +1,4 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::Json;
 use sea_orm::*;
 use serde::{Deserialize, Serialize};
@@ -292,6 +292,46 @@ pub async fn generate_report(
         report,
         findings: saved_findings,
     }))
+}
+
+// --- List findings by status (cross-report) ---
+
+#[derive(Deserialize)]
+pub struct FindingsQuery {
+    pub status: Option<String>,
+}
+
+pub async fn list_findings(
+    State(state): State<AppState>,
+    Path(vehicle_id): Path<i32>,
+    Query(query): Query<FindingsQuery>,
+) -> Result<Json<Vec<research_finding::Model>>, ApiError> {
+    // Get all report IDs for this vehicle
+    let report_ids: Vec<i32> = research_report::Entity::find()
+        .filter(research_report::Column::VehicleId.eq(vehicle_id))
+        .all(&state.db)
+        .await?
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
+
+    if report_ids.is_empty() {
+        return Ok(Json(vec![]));
+    }
+
+    let mut select = research_finding::Entity::find()
+        .filter(research_finding::Column::ReportId.is_in(report_ids));
+
+    if let Some(status) = query.status {
+        select = select.filter(research_finding::Column::Status.eq(status));
+    }
+
+    let findings = select
+        .order_by_desc(research_finding::Column::Id)
+        .all(&state.db)
+        .await?;
+
+    Ok(Json(findings))
 }
 
 // --- Finding management ---

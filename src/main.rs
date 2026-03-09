@@ -186,6 +186,10 @@ async fn main() -> anyhow::Result<()> {
             get(api::research::get_report),
         )
         .route(
+            "/api/vehicles/{vehicle_id}/research/findings",
+            get(api::research::list_findings),
+        )
+        .route(
             "/api/vehicles/{vehicle_id}/research/{report_id}/findings/{id}",
             axum::routing::put(api::research::update_finding_with_body),
         )

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { link } from '@keenmate/svelte-spa-router'
-  import { vehicles as vehiclesApi, reminders as remindersApi, mileage as mileageApi, vehicleExport } from '../lib/api'
+  import { vehicles as vehiclesApi, reminders as remindersApi, mileage as mileageApi, vehicleExport, research } from '../lib/api'
   import type { Vehicle, RemindersResponse } from '../lib/types'
   import { formatDate } from '../lib/dates'
   import ScheduleTab from './ScheduleTab.svelte'
@@ -21,6 +21,7 @@
 
   let vehicle: Vehicle | null = $state(null)
   let reminderData: RemindersResponse | null = $state(null)
+  let plannedCount = $state(0)
   let loading = $state(true)
   let error = $state('')
   let activeTab = $state('schedule')
@@ -31,8 +32,14 @@
   async function loadData() {
     try {
       const id = parseInt(routeParams.id)
-      vehicle = await vehiclesApi.get(id)
-      reminderData = await remindersApi.get(id)
+      const [v, r, planned] = await Promise.all([
+        vehiclesApi.get(id),
+        remindersApi.get(id),
+        research.listFindings(id, 'planned'),
+      ])
+      vehicle = v
+      reminderData = r
+      plannedCount = planned.length
     } catch (e: any) {
       error = e.message
     } finally {
@@ -196,7 +203,7 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
         Costs
       </button>
       <button class="tab" class:active={activeTab === 'research'} onclick={() => (activeTab = 'research')}>
-        Research
+        Research{#if plannedCount > 0} <span class="badge badge-planned">{plannedCount}</span>{/if}
       </button>
       <button class="tab" class:active={activeTab === 'ai'} onclick={() => (activeTab = 'ai')}>
         AI

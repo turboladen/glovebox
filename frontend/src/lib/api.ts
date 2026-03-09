@@ -187,6 +187,8 @@ export const research = {
       method: 'PUT',
       body: JSON.stringify(data),
     }),
+  listFindings: (vehicleId: number, status?: string) =>
+    request<ResearchFinding[]>(`/vehicles/${vehicleId}/research/findings${status ? `?status=${status}` : ''}`),
 }
 
 // AI

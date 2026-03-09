@@ -1,28 +1,37 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { link } from '@keenmate/svelte-spa-router'
-  import { vehicles as vehiclesApi, reminders as remindersApi } from '../lib/api'
+  import { vehicles as vehiclesApi, reminders as remindersApi, research } from '../lib/api'
   import type { Vehicle, RemindersResponse } from '../lib/types'
 
   let vehicleList: Vehicle[] = $state([])
   let reminderMap: Map<number, RemindersResponse> = $state(new Map())
+  let plannedCountMap: Map<number, number> = $state(new Map())
   let loading = $state(true)
   let error = $state('')
 
   onMount(async () => {
     try {
       vehicleList = await vehiclesApi.list()
-      // Fetch reminders for each vehicle in parallel
-      const results = await Promise.allSettled(
-        vehicleList.map((v) => remindersApi.get(v.id))
-      )
-      for (let i = 0; i < results.length; i++) {
-        const result = results[i]
+      // Fetch reminders and planned findings counts in parallel
+      const [reminderResults, plannedResults] = await Promise.all([
+        Promise.allSettled(vehicleList.map((v) => remindersApi.get(v.id))),
+        Promise.allSettled(vehicleList.map((v) => research.listFindings(v.id, 'planned'))),
+      ])
+      for (let i = 0; i < reminderResults.length; i++) {
+        const result = reminderResults[i]
         if (result.status === 'fulfilled') {
           reminderMap.set(vehicleList[i].id, result.value)
         }
       }
+      for (let i = 0; i < plannedResults.length; i++) {
+        const result = plannedResults[i]
+        if (result.status === 'fulfilled') {
+          plannedCountMap.set(vehicleList[i].id, result.value.length)
+        }
+      }
       reminderMap = reminderMap // trigger reactivity
+      plannedCountMap = plannedCountMap
     } catch (e: any) {
       error = e.message
     } finally {
@@ -164,6 +173,7 @@
       {#each vehicleList as vehicle, i (vehicle.id)}
         {@const summary = statusSummary(reminderMap.get(vehicle.id))}
         {@const est = reminderMap.get(vehicle.id)?.estimated_mileage}
+        {@const planned = plannedCountMap.get(vehicle.id) ?? 0}
         <a
           href="/vehicles/{vehicle.id}"
           use:link
@@ -205,7 +215,10 @@
                 {#if summary.upcoming > 0}
                   <span class="badge badge-warning">{summary.upcoming} upcoming</span>
                 {/if}
-                {#if summary.overdue === 0 && summary.upcoming === 0}
+                {#if planned > 0}
+                  <span class="badge badge-planned">{planned} planned</span>
+                {/if}
+                {#if summary.overdue === 0 && summary.upcoming === 0 && planned === 0}
                   <span class="badge badge-success">All good</span>
                 {/if}
               </div>
