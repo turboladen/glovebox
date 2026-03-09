@@ -1,14 +1,16 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { observations as obsApi } from '../lib/api'
-  import type { Observation } from '../lib/types'
+  import { observations as obsApi, services as servicesApi } from '../lib/api'
+  import type { Observation, ServiceRecordWithLinks } from '../lib/types'
   import { formatDate } from '../lib/dates'
 
   let { vehicleId }: { vehicleId: number } = $props()
 
   let items: Observation[] = $state([])
+  let serviceRecords: ServiceRecordWithLinks[] = $state([])
   let loading = $state(true)
   let showForm = $state(false)
+  let resolvingObsId: number | null = $state(null)
 
   // Form fields
   let category = $state('general')
@@ -26,7 +28,12 @@
 
   async function loadData() {
     try {
-      items = await obsApi.list(vehicleId)
+      const [obsList, svcList] = await Promise.all([
+        obsApi.list(vehicleId),
+        servicesApi.list(vehicleId),
+      ])
+      items = obsList
+      serviceRecords = svcList
     } catch (e) {
       console.error(e)
     } finally {
@@ -57,8 +64,20 @@
     }
   }
 
-  async function toggleResolved(obs: Observation) {
-    await obsApi.update(vehicleId, obs.id, { resolved: !obs.resolved })
+  async function resolveWith(obs: Observation, serviceId: number | null) {
+    await obsApi.update(vehicleId, obs.id, {
+      resolved: true,
+      resolved_service_id: serviceId,
+    })
+    resolvingObsId = null
+    await loadData()
+  }
+
+  async function unresolve(obs: Observation) {
+    await obsApi.update(vehicleId, obs.id, {
+      resolved: false,
+      resolved_service_id: null,
+    })
     await loadData()
   }
 
@@ -145,9 +164,42 @@
             <span class="obs-meta obd">{obs.obd_codes}</span>
           {/if}
           <div class="obs-actions">
-            <button class="btn btn-secondary" onclick={() => toggleResolved(obs)}>
-              {obs.resolved ? 'Unresolve' : 'Mark Resolved'}
-            </button>
+            {#if obs.resolved}
+              <span class="resolved-info">
+                Resolved
+                {#if obs.resolved_service_id}
+                  {@const svc = serviceRecords.find(s => s.id === obs.resolved_service_id)}
+                  {#if svc}
+                    — {svc.description || 'Service'} ({formatDate(svc.service_date)})
+                  {/if}
+                {/if}
+              </span>
+              <button class="btn btn-secondary" onclick={() => unresolve(obs)}>
+                Unresolve
+              </button>
+            {:else if resolvingObsId === obs.id}
+              <div class="resolve-picker">
+                <select onchange={(e) => {
+                  const val = (e.target as HTMLSelectElement).value
+                  resolveWith(obs, val === '' ? null : parseInt(val))
+                }}>
+                  <option value="" disabled selected>Link to a service...</option>
+                  <option value="">Resolve without service</option>
+                  {#each serviceRecords as svc (svc.id)}
+                    <option value={svc.id}>
+                      {formatDate(svc.service_date)} — {svc.description || 'Service'}
+                    </option>
+                  {/each}
+                </select>
+                <button class="btn btn-secondary" onclick={() => (resolvingObsId = null)}>
+                  Cancel
+                </button>
+              </div>
+            {:else}
+              <button class="btn btn-secondary" onclick={() => (resolvingObsId = obs.id)}>
+                Mark Resolved
+              </button>
+            {/if}
           </div>
         </div>
       {/each}
@@ -199,6 +251,22 @@
   .obs-desc { font-size: 0.85rem; color: var(--text-muted); margin: var(--sp-1) 0; }
   .obs-meta { font-size: 0.8rem; color: var(--text-muted); margin-right: var(--sp-2); }
   .obs-meta.obd { font-family: var(--font-mono); }
-  .obs-actions { margin-top: var(--sp-2); }
+  .obs-actions { margin-top: var(--sp-2); display: flex; align-items: center; gap: var(--sp-2); }
+
+  .resolved-info {
+    font-size: 0.8rem;
+    color: var(--success);
+    font-weight: 500;
+  }
+
+  .resolve-picker {
+    display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
+  }
+
+  .resolve-picker select {
+    font-size: 0.85rem;
+    max-width: 300px;
+  }
+
   .empty { color: var(--text-muted); text-align: center; padding: var(--sp-8) 0; }
 </style>
