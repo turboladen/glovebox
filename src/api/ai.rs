@@ -245,6 +245,11 @@ pub async fn parse_invoice(
         ))
     })?;
 
+    // Persist extracted text back to the document
+    let mut active: document::ActiveModel = doc.into();
+    active.extracted_text = sea_orm::Set(Some(response.content.clone()));
+    active.update(&state.db).await?;
+
     Ok(Json(parsed))
 }
 

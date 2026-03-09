@@ -102,6 +102,8 @@
     parsedInvoice = null
     try {
       parsedInvoice = await ai.parseInvoice(docId, selectedProviderId)
+      // Refresh docs to pick up the persisted extracted_text
+      docs = await docsApi.list({ vehicle_id: vehicleId })
     } catch (e: any) {
       parseError = e.message
     } finally {
@@ -279,6 +281,12 @@
             {#if doc.notes}
               <p class="doc-notes">{doc.notes}</p>
             {/if}
+            {#if doc.extracted_text}
+              <details class="doc-extracted-text">
+                <summary>Extracted Text</summary>
+                <pre>{doc.extracted_text}</pre>
+              </details>
+            {/if}
           </div>
           <div class="doc-actions">
             <a href="/files/{doc.file_path}" target="_blank" class="btn btn-secondary">View</a>
@@ -399,6 +407,17 @@
     margin-top: var(--sp-1);
   }
   .doc-notes { font-size: 0.85rem; color: var(--text-muted); margin: var(--sp-1) 0 0; }
+  .doc-extracted-text { margin-top: var(--sp-2); font-size: 0.8rem; }
+  .doc-extracted-text summary {
+    cursor: pointer; color: var(--text-muted); font-weight: 500;
+    user-select: none;
+  }
+  .doc-extracted-text pre {
+    margin: var(--sp-2) 0 0; padding: var(--sp-3); background: var(--surface);
+    border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
+    white-space: pre-wrap; word-break: break-word; font-size: 0.8rem;
+    max-height: 300px; overflow-y: auto;
+  }
 
   .doc-actions { display: flex; gap: var(--sp-2); flex-shrink: 0; }
 
