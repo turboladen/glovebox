@@ -54,6 +54,57 @@ pub async fn check_recalls(
         return Err("Make and model are required for recall lookup".to_string());
     }
 
+    // Try the full model name first. If the API returns 400, retry with progressively
+    // shorter prefixes (e.g., "Golf GTI" -> "Golf"). The NHTSA Recalls API uses coarser
+    // model names than the VIN decode API, so "Golf GTI" fails but "Golf" succeeds.
+    match fetch_recalls(make, model, model_year).await {
+        Ok(result) => return Ok(result),
+        Err(NhtsaError::BadRequest(url)) => {
+            tracing::warn!("NHTSA 400 for {url}, retrying with shorter model name");
+        }
+        Err(e) => return Err(e.to_string()),
+    }
+
+    // Retry with progressively shorter model names by dropping words from the right
+    let words: Vec<&str> = model.split_whitespace().collect();
+    for end in (1..words.len()).rev() {
+        let shorter = words[..end].join(" ");
+        match fetch_recalls(make, &shorter, model_year).await {
+            Ok(result) => return Ok(result),
+            Err(NhtsaError::BadRequest(url)) => {
+                tracing::warn!("NHTSA 400 for {url}, trying shorter model name");
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+
+    Err(format!(
+        "NHTSA Recalls API does not recognize model '{model}' for {make} {model_year}"
+    ))
+}
+
+#[derive(Debug)]
+enum NhtsaError {
+    BadRequest(String),
+    Network(String),
+    Parse(String),
+}
+
+impl std::fmt::Display for NhtsaError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BadRequest(url) => write!(f, "NHTSA returned 400 Bad Request for {url}"),
+            Self::Network(msg) => write!(f, "NHTSA request failed: {msg}"),
+            Self::Parse(msg) => write!(f, "Failed to parse NHTSA response: {msg}"),
+        }
+    }
+}
+
+async fn fetch_recalls(
+    make: &str,
+    model: &str,
+    model_year: i32,
+) -> Result<RecallCheckResult, NhtsaError> {
     let url = reqwest::Url::parse_with_params(
         NHTSA_RECALLS_URL,
         &[
@@ -62,23 +113,26 @@ pub async fn check_recalls(
             ("modelYear", &model_year.to_string()),
         ],
     )
-    .map_err(|e| format!("Failed to build NHTSA URL: {e}"))?;
+    .map_err(|e| NhtsaError::Network(format!("Failed to build URL: {e}")))?;
 
-    let resp = reqwest::get(url)
+    let resp = reqwest::get(url.clone())
         .await
-        .map_err(|e| format!("NHTSA Recalls API request failed: {e}"))?;
+        .map_err(|e| NhtsaError::Network(e.to_string()))?;
 
+    if resp.status() == reqwest::StatusCode::BAD_REQUEST {
+        return Err(NhtsaError::BadRequest(url.to_string()));
+    }
     if !resp.status().is_success() {
-        return Err(format!(
-            "NHTSA Recalls API returned status {}",
+        return Err(NhtsaError::Network(format!(
+            "NHTSA returned status {}",
             resp.status()
-        ));
+        )));
     }
 
     let data: NhtsaRecallsResponse = resp
         .json()
         .await
-        .map_err(|e| format!("Failed to parse NHTSA recalls response: {e}"))?;
+        .map_err(|e| NhtsaError::Parse(e.to_string()))?;
 
     let recalls = parse_recall_results(data.results);
 
