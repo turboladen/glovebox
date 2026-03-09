@@ -177,10 +177,10 @@ export const research = {
   checkRecalls: (vehicleId: number) => request<RecallCheckResult>(`/vehicles/${vehicleId}/recalls`),
   listReports: (vehicleId: number) => request<ResearchReport[]>(`/vehicles/${vehicleId}/research`),
   getReport: (vehicleId: number, id: number) => request<ReportWithFindings>(`/vehicles/${vehicleId}/research/${id}`),
-  generateReport: (vehicleId: number, reportType?: string) =>
+  generateReport: (vehicleId: number, reportType?: string, providerId?: number) =>
     request<ReportWithFindings>(`/vehicles/${vehicleId}/research`, {
       method: 'POST',
-      body: JSON.stringify({ report_type: reportType || 'full_check' }),
+      body: JSON.stringify({ report_type: reportType || 'full_check', provider_id: providerId }),
     }),
   updateFinding: (vehicleId: number, reportId: number, findingId: number, data: { status?: string; linked_entity_type?: string | null; linked_entity_id?: number | null }) =>
     request<ResearchFinding>(`/vehicles/${vehicleId}/research/${reportId}/findings/${findingId}`, {

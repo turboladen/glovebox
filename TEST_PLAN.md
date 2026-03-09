@@ -331,18 +331,26 @@ Playwright e2e tests. Keep it updated as features are added.
 
 | # | Step | Expected |
 |---|------|----------|
-| 1 | Click "Run Full Check" | Loading state ("Generating..."), then report with findings shown |
+| 1 | Click "Run Full Check" | Progress indicator shows staged steps ("Fetching vehicle data...", "Checking NHTSA recalls...", etc.), then report with findings shown |
 | 2 | Report shows summary | Summary text describes number of findings |
-| 3 | Each finding shows | Category badge, severity badge, status badge, title, description |
-| 4 | Finding status actions | "Dismiss", "Plan", "Complete" buttons update status |
-| 5 | Dismissed findings | Card becomes dimmed |
-| 6 | Completed findings | Card border turns green, opacity reduced |
-| 7 | Reports list | Previous reports shown with type, date, and summary preview |
-| 8 | Click a report row | Expands to show findings for that report |
+| 3 | Section description visible | "AI-generated analysis of common issues..." subtitle below "Research Reports" heading |
+| 4 | Findings grouped by category | Section headers for Recall, Suggested Maintenance, Forum Report, Upgrade Idea |
+| 5 | Severity filter chips | Critical, recommended, optional, informational toggle chips; clicking filters findings |
+| 6 | Each finding shows | Severity badge, status badge, title, description |
+| 7 | Sources/citations | Collapsible "Sources" disclosure on findings with source_url |
+| 8 | Finding status actions | "Dismiss", "Plan", "Complete" buttons update status |
+| 9 | Dismissed findings | Card becomes dimmed |
+| 10 | Completed findings | Card border turns green, opacity reduced |
+| 11 | Reports list | Previous reports shown with type, date, and summary preview |
+| 12 | Click a report row | Expands to show findings for that report |
 | 9 | `POST /api/vehicles/:id/research` | Creates report with findings from NHTSA + AI |
 | 10 | `GET /api/vehicles/:id/research` | Returns list of reports ordered by generated_at desc |
 | 11 | `GET /api/vehicles/:id/research/:id` | Returns report with findings array |
-| 12 | `PUT /api/vehicles/:id/research/:rid/findings/:id` | Updates finding status and linked entity |
+| 13 | AI model selector | Provider dropdown shown next to "Run Full Check" when 2+ providers configured |
+| 14 | Complete with linking | "Complete" opens picker to link finding to service record or part |
+| 15 | Complete without linking | "Complete without linking" option marks done without association |
+| 16 | Linked finding display | Completed + linked findings show "Linked to service #N" label |
+| 17 | `PUT /api/vehicles/:id/research/:rid/findings/:id` | Updates finding status and linked entity |
 
 ---
 

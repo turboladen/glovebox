@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { research as researchApi } from '../lib/api'
-  import type { RecallCheckResult, ResearchReport, ReportWithFindings, ResearchFinding } from '../lib/types'
+  import { research as researchApi, services as servicesApi, parts as partsApi } from '../lib/api'
+  import type { RecallCheckResult, ResearchReport, ReportWithFindings, ResearchFinding, ServiceRecordWithLinks, Part } from '../lib/types'
   import { formatDate } from '../lib/dates'
+  import AiProviderSelect from './AiProviderSelect.svelte'
 
   let { vehicleId }: { vehicleId: number } = $props()
 
@@ -15,6 +16,56 @@
 
   let generating = $state(false)
   let generateError = $state('')
+  let generateStep = $state('')
+
+  let selectedProviderId: number | undefined = $state(undefined)
+
+  // Link picker state
+  let linkPickerFinding: ResearchFinding | null = $state(null)
+  let linkableServices: ServiceRecordWithLinks[] = $state([])
+  let linkableParts: Part[] = $state([])
+  let linkLoading = $state(false)
+
+  // Severity filter state — all enabled by default
+  const severityLevels = ['critical', 'recommended', 'optional', 'informational'] as const
+  let activeSeverities: Set<string> = $state(new Set(severityLevels))
+
+  // Derived: findings grouped by category with active filters applied
+  const categoryOrder = ['recall', 'suggested_maintenance', 'forum_report', 'upgrade_idea']
+
+  let filteredGroupedFindings = $derived.by(() => {
+    if (!expandedReport) return []
+    const filtered = expandedReport.findings.filter(f => activeSeverities.has(f.severity ?? 'informational'))
+    const groups: { category: string; findings: ResearchFinding[] }[] = []
+    const byCategory = new Map<string, ResearchFinding[]>()
+    for (const f of filtered) {
+      const cat = f.category
+      if (!byCategory.has(cat)) byCategory.set(cat, [])
+      byCategory.get(cat)!.push(f)
+    }
+    // Sort categories in defined order, then any unknown categories at the end
+    for (const cat of categoryOrder) {
+      if (byCategory.has(cat)) {
+        groups.push({ category: cat, findings: byCategory.get(cat)! })
+        byCategory.delete(cat)
+      }
+    }
+    for (const [cat, findings] of byCategory) {
+      groups.push({ category: cat, findings })
+    }
+    return groups
+  })
+
+  function toggleSeverity(level: string) {
+    const next = new Set(activeSeverities)
+    if (next.has(level)) {
+      // Don't allow deselecting all
+      if (next.size > 1) next.delete(level)
+    } else {
+      next.add(level)
+    }
+    activeSeverities = next
+  }
 
   async function loadReports() {
     try {
@@ -45,17 +96,37 @@
     }
   }
 
+  const progressSteps = [
+    'Fetching vehicle data...',
+    'Checking NHTSA recalls...',
+    'Compiling maintenance history...',
+    'Generating AI analysis...',
+  ]
+
   async function generateReport() {
     generating = true
     generateError = ''
+    generateStep = progressSteps[0]
+
+    // Advance through progress steps on a timer
+    let stepIndex = 0
+    const stepInterval = setInterval(() => {
+      stepIndex++
+      if (stepIndex < progressSteps.length) {
+        generateStep = progressSteps[stepIndex]
+      }
+    }, 3000)
+
     try {
-      const report = await researchApi.generateReport(vehicleId, 'full_check')
+      const report = await researchApi.generateReport(vehicleId, 'full_check', selectedProviderId)
       expandedReport = report
       reports = [report, ...reports]
     } catch (e: any) {
       generateError = e.message
     } finally {
+      clearInterval(stepInterval)
       generating = false
+      generateStep = ''
     }
   }
 
@@ -77,6 +148,53 @@
       }
     } catch (e: any) {
       console.error('Failed to update finding:', e)
+    }
+  }
+
+  async function openLinkPicker(finding: ResearchFinding) {
+    linkPickerFinding = finding
+    linkLoading = true
+    try {
+      const [svc, pts] = await Promise.all([
+        servicesApi.list(vehicleId),
+        partsApi.list(vehicleId),
+      ])
+      linkableServices = svc
+      linkableParts = pts
+    } catch (e) {
+      console.error('Failed to load linkable records:', e)
+    } finally {
+      linkLoading = false
+    }
+  }
+
+  async function linkAndComplete(entityType: string | null, entityId: number | null) {
+    if (!linkPickerFinding) return
+    try {
+      const updated = await researchApi.updateFinding(vehicleId, linkPickerFinding.report_id, linkPickerFinding.id, {
+        status: 'completed',
+        linked_entity_type: entityType,
+        linked_entity_id: entityId,
+      })
+      if (expandedReport) {
+        expandedReport = {
+          ...expandedReport,
+          findings: expandedReport.findings.map(f => f.id === updated.id ? updated : f),
+        }
+      }
+    } catch (e: any) {
+      console.error('Failed to link finding:', e)
+    } finally {
+      linkPickerFinding = null
+    }
+  }
+
+  function linkedLabel(finding: ResearchFinding): string | null {
+    if (!finding.linked_entity_type || !finding.linked_entity_id) return null
+    switch (finding.linked_entity_type) {
+      case 'service': return `Linked to service #${finding.linked_entity_id}`
+      case 'part': return `Linked to part #${finding.linked_entity_id}`
+      default: return `Linked to ${finding.linked_entity_type} #${finding.linked_entity_id}`
     }
   }
 
@@ -149,11 +267,24 @@
 
   <div class="section">
     <div class="section-header">
-      <h3>Research Reports</h3>
-      <button class="btn btn-primary" onclick={generateReport} disabled={generating}>
-        {generating ? 'Generating...' : 'Run Full Check'}
-      </button>
+      <div>
+        <h3>Research Reports</h3>
+        <p class="section-desc">AI-generated analysis of common issues, maintenance tips, recalls, and popular upgrades for your vehicle.</p>
+      </div>
+      <div class="generate-controls">
+        <AiProviderSelect bind:selectedProviderId />
+        <button class="btn btn-primary" onclick={generateReport} disabled={generating}>
+          {generating ? 'Generating...' : 'Run Full Check'}
+        </button>
+      </div>
     </div>
+
+    {#if generating}
+      <div class="progress-indicator">
+        <span class="spinner"></span>
+        <span class="progress-step">{generateStep}</span>
+      </div>
+    {/if}
 
     {#if generateError}
       <p class="error">{generateError}</p>
@@ -171,35 +302,59 @@
         {#if expandedReport.findings.length === 0}
           <p class="no-data">No findings in this report.</p>
         {:else}
+          <div class="severity-filters">
+            {#each severityLevels as level}
+              <button
+                class="filter-chip {severityClass(level)}"
+                class:inactive={!activeSeverities.has(level)}
+                onclick={() => toggleSeverity(level)}
+              >
+                {level}
+              </button>
+            {/each}
+          </div>
+
           <div class="findings-list">
-            {#each expandedReport.findings as finding}
-              <div class="finding-card" class:dismissed={finding.status === 'dismissed'} class:completed={finding.status === 'completed'}>
-                <div class="finding-header">
-                  <span class="badge category-badge">{categoryLabel(finding.category)}</span>
-                  <span class="badge {severityClass(finding.severity)}">{finding.severity ?? 'info'}</span>
-                  <span class="badge status-badge status-{finding.status}">{statusLabel(finding.status)}</span>
-                </div>
-                <h5>{finding.title}</h5>
-                {#if finding.description}
-                  <p class="finding-desc">{finding.description}</p>
-                {/if}
-                {#if finding.source_url}
-                  <a href={finding.source_url} target="_blank" rel="noopener" class="source-link">View source</a>
-                {/if}
-                <div class="finding-actions">
-                  {#if finding.status !== 'dismissed'}
-                    <button class="btn btn-sm btn-secondary" onclick={() => updateFindingStatus(finding, 'dismissed')}>Dismiss</button>
-                  {/if}
-                  {#if finding.status !== 'planned'}
-                    <button class="btn btn-sm btn-secondary" onclick={() => updateFindingStatus(finding, 'planned')}>Plan</button>
-                  {/if}
-                  {#if finding.status !== 'completed'}
-                    <button class="btn btn-sm btn-primary" onclick={() => updateFindingStatus(finding, 'completed')}>Complete</button>
-                  {/if}
-                  {#if finding.status !== 'new'}
-                    <button class="btn btn-sm btn-secondary" onclick={() => updateFindingStatus(finding, 'new')}>Reopen</button>
-                  {/if}
-                </div>
+            {#each filteredGroupedFindings as group}
+              <div class="category-group">
+                <h5 class="category-header">{categoryLabel(group.category)}</h5>
+                {#each group.findings as finding}
+                  <div class="finding-card" class:dismissed={finding.status === 'dismissed'} class:completed={finding.status === 'completed'}>
+                    <div class="finding-header">
+                      <span class="badge {severityClass(finding.severity)}">{finding.severity ?? 'info'}</span>
+                      <span class="badge status-badge status-{finding.status}">{statusLabel(finding.status)}</span>
+                    </div>
+                    <h5>{finding.title}</h5>
+                    {#if finding.description}
+                      <p class="finding-desc">{finding.description}</p>
+                    {/if}
+                    {#if finding.source_url}
+                      <details class="sources-detail">
+                        <summary class="sources-toggle">Sources</summary>
+                        <div class="sources-content">
+                          <a href={finding.source_url} target="_blank" rel="noopener" class="source-link">{finding.source_url}</a>
+                        </div>
+                      </details>
+                    {/if}
+                    {#if linkedLabel(finding)}
+                      <p class="linked-label">{linkedLabel(finding)}</p>
+                    {/if}
+                    <div class="finding-actions">
+                      {#if finding.status !== 'dismissed'}
+                        <button class="btn btn-sm btn-secondary" onclick={() => updateFindingStatus(finding, 'dismissed')}>Dismiss</button>
+                      {/if}
+                      {#if finding.status !== 'planned'}
+                        <button class="btn btn-sm btn-secondary" onclick={() => updateFindingStatus(finding, 'planned')}>Plan</button>
+                      {/if}
+                      {#if finding.status !== 'completed'}
+                        <button class="btn btn-sm btn-primary" onclick={() => openLinkPicker(finding)}>Complete</button>
+                      {/if}
+                      {#if finding.status !== 'new'}
+                        <button class="btn btn-sm btn-secondary" onclick={() => updateFindingStatus(finding, 'new')}>Reopen</button>
+                      {/if}
+                    </div>
+                  </div>
+                {/each}
               </div>
             {/each}
           </div>
@@ -224,6 +379,47 @@
     {/if}
   </div>
 </div>
+
+{#if linkPickerFinding}
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="modal-backdrop" onclick={() => (linkPickerFinding = null)} onkeydown={(e) => e.key === 'Escape' && (linkPickerFinding = null)}>
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="modal-content" onclick={(e) => e.stopPropagation()}>
+      <h4>Mark as Completed</h4>
+      <p class="modal-desc">Optionally link this finding to a service record or part that addressed it.</p>
+
+      {#if linkLoading}
+        <p class="loading">Loading records...</p>
+      {:else}
+        <button class="btn btn-primary link-option" onclick={() => linkAndComplete(null, null)}>
+          Complete without linking
+        </button>
+
+        {#if linkableServices.length > 0}
+          <h5 class="link-section-header">Service Records</h5>
+          {#each linkableServices as svc}
+            <button class="link-option" onclick={() => linkAndComplete('service', svc.id)}>
+              <span class="link-option-title">{svc.description ?? 'Service'}</span>
+              <span class="link-option-meta">{formatDate(svc.service_date)}{svc.shop_name ? ` · ${svc.shop_name}` : ''}</span>
+            </button>
+          {/each}
+        {/if}
+
+        {#if linkableParts.length > 0}
+          <h5 class="link-section-header">Parts</h5>
+          {#each linkableParts as part}
+            <button class="link-option" onclick={() => linkAndComplete('part', part.id)}>
+              <span class="link-option-title">{part.name}</span>
+              <span class="link-option-meta">{part.manufacturer ?? ''}{part.part_number ? ` · ${part.part_number}` : ''}</span>
+            </button>
+          {/each}
+        {/if}
+      {/if}
+
+      <button class="btn btn-secondary btn-sm modal-close" onclick={() => (linkPickerFinding = null)}>Cancel</button>
+    </div>
+  </div>
+{/if}
 
 <style>
   .research-tab {
@@ -250,6 +446,102 @@
     margin: 0;
     font-family: var(--font-display);
     font-size: 1rem;
+  }
+
+  .section-desc {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    margin: var(--sp-1) 0 0;
+  }
+
+  .progress-indicator {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    padding: var(--sp-3);
+    background: var(--info-bg);
+    border: 1px solid var(--info);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--sp-3);
+    font-size: 0.85rem;
+    color: var(--info);
+  }
+
+  .spinner {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 2px solid currentColor;
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    flex-shrink: 0;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  .progress-step {
+    font-weight: 500;
+  }
+
+  .severity-filters {
+    display: flex;
+    gap: var(--sp-1);
+    flex-wrap: wrap;
+    margin-bottom: var(--sp-3);
+  }
+
+  .filter-chip {
+    font-size: 0.75rem;
+    padding: var(--sp-1) var(--sp-2);
+    border-radius: var(--radius-full, 999px);
+    cursor: pointer;
+    font-weight: 500;
+    transition: opacity var(--duration-fast) var(--ease-out);
+  }
+
+  .filter-chip.inactive {
+    opacity: 0.35;
+  }
+
+  .category-group {
+    margin-bottom: var(--sp-3);
+  }
+
+  .category-header {
+    font-family: var(--font-display);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    margin: var(--sp-3) 0 var(--sp-1);
+    padding-bottom: var(--sp-1);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .sources-detail {
+    margin: var(--sp-1) 0;
+    font-size: 0.8rem;
+  }
+
+  .sources-toggle {
+    cursor: pointer;
+    color: var(--primary);
+    font-size: 0.8rem;
+  }
+
+  .sources-toggle:hover {
+    text-decoration: underline;
+  }
+
+  .sources-content {
+    padding: var(--sp-1) var(--sp-2);
+    margin-top: var(--sp-1);
+    background: var(--surface);
+    border-radius: var(--radius-sm);
+    word-break: break-all;
   }
 
   .recall-clear {
@@ -430,5 +722,92 @@
   .loading {
     color: var(--text-muted);
     font-size: 0.9rem;
+  }
+
+  .generate-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    flex-shrink: 0;
+  }
+
+  .linked-label {
+    font-size: 0.75rem;
+    color: var(--success);
+    margin: var(--sp-1) 0 0;
+    font-style: italic;
+  }
+
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+  }
+
+  .modal-content {
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: var(--sp-4);
+    max-width: 480px;
+    width: 90vw;
+    max-height: 70vh;
+    overflow-y: auto;
+  }
+
+  .modal-content h4 {
+    margin: 0 0 var(--sp-1);
+  }
+
+  .modal-desc {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin: 0 0 var(--sp-3);
+  }
+
+  .link-section-header {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    margin: var(--sp-3) 0 var(--sp-1);
+  }
+
+  .link-option {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    padding: var(--sp-2) var(--sp-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: none;
+    cursor: pointer;
+    text-align: left;
+    color: var(--text);
+    margin-bottom: var(--sp-1);
+    transition: background var(--duration-fast) var(--ease-out);
+  }
+
+  .link-option:hover {
+    background: var(--surface-hover);
+  }
+
+  .link-option-title {
+    font-size: 0.85rem;
+    font-weight: 500;
+  }
+
+  .link-option-meta {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+
+  .modal-close {
+    margin-top: var(--sp-3);
+    width: 100%;
   }
 </style>

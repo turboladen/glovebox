@@ -177,6 +177,7 @@ pub async fn get_report(
 #[derive(Deserialize)]
 pub struct GenerateReportRequest {
     pub report_type: Option<String>,
+    pub provider_id: Option<i32>,
 }
 
 pub async fn generate_report(
@@ -218,7 +219,7 @@ pub async fn generate_report(
 
     // If AI is configured and report type includes community wisdom, query AI
     if report_type == "full_check" || report_type == "community_wisdom" {
-        if let Ok(provider) = state.ai.resolve(None).await {
+        if let Ok(provider) = state.ai.resolve(body.provider_id).await {
             let prompt = build_community_wisdom_prompt(&vehicle);
             match provider
                 .complete(crate::services::ai::AiRequest {
