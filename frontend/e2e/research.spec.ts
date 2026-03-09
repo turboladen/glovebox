@@ -70,9 +70,9 @@ test.describe('Research with vehicle details', () => {
     await page.goto(vehicleUrl)
     await page.getByRole('button', { name: 'Research' }).click()
     await page.getByRole('button', { name: 'Check Recalls' }).click()
-    // Should either show recalls or "No open recalls found"
+    // Wait for the check to complete — should show either recall count or "no recalls"
     await expect(
-      page.getByText(/recall|No open recalls found/i)
-    ).toBeVisible({ timeout: 15000 })
+      page.getByText(/recall\(s\) found|No open recalls found/i).first()
+    ).toBeVisible({ timeout: 30000 })
   })
 })

@@ -9,6 +9,7 @@ use crate::entities::{maintenance_schedule_item, model_template, vehicle};
 use crate::AppState;
 
 use super::error::ApiError;
+use super::serde_helpers::deserialize_optional;
 
 type Result<T> = std::result::Result<T, ApiError>;
 
@@ -34,15 +35,24 @@ pub struct CreateScheduleItem {
 #[derive(Deserialize)]
 pub struct UpdateScheduleItem {
     pub name: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub description: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub interval_miles: Option<Option<i32>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub interval_months: Option<Option<i32>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub warning_miles: Option<Option<i32>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub warning_days: Option<Option<i32>>,
     pub enabled: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub source: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub notes: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub is_factory_recommended: Option<Option<bool>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub labor_categories: Option<Option<String>>,
 }
 

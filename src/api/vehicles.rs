@@ -8,6 +8,7 @@ use crate::entities::vehicle;
 use crate::AppState;
 
 use super::error::ApiError;
+use super::serde_helpers::deserialize_optional;
 
 type Result<T> = std::result::Result<T, ApiError>;
 
@@ -37,27 +38,49 @@ pub struct CreateVehicle {
 #[derive(Deserialize)]
 pub struct UpdateVehicle {
     pub name: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub model_template_id: Option<Option<i32>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub year: Option<Option<i32>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub make: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub model: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub trim_level: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub body_style: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub engine: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub transmission: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub drivetrain: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub vin: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub license_plate: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub color: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub purchase_date: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub purchase_price_cents: Option<Option<i32>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub purchase_price_currency: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub purchase_mileage: Option<Option<i32>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub sold_date: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub sold_price_cents: Option<Option<i32>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub sold_price_currency: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub sold_mileage: Option<Option<i32>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub photo_path: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub notes: Option<Option<String>>,
 }
 

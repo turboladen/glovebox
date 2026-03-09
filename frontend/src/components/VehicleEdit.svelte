@@ -49,9 +49,10 @@
     templates = await mtApi.list()
   })
 
-  function parseCents(dollars: string): number | null {
-    if (!dollars.trim()) return null
-    const n = parseFloat(dollars)
+  function parseCents(dollars: string | number): number | null {
+    const s = String(dollars ?? '').trim()
+    if (!s) return null
+    const n = parseFloat(s)
     return isNaN(n) ? null : Math.round(n * 100)
   }
 
@@ -88,12 +89,12 @@
       error = 'Vehicle name is required'
       return
     }
-    const rawPurchase = purchasePriceDollars.trim()
+    const rawPurchase = String(purchasePriceDollars ?? '').trim()
     if (rawPurchase && isNaN(parseFloat(rawPurchase))) {
       error = 'Purchase price must be a valid number'
       return
     }
-    const rawSold = soldPriceDollars.trim()
+    const rawSold = String(soldPriceDollars ?? '').trim()
     if (rawSold && isNaN(parseFloat(rawSold))) {
       error = 'Sold price must be a valid number'
       return

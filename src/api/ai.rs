@@ -8,6 +8,7 @@ use sea_orm::{
 use serde::{Deserialize, Serialize};
 
 use crate::api::error::ApiError;
+use crate::api::serde_helpers::deserialize_optional;
 use crate::entities::{ai_provider_config, chat_message, document};
 use crate::services::ai::{AiRequest, Attachment, ChatMessage, Role};
 use crate::AppState;
@@ -589,8 +590,11 @@ pub async fn create_provider(
 pub struct UpdateProvider {
     pub name: Option<String>,
     pub provider_type: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub api_key: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub api_base: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub model: Option<Option<String>>,
     pub is_default: Option<bool>,
     pub enabled: Option<bool>,

@@ -8,6 +8,7 @@ use crate::AppState;
 
 use super::error::ApiError;
 use super::require_vehicle;
+use super::serde_helpers::deserialize_optional;
 
 type Result<T> = std::result::Result<T, ApiError>;
 
@@ -34,24 +35,41 @@ pub struct CreatePart {
 
 #[derive(Deserialize)]
 pub struct UpdatePart {
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub slot_id: Option<Option<i32>>,
     pub name: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub manufacturer: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub part_number: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub oe_part_number_replaced: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub seller: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub purchase_date: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub cost_cents: Option<Option<i32>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub cost_currency: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub invoice_url: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub manufacturer_url: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub retailer_url: Option<Option<String>>,
     pub status: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub installed_date: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub installed_odometer: Option<Option<i32>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub installed_service_id: Option<Option<i32>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub replaced_date: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub replaced_odometer: Option<Option<i32>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub notes: Option<Option<String>>,
 }
 

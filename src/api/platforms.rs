@@ -8,6 +8,7 @@ use crate::entities::platform;
 use crate::AppState;
 
 use super::error::ApiError;
+use super::serde_helpers::deserialize_optional;
 
 type Result<T> = std::result::Result<T, ApiError>;
 
@@ -22,8 +23,11 @@ pub struct CreatePlatform {
 #[derive(Deserialize)]
 pub struct UpdatePlatform {
     pub name: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub website_url: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub api_base_url: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub notes: Option<Option<String>>,
 }
 

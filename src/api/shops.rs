@@ -8,6 +8,7 @@ use crate::entities::shop;
 use crate::AppState;
 
 use super::error::ApiError;
+use super::serde_helpers::deserialize_optional;
 
 type Result<T> = std::result::Result<T, ApiError>;
 
@@ -24,10 +25,15 @@ pub struct CreateShop {
 #[derive(Deserialize)]
 pub struct UpdateShop {
     pub name: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub address: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub phone: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub website: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub specialty: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub notes: Option<Option<String>>,
 }
 

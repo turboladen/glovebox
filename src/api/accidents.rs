@@ -8,6 +8,7 @@ use crate::AppState;
 
 use super::error::ApiError;
 use super::require_vehicle;
+use super::serde_helpers::deserialize_optional;
 
 type Result<T> = std::result::Result<T, ApiError>;
 
@@ -34,24 +35,41 @@ pub struct CreateAccident {
 #[derive(Deserialize)]
 pub struct UpdateAccident {
     pub occurred_at: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub odometer: Option<Option<i32>>,
     pub description: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub fault: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub other_party_name: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub other_party_phone: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub other_party_email: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub other_party_insurance: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub other_party_policy_number: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub insurance_claim_number: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub insurance_adjuster: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub insurance_adjuster_phone: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub total_repair_cost_cents: Option<Option<i32>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub total_repair_cost_currency: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub deductible_cents: Option<Option<i32>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub deductible_currency: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub insurance_payout_cents: Option<Option<i32>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub insurance_payout_currency: Option<Option<String>>,
     pub resolved: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub notes: Option<Option<String>>,
     pub service_record_ids: Option<Vec<i32>>,
 }

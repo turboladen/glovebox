@@ -7,6 +7,7 @@ use crate::entities::{part_slot, vehicle};
 use crate::AppState;
 
 use super::error::ApiError;
+use super::serde_helpers::deserialize_optional;
 
 type Result<T> = std::result::Result<T, ApiError>;
 
@@ -22,9 +23,13 @@ pub struct CreatePartSlot {
 #[derive(Deserialize)]
 pub struct UpdatePartSlot {
     pub name: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub category: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub oe_spec: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub oe_part_number: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub notes: Option<Option<String>>,
 }
 

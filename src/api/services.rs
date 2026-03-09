@@ -8,6 +8,7 @@ use crate::AppState;
 
 use super::error::ApiError;
 use super::require_vehicle;
+use super::serde_helpers::deserialize_optional;
 
 type Result<T> = std::result::Result<T, ApiError>;
 
@@ -32,16 +33,27 @@ pub struct CreateServiceRecord {
 #[derive(Deserialize)]
 pub struct UpdateServiceRecord {
     pub service_date: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub mileage: Option<Option<i32>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub description: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub parts_cost_cents: Option<Option<i32>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub parts_cost_currency: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub labor_cost_cents: Option<Option<i32>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub labor_cost_currency: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub total_cost_cents: Option<Option<i32>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub total_cost_currency: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub shop_name: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub shop_id: Option<Option<i32>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub notes: Option<Option<String>>,
     pub schedule_item_ids: Option<Vec<i32>>,
     pub part_ids: Option<Vec<i32>>,

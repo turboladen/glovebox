@@ -7,6 +7,7 @@ use crate::entities::{research_finding, research_report, vehicle};
 use crate::AppState;
 
 use super::error::ApiError;
+use super::serde_helpers::deserialize_optional;
 
 // --- Recall check ---
 
@@ -339,7 +340,9 @@ pub async fn list_findings(
 #[derive(Deserialize)]
 pub struct UpdateFindingRequest {
     pub status: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub linked_entity_type: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub linked_entity_id: Option<Option<i32>>,
 }
 

@@ -35,14 +35,31 @@ test.describe('Observations', () => {
   test('resolve an observation', async ({ page }) => {
     await page.goto(vehicleUrl)
     await page.getByRole('button', { name: 'Obs.' }).click()
-    await page.getByRole('button', { name: 'Mark Resolved' }).click()
-    await expect(page.getByRole('button', { name: 'Unresolve' })).toBeVisible()
+    // Ensure an observation exists (create one if needed)
+    if (!(await page.getByRole('button', { name: 'Mark Resolved' }).first().isVisible().catch(() => false))) {
+      await page.getByRole('button', { name: '+ Add Observation' }).click()
+      await page.getByLabel('Title').fill('Resolve test obs')
+      await page.getByRole('button', { name: 'Save' }).click()
+      await expect(page.getByText('Resolve test obs')).toBeVisible()
+    }
+    await page.getByRole('button', { name: 'Mark Resolved' }).first().click()
+    // Select "Resolve without service" from the dropdown
+    await page.locator('.resolve-picker select').selectOption({ label: 'Resolve without service' })
+    await expect(page.getByRole('button', { name: 'Unresolve' }).first()).toBeVisible()
   })
 
   test('observation appears in history tab', async ({ page }) => {
     await page.goto(vehicleUrl)
+    await page.getByRole('button', { name: 'Obs.' }).click()
+    // Ensure an observation exists
+    if (!(await page.getByText('Rattle on cold start').first().isVisible().catch(() => false))) {
+      await page.getByRole('button', { name: '+ Add Observation' }).click()
+      await page.getByLabel('Title').fill('Rattle on cold start')
+      await page.getByRole('button', { name: 'Save' }).click()
+      await expect(page.getByText('Rattle on cold start')).toBeVisible()
+    }
     await page.getByRole('button', { name: 'History', exact: true }).click()
-    await expect(page.getByText('Rattle on cold start')).toBeVisible()
-    await expect(page.getByText('Observation', { exact: true })).toBeVisible()
+    await expect(page.getByText('Rattle on cold start').first()).toBeVisible()
+    await expect(page.getByText('Observation', { exact: true }).first()).toBeVisible()
   })
 })

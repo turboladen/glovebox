@@ -8,6 +8,7 @@ use crate::AppState;
 
 use super::error::ApiError;
 use super::require_vehicle;
+use super::serde_helpers::deserialize_optional;
 
 type Result<T> = std::result::Result<T, ApiError>;
 
@@ -26,12 +27,17 @@ pub struct CreateObservation {
 pub struct UpdateObservation {
     pub category: Option<String>,
     pub title: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub description: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub odometer: Option<Option<i32>>,
     pub observed_at: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub obd_codes: Option<Option<String>>,
     pub resolved: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub resolved_service_id: Option<Option<i32>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub notes: Option<Option<String>>,
 }
 

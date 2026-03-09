@@ -8,6 +8,7 @@ use crate::entities::model_template;
 use crate::AppState;
 
 use super::error::ApiError;
+use super::serde_helpers::deserialize_optional;
 
 type Result<T> = std::result::Result<T, ApiError>;
 
@@ -27,15 +28,25 @@ pub struct CreateModelTemplate {
 
 #[derive(Deserialize)]
 pub struct UpdateModelTemplate {
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub platform_id: Option<Option<i32>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub platform_ref: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub year: Option<Option<i32>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub make: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub model: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub trim_level: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub body_style: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub engine: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub transmission: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
     pub drivetrain: Option<Option<String>>,
 }
 
