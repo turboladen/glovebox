@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { services as servicesApi, observations as obsApi } from '../lib/api'
-  import type { ServiceRecordWithLinks, Observation } from '../lib/types'
+  import { services as servicesApi, observations as obsApi, parts as partsApi } from '../lib/api'
+  import type { ServiceRecordWithLinks, Observation, Part } from '../lib/types'
   import { formatDate } from '../lib/dates'
 
   let { vehicleId }: { vehicleId: number } = $props()
@@ -11,15 +11,21 @@
     | { type: 'observation'; date: string; data: Observation }
 
   let entries: TimelineEntry[] = $state([])
+  let allParts: Part[] = $state([])
+  let allObservations: Observation[] = $state([])
   let loading = $state(true)
   let filter = $state<'all' | 'services' | 'observations'>('all')
 
   onMount(async () => {
     try {
-      const [svcList, obsList] = await Promise.all([
+      const [svcList, obsList, partsList] = await Promise.all([
         servicesApi.list(vehicleId),
         obsApi.list(vehicleId),
+        partsApi.list(vehicleId),
       ])
+
+      allParts = partsList
+      allObservations = obsList
 
       const timeline: TimelineEntry[] = [
         ...svcList.map((s): TimelineEntry => ({ type: 'service', date: s.service_date, data: s })),
@@ -33,6 +39,16 @@
       loading = false
     }
   })
+
+  function partsForService(service: ServiceRecordWithLinks): Part[] {
+    if (!service.part_ids.length) return []
+    const ids = new Set(service.part_ids)
+    return allParts.filter(p => ids.has(p.id))
+  }
+
+  function resolvedObsForService(serviceId: number): Observation[] {
+    return allObservations.filter(o => o.resolved_service_id === serviceId)
+  }
 
   let filtered = $derived(
     filter === 'all' ? entries :
@@ -86,6 +102,22 @@
           </div>
           {#if record.notes}
             <p class="notes">{record.notes}</p>
+          {/if}
+          {#if partsForService(record).length > 0}
+            <div class="linked-items">
+              <span class="linked-label">Parts:</span>
+              {#each partsForService(record) as part (part.id)}
+                <span class="linked-chip part-chip">{part.name}</span>
+              {/each}
+            </div>
+          {/if}
+          {#if resolvedObsForService(record.id).length > 0}
+            <div class="linked-items">
+              <span class="linked-label">Resolved:</span>
+              {#each resolvedObsForService(record.id) as obs (obs.id)}
+                <span class="linked-chip obs-chip">{obs.title}</span>
+              {/each}
+            </div>
           {/if}
         </div>
       {:else}
@@ -170,4 +202,21 @@
   .category { text-transform: capitalize; }
   .notes { font-size: 0.85rem; color: var(--text-muted); margin: var(--sp-1) 0 0; font-style: italic; }
   .empty { color: var(--text-muted); text-align: center; padding: var(--sp-8) 0; }
+
+  .linked-items {
+    display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1);
+    margin-top: var(--sp-2); font-size: 0.8rem;
+  }
+
+  .linked-label {
+    font-weight: 600; color: var(--text-muted); font-size: 0.75rem;
+    text-transform: uppercase; letter-spacing: 0.03em;
+  }
+
+  .linked-chip {
+    padding: 0.1rem 0.5rem; border-radius: var(--radius-sm); font-size: 0.8rem;
+  }
+
+  .part-chip { background: var(--success-bg); color: var(--success); }
+  .obs-chip { background: var(--warning-bg); color: var(--warning); }
 </style>
