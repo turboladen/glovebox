@@ -124,7 +124,7 @@
   <div class="section">
     <div class="section-header">
       <h3>NHTSA Recall Check</h3>
-      <button class="btn btn-secondary" onclick={checkRecalls} disabled={recallLoading}>
+      <button class="btn btn-primary" onclick={checkRecalls} disabled={recallLoading}>
         {recallLoading ? 'Checking...' : 'Check Recalls'}
       </button>
     </div>

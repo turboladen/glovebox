@@ -142,8 +142,8 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
         <div class="mileage-readout">
           <span class="est-mileage">{formatMileage(reminderData.estimated_mileage)}</span>
           <span class="mileage-unit">mi{#if reminderData.mileage_is_estimate} est.{/if}</span>
+          <span class="mileage-date">as of {formatDate(reminderData.mileage_as_of)}</span>
         </div>
-        <span class="mileage-date">as of {formatDate(reminderData.mileage_as_of)}</span>
       {/if}
       <div class="actions">
         <button class="btn btn-secondary" onclick={() => (showEditForm = !showEditForm)}>
@@ -293,28 +293,30 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
   .mileage-readout {
     display: flex;
     align-items: baseline;
-    gap: var(--sp-2);
+    gap: var(--sp-1);
   }
 
   .est-mileage {
     font-family: var(--font-display);
     font-weight: 700;
-    font-size: 1.35rem;
+    font-size: 1.25rem;
     letter-spacing: -0.02em;
     color: var(--text);
   }
 
   .mileage-unit {
-    font-size: 0.8rem;
-    font-weight: 500;
+    font-family: var(--font-display);
+    font-size: 0.85rem;
+    font-weight: 600;
     color: var(--text-muted);
     text-transform: uppercase;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.03em;
   }
 
   .mileage-date {
-    font-size: 0.8rem;
+    font-size: 0.85rem;
     color: var(--text-muted);
+    margin-left: var(--sp-1);
   }
 
   .actions {
