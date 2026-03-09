@@ -44,6 +44,74 @@ test.describe('Vehicle Detail', () => {
   })
 })
 
+// TP-04a-e: Edit Vehicle
+test.describe('Edit Vehicle', () => {
+  let vehicleUrl: string
+
+  test.beforeAll(async ({ browser }) => {
+    const page = await browser.newPage()
+    await page.goto('/vehicles/new')
+    await page.getByRole('button', { name: 'Skip' }).click()
+    await page.getByLabel('Vehicle Name').fill('Edit Test Car')
+    await page.getByRole('button', { name: 'Create Vehicle' }).click()
+    await page.waitForURL(/\/vehicles\/\d+/)
+    vehicleUrl = new URL(page.url()).pathname
+    await page.close()
+  })
+
+  test('toggle edit form', async ({ page }) => {
+    await page.goto(vehicleUrl)
+    await page.getByRole('button', { name: 'Edit' }).click()
+    await expect(page.getByRole('heading', { name: 'Edit Vehicle' })).toBeVisible()
+    await page.getByRole('button', { name: 'Cancel' }).click()
+    await expect(page.getByRole('heading', { name: 'Edit Vehicle' })).not.toBeVisible()
+  })
+
+  test('edit name updates heading', async ({ page }) => {
+    await page.goto(vehicleUrl)
+    await page.getByRole('button', { name: 'Edit' }).click()
+    await page.getByLabel('Vehicle Name').fill('Renamed Car')
+    await page.getByRole('button', { name: 'Save Changes' }).click()
+    await expect(page.getByRole('heading', { name: 'Edit Vehicle' })).not.toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Renamed Car' })).toBeVisible()
+  })
+
+  test('set vehicle details shows subtitle', async ({ page }) => {
+    await page.goto(vehicleUrl)
+    await page.getByRole('button', { name: 'Edit' }).click()
+    await page.getByLabel('Year').fill('2020')
+    await page.getByLabel('Make').fill('Toyota')
+    await page.getByRole('textbox', { name: 'Model' }).fill('Camry')
+    await page.getByRole('button', { name: 'Save Changes' }).click()
+    await expect(page.locator('.vehicle-subtitle')).toContainText('2020 Toyota Camry')
+  })
+
+  test('set sold fields shows badge', async ({ page }) => {
+    await page.goto(vehicleUrl)
+    await page.getByRole('button', { name: 'Edit' }).click()
+    await page.getByLabel('Sold Date').fill('2025-06-15')
+    await page.getByLabel('Sold Price ($)').fill('15000')
+    await page.getByLabel('Sold Mileage').fill('85000')
+    await page.getByRole('button', { name: 'Save Changes' }).click()
+    await expect(page.locator('.sold-badge')).toBeVisible()
+    await expect(page.locator('.sold-badge')).toContainText('Sold')
+  })
+
+  test('clear sold fields removes badge', async ({ page }) => {
+    await page.goto(vehicleUrl)
+    // First set sold fields
+    await page.getByRole('button', { name: 'Edit' }).click()
+    await page.getByLabel('Sold Date').fill('2025-06-15')
+    await page.getByRole('button', { name: 'Save Changes' }).click()
+    await expect(page.locator('.sold-badge')).toBeVisible()
+    // Now clear them
+    await page.getByRole('button', { name: 'Edit' }).click()
+    await page.getByLabel('Sold Date').fill('')
+    await page.getByRole('button', { name: 'Save Changes' }).click()
+    await expect(page.locator('.sold-badge')).not.toBeVisible()
+  })
+})
+
 // TP-05: Update Mileage
 test.describe('Update Mileage', () => {
   let vehicleUrl: string

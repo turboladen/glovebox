@@ -14,6 +14,7 @@
   import CostsTab from './CostsTab.svelte'
   import ChatTab from './ChatTab.svelte'
   import ResearchTab from './ResearchTab.svelte'
+  import VehicleEdit from './VehicleEdit.svelte'
 
   let { routeParams = {} }: { routeParams?: Record<string, string> } = $props()
 
@@ -24,6 +25,7 @@
   let activeTab = $state('schedule')
   let showMileageForm = $state(false)
   let showServiceForm = $state(false)
+  let showEditForm = $state(false)
 
   async function loadData() {
     try {
@@ -51,6 +53,11 @@
     if (vehicle) {
       reminderData = await remindersApi.get(vehicle.id)
     }
+  }
+
+  function onVehicleUpdated(updated: Vehicle) {
+    vehicle = updated
+    showEditForm = false
   }
 
   function formatMileage(n: number): string {
@@ -119,6 +126,14 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
     <div class="detail-header">
       <a href="/" use:link class="back-link">← Garage</a>
       <h1>{vehicle.name}</h1>
+      {#if vehicle.year || vehicle.make || vehicle.model}
+        <p class="vehicle-subtitle">
+          {[vehicle.year, vehicle.make, vehicle.model, vehicle.trim_level].filter(Boolean).join(' ')}
+        </p>
+      {/if}
+      {#if vehicle.sold_date}
+        <span class="sold-badge">Sold {formatDate(vehicle.sold_date)}</span>
+      {/if}
     </div>
 
     <div class="status-bar">
@@ -130,6 +145,9 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
         <span class="mileage-date">as of {formatDate(reminderData.mileage_as_of)}</span>
       {/if}
       <div class="actions">
+        <button class="btn btn-secondary" onclick={() => (showEditForm = !showEditForm)}>
+          Edit
+        </button>
         <button class="btn btn-secondary" onclick={() => (showMileageForm = !showMileageForm)}>
           Update Mileage
         </button>
@@ -141,6 +159,10 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
         </button>
       </div>
     </div>
+
+    {#if showEditForm}
+      <VehicleEdit {vehicle} onComplete={onVehicleUpdated} onCancel={() => (showEditForm = false)} />
+    {/if}
 
     {#if showMileageForm}
       <MileageEntry vehicleId={vehicle.id} onComplete={onMileageAdded} onCancel={() => (showMileageForm = false)} />
@@ -228,6 +250,25 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
     font-size: 1.6rem;
     font-weight: 700;
     letter-spacing: -0.02em;
+  }
+
+  .vehicle-subtitle {
+    margin: var(--sp-1) 0 0;
+    font-size: 0.9rem;
+    color: var(--text-muted);
+  }
+
+  .sold-badge {
+    display: inline-block;
+    margin-top: var(--sp-2);
+    padding: var(--sp-1) var(--sp-3);
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--warning);
+    border: 1px solid var(--warning);
+    border-radius: var(--radius-sm);
   }
 
   /* --- Instrument cluster status bar --- */

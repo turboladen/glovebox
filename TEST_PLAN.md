@@ -74,6 +74,11 @@ Playwright e2e tests. Keep it updated as features are added.
 | 2a | Status bar (exact) | Shows mileage with "mi" (no "est.") and "as of" date when last entry is from today |
 | 3 | "Update Mileage" button | Toggles mileage entry form inline |
 | 4 | "Log Service" button | Toggles service form inline |
+| 4a | "Edit" button | Toggles vehicle edit form inline with all fields pre-populated |
+| 4b | Edit form: change name and save | Vehicle name updates in heading; form closes |
+| 4c | Edit form: set sold fields | Sold date, price, mileage saved; "Sold" badge appears in header |
+| 4d | Edit form: clear sold fields | Sold badge disappears after save |
+| 4e | Vehicle subtitle | Year/make/model/trim shown below vehicle name |
 | 5 | Schedule tab (default) | Active, shows reminder groups (overdue/upcoming/ok) |
 | 6 | History tab | Click switches to service history list |
 | 7 | Click "← Garage" | Returns to `/` |
