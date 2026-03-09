@@ -283,6 +283,25 @@
       <form onsubmit={(e) => { e.preventDefault(); submitPart() }}>
         <div class="form-row">
           <div class="field">
+            <label for="part-slot">Slot</label>
+            <select id="part-slot" bind:value={partSlotId}>
+              <option value={null}>None (unslotted)</option>
+              {#each slots as slot}
+                <option value={slot.id}>{slot.name}{slot.category ? ` (${categoryLabel(slot.category)})` : ''}</option>
+              {/each}
+            </select>
+          </div>
+          <div class="field">
+            <label for="part-status">Status</label>
+            <select id="part-status" bind:value={partStatus}>
+              {#each statuses as s}
+                <option value={s}>{categoryLabel(s)}</option>
+              {/each}
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="field">
             <label for="part-name">Part Name</label>
             <input id="part-name" type="text" bind:value={partName} required placeholder="e.g., GFB DV+" />
           </div>
@@ -315,14 +334,6 @@
           <div class="field">
             <label for="part-cost">Cost ($)</label>
             <input id="part-cost" type="number" step="0.01" min="0" bind:value={partCost} />
-          </div>
-          <div class="field">
-            <label for="part-status">Status</label>
-            <select id="part-status" bind:value={partStatus}>
-              {#each statuses as s}
-                <option value={s}>{categoryLabel(s)}</option>
-              {/each}
-            </select>
           </div>
         </div>
         {#if partStatus === 'installed' || partStatus === 'replaced'}

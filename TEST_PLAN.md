@@ -213,7 +213,9 @@ Playwright e2e tests. Keep it updated as features are added.
 | 2 | No slots or parts | "No parts or slots yet." message |
 | 3 | Add a slot (name, category, OE spec) | Slot appears grouped under category heading |
 | 4 | Slot with no part installed | "No part installed" shown in slot card |
-| 5 | Add a part to a slot (name, manufacturer, cost) | Part appears under slot, status badge "purchased" |
+| 5 | Add a part to a slot (name, manufacturer, cost) | Part appears under slot, status badge "purchased", slot dropdown pre-selected |
+| 5a | Part form slot dropdown | Slot dropdown visible with "None (unslotted)" + all vehicle slots; pre-selects correctly based on which button opened the form |
+| 5b | Change slot via dropdown | Reassigning a part's slot via the dropdown moves it to the new slot's list |
 | 6 | Edit part status to "installed" | Status badge changes, install date/odometer shown |
 | 7 | Expand part history on slot | Shows all parts for that slot with status, cost |
 | 8 | Add unslotted part | Part appears under "Unslotted Parts" heading |

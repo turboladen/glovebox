@@ -67,6 +67,28 @@ test.describe('Parts Tab', () => {
     await expect(page.locator('.badge').filter({ hasText: 'installed' }).first()).toBeVisible()
   })
 
+  test('slot dropdown defaults to None from header button', async ({ page }) => {
+    await page.goto(vehicleUrl)
+    await page.getByRole('button', { name: 'Parts' }).click()
+    await createSlot(page, 'Dropdown Test Slot', 'engine')
+    await page.locator('.header-actions').getByRole('button', { name: '+ Add Part' }).click()
+    const slotSelect = page.getByLabel('Slot')
+    await expect(slotSelect).toBeVisible()
+    // Header "+ Add Part" should default to "None (unslotted)"
+    await expect(slotSelect.locator('option:checked')).toHaveText('None (unslotted)')
+  })
+
+  test('slot dropdown pre-selects slot from slot button', async ({ page }) => {
+    await page.goto(vehicleUrl)
+    await page.getByRole('button', { name: 'Parts' }).click()
+    await createSlot(page, 'Preselect Test Slot', 'brakes')
+    await page.locator('.slot-card').filter({ hasText: 'Preselect Test Slot' }).getByRole('button', { name: '+ Part' }).click()
+    const slotSelect = page.getByLabel('Slot')
+    await expect(slotSelect).toBeVisible()
+    // Should be pre-selected to the clicked slot
+    await expect(slotSelect.locator('option:checked')).toHaveText(/Preselect Test Slot/)
+  })
+
   test('add an unslotted part', async ({ page }) => {
     await page.goto(vehicleUrl)
     await page.getByRole('button', { name: 'Parts' }).click()
