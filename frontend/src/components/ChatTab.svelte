@@ -171,6 +171,8 @@
     display: flex;
     flex-direction: column;
     gap: var(--sp-3);
+    user-select: text;
+    -webkit-user-select: text;
   }
 
   .empty {
@@ -220,6 +222,9 @@
   .message-content {
     white-space: pre-wrap;
     word-break: break-word;
+    user-select: text;
+    -webkit-user-select: text;
+    cursor: text;
   }
 
   .message-content.markdown {
