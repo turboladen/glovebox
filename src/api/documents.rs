@@ -253,7 +253,7 @@ pub async fn delete(
     Ok(Json(serde_json::json!({ "deleted": id })))
 }
 
-fn sanitize_filename(name: &str) -> String {
+pub(super) fn sanitize_filename(name: &str) -> String {
     name.chars()
         .map(|c| {
             if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' {

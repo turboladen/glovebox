@@ -18,6 +18,16 @@ export const vehicles = {
   get: (id: number) => request<Vehicle>(`/vehicles/${id}`),
   create: (data: CreateVehicle) => request<Vehicle>('/vehicles', { method: 'POST', body: JSON.stringify(data) }),
   update: (id: number, data: Partial<Vehicle>) => request<Vehicle>(`/vehicles/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  uploadPhoto: async (id: number, file: File): Promise<Vehicle> => {
+    const formData = new FormData()
+    formData.append('file', file)
+    const res = await fetch(`${BASE}/vehicles/${id}/photo`, { method: 'POST', body: formData })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ error: res.statusText }))
+      throw new Error(body.error || `HTTP ${res.status}`)
+    }
+    return res.json()
+  },
 }
 
 // Platforms

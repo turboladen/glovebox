@@ -1,4 +1,4 @@
-use axum::extract::{Path, State};
+use axum::extract::{Multipart, Path, State};
 use axum::routing::get;
 use axum::{Json, Router};
 use sea_orm::*;
@@ -195,8 +195,62 @@ async fn update(
     Ok(Json(result))
 }
 
+async fn upload_photo(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+    mut multipart: Multipart,
+) -> Result<Json<vehicle::Model>> {
+    let existing = vehicle::Entity::find_by_id(id)
+        .one(&state.db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Vehicle {id} not found")))?;
+
+    // Extract file from multipart
+    let field = multipart
+        .next_field()
+        .await
+        .map_err(|e| ApiError::BadRequest(format!("Multipart error: {e}")))?
+        .ok_or_else(|| ApiError::BadRequest("No file provided".into()))?;
+
+    let file_name = field
+        .file_name()
+        .map_or_else(|| "photo.jpg".into(), std::string::ToString::to_string);
+    let data = field
+        .bytes()
+        .await
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+
+    // Save to {files_dir}/{vehicle_id}/photos/
+    let dir: std::path::PathBuf = [&state.config.files_dir, &id.to_string(), "photos"]
+        .iter()
+        .collect();
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S");
+    let safe_name = super::documents::sanitize_filename(&file_name);
+    let stored_name = format!("{timestamp}_{safe_name}");
+    let full_path = dir.join(&stored_name);
+
+    tokio::fs::write(&full_path, &data)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    let relative_path = format!("{id}/photos/{stored_name}");
+
+    // Update vehicle photo_path
+    let mut active: vehicle::ActiveModel = existing.into();
+    active.photo_path = Set(Some(relative_path));
+    active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
+    let result = active.update(&state.db).await?;
+
+    Ok(Json(result))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list).post(create))
         .route("/{id}", get(get_one).put(update))
+        .route("/{id}/photo", axum::routing::post(upload_photo))
 }

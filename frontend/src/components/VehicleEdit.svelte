@@ -42,6 +42,8 @@
   let templates: ModelTemplate[] = $state([])
   let saving = $state(false)
   let error = $state('')
+  let photoInput: HTMLInputElement | undefined = $state(undefined)
+  let uploadingPhoto = $state(false)
 
   onMount(async () => {
     templates = await mtApi.list()
@@ -51,6 +53,34 @@
     if (!dollars.trim()) return null
     const n = parseFloat(dollars)
     return isNaN(n) ? null : Math.round(n * 100)
+  }
+
+  async function uploadPhoto() {
+    const file = photoInput?.files?.[0]
+    if (!file) return
+    uploadingPhoto = true
+    error = ''
+    try {
+      const updated = await vehiclesApi.uploadPhoto(vehicle.id, file)
+      onComplete(updated)
+    } catch (e: any) {
+      error = e.message
+    } finally {
+      uploadingPhoto = false
+    }
+  }
+
+  async function removePhoto() {
+    saving = true
+    error = ''
+    try {
+      const updated = await vehiclesApi.update(vehicle.id, { photo_path: null })
+      onComplete(updated)
+    } catch (e: any) {
+      error = e.message
+    } finally {
+      saving = false
+    }
   }
 
   async function save() {
@@ -109,6 +139,23 @@
 
 <div class="vehicle-edit">
   <h3>Edit Vehicle</h3>
+
+  <div class="photo-section">
+    <h4>Photo</h4>
+    {#if vehicle.photo_path}
+      <div class="photo-preview">
+        <img src="/files/{vehicle.photo_path}" alt={vehicle.name} />
+        <button type="button" class="btn btn-sm btn-secondary" onclick={removePhoto} disabled={saving}>Remove</button>
+      </div>
+    {/if}
+    <div class="photo-upload">
+      <input type="file" accept="image/*" bind:this={photoInput} />
+      <button type="button" class="btn btn-secondary" onclick={uploadPhoto} disabled={uploadingPhoto}>
+        {uploadingPhoto ? 'Uploading...' : vehicle.photo_path ? 'Replace Photo' : 'Upload Photo'}
+      </button>
+    </div>
+  </div>
+
   <form onsubmit={(e) => { e.preventDefault(); save() }}>
     <div class="field">
       <label for="ve-name">Vehicle Name</label>
@@ -262,5 +309,39 @@
   .error {
     color: var(--danger);
     font-size: 0.85rem;
+  }
+
+  .photo-section {
+    margin-bottom: var(--sp-4);
+    padding-bottom: var(--sp-4);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .photo-section h4 {
+    margin: 0 0 var(--sp-2);
+    font-family: var(--font-display);
+    font-size: 0.9rem;
+    color: var(--text-muted);
+  }
+
+  .photo-preview {
+    display: flex;
+    align-items: flex-end;
+    gap: var(--sp-3);
+    margin-bottom: var(--sp-3);
+  }
+
+  .photo-preview img {
+    width: 120px;
+    height: 80px;
+    object-fit: cover;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-subtle);
+  }
+
+  .photo-upload {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
   }
 </style>
