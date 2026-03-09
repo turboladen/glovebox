@@ -16,6 +16,7 @@
   let category = $state('general')
   let title = $state('')
   let description = $state('')
+  let observedAt = $state(new Date().toISOString().slice(0, 10))
   let odometer = $state<number | undefined>()
   let obdCodes = $state('')
   let saving = $state(false)
@@ -49,11 +50,13 @@
         category,
         title: title.trim(),
         description: description || undefined,
+        observed_at: observedAt || undefined,
         odometer,
         obd_codes: obdCodes || undefined,
       })
       showForm = false
       title = ''; description = ''; odometer = undefined; obdCodes = ''
+      observedAt = new Date().toISOString().slice(0, 10)
       await loadData()
     } catch (e: any) {
       error = e.message
@@ -103,6 +106,10 @@
                 <option value={c}>{categoryLabel(c)}</option>
               {/each}
             </select>
+          </div>
+          <div class="field">
+            <label for="obs-date">Date Observed</label>
+            <input id="obs-date" type="date" bind:value={observedAt} />
           </div>
           <div class="field">
             <label for="obs-odometer">Odometer</label>
