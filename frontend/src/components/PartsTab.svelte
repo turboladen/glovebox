@@ -36,6 +36,8 @@
   let partStatus = $state('purchased')
   let partInstalledDate = $state('')
   let partInstalledOdometer = $state<number | undefined>()
+  let partReplacedDate = $state('')
+  let partReplacedOdometer = $state<number | undefined>()
   let partNotes = $state('')
   let partSaving = $state(false)
   let partError = $state('')
@@ -167,6 +169,8 @@
     partStatus = part?.status || 'purchased'
     partInstalledDate = part?.installed_date || ''
     partInstalledOdometer = part?.installed_odometer ?? undefined
+    partReplacedDate = part?.replaced_date || ''
+    partReplacedOdometer = part?.replaced_odometer ?? undefined
     partNotes = part?.notes || ''
     partError = ''
     showPartForm = true
@@ -196,6 +200,8 @@
         status: partStatus,
         installed_date: partInstalledDate || undefined,
         installed_odometer: partInstalledOdometer,
+        replaced_date: partReplacedDate || undefined,
+        replaced_odometer: partReplacedOdometer,
         notes: partNotes || undefined,
       }
       if (editingPart) {
@@ -346,6 +352,18 @@
             <div class="field">
               <label for="part-installed-odo">Installed Odometer</label>
               <input id="part-installed-odo" type="number" min="0" bind:value={partInstalledOdometer} />
+            </div>
+          </div>
+        {/if}
+        {#if partStatus === 'replaced'}
+          <div class="form-row">
+            <div class="field">
+              <label for="part-replaced-date">Replaced Date</label>
+              <input id="part-replaced-date" type="date" bind:value={partReplacedDate} />
+            </div>
+            <div class="field">
+              <label for="part-replaced-odo">Replaced Odometer</label>
+              <input id="part-replaced-odo" type="number" min="0" bind:value={partReplacedOdometer} />
             </div>
           </div>
         {/if}
