@@ -1,12 +1,13 @@
 use axum::extract::{Path, State};
 use axum::Json;
-use sea_orm::*;
+use sea_orm::{ActiveEnum, QueryOrder, QueryFilter, EntityTrait, ColumnTrait, Iterable};
 use serde::Serialize;
 
-use crate::entities::{part, service_record, vehicle};
+use crate::entities::{part, service_record};
 use crate::AppState;
 
 use super::error::ApiError;
+use super::require_vehicle;
 
 type Result<T> = std::result::Result<T, ApiError>;
 
@@ -53,10 +54,7 @@ pub async fn export_history(
     State(state): State<AppState>,
     Path(vehicle_id): Path<i32>,
 ) -> Result<Json<VehicleExport>> {
-    let v = vehicle::Entity::find_by_id(vehicle_id)
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Vehicle {vehicle_id} not found")))?;
+    let v = require_vehicle(&state.db, vehicle_id).await?;
 
     let services = service_record::Entity::find()
         .filter(service_record::Column::VehicleId.eq(vehicle_id))
@@ -71,33 +69,41 @@ pub async fn export_history(
         .all(&state.db)
         .await?;
 
-    let total_svc: i64 = services.iter()
+    let total_svc: i64 = services
+        .iter()
         .filter_map(|s| s.total_cost_cents)
-        .map(|c| c as i64)
+        .map(|c| i64::from(c))
         .sum();
 
-    let total_prt: i64 = parts.iter()
+    let total_prt: i64 = parts
+        .iter()
         .filter_map(|p| p.cost_cents)
-        .map(|c| c as i64)
+        .map(|c| i64::from(c))
         .sum();
 
-    let records: Vec<ExportRecord> = services.iter().map(|s| ExportRecord {
-        date: s.service_date.clone(),
-        mileage: s.mileage,
-        description: s.description.clone(),
-        total_cost: s.total_cost_cents.map(|c| fmt_cost(c as i64)),
-        shop: s.shop_name.clone(),
-        notes: s.notes.clone(),
-    }).collect();
+    let records: Vec<ExportRecord> = services
+        .iter()
+        .map(|s| ExportRecord {
+            date: s.service_date.clone(),
+            mileage: s.mileage,
+            description: s.description.clone(),
+            total_cost: s.total_cost_cents.map(|c| fmt_cost(i64::from(c))),
+            shop: s.shop_name.clone(),
+            notes: s.notes.clone(),
+        })
+        .collect();
 
-    let installed_parts: Vec<ExportPart> = parts.iter().map(|p| ExportPart {
-        name: p.name.clone(),
-        manufacturer: p.manufacturer.clone(),
-        part_number: p.part_number.clone(),
-        installed_date: p.installed_date.clone(),
-        installed_odometer: p.installed_odometer,
-        cost: p.cost_cents.map(|c| fmt_cost(c as i64)),
-    }).collect();
+    let installed_parts: Vec<ExportPart> = parts
+        .iter()
+        .map(|p| ExportPart {
+            name: p.name.clone(),
+            manufacturer: p.manufacturer.clone(),
+            part_number: p.part_number.clone(),
+            installed_date: p.installed_date.clone(),
+            installed_odometer: p.installed_odometer,
+            cost: p.cost_cents.map(|c| fmt_cost(i64::from(c))),
+        })
+        .collect();
 
     let record_count = records.len();
 

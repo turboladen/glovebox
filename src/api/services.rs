@@ -1,12 +1,13 @@
 use axum::extract::{Path, State};
 use axum::Json;
-use sea_orm::*;
+use sea_orm::{ConnectionTrait, QueryFilter, EntityTrait, ColumnTrait, QueryOrder, Iterable, ActiveModelBehavior, TransactionTrait, Set, ActiveModelTrait, Iden};
 use serde::{Deserialize, Serialize};
 
-use crate::entities::{mileage_log, part, service_record, service_schedule_link, vehicle};
+use crate::entities::{mileage_log, part, service_record, service_schedule_link};
 use crate::AppState;
 
 use super::error::ApiError;
+use super::require_vehicle;
 
 type Result<T> = std::result::Result<T, ApiError>;
 
@@ -54,14 +55,31 @@ pub struct ServiceRecordWithLinks {
     pub part_ids: Vec<i32>,
 }
 
+/// Load schedule link IDs and part IDs for a single service record.
+async fn load_service_links(
+    db: &impl ConnectionTrait,
+    record_id: i32,
+) -> Result<(Vec<i32>, Vec<i32>)> {
+    let links = service_schedule_link::Entity::find()
+        .filter(service_schedule_link::Column::ServiceRecordId.eq(record_id))
+        .all(db)
+        .await?;
+    let schedule_item_ids = links.into_iter().map(|l| l.schedule_item_id).collect();
+
+    let parts = part::Entity::find()
+        .filter(part::Column::InstalledServiceId.eq(record_id))
+        .all(db)
+        .await?;
+    let part_ids = parts.into_iter().map(|p| p.id).collect();
+
+    Ok((schedule_item_ids, part_ids))
+}
+
 pub async fn list(
     State(state): State<AppState>,
     Path(vehicle_id): Path<i32>,
 ) -> Result<Json<Vec<ServiceRecordWithLinks>>> {
-    vehicle::Entity::find_by_id(vehicle_id)
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Vehicle {vehicle_id} not found")))?;
+    require_vehicle(&state.db, vehicle_id).await?;
 
     let records = service_record::Entity::find()
         .filter(service_record::Column::VehicleId.eq(vehicle_id))
@@ -69,24 +87,48 @@ pub async fn list(
         .all(&state.db)
         .await?;
 
-    let mut results = Vec::with_capacity(records.len());
-    for record in records {
-        let links = service_schedule_link::Entity::find()
-            .filter(service_schedule_link::Column::ServiceRecordId.eq(record.id))
+    // Batch-load all schedule links and parts for these records (avoids N+1)
+    let record_ids: Vec<i32> = records.iter().map(|r| r.id).collect();
+
+    let all_links = if record_ids.is_empty() {
+        vec![]
+    } else {
+        service_schedule_link::Entity::find()
+            .filter(service_schedule_link::Column::ServiceRecordId.is_in(record_ids.clone()))
             .all(&state.db)
-            .await?;
-        let schedule_item_ids = links.into_iter().map(|l| l.schedule_item_id).collect();
-        let parts = part::Entity::find()
-            .filter(part::Column::InstalledServiceId.eq(record.id))
+            .await?
+    };
+
+    let all_parts = if record_ids.is_empty() {
+        vec![]
+    } else {
+        part::Entity::find()
+            .filter(part::Column::InstalledServiceId.is_in(record_ids))
             .all(&state.db)
-            .await?;
-        let part_ids = parts.into_iter().map(|p| p.id).collect();
-        results.push(ServiceRecordWithLinks {
-            record,
-            schedule_item_ids,
-            part_ids,
-        });
-    }
+            .await?
+    };
+
+    let results = records
+        .into_iter()
+        .map(|record| {
+            let schedule_item_ids = all_links
+                .iter()
+                .filter(|l| l.service_record_id == record.id)
+                .map(|l| l.schedule_item_id)
+                .collect();
+            let part_ids = all_parts
+                .iter()
+                .filter(|p| p.installed_service_id == Some(record.id))
+                .map(|p| p.id)
+                .collect();
+            ServiceRecordWithLinks {
+                record,
+                schedule_item_ids,
+                part_ids,
+            }
+        })
+        .collect();
+
     Ok(Json(results))
 }
 
@@ -94,22 +136,15 @@ pub async fn get_one(
     State(state): State<AppState>,
     Path((vehicle_id, id)): Path<(i32, i32)>,
 ) -> Result<Json<ServiceRecordWithLinks>> {
+    require_vehicle(&state.db, vehicle_id).await?;
+
     let record = service_record::Entity::find_by_id(id)
         .filter(service_record::Column::VehicleId.eq(vehicle_id))
         .one(&state.db)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Service record {id} not found")))?;
 
-    let links = service_schedule_link::Entity::find()
-        .filter(service_schedule_link::Column::ServiceRecordId.eq(record.id))
-        .all(&state.db)
-        .await?;
-    let schedule_item_ids = links.into_iter().map(|l| l.schedule_item_id).collect();
-    let parts = part::Entity::find()
-        .filter(part::Column::InstalledServiceId.eq(record.id))
-        .all(&state.db)
-        .await?;
-    let part_ids = parts.into_iter().map(|p| p.id).collect();
+    let (schedule_item_ids, part_ids) = load_service_links(&state.db, record.id).await?;
 
     Ok(Json(ServiceRecordWithLinks {
         record,
@@ -123,10 +158,7 @@ pub async fn create(
     Path(vehicle_id): Path<i32>,
     Json(input): Json<CreateServiceRecord>,
 ) -> Result<Json<ServiceRecordWithLinks>> {
-    vehicle::Entity::find_by_id(vehicle_id)
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Vehicle {vehicle_id} not found")))?;
+    require_vehicle(&state.db, vehicle_id).await?;
 
     let txn = state.db.begin().await?;
 
@@ -203,6 +235,8 @@ pub async fn update(
     Path((vehicle_id, id)): Path<(i32, i32)>,
     Json(input): Json<UpdateServiceRecord>,
 ) -> Result<Json<ServiceRecordWithLinks>> {
+    require_vehicle(&state.db, vehicle_id).await?;
+
     let existing = service_record::Entity::find_by_id(id)
         .filter(service_record::Column::VehicleId.eq(vehicle_id))
         .one(&state.db)
@@ -213,18 +247,44 @@ pub async fn update(
 
     let mut active: service_record::ActiveModel = existing.into();
 
-    if let Some(v) = input.service_date { active.service_date = Set(v); }
-    if let Some(v) = input.mileage { active.mileage = Set(v); }
-    if let Some(v) = input.description { active.description = Set(v); }
-    if let Some(v) = input.parts_cost_cents { active.parts_cost_cents = Set(v); }
-    if let Some(v) = input.parts_cost_currency { active.parts_cost_currency = Set(v); }
-    if let Some(v) = input.labor_cost_cents { active.labor_cost_cents = Set(v); }
-    if let Some(v) = input.labor_cost_currency { active.labor_cost_currency = Set(v); }
-    if let Some(v) = input.total_cost_cents { active.total_cost_cents = Set(v); }
-    if let Some(v) = input.total_cost_currency { active.total_cost_currency = Set(v); }
-    if let Some(v) = input.shop_name { active.shop_name = Set(v); }
-    if let Some(v) = input.shop_id { active.shop_id = Set(v); }
-    if let Some(v) = input.notes { active.notes = Set(v); }
+    if let Some(v) = input.service_date {
+        active.service_date = Set(v);
+    }
+    if let Some(v) = input.mileage {
+        active.mileage = Set(v);
+    }
+    if let Some(v) = input.description {
+        active.description = Set(v);
+    }
+    if let Some(v) = input.parts_cost_cents {
+        active.parts_cost_cents = Set(v);
+    }
+    if let Some(v) = input.parts_cost_currency {
+        active.parts_cost_currency = Set(v);
+    }
+    if let Some(v) = input.labor_cost_cents {
+        active.labor_cost_cents = Set(v);
+    }
+    if let Some(v) = input.labor_cost_currency {
+        active.labor_cost_currency = Set(v);
+    }
+    if let Some(v) = input.total_cost_cents {
+        active.total_cost_cents = Set(v);
+    }
+    if let Some(v) = input.total_cost_currency {
+        active.total_cost_currency = Set(v);
+    }
+    if let Some(v) = input.shop_name {
+        active.shop_name = Set(v);
+    }
+    if let Some(v) = input.shop_id {
+        active.shop_id = Set(v);
+    }
+    if let Some(v) = input.notes {
+        active.notes = Set(v);
+    }
+
+    active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
 
     let record = active.update(&txn).await?;
 

@@ -1,7 +1,7 @@
 use axum::extract::{Path, Query, State};
 use axum::routing::get;
 use axum::{Json, Router};
-use sea_orm::*;
+use sea_orm::{EntityTrait, QueryFilter, ColumnTrait, PaginatorTrait, Iterable, Iden, Set, ActiveEnum, ActiveModelTrait, ActiveModelBehavior, ModelTrait};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -100,11 +100,14 @@ async fn create(
         input.platform_id.is_some(),
         input.model_template_id.is_some(),
         input.vehicle_id.is_some(),
-    ].iter().filter(|&&b| b).count();
+    ]
+    .iter()
+    .filter(|&&b| b)
+    .count();
 
     if owner_count != 1 {
         return Err(ApiError::BadRequest(
-            "Exactly one of platform_id, model_template_id, or vehicle_id must be set".to_string()
+            "Exactly one of platform_id, model_template_id, or vehicle_id must be set".to_string(),
         ));
     }
 
@@ -142,17 +145,39 @@ async fn update(
 
     let mut active: maintenance_schedule_item::ActiveModel = existing.into();
 
-    if let Some(v) = input.name { active.name = Set(v); }
-    if let Some(v) = input.description { active.description = Set(v); }
-    if let Some(v) = input.interval_miles { active.interval_miles = Set(v); }
-    if let Some(v) = input.interval_months { active.interval_months = Set(v); }
-    if let Some(v) = input.warning_miles { active.warning_miles = Set(v); }
-    if let Some(v) = input.warning_days { active.warning_days = Set(v); }
-    if let Some(v) = input.enabled { active.enabled = Set(v); }
-    if let Some(v) = input.source { active.source = Set(v); }
-    if let Some(v) = input.notes { active.notes = Set(v); }
-    if let Some(v) = input.is_factory_recommended { active.is_factory_recommended = Set(v); }
-    if let Some(v) = input.labor_categories { active.labor_categories = Set(v); }
+    if let Some(v) = input.name {
+        active.name = Set(v);
+    }
+    if let Some(v) = input.description {
+        active.description = Set(v);
+    }
+    if let Some(v) = input.interval_miles {
+        active.interval_miles = Set(v);
+    }
+    if let Some(v) = input.interval_months {
+        active.interval_months = Set(v);
+    }
+    if let Some(v) = input.warning_miles {
+        active.warning_miles = Set(v);
+    }
+    if let Some(v) = input.warning_days {
+        active.warning_days = Set(v);
+    }
+    if let Some(v) = input.enabled {
+        active.enabled = Set(v);
+    }
+    if let Some(v) = input.source {
+        active.source = Set(v);
+    }
+    if let Some(v) = input.notes {
+        active.notes = Set(v);
+    }
+    if let Some(v) = input.is_factory_recommended {
+        active.is_factory_recommended = Set(v);
+    }
+    if let Some(v) = input.labor_categories {
+        active.labor_categories = Set(v);
+    }
 
     let result = active.update(&state.db).await?;
     Ok(Json(result))
@@ -187,7 +212,9 @@ pub async fn resolve(
     let mut schedule: HashMap<String, ResolvedScheduleItem> = HashMap::new();
 
     if let Some(mt_id) = v.model_template_id {
-        let mt = model_template::Entity::find_by_id(mt_id).one(&state.db).await?;
+        let mt = model_template::Entity::find_by_id(mt_id)
+            .one(&state.db)
+            .await?;
 
         if let Some(mt) = &mt {
             if let Some(platform_id) = mt.platform_id {
@@ -198,10 +225,13 @@ pub async fn resolve(
 
                 for item in platform_items {
                     let name = item.name.clone();
-                    schedule.insert(name, ResolvedScheduleItem {
-                        effective_item: item,
-                        inherited_from: Some("platform".to_string()),
-                    });
+                    schedule.insert(
+                        name,
+                        ResolvedScheduleItem {
+                            effective_item: item,
+                            inherited_from: Some("platform".to_string()),
+                        },
+                    );
                 }
             }
 
@@ -213,10 +243,13 @@ pub async fn resolve(
 
             for item in template_items {
                 let name = item.name.clone();
-                schedule.insert(name, ResolvedScheduleItem {
-                    effective_item: item,
-                    inherited_from: Some("model_template".to_string()),
-                });
+                schedule.insert(
+                    name,
+                    ResolvedScheduleItem {
+                        effective_item: item,
+                        inherited_from: Some("model_template".to_string()),
+                    },
+                );
             }
         }
     }
@@ -229,10 +262,13 @@ pub async fn resolve(
 
     for item in vehicle_items {
         let name = item.name.clone();
-        schedule.insert(name, ResolvedScheduleItem {
-            effective_item: item,
-            inherited_from: None,
-        });
+        schedule.insert(
+            name,
+            ResolvedScheduleItem {
+                effective_item: item,
+                inherited_from: None,
+            },
+        );
     }
 
     // Filter out disabled items and sort by name for stable output

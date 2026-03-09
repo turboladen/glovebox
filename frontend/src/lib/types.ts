@@ -312,6 +312,55 @@ export interface AccidentWithDetails extends Accident {
   service_record_ids: number[]
 }
 
+export interface CreateAccident {
+  occurred_at: string
+  odometer?: number | null
+  description: string
+  fault?: string | null
+  other_party_name?: string | null
+  other_party_phone?: string | null
+  other_party_email?: string | null
+  other_party_insurance?: string | null
+  other_party_policy_number?: string | null
+  insurance_claim_number?: string | null
+  insurance_adjuster?: string | null
+  insurance_adjuster_phone?: string | null
+  notes?: string | null
+  service_record_ids?: number[]
+}
+
+export interface UpdateAccident {
+  occurred_at?: string
+  odometer?: number | null
+  description?: string
+  fault?: string | null
+  other_party_name?: string | null
+  other_party_phone?: string | null
+  other_party_email?: string | null
+  other_party_insurance?: string | null
+  other_party_policy_number?: string | null
+  insurance_claim_number?: string | null
+  insurance_adjuster?: string | null
+  insurance_adjuster_phone?: string | null
+  total_repair_cost_cents?: number | null
+  total_repair_cost_currency?: string | null
+  deductible_cents?: number | null
+  deductible_currency?: string | null
+  insurance_payout_cents?: number | null
+  insurance_payout_currency?: string | null
+  resolved?: boolean
+  notes?: string | null
+  service_record_ids?: number[]
+}
+
+export interface CreateCorrespondence {
+  occurred_at: string
+  contact_method?: string | null
+  contact_with?: string | null
+  summary: string
+  notes?: string | null
+}
+
 export interface PartSlot {
   id: number
   vehicle_id: number

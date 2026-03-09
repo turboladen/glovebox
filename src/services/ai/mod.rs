@@ -62,7 +62,7 @@ pub enum AiError {
 pub trait AiProvider: Send + Sync {
     async fn complete(&self, request: AiRequest) -> Result<AiResponse, AiError>;
 
-    /// Human-readable provider name (e.g. "claude", "openai_compat", "none").
+    /// Human-readable provider name (e.g. "claude", "`openai_compat`", "none").
     fn provider_name(&self) -> &str;
 
     /// Whether the provider is properly configured and ready to use.
@@ -109,7 +109,10 @@ pub fn create_provider(
             ))
         }
         _ => {
-            tracing::warn!("Unknown AI provider '{}', falling back to none", provider_name);
+            tracing::warn!(
+                "Unknown AI provider '{}', falling back to none",
+                provider_name
+            );
             Box::new(noop::NoOpProvider)
         }
     }
@@ -158,5 +161,4 @@ mod tests {
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), AiError::NotConfigured));
     }
-
 }

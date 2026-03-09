@@ -45,21 +45,21 @@ impl MigrationTrait for Migration {
         db.execute_unprepared(
             "CREATE INDEX IF NOT EXISTS idx_msi_platform
              ON maintenance_schedule_items(platform_id)
-             WHERE platform_id IS NOT NULL"
+             WHERE platform_id IS NOT NULL",
         )
         .await?;
 
         db.execute_unprepared(
             "CREATE INDEX IF NOT EXISTS idx_msi_model_template
              ON maintenance_schedule_items(model_template_id)
-             WHERE model_template_id IS NOT NULL"
+             WHERE model_template_id IS NOT NULL",
         )
         .await?;
 
         db.execute_unprepared(
             "CREATE INDEX IF NOT EXISTS idx_msi_vehicle
              ON maintenance_schedule_items(vehicle_id)
-             WHERE vehicle_id IS NOT NULL"
+             WHERE vehicle_id IS NOT NULL",
         )
         .await?;
 
@@ -69,22 +69,40 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(Shops::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new(Shops::Id).integer().not_null().auto_increment().primary_key())
+                    .col(
+                        ColumnDef::new(Shops::Id)
+                            .integer()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
                     .col(ColumnDef::new(Shops::Name).text().not_null())
                     .col(ColumnDef::new(Shops::Address).text())
                     .col(ColumnDef::new(Shops::Phone).text())
                     .col(ColumnDef::new(Shops::Website).text())
                     .col(ColumnDef::new(Shops::Specialty).text())
                     .col(ColumnDef::new(Shops::Notes).text())
-                    .col(ColumnDef::new(Shops::CreatedAt).text().not_null().default(Expr::cust("(datetime('now'))")))
-                    .col(ColumnDef::new(Shops::UpdatedAt).text().not_null().default(Expr::cust("(datetime('now'))")))
+                    .col(
+                        ColumnDef::new(Shops::CreatedAt)
+                            .text()
+                            .not_null()
+                            .default(Expr::cust("(datetime('now'))")),
+                    )
+                    .col(
+                        ColumnDef::new(Shops::UpdatedAt)
+                            .text()
+                            .not_null()
+                            .default(Expr::cust("(datetime('now'))")),
+                    )
                     .to_owned(),
             )
             .await
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager.drop_table(Table::drop().table(Shops::Table).to_owned()).await?;
+        manager
+            .drop_table(Table::drop().table(Shops::Table).to_owned())
+            .await?;
         manager
             .get_connection()
             .execute_unprepared("DROP TABLE IF EXISTS maintenance_schedule_items")

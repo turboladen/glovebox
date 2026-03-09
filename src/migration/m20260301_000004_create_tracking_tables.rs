@@ -12,19 +12,45 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(Observations::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new(Observations::Id).integer().not_null().auto_increment().primary_key())
+                    .col(
+                        ColumnDef::new(Observations::Id)
+                            .integer()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
                     .col(ColumnDef::new(Observations::VehicleId).integer().not_null())
                     .col(ColumnDef::new(Observations::Category).text().not_null())
                     .col(ColumnDef::new(Observations::Title).text().not_null())
                     .col(ColumnDef::new(Observations::Description).text())
                     .col(ColumnDef::new(Observations::Odometer).integer())
-                    .col(ColumnDef::new(Observations::ObservedAt).text().not_null().default(Expr::cust("(datetime('now'))")))
+                    .col(
+                        ColumnDef::new(Observations::ObservedAt)
+                            .text()
+                            .not_null()
+                            .default(Expr::cust("(datetime('now'))")),
+                    )
                     .col(ColumnDef::new(Observations::ObdCodes).text())
-                    .col(ColumnDef::new(Observations::Resolved).boolean().not_null().default(false))
+                    .col(
+                        ColumnDef::new(Observations::Resolved)
+                            .boolean()
+                            .not_null()
+                            .default(false),
+                    )
                     .col(ColumnDef::new(Observations::ResolvedServiceId).integer())
                     .col(ColumnDef::new(Observations::Notes).text())
-                    .col(ColumnDef::new(Observations::CreatedAt).text().not_null().default(Expr::cust("(datetime('now'))")))
-                    .col(ColumnDef::new(Observations::UpdatedAt).text().not_null().default(Expr::cust("(datetime('now'))")))
+                    .col(
+                        ColumnDef::new(Observations::CreatedAt)
+                            .text()
+                            .not_null()
+                            .default(Expr::cust("(datetime('now'))")),
+                    )
+                    .col(
+                        ColumnDef::new(Observations::UpdatedAt)
+                            .text()
+                            .not_null()
+                            .default(Expr::cust("(datetime('now'))")),
+                    )
                     .foreign_key(
                         ForeignKey::create()
                             .from(Observations::Table, Observations::VehicleId)
@@ -47,7 +73,13 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(Documents::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new(Documents::Id).integer().not_null().auto_increment().primary_key())
+                    .col(
+                        ColumnDef::new(Documents::Id)
+                            .integer()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
                     .col(ColumnDef::new(Documents::VehicleId).integer())
                     .col(ColumnDef::new(Documents::Title).text().not_null())
                     .col(ColumnDef::new(Documents::FilePath).text().not_null())
@@ -59,7 +91,12 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(Documents::LinkedEntityId).integer())
                     .col(ColumnDef::new(Documents::Notes).text())
                     .col(ColumnDef::new(Documents::ExtractedText).text())
-                    .col(ColumnDef::new(Documents::CreatedAt).text().not_null().default(Expr::cust("(datetime('now'))")))
+                    .col(
+                        ColumnDef::new(Documents::CreatedAt)
+                            .text()
+                            .not_null()
+                            .default(Expr::cust("(datetime('now'))")),
+                    )
                     .foreign_key(
                         ForeignKey::create()
                             .from(Documents::Table, Documents::VehicleId)
@@ -76,11 +113,22 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(ChatMessages::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new(ChatMessages::Id).integer().not_null().auto_increment().primary_key())
+                    .col(
+                        ColumnDef::new(ChatMessages::Id)
+                            .integer()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
                     .col(ColumnDef::new(ChatMessages::VehicleId).integer())
                     .col(ColumnDef::new(ChatMessages::Role).text().not_null())
                     .col(ColumnDef::new(ChatMessages::Content).text().not_null())
-                    .col(ColumnDef::new(ChatMessages::CreatedAt).text().not_null().default(Expr::cust("(datetime('now'))")))
+                    .col(
+                        ColumnDef::new(ChatMessages::CreatedAt)
+                            .text()
+                            .not_null()
+                            .default(Expr::cust("(datetime('now'))")),
+                    )
                     .foreign_key(
                         ForeignKey::create()
                             .from(ChatMessages::Table, ChatMessages::VehicleId)
@@ -103,9 +151,15 @@ impl MigrationTrait for Migration {
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager.drop_table(Table::drop().table(ChatMessages::Table).to_owned()).await?;
-        manager.drop_table(Table::drop().table(Documents::Table).to_owned()).await?;
-        manager.drop_table(Table::drop().table(Observations::Table).to_owned()).await
+        manager
+            .drop_table(Table::drop().table(ChatMessages::Table).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(Documents::Table).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(Observations::Table).to_owned())
+            .await
     }
 }
 

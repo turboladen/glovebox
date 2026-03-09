@@ -1,12 +1,13 @@
 use axum::extract::{Path, State};
 use axum::Json;
-use sea_orm::*;
+use sea_orm::{QueryOrder, QueryFilter, EntityTrait, ColumnTrait, Set, ActiveModelTrait, Iden};
 use serde::Deserialize;
 
-use crate::entities::{observation, vehicle};
+use crate::entities::observation;
 use crate::AppState;
 
 use super::error::ApiError;
+use super::require_vehicle;
 
 type Result<T> = std::result::Result<T, ApiError>;
 
@@ -38,10 +39,7 @@ pub async fn list(
     State(state): State<AppState>,
     Path(vehicle_id): Path<i32>,
 ) -> Result<Json<Vec<observation::Model>>> {
-    vehicle::Entity::find_by_id(vehicle_id)
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Vehicle {vehicle_id} not found")))?;
+    require_vehicle(&state.db, vehicle_id).await?;
 
     let observations = observation::Entity::find()
         .filter(observation::Column::VehicleId.eq(vehicle_id))
@@ -68,10 +66,7 @@ pub async fn create(
     Path(vehicle_id): Path<i32>,
     Json(input): Json<CreateObservation>,
 ) -> Result<Json<observation::Model>> {
-    vehicle::Entity::find_by_id(vehicle_id)
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Vehicle {vehicle_id} not found")))?;
+    require_vehicle(&state.db, vehicle_id).await?;
 
     let mut model = observation::ActiveModel {
         vehicle_id: Set(vehicle_id),
@@ -105,15 +100,35 @@ pub async fn update(
 
     let mut active: observation::ActiveModel = existing.into();
 
-    if let Some(v) = input.category { active.category = Set(v); }
-    if let Some(v) = input.title { active.title = Set(v); }
-    if let Some(v) = input.description { active.description = Set(v); }
-    if let Some(v) = input.odometer { active.odometer = Set(v); }
-    if let Some(v) = input.observed_at { active.observed_at = Set(v); }
-    if let Some(v) = input.obd_codes { active.obd_codes = Set(v); }
-    if let Some(v) = input.resolved { active.resolved = Set(v); }
-    if let Some(v) = input.resolved_service_id { active.resolved_service_id = Set(v); }
-    if let Some(v) = input.notes { active.notes = Set(v); }
+    if let Some(v) = input.category {
+        active.category = Set(v);
+    }
+    if let Some(v) = input.title {
+        active.title = Set(v);
+    }
+    if let Some(v) = input.description {
+        active.description = Set(v);
+    }
+    if let Some(v) = input.odometer {
+        active.odometer = Set(v);
+    }
+    if let Some(v) = input.observed_at {
+        active.observed_at = Set(v);
+    }
+    if let Some(v) = input.obd_codes {
+        active.obd_codes = Set(v);
+    }
+    if let Some(v) = input.resolved {
+        active.resolved = Set(v);
+    }
+    if let Some(v) = input.resolved_service_id {
+        active.resolved_service_id = Set(v);
+    }
+    if let Some(v) = input.notes {
+        active.notes = Set(v);
+    }
+
+    active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
 
     let result = active.update(&state.db).await?;
     Ok(Json(result))

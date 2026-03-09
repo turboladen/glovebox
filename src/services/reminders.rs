@@ -1,11 +1,11 @@
 use chrono::{Datelike, NaiveDate};
-use sea_orm::*;
+use sea_orm::{ActiveEnum, DatabaseConnection, DbErr, QuerySelect, QueryOrder, QueryFilter, EntityTrait, ColumnTrait, Iden, Iterable, ActiveModelBehavior, ActiveModelTrait};
 use serde::Serialize;
 use std::collections::HashMap;
 
 use crate::entities::{
-    maintenance_schedule_item, mileage_log, model_template, service_record,
-    service_schedule_link, vehicle,
+    maintenance_schedule_item, mileage_log, model_template, service_record, service_schedule_link,
+    vehicle,
 };
 
 #[derive(Debug, Serialize, Clone)]
@@ -57,7 +57,7 @@ pub struct RemindersResponse {
     pub bundle_suggestions: Vec<BundleSuggestion>,
 }
 
-/// Estimate current mileage from mileage_log entries.
+/// Estimate current mileage from `mileage_log` entries.
 /// Calculates average daily miles from the oldest and newest of the last 50 entries,
 /// then extrapolates forward from the most recent entry to today.
 pub async fn estimate_mileage(
@@ -89,16 +89,18 @@ pub async fn estimate_mileage(
         let oldest_date = parse_date(&oldest.recorded_at).unwrap_or(latest_date);
         let days = (latest_date - oldest_date).num_days().max(1);
         let miles = (latest.mileage - oldest.mileage).max(0);
-        miles as f64 / days as f64
+        f64::from(miles) / days as f64
     } else {
         // With only one entry, use purchase mileage as baseline
         let purchase_miles = v.purchase_mileage.unwrap_or(0);
-        let purchase_date = v.purchase_date.as_deref()
-            .and_then(|d| parse_date(d))
+        let purchase_date = v
+            .purchase_date
+            .as_deref()
+            .and_then(parse_date)
             .unwrap_or(latest_date);
         let days = (latest_date - purchase_date).num_days().max(1);
         let miles = (latest.mileage - purchase_miles).max(0);
-        miles as f64 / days as f64
+        f64::from(miles) / days as f64
     };
 
     // Extrapolate from latest entry to today
@@ -126,29 +128,44 @@ pub async fn calculate_reminders(
 
     let today = chrono::Utc::now().date_naive();
 
+    // Batch-load all schedule links and service records for this vehicle (avoids N+1)
+    let item_ids: Vec<i32> = effective_items.iter().map(|i| i.id).collect();
+
+    let all_links = if item_ids.is_empty() {
+        vec![]
+    } else {
+        service_schedule_link::Entity::find()
+            .filter(service_schedule_link::Column::ScheduleItemId.is_in(item_ids))
+            .all(db)
+            .await?
+    };
+
+    let linked_service_ids: Vec<i32> = all_links.iter().map(|l| l.service_record_id).collect();
+    let all_services = if linked_service_ids.is_empty() {
+        vec![]
+    } else {
+        service_record::Entity::find()
+            .filter(service_record::Column::Id.is_in(linked_service_ids))
+            .filter(service_record::Column::VehicleId.eq(vehicle_id))
+            .all(db)
+            .await?
+    };
+
     // For each schedule item, find last service and calculate status
     let mut reminders = Vec::new();
 
     for item in &effective_items {
-        // Find service records linked to this schedule item
-        let linked_service_ids: Vec<i32> = service_schedule_link::Entity::find()
-            .filter(service_schedule_link::Column::ScheduleItemId.eq(item.id))
-            .all(db)
-            .await?
-            .into_iter()
+        // Find the most recent service linked to this schedule item
+        let item_service_ids: Vec<i32> = all_links
+            .iter()
+            .filter(|l| l.schedule_item_id == item.id)
             .map(|l| l.service_record_id)
             .collect();
 
-        let last_service = if !linked_service_ids.is_empty() {
-            service_record::Entity::find()
-                .filter(service_record::Column::Id.is_in(linked_service_ids))
-                .filter(service_record::Column::VehicleId.eq(vehicle_id))
-                .order_by_desc(service_record::Column::ServiceDate)
-                .one(db)
-                .await?
-        } else {
-            None
-        };
+        let last_service = all_services
+            .iter()
+            .filter(|s| item_service_ids.contains(&s.id))
+            .max_by(|a, b| a.service_date.cmp(&b.service_date));
 
         // Baseline: last service or vehicle purchase
         let (baseline_miles, baseline_date) = match &last_service {
@@ -158,15 +175,16 @@ pub async fn calculate_reminders(
             ),
             None => (
                 v.purchase_mileage.unwrap_or(0),
-                v.purchase_date.as_deref().and_then(|d| parse_date(d)).unwrap_or(today),
+                v.purchase_date
+                    .as_deref()
+                    .and_then(parse_date)
+                    .unwrap_or(today),
             ),
         };
 
         // Calculate due mileage and date
         let due_at_miles = item.interval_miles.map(|i| baseline_miles + i);
-        let due_at_date = item.interval_months.map(|m| {
-            add_months(baseline_date, m)
-        });
+        let due_at_date = item.interval_months.map(|m| add_months(baseline_date, m));
 
         let miles_remaining = due_at_miles.map(|due| due - estimated_mileage);
         let days_remaining = due_at_date.map(|due| (due - today).num_days());
@@ -176,15 +194,23 @@ pub async fn calculate_reminders(
         let warning_days = item.warning_days.unwrap_or(30);
 
         let miles_status = miles_remaining.map(|r| {
-            if r <= 0 { "overdue" }
-            else if r <= warning_miles { "upcoming" }
-            else { "ok" }
+            if r <= 0 {
+                "overdue"
+            } else if r <= warning_miles {
+                "upcoming"
+            } else {
+                "ok"
+            }
         });
 
         let time_status = days_remaining.map(|r| {
-            if r <= 0 { "overdue" }
-            else if r <= warning_days as i64 { "upcoming" }
-            else { "ok" }
+            if r <= 0 {
+                "overdue"
+            } else if r <= i64::from(warning_days) {
+                "upcoming"
+            } else {
+                "ok"
+            }
         });
 
         // Use the more urgent status
@@ -196,8 +222,8 @@ pub async fn calculate_reminders(
 
         let trigger = match (miles_status, time_status) {
             (Some(m), Some(t)) if m == t => Some("both"),
-            (Some("overdue"), _) | (Some("upcoming"), _) => Some("mileage"),
-            (_, Some("overdue")) | (_, Some("upcoming")) => Some("time"),
+            (Some("overdue" | "upcoming"), _) => Some("mileage"),
+            (_, Some("overdue" | "upcoming")) => Some("time"),
             (Some(_), None) => Some("mileage"),
             (None, Some(_)) => Some("time"),
             _ => None,
@@ -209,7 +235,7 @@ pub async fn calculate_reminders(
                 name: item.name.clone(),
             },
             status: status.to_string(),
-            last_service: last_service.as_ref().map(|s| LastServiceInfo {
+            last_service: last_service.map(|s| LastServiceInfo {
                 id: s.id,
                 date: s.service_date.clone(),
                 odometer: s.mileage,
@@ -218,7 +244,7 @@ pub async fn calculate_reminders(
             due_at_date: due_at_date.map(|d| d.format("%Y-%m-%d").to_string()),
             miles_remaining,
             days_remaining,
-            trigger: trigger.map(|s| s.to_string()),
+            trigger: trigger.map(std::string::ToString::to_string),
         });
     }
 
@@ -229,7 +255,8 @@ pub async fn calculate_reminders(
             "upcoming" => 1,
             _ => 2,
         };
-        priority(&a.status).cmp(&priority(&b.status))
+        priority(&a.status)
+            .cmp(&priority(&b.status))
             .then(a.schedule_item.name.cmp(&b.schedule_item.name))
     });
 
@@ -291,7 +318,7 @@ async fn resolve_schedule(
     Ok(schedule.into_values().filter(|i| i.enabled).collect())
 }
 
-/// Calculate bundle suggestions based on labor_categories.
+/// Calculate bundle suggestions based on `labor_categories`.
 fn calculate_bundles(reminders: &[ReminderStatus], bundling_window: i32) -> Vec<BundleSuggestion> {
     let mut suggestions = Vec::new();
 
@@ -341,24 +368,32 @@ fn calculate_bundles(reminders: &[ReminderStatus], bundling_window: i32) -> Vec<
 
 fn parse_date(s: &str) -> Option<NaiveDate> {
     // Extract just the date portion (handles "2024-01-15", "2024-01-15 10:30:00", "2024-01-15T10:30:00")
-    let date_part = s.split(|c| c == ' ' || c == 'T').next().unwrap_or(s);
+    let date_part = s.split([' ', 'T']).next().unwrap_or(s);
     NaiveDate::parse_from_str(date_part, "%Y-%m-%d").ok()
 }
 
 fn add_months(date: NaiveDate, months: i32) -> NaiveDate {
+    if months <= 0 {
+        return date;
+    }
     let total_months = date.month() as i32 + months - 1;
     let new_year = date.year() + total_months / 12;
     let new_month = (total_months % 12 + 1) as u32;
     let new_day = date.day().min(days_in_month(new_year, new_month));
-    NaiveDate::from_ymd_opt(new_year, new_month, new_day)
-        .unwrap_or(date)
+    NaiveDate::from_ymd_opt(new_year, new_month, new_day).unwrap_or(date)
 }
 
 fn days_in_month(year: i32, month: u32) -> u32 {
     match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
-        2 => if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) { 29 } else { 28 },
+        2 => {
+            if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
+                29
+            } else {
+                28
+            }
+        }
         _ => 30,
     }
 }

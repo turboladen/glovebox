@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use super::{AiError, AiProvider, AiRequest, AiResponse, Role};
 
 /// An AI provider that talks to any OpenAI-compatible chat completions API
-/// (e.g. Ollama, LM Studio, vLLM, or OpenAI itself).
+/// (e.g. Ollama, LM Studio, vLLM, or `OpenAI` itself).
 pub struct OpenAiCompatProvider {
     api_base: String,
     model: String,
@@ -168,7 +168,7 @@ impl AiProvider for OpenAiCompatProvider {
         })
     }
 
-    fn provider_name(&self) -> &str {
+    fn provider_name(&self) -> &'static str {
         "openai_compat"
     }
 

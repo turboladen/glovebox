@@ -45,7 +45,11 @@ pub struct RecallCheckResult {
     pub recalls: Vec<RecallInfo>,
 }
 
-pub async fn check_recalls(make: &str, model: &str, model_year: i32) -> Result<RecallCheckResult, String> {
+pub async fn check_recalls(
+    make: &str,
+    model: &str,
+    model_year: i32,
+) -> Result<RecallCheckResult, String> {
     if make.is_empty() || model.is_empty() {
         return Err("Make and model are required for recall lookup".to_string());
     }
@@ -65,7 +69,10 @@ pub async fn check_recalls(make: &str, model: &str, model_year: i32) -> Result<R
         .map_err(|e| format!("NHTSA Recalls API request failed: {e}"))?;
 
     if !resp.status().is_success() {
-        return Err(format!("NHTSA Recalls API returned status {}", resp.status()));
+        return Err(format!(
+            "NHTSA Recalls API returned status {}",
+            resp.status()
+        ));
     }
 
     let data: NhtsaRecallsResponse = resp
@@ -161,7 +168,10 @@ mod tests {
         assert_eq!(recalls.len(), 2);
         assert_eq!(recalls[0].campaign_number, "17V123000");
         assert_eq!(recalls[0].subject, "Fuel Pump Failure");
-        assert_eq!(recalls[0].component.as_deref(), Some("FUEL SYSTEM, GASOLINE"));
+        assert_eq!(
+            recalls[0].component.as_deref(),
+            Some("FUEL SYSTEM, GASOLINE")
+        );
         assert_eq!(recalls[1].campaign_number, "18V456000");
     }
 
@@ -180,7 +190,10 @@ mod tests {
             ]
         }"#;
         let recalls = parse_response_json(json).unwrap();
-        assert!(recalls.is_empty(), "Recalls without campaign number should be filtered out");
+        assert!(
+            recalls.is_empty(),
+            "Recalls without campaign number should be filtered out"
+        );
     }
 
     #[test]
@@ -219,7 +232,11 @@ mod tests {
             ]
         }"#;
         let recalls = parse_response_json(json).unwrap();
-        assert_eq!(recalls.len(), 1, "Only valid recalls should remain after filtering");
+        assert_eq!(
+            recalls.len(),
+            1,
+            "Only valid recalls should remain after filtering"
+        );
     }
 
     #[test]

@@ -56,7 +56,11 @@ impl Related<super::maintenance_schedule_item::Entity> for Entity {
         super::service_schedule_link::Relation::MaintenanceScheduleItem.def()
     }
     fn via() -> Option<RelationDef> {
-        Some(super::service_schedule_link::Relation::ServiceRecord.def().rev())
+        Some(
+            super::service_schedule_link::Relation::ServiceRecord
+                .def()
+                .rev(),
+        )
     }
 }
 

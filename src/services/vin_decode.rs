@@ -19,7 +19,7 @@ pub struct VinDecodeResult {
     pub engine: Option<String>,
     pub transmission: Option<String>,
     pub drivetrain: Option<String>,
-    /// All decoded attributes as key-value pairs for storage in vehicle_attributes
+    /// All decoded attributes as key-value pairs for storage in `vehicle_attributes`
     pub all_attributes: HashMap<String, String>,
 }
 
@@ -43,7 +43,10 @@ pub async fn decode_vin(vin: &str) -> Result<VinDecodeResult, String> {
         .await
         .map_err(|e| format!("Failed to parse NHTSA response: {e}"))?;
 
-    let result = data.results.into_iter().next()
+    let result = data
+        .results
+        .into_iter()
+        .next()
         .ok_or_else(|| "NHTSA response contained no results".to_string())?;
 
     fn get_str(map: &HashMap<String, serde_json::Value>, key: &str) -> Option<String> {
@@ -54,11 +57,11 @@ pub async fn decode_vin(vin: &str) -> Result<VinDecodeResult, String> {
     }
 
     fn get_int(map: &HashMap<String, serde_json::Value>, key: &str) -> Option<i32> {
-        map.get(key)
-            .and_then(|v| {
-                v.as_i64().map(|n| n as i32)
-                    .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
-            })
+        map.get(key).and_then(|v| {
+            v.as_i64()
+                .map(|n| n as i32)
+                .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+        })
     }
 
     // Build engine description from components
@@ -70,7 +73,9 @@ pub async fn decode_vin(vin: &str) -> Result<VinDecodeResult, String> {
         let turbo = get_str(&result, "Turbo");
 
         let mut parts = Vec::new();
-        if let Some(d) = displacement { parts.push(format!("{d}L")); }
+        if let Some(d) = displacement {
+            parts.push(format!("{d}L"));
+        }
         if let Some(c) = cylinders {
             if let Some(cfg) = config {
                 parts.push(format!("{cfg}-{c}"));
@@ -78,10 +83,18 @@ pub async fn decode_vin(vin: &str) -> Result<VinDecodeResult, String> {
                 parts.push(format!("{c}-cyl"));
             }
         }
-        if turbo.as_deref() == Some("Yes") { parts.push("Turbo".to_string()); }
-        if let Some(f) = fuel { parts.push(f); }
+        if turbo.as_deref() == Some("Yes") {
+            parts.push("Turbo".to_string());
+        }
+        if let Some(f) = fuel {
+            parts.push(f);
+        }
 
-        if parts.is_empty() { None } else { Some(parts.join(" ")) }
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join(" "))
+        }
     };
 
     // Extract named fields before consuming result
@@ -97,10 +110,15 @@ pub async fn decode_vin(vin: &str) -> Result<VinDecodeResult, String> {
     let all_attributes: HashMap<String, String> = result
         .into_iter()
         .filter_map(|(k, v)| {
-            let s = v.as_str()
+            let s = v
+                .as_str()
                 .map(|s| s.trim().to_string())
                 .or_else(|| {
-                    if v.is_number() { Some(v.to_string()) } else { None }
+                    if v.is_number() {
+                        Some(v.to_string())
+                    } else {
+                        None
+                    }
                 })
                 .filter(|s| !s.is_empty())?;
             Some((k, s))

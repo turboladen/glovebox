@@ -1,12 +1,13 @@
 use axum::extract::{Path, Query, State};
 use axum::Json;
-use sea_orm::*;
+use sea_orm::{QueryFilter, EntityTrait, ColumnTrait, QueryOrder, Set, ActiveEnum, Iden, ActiveModelTrait, ModelTrait, ActiveModelBehavior};
 use serde::Deserialize;
 
-use crate::entities::{part, vehicle};
+use crate::entities::part;
 use crate::AppState;
 
 use super::error::ApiError;
+use super::require_vehicle;
 
 type Result<T> = std::result::Result<T, ApiError>;
 
@@ -61,13 +62,9 @@ pub async fn list(
     Path(vehicle_id): Path<i32>,
     Query(filter): Query<ListFilter>,
 ) -> Result<Json<Vec<part::Model>>> {
-    vehicle::Entity::find_by_id(vehicle_id)
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Vehicle {vehicle_id} not found")))?;
+    require_vehicle(&state.db, vehicle_id).await?;
 
-    let mut query = part::Entity::find()
-        .filter(part::Column::VehicleId.eq(vehicle_id));
+    let mut query = part::Entity::find().filter(part::Column::VehicleId.eq(vehicle_id));
 
     if let Some(slot_id) = filter.slot_id {
         query = query.filter(part::Column::SlotId.eq(slot_id));
@@ -100,10 +97,7 @@ pub async fn create(
     Path(vehicle_id): Path<i32>,
     Json(input): Json<CreatePart>,
 ) -> Result<Json<part::Model>> {
-    vehicle::Entity::find_by_id(vehicle_id)
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Vehicle {vehicle_id} not found")))?;
+    require_vehicle(&state.db, vehicle_id).await?;
 
     let model = part::ActiveModel {
         vehicle_id: Set(vehicle_id),
@@ -142,23 +136,59 @@ pub async fn update(
 
     let mut active: part::ActiveModel = existing.into();
 
-    if let Some(v) = input.slot_id { active.slot_id = Set(v); }
-    if let Some(v) = input.name { active.name = Set(v); }
-    if let Some(v) = input.manufacturer { active.manufacturer = Set(v); }
-    if let Some(v) = input.part_number { active.part_number = Set(v); }
-    if let Some(v) = input.oe_part_number_replaced { active.oe_part_number_replaced = Set(v); }
-    if let Some(v) = input.seller { active.seller = Set(v); }
-    if let Some(v) = input.purchase_date { active.purchase_date = Set(v); }
-    if let Some(v) = input.cost_cents { active.cost_cents = Set(v); }
-    if let Some(v) = input.cost_currency { active.cost_currency = Set(v); }
-    if let Some(v) = input.invoice_url { active.invoice_url = Set(v); }
-    if let Some(v) = input.status { active.status = Set(v); }
-    if let Some(v) = input.installed_date { active.installed_date = Set(v); }
-    if let Some(v) = input.installed_odometer { active.installed_odometer = Set(v); }
-    if let Some(v) = input.installed_service_id { active.installed_service_id = Set(v); }
-    if let Some(v) = input.replaced_date { active.replaced_date = Set(v); }
-    if let Some(v) = input.replaced_odometer { active.replaced_odometer = Set(v); }
-    if let Some(v) = input.notes { active.notes = Set(v); }
+    if let Some(v) = input.slot_id {
+        active.slot_id = Set(v);
+    }
+    if let Some(v) = input.name {
+        active.name = Set(v);
+    }
+    if let Some(v) = input.manufacturer {
+        active.manufacturer = Set(v);
+    }
+    if let Some(v) = input.part_number {
+        active.part_number = Set(v);
+    }
+    if let Some(v) = input.oe_part_number_replaced {
+        active.oe_part_number_replaced = Set(v);
+    }
+    if let Some(v) = input.seller {
+        active.seller = Set(v);
+    }
+    if let Some(v) = input.purchase_date {
+        active.purchase_date = Set(v);
+    }
+    if let Some(v) = input.cost_cents {
+        active.cost_cents = Set(v);
+    }
+    if let Some(v) = input.cost_currency {
+        active.cost_currency = Set(v);
+    }
+    if let Some(v) = input.invoice_url {
+        active.invoice_url = Set(v);
+    }
+    if let Some(v) = input.status {
+        active.status = Set(v);
+    }
+    if let Some(v) = input.installed_date {
+        active.installed_date = Set(v);
+    }
+    if let Some(v) = input.installed_odometer {
+        active.installed_odometer = Set(v);
+    }
+    if let Some(v) = input.installed_service_id {
+        active.installed_service_id = Set(v);
+    }
+    if let Some(v) = input.replaced_date {
+        active.replaced_date = Set(v);
+    }
+    if let Some(v) = input.replaced_odometer {
+        active.replaced_odometer = Set(v);
+    }
+    if let Some(v) = input.notes {
+        active.notes = Set(v);
+    }
+
+    active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
 
     let result = active.update(&state.db).await?;
     Ok(Json(result))

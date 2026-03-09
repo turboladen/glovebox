@@ -208,8 +208,8 @@
     </div>
 
     {#if scheduleItems.length > 0}
-      <div class="field">
-        <label>Schedule items covered</label>
+      <div class="field" role="group" aria-labelledby="schedule-items-label">
+        <span id="schedule-items-label" class="field-label">Schedule items covered</span>
         <div class="checkbox-list">
           {#each scheduleItems as item (item.effective_item.id)}
             <label class="checkbox-item">
@@ -226,8 +226,8 @@
     {/if}
 
     {#if availableParts.length > 0}
-      <div class="field">
-        <label>Parts installed during this service</label>
+      <div class="field" role="group" aria-labelledby="parts-installed-label">
+        <span id="parts-installed-label" class="field-label">Parts installed during this service</span>
         <div class="checkbox-list">
           {#each availableParts as p (p.id)}
             <label class="checkbox-item">

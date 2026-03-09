@@ -1,5 +1,5 @@
 <script lang="ts">
-  import Router, { link } from '@keenmate/svelte-spa-router'
+  import { Router, link } from '@keenmate/svelte-spa-router'
   import Garage from './components/Garage.svelte'
   import VehicleDetail from './components/VehicleDetail.svelte'
   import VehicleNew from './components/VehicleNew.svelte'

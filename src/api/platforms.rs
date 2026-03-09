@@ -1,7 +1,7 @@
 use axum::extract::{Path, State};
 use axum::routing::get;
 use axum::{Json, Router};
-use sea_orm::*;
+use sea_orm::{EntityTrait, Set, ActiveEnum, ActiveModelTrait, ActiveModelBehavior};
 use serde::Deserialize;
 
 use crate::entities::platform;
@@ -70,10 +70,18 @@ async fn update(
 
     let mut active: platform::ActiveModel = existing.into();
 
-    if let Some(v) = input.name { active.name = Set(v); }
-    if let Some(v) = input.website_url { active.website_url = Set(v); }
-    if let Some(v) = input.api_base_url { active.api_base_url = Set(v); }
-    if let Some(v) = input.notes { active.notes = Set(v); }
+    if let Some(v) = input.name {
+        active.name = Set(v);
+    }
+    if let Some(v) = input.website_url {
+        active.website_url = Set(v);
+    }
+    if let Some(v) = input.api_base_url {
+        active.api_base_url = Set(v);
+    }
+    if let Some(v) = input.notes {
+        active.notes = Set(v);
+    }
 
     let result = active.update(&state.db).await?;
     Ok(Json(result))

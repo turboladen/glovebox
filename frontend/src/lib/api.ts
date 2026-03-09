@@ -120,11 +120,11 @@ export const documents = {
 export const accidents = {
   list: (vehicleId: number) => request<AccidentWithDetails[]>(`/vehicles/${vehicleId}/accidents`),
   get: (vehicleId: number, id: number) => request<AccidentWithDetails>(`/vehicles/${vehicleId}/accidents/${id}`),
-  create: (vehicleId: number, data: any) =>
+  create: (vehicleId: number, data: CreateAccident) =>
     request<AccidentWithDetails>(`/vehicles/${vehicleId}/accidents`, { method: 'POST', body: JSON.stringify(data) }),
-  update: (vehicleId: number, id: number, data: any) =>
+  update: (vehicleId: number, id: number, data: UpdateAccident) =>
     request<AccidentWithDetails>(`/vehicles/${vehicleId}/accidents/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
-  addCorrespondence: (vehicleId: number, accidentId: number, data: any) =>
+  addCorrespondence: (vehicleId: number, accidentId: number, data: CreateCorrespondence) =>
     request<AccidentCorrespondence>(`/vehicles/${vehicleId}/accidents/${accidentId}/correspondence`, { method: 'POST', body: JSON.stringify(data) }),
 }
 
@@ -223,7 +223,7 @@ import type {
   ScheduleItem, CreateScheduleItem, ResolvedScheduleItem,
   RemindersResponse, VinDecodeResponse,
   Shop, Observation, CreateObservation, Document,
-  AccidentWithDetails, AccidentCorrespondence,
+  AccidentWithDetails, AccidentCorrespondence, CreateAccident, UpdateAccident, CreateCorrespondence,
   PartSlot, CreatePartSlot, Part, CreatePart,
   CostSummary, VehicleExport,
   AiStatus, AiProvider, CreateAiProvider, UpdateAiProvider, ProviderSummary,

@@ -1,6 +1,6 @@
 use axum::extract::{Path, State};
 use axum::Json;
-use sea_orm::*;
+use sea_orm::{EntityTrait, QueryOrder, QueryFilter, ColumnTrait, Set, ActiveEnum, ActiveModelTrait, ModelTrait, ActiveModelBehavior};
 use serde::Deserialize;
 
 use crate::entities::{part_slot, vehicle};
@@ -95,11 +95,21 @@ pub async fn update(
 
     let mut active: part_slot::ActiveModel = existing.into();
 
-    if let Some(v) = input.name { active.name = Set(v); }
-    if let Some(v) = input.category { active.category = Set(v); }
-    if let Some(v) = input.oe_spec { active.oe_spec = Set(v); }
-    if let Some(v) = input.oe_part_number { active.oe_part_number = Set(v); }
-    if let Some(v) = input.notes { active.notes = Set(v); }
+    if let Some(v) = input.name {
+        active.name = Set(v);
+    }
+    if let Some(v) = input.category {
+        active.category = Set(v);
+    }
+    if let Some(v) = input.oe_spec {
+        active.oe_spec = Set(v);
+    }
+    if let Some(v) = input.oe_part_number {
+        active.oe_part_number = Set(v);
+    }
+    if let Some(v) = input.notes {
+        active.notes = Set(v);
+    }
 
     let result = active.update(&state.db).await?;
     Ok(Json(result))

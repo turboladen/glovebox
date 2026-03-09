@@ -352,7 +352,8 @@ input::placeholder, textarea::placeholder {
   color: var(--text-muted);
 }
 
-label {
+label,
+.field-label {
   display: block;
   font-size: 0.8rem;
   font-weight: 500;

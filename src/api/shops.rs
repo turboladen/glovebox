@@ -1,7 +1,7 @@
 use axum::extract::{Path, State};
 use axum::routing::get;
 use axum::{Json, Router};
-use sea_orm::*;
+use sea_orm::{QueryOrder, EntityTrait, Set, ActiveEnum, ActiveModelTrait, ActiveModelBehavior};
 use serde::Deserialize;
 
 use crate::entities::shop;
@@ -39,10 +39,7 @@ async fn list(State(state): State<AppState>) -> Result<Json<Vec<shop::Model>>> {
     Ok(Json(shops))
 }
 
-async fn get_one(
-    State(state): State<AppState>,
-    Path(id): Path<i32>,
-) -> Result<Json<shop::Model>> {
+async fn get_one(State(state): State<AppState>, Path(id): Path<i32>) -> Result<Json<shop::Model>> {
     shop::Entity::find_by_id(id)
         .one(&state.db)
         .await?
@@ -79,12 +76,24 @@ async fn update(
 
     let mut active: shop::ActiveModel = existing.into();
 
-    if let Some(v) = input.name { active.name = Set(v); }
-    if let Some(v) = input.address { active.address = Set(v); }
-    if let Some(v) = input.phone { active.phone = Set(v); }
-    if let Some(v) = input.website { active.website = Set(v); }
-    if let Some(v) = input.specialty { active.specialty = Set(v); }
-    if let Some(v) = input.notes { active.notes = Set(v); }
+    if let Some(v) = input.name {
+        active.name = Set(v);
+    }
+    if let Some(v) = input.address {
+        active.address = Set(v);
+    }
+    if let Some(v) = input.phone {
+        active.phone = Set(v);
+    }
+    if let Some(v) = input.website {
+        active.website = Set(v);
+    }
+    if let Some(v) = input.specialty {
+        active.specialty = Set(v);
+    }
+    if let Some(v) = input.notes {
+        active.notes = Set(v);
+    }
 
     let result = active.update(&state.db).await?;
     Ok(Json(result))

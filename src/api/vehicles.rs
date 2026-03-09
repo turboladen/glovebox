@@ -1,7 +1,7 @@
 use axum::extract::{Path, State};
 use axum::routing::get;
 use axum::{Json, Router};
-use sea_orm::*;
+use sea_orm::{EntityTrait, Set, ActiveEnum, ActiveModelTrait, Iden, ActiveModelBehavior};
 use serde::Deserialize;
 
 use crate::entities::vehicle;
@@ -119,29 +119,77 @@ async fn update(
 
     let mut active: vehicle::ActiveModel = existing.into();
 
-    if let Some(v) = input.name { active.name = Set(v); }
-    if let Some(v) = input.model_template_id { active.model_template_id = Set(v); }
-    if let Some(v) = input.year { active.year = Set(v); }
-    if let Some(v) = input.make { active.make = Set(v); }
-    if let Some(v) = input.model { active.model = Set(v); }
-    if let Some(v) = input.trim_level { active.trim_level = Set(v); }
-    if let Some(v) = input.body_style { active.body_style = Set(v); }
-    if let Some(v) = input.engine { active.engine = Set(v); }
-    if let Some(v) = input.transmission { active.transmission = Set(v); }
-    if let Some(v) = input.drivetrain { active.drivetrain = Set(v); }
-    if let Some(v) = input.vin { active.vin = Set(v); }
-    if let Some(v) = input.license_plate { active.license_plate = Set(v); }
-    if let Some(v) = input.color { active.color = Set(v); }
-    if let Some(v) = input.purchase_date { active.purchase_date = Set(v); }
-    if let Some(v) = input.purchase_price_cents { active.purchase_price_cents = Set(v); }
-    if let Some(v) = input.purchase_price_currency { active.purchase_price_currency = Set(v); }
-    if let Some(v) = input.purchase_mileage { active.purchase_mileage = Set(v); }
-    if let Some(v) = input.sold_date { active.sold_date = Set(v); }
-    if let Some(v) = input.sold_price_cents { active.sold_price_cents = Set(v); }
-    if let Some(v) = input.sold_price_currency { active.sold_price_currency = Set(v); }
-    if let Some(v) = input.sold_mileage { active.sold_mileage = Set(v); }
-    if let Some(v) = input.photo_path { active.photo_path = Set(v); }
-    if let Some(v) = input.notes { active.notes = Set(v); }
+    if let Some(v) = input.name {
+        active.name = Set(v);
+    }
+    if let Some(v) = input.model_template_id {
+        active.model_template_id = Set(v);
+    }
+    if let Some(v) = input.year {
+        active.year = Set(v);
+    }
+    if let Some(v) = input.make {
+        active.make = Set(v);
+    }
+    if let Some(v) = input.model {
+        active.model = Set(v);
+    }
+    if let Some(v) = input.trim_level {
+        active.trim_level = Set(v);
+    }
+    if let Some(v) = input.body_style {
+        active.body_style = Set(v);
+    }
+    if let Some(v) = input.engine {
+        active.engine = Set(v);
+    }
+    if let Some(v) = input.transmission {
+        active.transmission = Set(v);
+    }
+    if let Some(v) = input.drivetrain {
+        active.drivetrain = Set(v);
+    }
+    if let Some(v) = input.vin {
+        active.vin = Set(v);
+    }
+    if let Some(v) = input.license_plate {
+        active.license_plate = Set(v);
+    }
+    if let Some(v) = input.color {
+        active.color = Set(v);
+    }
+    if let Some(v) = input.purchase_date {
+        active.purchase_date = Set(v);
+    }
+    if let Some(v) = input.purchase_price_cents {
+        active.purchase_price_cents = Set(v);
+    }
+    if let Some(v) = input.purchase_price_currency {
+        active.purchase_price_currency = Set(v);
+    }
+    if let Some(v) = input.purchase_mileage {
+        active.purchase_mileage = Set(v);
+    }
+    if let Some(v) = input.sold_date {
+        active.sold_date = Set(v);
+    }
+    if let Some(v) = input.sold_price_cents {
+        active.sold_price_cents = Set(v);
+    }
+    if let Some(v) = input.sold_price_currency {
+        active.sold_price_currency = Set(v);
+    }
+    if let Some(v) = input.sold_mileage {
+        active.sold_mileage = Set(v);
+    }
+    if let Some(v) = input.photo_path {
+        active.photo_path = Set(v);
+    }
+    if let Some(v) = input.notes {
+        active.notes = Set(v);
+    }
+
+    active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
 
     let result = active.update(&state.db).await?;
     Ok(Json(result))

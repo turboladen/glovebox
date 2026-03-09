@@ -12,9 +12,23 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(ServiceRecords::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new(ServiceRecords::Id).integer().not_null().auto_increment().primary_key())
-                    .col(ColumnDef::new(ServiceRecords::VehicleId).integer().not_null())
-                    .col(ColumnDef::new(ServiceRecords::ServiceDate).text().not_null())
+                    .col(
+                        ColumnDef::new(ServiceRecords::Id)
+                            .integer()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(ServiceRecords::VehicleId)
+                            .integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ServiceRecords::ServiceDate)
+                            .text()
+                            .not_null(),
+                    )
                     .col(ColumnDef::new(ServiceRecords::Mileage).integer())
                     .col(ColumnDef::new(ServiceRecords::Description).text())
                     .col(ColumnDef::new(ServiceRecords::PartsCostCents).integer())
@@ -25,8 +39,18 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(ServiceRecords::TotalCostCurrency).text())
                     .col(ColumnDef::new(ServiceRecords::ShopName).text())
                     .col(ColumnDef::new(ServiceRecords::Notes).text())
-                    .col(ColumnDef::new(ServiceRecords::CreatedAt).text().not_null().default(Expr::cust("(datetime('now'))")))
-                    .col(ColumnDef::new(ServiceRecords::UpdatedAt).text().not_null().default(Expr::cust("(datetime('now'))")))
+                    .col(
+                        ColumnDef::new(ServiceRecords::CreatedAt)
+                            .text()
+                            .not_null()
+                            .default(Expr::cust("(datetime('now'))")),
+                    )
+                    .col(
+                        ColumnDef::new(ServiceRecords::UpdatedAt)
+                            .text()
+                            .not_null()
+                            .default(Expr::cust("(datetime('now'))")),
+                    )
                     .col(ColumnDef::new(ServiceRecords::ShopId).integer())
                     .foreign_key(
                         ForeignKey::create()
@@ -50,8 +74,16 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(ServiceScheduleLinks::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new(ServiceScheduleLinks::ServiceRecordId).integer().not_null())
-                    .col(ColumnDef::new(ServiceScheduleLinks::ScheduleItemId).integer().not_null())
+                    .col(
+                        ColumnDef::new(ServiceScheduleLinks::ServiceRecordId)
+                            .integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(ServiceScheduleLinks::ScheduleItemId)
+                            .integer()
+                            .not_null(),
+                    )
                     .primary_key(
                         Index::create()
                             .col(ServiceScheduleLinks::ServiceRecordId)
@@ -59,14 +91,23 @@ impl MigrationTrait for Migration {
                     )
                     .foreign_key(
                         ForeignKey::create()
-                            .from(ServiceScheduleLinks::Table, ServiceScheduleLinks::ServiceRecordId)
+                            .from(
+                                ServiceScheduleLinks::Table,
+                                ServiceScheduleLinks::ServiceRecordId,
+                            )
                             .to(ServiceRecords::Table, ServiceRecords::Id)
                             .on_delete(ForeignKeyAction::Cascade),
                     )
                     .foreign_key(
                         ForeignKey::create()
-                            .from(ServiceScheduleLinks::Table, ServiceScheduleLinks::ScheduleItemId)
-                            .to(MaintenanceScheduleItems::Table, MaintenanceScheduleItems::Id)
+                            .from(
+                                ServiceScheduleLinks::Table,
+                                ServiceScheduleLinks::ScheduleItemId,
+                            )
+                            .to(
+                                MaintenanceScheduleItems::Table,
+                                MaintenanceScheduleItems::Id,
+                            )
                             .on_delete(ForeignKeyAction::Cascade),
                     )
                     .to_owned(),
@@ -75,8 +116,12 @@ impl MigrationTrait for Migration {
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager.drop_table(Table::drop().table(ServiceScheduleLinks::Table).to_owned()).await?;
-        manager.drop_table(Table::drop().table(ServiceRecords::Table).to_owned()).await
+        manager
+            .drop_table(Table::drop().table(ServiceScheduleLinks::Table).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(ServiceRecords::Table).to_owned())
+            .await
     }
 }
 

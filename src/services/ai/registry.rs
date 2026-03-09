@@ -16,18 +16,13 @@ impl AiProviderRegistry {
     }
 
     /// Resolve a provider by optional ID. If `None`, returns the default provider.
-    pub async fn resolve(
-        &self,
-        provider_id: Option<i32>,
-    ) -> Result<Box<dyn AiProvider>, AiError> {
+    pub async fn resolve(&self, provider_id: Option<i32>) -> Result<Box<dyn AiProvider>, AiError> {
         let row = match provider_id {
             Some(id) => ai_provider_config::Entity::find_by_id(id)
                 .one(&self.db)
                 .await
                 .map_err(|e| AiError::ProviderError(format!("DB error: {e}")))?
-                .ok_or_else(|| {
-                    AiError::ProviderError(format!("AI provider {id} not found"))
-                })?,
+                .ok_or_else(|| AiError::ProviderError(format!("AI provider {id} not found")))?,
             None => self.default_provider_row().await?,
         };
 
@@ -53,9 +48,7 @@ impl AiProviderRegistry {
     }
 
     /// List all enabled providers.
-    pub async fn list_enabled(
-        &self,
-    ) -> Result<Vec<ai_provider_config::Model>, AiError> {
+    pub async fn list_enabled(&self) -> Result<Vec<ai_provider_config::Model>, AiError> {
         ai_provider_config::Entity::find()
             .filter(ai_provider_config::Column::Enabled.eq(true))
             .all(&self.db)

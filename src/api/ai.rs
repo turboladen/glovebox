@@ -1,13 +1,16 @@
-use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait};
+use axum::Json;
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set,
+    TransactionTrait,
+};
 use serde::{Deserialize, Serialize};
 
-use crate::AppState;
 use crate::api::error::ApiError;
 use crate::entities::{ai_provider_config, chat_message, document};
 use crate::services::ai::{AiRequest, Attachment, ChatMessage, Role};
+use crate::AppState;
 
 #[derive(Serialize)]
 pub struct AiStatusResponse {
@@ -26,12 +29,8 @@ pub struct ProviderSummary {
     pub enabled: bool,
 }
 
-pub async fn status(
-    State(state): State<AppState>,
-) -> Result<Json<AiStatusResponse>, ApiError> {
-    let all_providers = ai_provider_config::Entity::find()
-        .all(&state.db)
-        .await?;
+pub async fn status(State(state): State<AppState>) -> Result<Json<AiStatusResponse>, ApiError> {
+    let all_providers = ai_provider_config::Entity::find().all(&state.db).await?;
 
     let default_provider_id = all_providers
         .iter()
@@ -208,9 +207,9 @@ pub async fn parse_invoice(
     if !file_path.starts_with(&files_dir) {
         return Err(ApiError::BadRequest("Invalid file path".to_string()));
     }
-    let file_data = tokio::fs::read(&file_path).await.map_err(|e| {
-        ApiError::Internal(format!("Failed to read file: {e}"))
-    })?;
+    let file_data = tokio::fs::read(&file_path)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to read file: {e}")))?;
 
     // Build AI request
     let request = AiRequest {
@@ -230,7 +229,7 @@ pub async fn parse_invoice(
     let response = provider
         .complete(request)
         .await
-        .map_err(|e| ApiError::Internal(format!("AI error: {}", e)))?;
+        .map_err(|e| ApiError::Internal(format!("AI error: {e}")))?;
 
     // Parse AI response, stripping code fences if present
     let cleaned = strip_code_fences(&response.content);
@@ -297,7 +296,7 @@ pub async fn fetch_models(
                 .iter()
                 .map(|m| ModelInfo {
                     id: m["id"].as_str().unwrap_or("").to_string(),
-                    display_name: m["display_name"].as_str().map(|s| s.to_string()),
+                    display_name: m["display_name"].as_str().map(std::string::ToString::to_string),
                 })
                 .filter(|m| !m.id.is_empty())
                 .collect();
@@ -480,7 +479,7 @@ pub async fn chat_history(
     }
     let messages = q
         .order_by_asc(chat_message::Column::CreatedAt)
-        .limit(200)
+        .limit(100)
         .all(&state.db)
         .await?;
     Ok(Json(messages))
@@ -522,10 +521,10 @@ impl From<ai_provider_config::Model> for ProviderResponse {
 pub async fn list_providers(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<ProviderResponse>>, ApiError> {
-    let providers = ai_provider_config::Entity::find()
-        .all(&state.db)
-        .await?;
-    Ok(Json(providers.into_iter().map(ProviderResponse::from).collect()))
+    let providers = ai_provider_config::Entity::find().all(&state.db).await?;
+    Ok(Json(
+        providers.into_iter().map(ProviderResponse::from).collect(),
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -647,13 +646,13 @@ pub async fn delete_provider(
     Ok(Json(serde_json::json!({ "deleted": id })))
 }
 
-async fn clear_default_provider(
-    txn: &sea_orm::DatabaseTransaction,
-) -> Result<(), ApiError> {
+async fn clear_default_provider(txn: &sea_orm::DatabaseTransaction) -> Result<(), ApiError> {
     use sea_orm::sea_query::Expr;
 
+    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
     ai_provider_config::Entity::update_many()
         .col_expr(ai_provider_config::Column::IsDefault, Expr::value(false))
+        .col_expr(ai_provider_config::Column::UpdatedAt, Expr::value(now))
         .filter(ai_provider_config::Column::IsDefault.eq(true))
         .exec(txn)
         .await?;
@@ -779,8 +778,7 @@ mod tests {
 
     #[test]
     fn parse_invoice_from_code_fenced_response() {
-        let with_fence =
-            "```json\n{\"service_date\": \"2024-01-01\", \"line_items\": []}\n```";
+        let with_fence = "```json\n{\"service_date\": \"2024-01-01\", \"line_items\": []}\n```";
         let cleaned = strip_code_fences(with_fence);
         let parsed: ParsedInvoice = serde_json::from_str(cleaned).unwrap();
         assert_eq!(parsed.service_date.as_deref(), Some("2024-01-01"));

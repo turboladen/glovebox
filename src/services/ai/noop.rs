@@ -12,7 +12,7 @@ impl AiProvider for NoOpProvider {
         Err(AiError::NotConfigured)
     }
 
-    fn provider_name(&self) -> &str {
+    fn provider_name(&self) -> &'static str {
         "none"
     }
 

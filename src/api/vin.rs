@@ -1,6 +1,6 @@
 use axum::extract::{Path, State};
 use axum::Json;
-use sea_orm::*;
+use sea_orm::{EntityTrait, TransactionTrait, QueryFilter, ColumnTrait, Set, Iden, ActiveModelTrait};
 use serde::Serialize;
 
 use crate::entities::vehicle_attribute;
@@ -19,9 +19,7 @@ pub struct VinDecodeResponse {
 }
 
 /// Decode a VIN without creating a vehicle — useful for the setup wizard preview step
-pub async fn decode(
-    Path(vin): Path<String>,
-) -> Result<Json<VinDecodeResponse>> {
+pub async fn decode(Path(vin): Path<String>) -> Result<Json<VinDecodeResponse>> {
     let decoded = vin_decode::decode_vin(&vin)
         .await
         .map_err(ApiError::BadRequest)?;

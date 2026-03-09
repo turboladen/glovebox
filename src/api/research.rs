@@ -1,10 +1,10 @@
 use axum::extract::{Path, State};
 use axum::Json;
-use sea_orm::*;
+use sea_orm::{EntityTrait, Iden, QueryOrder, QueryFilter, ColumnTrait, ActiveModelBehavior, StatementBuilder, QueryTrait, TransactionTrait, Set, ActiveModelTrait, ColIdx, IdenStatic, QuerySelect};
 use serde::{Deserialize, Serialize};
 
-use crate::AppState;
 use crate::entities::{research_finding, research_report, vehicle};
+use crate::AppState;
 
 use super::error::ApiError;
 
@@ -102,9 +102,7 @@ pub async fn generate_report(
     let mut all_findings: Vec<NewFinding> = Vec::new();
 
     // Check NHTSA recalls if vehicle has make/model/year
-    if let (Some(make), Some(model), Some(year)) =
-        (&vehicle.make, &vehicle.model, vehicle.year)
-    {
+    if let (Some(make), Some(model), Some(year)) = (&vehicle.make, &vehicle.model, vehicle.year) {
         match crate::services::nhtsa::check_recalls(make, model, year).await {
             Ok(result) => {
                 for recall in &result.recalls {
@@ -206,7 +204,6 @@ pub struct UpdateFindingRequest {
     pub linked_entity_id: Option<Option<i32>>,
 }
 
-
 pub async fn update_finding_with_body(
     State(state): State<AppState>,
     Path((vehicle_id, report_id, id)): Path<(i32, i32, i32)>,
@@ -261,7 +258,12 @@ struct NewFinding {
 }
 
 fn build_community_wisdom_prompt(vehicle: &vehicle::Model) -> String {
-    let mut prompt = format!("For a {} ", vehicle.year.map_or("unknown year".to_string(), |y| y.to_string()));
+    let mut prompt = format!(
+        "For a {} ",
+        vehicle
+            .year
+            .map_or("unknown year".to_string(), |y| y.to_string())
+    );
     if let Some(ref make) = vehicle.make {
         prompt.push_str(make);
         prompt.push(' ');
@@ -275,23 +277,15 @@ fn build_community_wisdom_prompt(vehicle: &vehicle::Model) -> String {
         prompt.push(' ');
     }
     if let Some(ref engine) = vehicle.engine {
-        prompt.push_str(&format!("with {} engine ", engine));
+        prompt.push_str(&format!("with {engine} engine "));
     }
     prompt.push_str("— what are the most common issues, recommended preventive maintenance items beyond factory schedule, and popular upgrades reported by owners? Return as JSON array.");
     prompt
 }
 
 fn parse_ai_findings(content: &str) -> Result<Vec<NewFinding>, serde_json::Error> {
-    // Try to extract JSON from potential code fences
-    let trimmed = content.trim();
-    let json_str = if trimmed.starts_with("```") {
-        let start = trimmed.find('[').unwrap_or(0);
-        let end = trimmed.rfind(']').map(|i| i + 1).unwrap_or(trimmed.len());
-        &trimmed[start..end]
-    } else {
-        trimmed
-    };
-    serde_json::from_str(json_str)
+    let cleaned = super::ai::strip_code_fences(content);
+    serde_json::from_str(cleaned)
 }
 
 #[cfg(test)]

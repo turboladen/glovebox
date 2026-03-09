@@ -2,13 +2,14 @@ use std::path::PathBuf;
 
 use axum::extract::{Multipart, Path, Query, State};
 use axum::Json;
-use sea_orm::*;
+use sea_orm::{EntityTrait, QueryFilter, ColumnTrait, ColIdx, IdenStatic, QueryOrder, Iden, ActiveEnum, Iterable, QuerySelect, Set, ActiveModelTrait, ActiveModelBehavior};
 use serde::Deserialize;
 
-use crate::entities::{document, vehicle};
+use crate::entities::document;
 use crate::AppState;
 
 use super::error::ApiError;
+use super::require_vehicle;
 
 type Result<T> = std::result::Result<T, ApiError>;
 
@@ -67,35 +68,75 @@ pub async fn upload(
     let mut file_data: Option<Vec<u8>> = None;
     let mut mime_type: Option<String> = None;
 
-    while let Some(field) = multipart.next_field().await.map_err(|e| {
-        ApiError::BadRequest(format!("Multipart error: {e}"))
-    })? {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| ApiError::BadRequest(format!("Multipart error: {e}")))?
+    {
         let name = field.name().unwrap_or("").to_string();
         match name.as_str() {
             "vehicle_id" => {
-                let text = field.text().await.map_err(|e| ApiError::BadRequest(e.to_string()))?;
-                vehicle_id = Some(text.parse().map_err(|_| ApiError::BadRequest("Invalid vehicle_id".into()))?);
+                let text = field
+                    .text()
+                    .await
+                    .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+                vehicle_id = Some(
+                    text.parse()
+                        .map_err(|_| ApiError::BadRequest("Invalid vehicle_id".into()))?,
+                );
             }
             "title" => {
-                title = Some(field.text().await.map_err(|e| ApiError::BadRequest(e.to_string()))?);
+                title = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| ApiError::BadRequest(e.to_string()))?,
+                );
             }
             "doc_type" => {
-                doc_type = Some(field.text().await.map_err(|e| ApiError::BadRequest(e.to_string()))?);
+                doc_type = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| ApiError::BadRequest(e.to_string()))?,
+                );
             }
             "linked_entity_type" => {
-                linked_entity_type = Some(field.text().await.map_err(|e| ApiError::BadRequest(e.to_string()))?);
+                linked_entity_type = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| ApiError::BadRequest(e.to_string()))?,
+                );
             }
             "linked_entity_id" => {
-                let text = field.text().await.map_err(|e| ApiError::BadRequest(e.to_string()))?;
-                linked_entity_id = Some(text.parse().map_err(|_| ApiError::BadRequest("Invalid linked_entity_id".into()))?);
+                let text = field
+                    .text()
+                    .await
+                    .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+                linked_entity_id = Some(
+                    text.parse()
+                        .map_err(|_| ApiError::BadRequest("Invalid linked_entity_id".into()))?,
+                );
             }
             "notes" => {
-                notes = Some(field.text().await.map_err(|e| ApiError::BadRequest(e.to_string()))?);
+                notes = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| ApiError::BadRequest(e.to_string()))?,
+                );
             }
             "file" => {
-                file_name = field.file_name().map(|s| s.to_string());
-                mime_type = field.content_type().map(|s| s.to_string());
-                file_data = Some(field.bytes().await.map_err(|e| ApiError::BadRequest(e.to_string()))?.to_vec());
+                file_name = field.file_name().map(std::string::ToString::to_string);
+                mime_type = field.content_type().map(std::string::ToString::to_string);
+                file_data = Some(
+                    field
+                        .bytes()
+                        .await
+                        .map_err(|e| ApiError::BadRequest(e.to_string()))?
+                        .to_vec(),
+                );
             }
             _ => {}
         }
@@ -107,17 +148,18 @@ pub async fn upload(
 
     // Validate vehicle exists if provided
     if let Some(vid) = vehicle_id {
-        vehicle::Entity::find_by_id(vid)
-            .one(&state.db)
-            .await?
-            .ok_or_else(|| ApiError::NotFound(format!("Vehicle {vid} not found")))?;
+        require_vehicle(&state.db, vid).await?;
     }
 
     // Build storage path: {files_dir}/{vehicle_id or "general"}/{doc_type or "other"}/
-    let vid_dir = vehicle_id.map(|v| v.to_string()).unwrap_or_else(|| "general".into());
-    let type_dir = doc_type.as_deref().unwrap_or("other");
-    let dir: PathBuf = [&state.config.files_dir, &vid_dir, type_dir].iter().collect();
-    tokio::fs::create_dir_all(&dir).await.map_err(|e| ApiError::Internal(e.to_string()))?;
+    let vid_dir = vehicle_id.map_or_else(|| "general".into(), |v| v.to_string());
+    let type_dir = sanitize_filename(doc_type.as_deref().unwrap_or("other"));
+    let dir: PathBuf = [&state.config.files_dir, &vid_dir, &type_dir]
+        .iter()
+        .collect();
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
 
     // Use timestamp + original name to avoid collisions
     let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S");
@@ -125,7 +167,9 @@ pub async fn upload(
     let stored_name = format!("{timestamp}_{safe_name}");
     let full_path = dir.join(&stored_name);
 
-    tokio::fs::write(&full_path, &file_data).await.map_err(|e| ApiError::Internal(e.to_string()))?;
+    tokio::fs::write(&full_path, &file_data)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
 
     // Store relative path (from files_dir root)
     let relative_path = format!("{vid_dir}/{type_dir}/{stored_name}");
@@ -136,7 +180,10 @@ pub async fn upload(
         file_path: Set(relative_path),
         file_name: Set(original_name),
         mime_type: Set(mime_type),
-        file_size_bytes: Set(Some(file_data.len() as i32)),
+        file_size_bytes: Set(Some(
+            i32::try_from(file_data.len())
+                .map_err(|_| ApiError::BadRequest("File too large (max ~2GB)".into()))?,
+        )),
         doc_type: Set(doc_type),
         linked_entity_type: Set(linked_entity_type),
         linked_entity_id: Set(linked_entity_id),
@@ -156,10 +203,21 @@ pub async fn delete(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Document {id} not found")))?;
 
-    // Delete file from disk
-    let full_path: PathBuf = [&state.config.files_dir, &doc.file_path].iter().collect();
+    // Delete file from disk (with path traversal check)
+    let files_dir = std::path::Path::new(&state.config.files_dir)
+        .canonicalize()
+        .map_err(|e| ApiError::Internal(format!("Invalid files_dir: {e}")))?;
+    let full_path = files_dir.join(&doc.file_path);
     if full_path.exists() {
-        tokio::fs::remove_file(&full_path).await.map_err(|e| ApiError::Internal(e.to_string()))?;
+        let full_path = full_path
+            .canonicalize()
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+        if !full_path.starts_with(&files_dir) {
+            return Err(ApiError::BadRequest("Invalid file path".into()));
+        }
+        tokio::fs::remove_file(&full_path)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
     }
 
     document::Entity::delete_by_id(id).exec(&state.db).await?;
@@ -168,6 +226,12 @@ pub async fn delete(
 
 fn sanitize_filename(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }

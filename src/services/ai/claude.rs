@@ -135,8 +135,7 @@ impl AiProvider for ClaudeProvider {
                 ClaudeResponseBlock::Text { text } => Some(text),
                 _ => None,
             })
-            .collect::<Vec<_>>()
-            .join("");
+            .collect::<String>();
 
         Ok(AiResponse {
             content,
@@ -145,7 +144,7 @@ impl AiProvider for ClaudeProvider {
         })
     }
 
-    fn provider_name(&self) -> &str {
+    fn provider_name(&self) -> &'static str {
         "claude"
     }
 
@@ -260,7 +259,10 @@ mod tests {
         assert_eq!(json["messages"].as_array().unwrap().len(), 2);
         assert_eq!(json["messages"][0]["role"], "user");
         assert_eq!(json["messages"][0]["content"][0]["type"], "text");
-        assert_eq!(json["messages"][0]["content"][0]["text"], "What oil do I need?");
+        assert_eq!(
+            json["messages"][0]["content"][0]["text"],
+            "What oil do I need?"
+        );
         assert_eq!(json["messages"][1]["role"], "assistant");
     }
 

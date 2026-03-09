@@ -1,7 +1,7 @@
 use axum::extract::{Path, State};
 use axum::routing::get;
 use axum::{Json, Router};
-use sea_orm::*;
+use sea_orm::{EntityTrait, Set, ActiveModelTrait, ActiveModelBehavior};
 use serde::Deserialize;
 
 use crate::entities::model_template;
@@ -88,16 +88,36 @@ async fn update(
 
     let mut active: model_template::ActiveModel = existing.into();
 
-    if let Some(v) = input.platform_id { active.platform_id = Set(v); }
-    if let Some(v) = input.platform_ref { active.platform_ref = Set(v); }
-    if let Some(v) = input.year { active.year = Set(v); }
-    if let Some(v) = input.make { active.make = Set(v); }
-    if let Some(v) = input.model { active.model = Set(v); }
-    if let Some(v) = input.trim_level { active.trim_level = Set(v); }
-    if let Some(v) = input.body_style { active.body_style = Set(v); }
-    if let Some(v) = input.engine { active.engine = Set(v); }
-    if let Some(v) = input.transmission { active.transmission = Set(v); }
-    if let Some(v) = input.drivetrain { active.drivetrain = Set(v); }
+    if let Some(v) = input.platform_id {
+        active.platform_id = Set(v);
+    }
+    if let Some(v) = input.platform_ref {
+        active.platform_ref = Set(v);
+    }
+    if let Some(v) = input.year {
+        active.year = Set(v);
+    }
+    if let Some(v) = input.make {
+        active.make = Set(v);
+    }
+    if let Some(v) = input.model {
+        active.model = Set(v);
+    }
+    if let Some(v) = input.trim_level {
+        active.trim_level = Set(v);
+    }
+    if let Some(v) = input.body_style {
+        active.body_style = Set(v);
+    }
+    if let Some(v) = input.engine {
+        active.engine = Set(v);
+    }
+    if let Some(v) = input.transmission {
+        active.transmission = Set(v);
+    }
+    if let Some(v) = input.drivetrain {
+        active.drivetrain = Set(v);
+    }
 
     let result = active.update(&state.db).await?;
     Ok(Json(result))

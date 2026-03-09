@@ -9,9 +9,10 @@
   let messages: ChatMessage[] = $state([])
   let input = $state('')
   let sending = $state(false)
+  let nextOptimisticId = $state(-1)
   let aiStatus: AiStatus | null = $state(null)
   let loading = $state(true)
-  let messagesContainer: HTMLElement
+  let messagesContainer: HTMLElement | undefined = $state(undefined)
   let selectedProviderId: number | undefined = $state(undefined)
 
   onMount(async () => {
@@ -28,9 +29,10 @@
   })
 
   function scrollToBottom() {
-    if (messagesContainer) {
+    const el = messagesContainer
+    if (el) {
       setTimeout(() => {
-        messagesContainer.scrollTop = messagesContainer.scrollHeight
+        el.scrollTop = el.scrollHeight
       }, 0)
     }
   }
@@ -41,9 +43,10 @@
     input = ''
     sending = true
 
-    // Optimistically add user message
+    // Optimistically add user message with unique negative ID
+    const tempId = nextOptimisticId--
     messages = [...messages, {
-      id: 0,
+      id: tempId,
       vehicle_id: vehicleId,
       role: 'user',
       content: msg,
@@ -53,12 +56,9 @@
 
     try {
       const resp = await ai.chat(vehicleId, msg, selectedProviderId)
-      // Replace optimistic messages with real data
+      // Replace optimistic user message (keep its stable tempId) and append assistant
       messages = [...messages.slice(0, -1), {
-        id: resp.message.id - 1,
-        vehicle_id: vehicleId,
-        role: 'user',
-        content: msg,
+        ...messages[messages.length - 1],
         created_at: resp.message.created_at,
       }, resp.message]
       scrollToBottom()

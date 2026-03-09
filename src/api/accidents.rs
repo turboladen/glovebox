@@ -1,12 +1,13 @@
 use axum::extract::{Path, State};
 use axum::Json;
-use sea_orm::*;
+use sea_orm::{ConnectionTrait, QueryOrder, QueryFilter, EntityTrait, ColumnTrait, Iterable, ActiveModelBehavior, TransactionTrait, Set, ActiveModelTrait, Iden};
 use serde::{Deserialize, Serialize};
 
-use crate::entities::{accident, accident_correspondence, accident_service_link, vehicle};
+use crate::entities::{accident, accident_correspondence, accident_service_link};
 use crate::AppState;
 
 use super::error::ApiError;
+use super::require_vehicle;
 
 type Result<T> = std::result::Result<T, ApiError>;
 
@@ -72,16 +73,35 @@ pub struct CreateCorrespondence {
     pub notes: Option<String>,
 }
 
+// --- Helpers ---
+
+/// Load correspondence and service link IDs for a single accident.
+async fn load_accident_details(
+    db: &impl ConnectionTrait,
+    accident_id: i32,
+) -> Result<(Vec<accident_correspondence::Model>, Vec<i32>)> {
+    let correspondence = accident_correspondence::Entity::find()
+        .filter(accident_correspondence::Column::AccidentId.eq(accident_id))
+        .order_by_asc(accident_correspondence::Column::OccurredAt)
+        .all(db)
+        .await?;
+
+    let links = accident_service_link::Entity::find()
+        .filter(accident_service_link::Column::AccidentId.eq(accident_id))
+        .all(db)
+        .await?;
+    let service_record_ids = links.into_iter().map(|l| l.service_record_id).collect();
+
+    Ok((correspondence, service_record_ids))
+}
+
 // --- Handlers ---
 
 pub async fn list(
     State(state): State<AppState>,
     Path(vehicle_id): Path<i32>,
 ) -> Result<Json<Vec<AccidentWithDetails>>> {
-    vehicle::Entity::find_by_id(vehicle_id)
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Vehicle {vehicle_id} not found")))?;
+    require_vehicle(&state.db, vehicle_id).await?;
 
     let accidents = accident::Entity::find()
         .filter(accident::Column::VehicleId.eq(vehicle_id))
@@ -89,20 +109,49 @@ pub async fn list(
         .all(&state.db)
         .await?;
 
-    let mut results = Vec::with_capacity(accidents.len());
-    for acc in accidents {
-        let correspondence = accident_correspondence::Entity::find()
-            .filter(accident_correspondence::Column::AccidentId.eq(acc.id))
+    // Batch-load all correspondence and service links (avoids N+1)
+    let accident_ids: Vec<i32> = accidents.iter().map(|a| a.id).collect();
+
+    let all_correspondence = if accident_ids.is_empty() {
+        vec![]
+    } else {
+        accident_correspondence::Entity::find()
+            .filter(accident_correspondence::Column::AccidentId.is_in(accident_ids.clone()))
             .order_by_asc(accident_correspondence::Column::OccurredAt)
             .all(&state.db)
-            .await?;
-        let links = accident_service_link::Entity::find()
-            .filter(accident_service_link::Column::AccidentId.eq(acc.id))
+            .await?
+    };
+
+    let all_links = if accident_ids.is_empty() {
+        vec![]
+    } else {
+        accident_service_link::Entity::find()
+            .filter(accident_service_link::Column::AccidentId.is_in(accident_ids))
             .all(&state.db)
-            .await?;
-        let service_record_ids = links.into_iter().map(|l| l.service_record_id).collect();
-        results.push(AccidentWithDetails { accident: acc, correspondence, service_record_ids });
-    }
+            .await?
+    };
+
+    let results = accidents
+        .into_iter()
+        .map(|acc| {
+            let correspondence: Vec<_> = all_correspondence
+                .iter()
+                .filter(|c| c.accident_id == acc.id)
+                .cloned()
+                .collect();
+            let service_record_ids = all_links
+                .iter()
+                .filter(|l| l.accident_id == acc.id)
+                .map(|l| l.service_record_id)
+                .collect();
+            AccidentWithDetails {
+                accident: acc,
+                correspondence,
+                service_record_ids,
+            }
+        })
+        .collect();
+
     Ok(Json(results))
 }
 
@@ -110,24 +159,21 @@ pub async fn get_one(
     State(state): State<AppState>,
     Path((vehicle_id, id)): Path<(i32, i32)>,
 ) -> Result<Json<AccidentWithDetails>> {
+    require_vehicle(&state.db, vehicle_id).await?;
+
     let acc = accident::Entity::find_by_id(id)
         .filter(accident::Column::VehicleId.eq(vehicle_id))
         .one(&state.db)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Accident {id} not found")))?;
 
-    let correspondence = accident_correspondence::Entity::find()
-        .filter(accident_correspondence::Column::AccidentId.eq(acc.id))
-        .order_by_asc(accident_correspondence::Column::OccurredAt)
-        .all(&state.db)
-        .await?;
-    let links = accident_service_link::Entity::find()
-        .filter(accident_service_link::Column::AccidentId.eq(acc.id))
-        .all(&state.db)
-        .await?;
-    let service_record_ids = links.into_iter().map(|l| l.service_record_id).collect();
+    let (correspondence, service_record_ids) = load_accident_details(&state.db, acc.id).await?;
 
-    Ok(Json(AccidentWithDetails { accident: acc, correspondence, service_record_ids }))
+    Ok(Json(AccidentWithDetails {
+        accident: acc,
+        correspondence,
+        service_record_ids,
+    }))
 }
 
 pub async fn create(
@@ -135,10 +181,7 @@ pub async fn create(
     Path(vehicle_id): Path<i32>,
     Json(input): Json<CreateAccident>,
 ) -> Result<Json<AccidentWithDetails>> {
-    vehicle::Entity::find_by_id(vehicle_id)
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Vehicle {vehicle_id} not found")))?;
+    require_vehicle(&state.db, vehicle_id).await?;
 
     let txn = state.db.begin().await?;
 
@@ -184,6 +227,8 @@ pub async fn update(
     Path((vehicle_id, id)): Path<(i32, i32)>,
     Json(input): Json<UpdateAccident>,
 ) -> Result<Json<AccidentWithDetails>> {
+    require_vehicle(&state.db, vehicle_id).await?;
+
     let existing = accident::Entity::find_by_id(id)
         .filter(accident::Column::VehicleId.eq(vehicle_id))
         .one(&state.db)
@@ -194,26 +239,68 @@ pub async fn update(
 
     let mut active: accident::ActiveModel = existing.into();
 
-    if let Some(v) = input.occurred_at { active.occurred_at = Set(v); }
-    if let Some(v) = input.odometer { active.odometer = Set(v); }
-    if let Some(v) = input.description { active.description = Set(v); }
-    if let Some(v) = input.fault { active.fault = Set(v); }
-    if let Some(v) = input.other_party_name { active.other_party_name = Set(v); }
-    if let Some(v) = input.other_party_phone { active.other_party_phone = Set(v); }
-    if let Some(v) = input.other_party_email { active.other_party_email = Set(v); }
-    if let Some(v) = input.other_party_insurance { active.other_party_insurance = Set(v); }
-    if let Some(v) = input.other_party_policy_number { active.other_party_policy_number = Set(v); }
-    if let Some(v) = input.insurance_claim_number { active.insurance_claim_number = Set(v); }
-    if let Some(v) = input.insurance_adjuster { active.insurance_adjuster = Set(v); }
-    if let Some(v) = input.insurance_adjuster_phone { active.insurance_adjuster_phone = Set(v); }
-    if let Some(v) = input.total_repair_cost_cents { active.total_repair_cost_cents = Set(v); }
-    if let Some(v) = input.total_repair_cost_currency { active.total_repair_cost_currency = Set(v); }
-    if let Some(v) = input.deductible_cents { active.deductible_cents = Set(v); }
-    if let Some(v) = input.deductible_currency { active.deductible_currency = Set(v); }
-    if let Some(v) = input.insurance_payout_cents { active.insurance_payout_cents = Set(v); }
-    if let Some(v) = input.insurance_payout_currency { active.insurance_payout_currency = Set(v); }
-    if let Some(v) = input.resolved { active.resolved = Set(v); }
-    if let Some(v) = input.notes { active.notes = Set(v); }
+    if let Some(v) = input.occurred_at {
+        active.occurred_at = Set(v);
+    }
+    if let Some(v) = input.odometer {
+        active.odometer = Set(v);
+    }
+    if let Some(v) = input.description {
+        active.description = Set(v);
+    }
+    if let Some(v) = input.fault {
+        active.fault = Set(v);
+    }
+    if let Some(v) = input.other_party_name {
+        active.other_party_name = Set(v);
+    }
+    if let Some(v) = input.other_party_phone {
+        active.other_party_phone = Set(v);
+    }
+    if let Some(v) = input.other_party_email {
+        active.other_party_email = Set(v);
+    }
+    if let Some(v) = input.other_party_insurance {
+        active.other_party_insurance = Set(v);
+    }
+    if let Some(v) = input.other_party_policy_number {
+        active.other_party_policy_number = Set(v);
+    }
+    if let Some(v) = input.insurance_claim_number {
+        active.insurance_claim_number = Set(v);
+    }
+    if let Some(v) = input.insurance_adjuster {
+        active.insurance_adjuster = Set(v);
+    }
+    if let Some(v) = input.insurance_adjuster_phone {
+        active.insurance_adjuster_phone = Set(v);
+    }
+    if let Some(v) = input.total_repair_cost_cents {
+        active.total_repair_cost_cents = Set(v);
+    }
+    if let Some(v) = input.total_repair_cost_currency {
+        active.total_repair_cost_currency = Set(v);
+    }
+    if let Some(v) = input.deductible_cents {
+        active.deductible_cents = Set(v);
+    }
+    if let Some(v) = input.deductible_currency {
+        active.deductible_currency = Set(v);
+    }
+    if let Some(v) = input.insurance_payout_cents {
+        active.insurance_payout_cents = Set(v);
+    }
+    if let Some(v) = input.insurance_payout_currency {
+        active.insurance_payout_currency = Set(v);
+    }
+    if let Some(v) = input.resolved {
+        active.resolved = Set(v);
+    }
+    if let Some(v) = input.notes {
+        active.notes = Set(v);
+    }
+
+    active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
 
     let acc = active.update(&txn).await?;
 
@@ -246,7 +333,11 @@ pub async fn update(
 
     txn.commit().await?;
 
-    Ok(Json(AccidentWithDetails { accident: acc, correspondence, service_record_ids }))
+    Ok(Json(AccidentWithDetails {
+        accident: acc,
+        correspondence,
+        service_record_ids,
+    }))
 }
 
 // --- Correspondence sub-resource ---

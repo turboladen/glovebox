@@ -12,13 +12,29 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(Platforms::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new(Platforms::Id).integer().not_null().auto_increment().primary_key())
+                    .col(
+                        ColumnDef::new(Platforms::Id)
+                            .integer()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
                     .col(ColumnDef::new(Platforms::Name).text().not_null())
                     .col(ColumnDef::new(Platforms::WebsiteUrl).text())
                     .col(ColumnDef::new(Platforms::ApiBaseUrl).text())
                     .col(ColumnDef::new(Platforms::Notes).text())
-                    .col(ColumnDef::new(Platforms::CreatedAt).text().not_null().default(Expr::cust("(datetime('now'))")))
-                    .col(ColumnDef::new(Platforms::UpdatedAt).text().not_null().default(Expr::cust("(datetime('now'))")))
+                    .col(
+                        ColumnDef::new(Platforms::CreatedAt)
+                            .text()
+                            .not_null()
+                            .default(Expr::cust("(datetime('now'))")),
+                    )
+                    .col(
+                        ColumnDef::new(Platforms::UpdatedAt)
+                            .text()
+                            .not_null()
+                            .default(Expr::cust("(datetime('now'))")),
+                    )
                     .to_owned(),
             )
             .await?;
@@ -29,7 +45,13 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(ModelTemplates::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new(ModelTemplates::Id).integer().not_null().auto_increment().primary_key())
+                    .col(
+                        ColumnDef::new(ModelTemplates::Id)
+                            .integer()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
                     .col(ColumnDef::new(ModelTemplates::PlatformId).integer())
                     .col(ColumnDef::new(ModelTemplates::PlatformRef).text())
                     .col(ColumnDef::new(ModelTemplates::Year).integer())
@@ -40,8 +62,18 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(ModelTemplates::Engine).text())
                     .col(ColumnDef::new(ModelTemplates::Transmission).text())
                     .col(ColumnDef::new(ModelTemplates::Drivetrain).text())
-                    .col(ColumnDef::new(ModelTemplates::CreatedAt).text().not_null().default(Expr::cust("(datetime('now'))")))
-                    .col(ColumnDef::new(ModelTemplates::UpdatedAt).text().not_null().default(Expr::cust("(datetime('now'))")))
+                    .col(
+                        ColumnDef::new(ModelTemplates::CreatedAt)
+                            .text()
+                            .not_null()
+                            .default(Expr::cust("(datetime('now'))")),
+                    )
+                    .col(
+                        ColumnDef::new(ModelTemplates::UpdatedAt)
+                            .text()
+                            .not_null()
+                            .default(Expr::cust("(datetime('now'))")),
+                    )
                     .foreign_key(
                         ForeignKey::create()
                             .from(ModelTemplates::Table, ModelTemplates::PlatformId)
@@ -58,7 +90,13 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(Vehicles::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new(Vehicles::Id).integer().not_null().auto_increment().primary_key())
+                    .col(
+                        ColumnDef::new(Vehicles::Id)
+                            .integer()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
                     .col(ColumnDef::new(Vehicles::ModelTemplateId).integer())
                     .col(ColumnDef::new(Vehicles::Name).text().not_null())
                     .col(ColumnDef::new(Vehicles::Year).integer())
@@ -82,8 +120,18 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(Vehicles::SoldMileage).integer())
                     .col(ColumnDef::new(Vehicles::PhotoPath).text())
                     .col(ColumnDef::new(Vehicles::Notes).text())
-                    .col(ColumnDef::new(Vehicles::CreatedAt).text().not_null().default(Expr::cust("(datetime('now'))")))
-                    .col(ColumnDef::new(Vehicles::UpdatedAt).text().not_null().default(Expr::cust("(datetime('now'))")))
+                    .col(
+                        ColumnDef::new(Vehicles::CreatedAt)
+                            .text()
+                            .not_null()
+                            .default(Expr::cust("(datetime('now'))")),
+                    )
+                    .col(
+                        ColumnDef::new(Vehicles::UpdatedAt)
+                            .text()
+                            .not_null()
+                            .default(Expr::cust("(datetime('now'))")),
+                    )
                     .foreign_key(
                         ForeignKey::create()
                             .from(Vehicles::Table, Vehicles::ModelTemplateId)
@@ -100,13 +148,28 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(VehicleAttributes::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new(VehicleAttributes::Id).integer().not_null().auto_increment().primary_key())
-                    .col(ColumnDef::new(VehicleAttributes::VehicleId).integer().not_null())
+                    .col(
+                        ColumnDef::new(VehicleAttributes::Id)
+                            .integer()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(VehicleAttributes::VehicleId)
+                            .integer()
+                            .not_null(),
+                    )
                     .col(ColumnDef::new(VehicleAttributes::Key).text().not_null())
                     .col(ColumnDef::new(VehicleAttributes::Value).text().not_null())
                     .col(ColumnDef::new(VehicleAttributes::Source).text())
                     .col(ColumnDef::new(VehicleAttributes::SupersededBy).integer())
-                    .col(ColumnDef::new(VehicleAttributes::CreatedAt).text().not_null().default(Expr::cust("(datetime('now'))")))
+                    .col(
+                        ColumnDef::new(VehicleAttributes::CreatedAt)
+                            .text()
+                            .not_null()
+                            .default(Expr::cust("(datetime('now'))")),
+                    )
                     .foreign_key(
                         ForeignKey::create()
                             .from(VehicleAttributes::Table, VehicleAttributes::VehicleId)
@@ -153,7 +216,7 @@ impl MigrationTrait for Migration {
             .execute_unprepared(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_vehicle_attributes_unique_no_source
                  ON vehicle_attributes(vehicle_id, key)
-                 WHERE source IS NULL"
+                 WHERE source IS NULL",
             )
             .await?;
 
@@ -163,13 +226,24 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(MileageLog::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new(MileageLog::Id).integer().not_null().auto_increment().primary_key())
+                    .col(
+                        ColumnDef::new(MileageLog::Id)
+                            .integer()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
                     .col(ColumnDef::new(MileageLog::VehicleId).integer().not_null())
                     .col(ColumnDef::new(MileageLog::Mileage).integer().not_null())
                     .col(ColumnDef::new(MileageLog::RecordedAt).text().not_null())
                     .col(ColumnDef::new(MileageLog::Source).text())
                     .col(ColumnDef::new(MileageLog::Notes).text())
-                    .col(ColumnDef::new(MileageLog::CreatedAt).text().not_null().default(Expr::cust("(datetime('now'))")))
+                    .col(
+                        ColumnDef::new(MileageLog::CreatedAt)
+                            .text()
+                            .not_null()
+                            .default(Expr::cust("(datetime('now'))")),
+                    )
                     .foreign_key(
                         ForeignKey::create()
                             .from(MileageLog::Table, MileageLog::VehicleId)
@@ -193,11 +267,21 @@ impl MigrationTrait for Migration {
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager.drop_table(Table::drop().table(MileageLog::Table).to_owned()).await?;
-        manager.drop_table(Table::drop().table(VehicleAttributes::Table).to_owned()).await?;
-        manager.drop_table(Table::drop().table(Vehicles::Table).to_owned()).await?;
-        manager.drop_table(Table::drop().table(ModelTemplates::Table).to_owned()).await?;
-        manager.drop_table(Table::drop().table(Platforms::Table).to_owned()).await
+        manager
+            .drop_table(Table::drop().table(MileageLog::Table).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(VehicleAttributes::Table).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(Vehicles::Table).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(ModelTemplates::Table).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(Platforms::Table).to_owned())
+            .await
     }
 }
 

@@ -1,12 +1,13 @@
 use axum::extract::{Path, State};
 use axum::Json;
-use sea_orm::*;
+use sea_orm::{QueryOrder, QueryFilter, EntityTrait, ColumnTrait, Iden, Set, ActiveModelTrait};
 use serde::Deserialize;
 
-use crate::entities::{mileage_log, vehicle};
+use crate::entities::mileage_log;
 use crate::AppState;
 
 use super::error::ApiError;
+use super::require_vehicle;
 
 type Result<T> = std::result::Result<T, ApiError>;
 
@@ -22,11 +23,7 @@ pub async fn list(
     State(state): State<AppState>,
     Path(vehicle_id): Path<i32>,
 ) -> Result<Json<Vec<mileage_log::Model>>> {
-    // Verify vehicle exists
-    vehicle::Entity::find_by_id(vehicle_id)
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Vehicle {vehicle_id} not found")))?;
+    require_vehicle(&state.db, vehicle_id).await?;
 
     let entries = mileage_log::Entity::find()
         .filter(mileage_log::Column::VehicleId.eq(vehicle_id))
@@ -41,17 +38,13 @@ pub async fn create(
     Path(vehicle_id): Path<i32>,
     Json(input): Json<CreateMileageEntry>,
 ) -> Result<Json<mileage_log::Model>> {
-    // Verify vehicle exists
-    vehicle::Entity::find_by_id(vehicle_id)
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Vehicle {vehicle_id} not found")))?;
+    require_vehicle(&state.db, vehicle_id).await?;
 
     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let model = mileage_log::ActiveModel {
         vehicle_id: Set(vehicle_id),
         mileage: Set(input.mileage),
-        recorded_at: Set(input.recorded_at.unwrap_or_else(|| now)),
+        recorded_at: Set(input.recorded_at.unwrap_or(now)),
         source: Set(input.source.or(Some("manual".to_string()))),
         notes: Set(input.notes),
         ..Default::default()
@@ -59,4 +52,3 @@ pub async fn create(
     let result = model.insert(&state.db).await?;
     Ok(Json(result))
 }
-

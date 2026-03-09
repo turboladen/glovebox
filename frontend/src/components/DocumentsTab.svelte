@@ -15,7 +15,7 @@
   let title = $state('')
   let docType = $state('other')
   let notes = $state('')
-  let fileInput: HTMLInputElement
+  let fileInput: HTMLInputElement | undefined = $state(undefined)
   let uploading = $state(false)
   let error = $state('')
   let parsing = $state<number | null>(null)

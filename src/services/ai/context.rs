@@ -1,4 +1,4 @@
-use sea_orm::*;
+use sea_orm::{DatabaseConnection, DbErr, EntityTrait, ActiveEnum, ActiveModelBehavior, QuerySelect, QueryOrder, QueryFilter, ColumnTrait, Iterable, ColIdx, IdenStatic};
 use std::fmt::Write;
 
 use crate::entities::{observation, part, part_slot, service_record, vehicle};
@@ -24,7 +24,11 @@ pub async fn build_vehicle_context(
     // Mileage estimate
     let (est_mileage, mileage_as_of, avg_daily) =
         reminders::estimate_mileage(db, vehicle_id, &v).await?;
-    writeln!(ctx, "Estimated Mileage: {est_mileage} (as of {mileage_as_of})").unwrap();
+    writeln!(
+        ctx,
+        "Estimated Mileage: {est_mileage} (as of {mileage_as_of})"
+    )
+    .unwrap();
     writeln!(ctx, "Average Daily Miles: {avg_daily:.1}").unwrap();
     writeln!(ctx).unwrap();
 
@@ -108,9 +112,14 @@ async fn write_services(
         if let Some(m) = svc.mileage {
             write!(ctx, " @ {m}mi").unwrap();
         }
-        write!(ctx, ": {}", svc.description.as_deref().unwrap_or("(no description)")).unwrap();
+        write!(
+            ctx,
+            ": {}",
+            svc.description.as_deref().unwrap_or("(no description)")
+        )
+        .unwrap();
         if let Some(cost) = svc.total_cost_cents {
-            write!(ctx, " (${:.2})", cost as f64 / 100.0).unwrap();
+            write!(ctx, " (${:.2})", f64::from(cost) / 100.0).unwrap();
         }
         if let Some(ref shop) = svc.shop_name {
             write!(ctx, " at {shop}").unwrap();
@@ -149,8 +158,7 @@ async fn write_parts(
         let slot_name = p
             .slot_id
             .and_then(|sid| slots.iter().find(|s| s.id == sid))
-            .map(|s| s.name.as_str())
-            .unwrap_or("unslotted");
+            .map_or("unslotted", |s| s.name.as_str());
 
         write!(ctx, "- [{slot_name}] {}", p.name).unwrap();
         if let Some(ref mfr) = p.manufacturer {
