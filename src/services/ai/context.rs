@@ -4,6 +4,26 @@ use std::fmt::Write;
 use crate::entities::{observation, part, part_slot, service_record, vehicle};
 use crate::services::reminders;
 
+/// Shared preamble for all AI system prompts so the bot knows it's part of Glovebox.
+pub const GLOVEBOX_PREAMBLE: &str = "\
+You are the AI assistant built into Glovebox, a car maintenance tracking application. \
+The user is currently using Glovebox right now — never tell them to 'log this in your app' \
+or 'check your records elsewhere.' They are already in the app.\n\
+\n\
+Glovebox capabilities and where to find them on the vehicle detail page:\n\
+- Log a service record: click the \"Log Service\" button at the top, or go to the History tab\n\
+- Update mileage: click the \"Update Mileage\" button at the top\n\
+- View/manage maintenance schedule: Schedule tab (shows reminders for overdue/upcoming items)\n\
+- Track parts and part slots: Parts tab\n\
+- Record observations (noises, warning lights, issues): Observations tab\n\
+- Upload and manage documents/invoices: Documents tab\n\
+- Review cost of ownership: Costs tab\n\
+- Check NHTSA recalls and research: Research tab\n\
+- Chat with AI (you are here): Chat tab\n\
+\n\
+When suggesting actions, direct the user to the specific tab or button within Glovebox.\
+";
+
 /// Build a structured text context for a vehicle, suitable for AI system prompts.
 /// Gathers vehicle details, recent services, installed parts, active observations,
 /// and maintenance schedule status.
@@ -312,6 +332,21 @@ mod tests {
         assert!(ctx.contains("Vehicle: Bare Car"));
         assert!(!ctx.contains("Year:"));
         assert!(!ctx.contains("Purchased:"));
+    }
+
+    #[test]
+    fn preamble_identifies_glovebox() {
+        assert!(GLOVEBOX_PREAMBLE.contains("Glovebox"));
+        assert!(GLOVEBOX_PREAMBLE.contains("never tell them"));
+        // Verify it mentions the key tabs/actions
+        assert!(GLOVEBOX_PREAMBLE.contains("Log Service"));
+        assert!(GLOVEBOX_PREAMBLE.contains("Update Mileage"));
+        assert!(GLOVEBOX_PREAMBLE.contains("Schedule tab"));
+        assert!(GLOVEBOX_PREAMBLE.contains("Parts tab"));
+        assert!(GLOVEBOX_PREAMBLE.contains("Observations tab"));
+        assert!(GLOVEBOX_PREAMBLE.contains("Documents tab"));
+        assert!(GLOVEBOX_PREAMBLE.contains("Costs tab"));
+        assert!(GLOVEBOX_PREAMBLE.contains("Research tab"));
     }
 
     fn make_test_vehicle() -> vehicle::Model {

@@ -130,7 +130,13 @@ pub async fn generate_report(
             let prompt = build_community_wisdom_prompt(&vehicle);
             match provider
                 .complete(crate::services::ai::AiRequest {
-                    system_prompt: "You are a knowledgeable automotive expert. Provide findings as a JSON array of objects with fields: title, description, severity (critical/recommended/optional/informational), category (one of: forum_report, suggested_maintenance, upgrade_idea).".to_string(),
+                    system_prompt: format!(
+                        "{}\n\nReturn ONLY a valid JSON array — no narrative text, no markdown. \
+                        Provide findings as a JSON array of objects with fields: title, description, \
+                        severity (critical/recommended/optional/informational), category (one of: \
+                        forum_report, suggested_maintenance, upgrade_idea).",
+                        crate::services::ai::context::GLOVEBOX_PREAMBLE
+                    ),
                     messages: vec![crate::services::ai::ChatMessage {
                         role: crate::services::ai::Role::User,
                         content: prompt,

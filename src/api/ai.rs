@@ -106,12 +106,14 @@ pub async fn get_suggestions(
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
+    let preamble = crate::services::ai::context::GLOVEBOX_PREAMBLE;
     let request = AiRequest {
-        system_prompt: "You are an expert automotive maintenance advisor. Based on the vehicle \
-            data provided, suggest maintenance actions the owner should prioritize in the next \
-            3 months. Consider wear patterns, seasonal factors, mileage-based intervals, and \
-            manufacturer recommendations. Return ONLY a valid JSON array (no markdown)."
-            .to_string(),
+        system_prompt: format!(
+            "{preamble}\n\nBased on the vehicle data provided, suggest maintenance actions the \
+            owner should prioritize in the next 3 months. Consider wear patterns, seasonal \
+            factors, mileage-based intervals, and manufacturer recommendations. \
+            Return ONLY a valid JSON array (no markdown)."
+        ),
         messages: vec![ChatMessage {
             role: Role::User,
             content: format!(
@@ -213,7 +215,10 @@ pub async fn parse_invoice(
 
     // Build AI request
     let request = AiRequest {
-        system_prompt: INVOICE_SYSTEM_PROMPT.to_string(),
+        system_prompt: format!(
+            "{}\n\n{INVOICE_SYSTEM_PROMPT}",
+            crate::services::ai::context::GLOVEBOX_PREAMBLE
+        ),
         messages: vec![ChatMessage {
             role: Role::User,
             content: "Please extract the service record data from this attached invoice/receipt."
@@ -384,18 +389,20 @@ pub async fn chat(
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
     // Build vehicle context if vehicle_id is provided
+    let preamble = crate::services::ai::context::GLOVEBOX_PREAMBLE;
     let system_prompt = if let Some(vid) = body.vehicle_id {
         let context = crate::services::ai::context::build_vehicle_context(&state.db, vid)
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
         format!(
-            "You are a knowledgeable automotive assistant. Answer questions about the owner's \
-            vehicle based on the data below. Be concise and practical.\n\n{context}"
+            "{preamble}\n\nAnswer questions about the owner's vehicle based on the data below. \
+            Be concise and practical.\n\n{context}"
         )
     } else {
-        "You are a knowledgeable automotive assistant. Answer questions about car \
-        maintenance, repairs, and ownership. Be concise and practical."
-            .to_string()
+        format!(
+            "{preamble}\n\nAnswer questions about car maintenance, repairs, and ownership. \
+            Be concise and practical."
+        )
     };
 
     // Load recent chat history (last 20 messages)
