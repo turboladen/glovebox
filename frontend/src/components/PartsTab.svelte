@@ -38,6 +38,8 @@
   let partInstalledOdometer = $state<number | undefined>()
   let partReplacedDate = $state('')
   let partReplacedOdometer = $state<number | undefined>()
+  let partManufacturerUrl = $state('')
+  let partRetailerUrl = $state('')
   let partNotes = $state('')
   let partSaving = $state(false)
   let partError = $state('')
@@ -211,6 +213,8 @@
     partInstalledOdometer = part?.installed_odometer ?? undefined
     partReplacedDate = part?.replaced_date || ''
     partReplacedOdometer = part?.replaced_odometer ?? undefined
+    partManufacturerUrl = part?.manufacturer_url || ''
+    partRetailerUrl = part?.retailer_url || ''
     partNotes = part?.notes || ''
     partLinkedServiceId = part?.installed_service_id ?? null
     partServiceOption = part?.installed_service_id ? 'link' : 'none'
@@ -260,6 +264,8 @@
         installed_service_id: serviceId,
         replaced_date: partReplacedDate || undefined,
         replaced_odometer: partReplacedOdometer,
+        manufacturer_url: partManufacturerUrl || undefined,
+        retailer_url: partRetailerUrl || undefined,
         notes: partNotes || undefined,
       }
       if (editingPart) {
@@ -430,6 +436,16 @@
             <input id="part-cost" type="number" step="0.01" min="0" bind:value={partCost} />
           </div>
         </div>
+        <div class="form-row">
+          <div class="field">
+            <label for="part-manufacturer-url">Manufacturer URL</label>
+            <input id="part-manufacturer-url" type="url" bind:value={partManufacturerUrl} placeholder="https://..." />
+          </div>
+          <div class="field">
+            <label for="part-retailer-url">Retailer URL</label>
+            <input id="part-retailer-url" type="url" bind:value={partRetailerUrl} placeholder="https://..." />
+          </div>
+        </div>
         {#if partStatus === 'installed' || partStatus === 'replaced'}
           <fieldset class="service-link-fieldset">
             <legend>Service Record</legend>
@@ -578,6 +594,12 @@
                   {/if}
                 {/if}
                 <span class="badge {statusBadgeClass(installed.status)}">{installed.status}</span>
+                {#if installed.manufacturer_url}
+                  <a href={installed.manufacturer_url} target="_blank" class="part-link" onclick={(e) => e.stopPropagation()}>Manufacturer</a>
+                {/if}
+                {#if installed.retailer_url}
+                  <a href={installed.retailer_url} target="_blank" class="part-link" onclick={(e) => e.stopPropagation()}>Retailer</a>
+                {/if}
               </div>
             {:else}
               <div class="installed-part empty-slot">No part installed</div>
@@ -716,6 +738,8 @@
 
   .part-name { font-weight: 500; }
   .part-meta { font-size: 0.8rem; color: var(--text-muted); }
+  .part-link { font-size: 0.8rem; color: var(--primary); text-decoration: none; }
+  .part-link:hover { text-decoration: underline; }
 
   .badge-ok { background: var(--success-bg); color: var(--success); }
   .badge-upcoming { background: var(--warning-bg); color: var(--warning); }

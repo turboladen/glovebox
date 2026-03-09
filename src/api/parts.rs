@@ -23,6 +23,8 @@ pub struct CreatePart {
     pub cost_cents: Option<i32>,
     pub cost_currency: Option<String>,
     pub invoice_url: Option<String>,
+    pub manufacturer_url: Option<String>,
+    pub retailer_url: Option<String>,
     pub status: Option<String>,
     pub installed_date: Option<String>,
     pub installed_odometer: Option<i32>,
@@ -42,6 +44,8 @@ pub struct UpdatePart {
     pub cost_cents: Option<Option<i32>>,
     pub cost_currency: Option<Option<String>>,
     pub invoice_url: Option<Option<String>>,
+    pub manufacturer_url: Option<Option<String>>,
+    pub retailer_url: Option<Option<String>>,
     pub status: Option<String>,
     pub installed_date: Option<Option<String>>,
     pub installed_odometer: Option<Option<i32>>,
@@ -111,6 +115,8 @@ pub async fn create(
         cost_cents: Set(input.cost_cents),
         cost_currency: Set(input.cost_currency),
         invoice_url: Set(input.invoice_url),
+        manufacturer_url: Set(input.manufacturer_url),
+        retailer_url: Set(input.retailer_url),
         status: Set(input.status.unwrap_or_else(|| "purchased".to_string())),
         installed_date: Set(input.installed_date),
         installed_odometer: Set(input.installed_odometer),
@@ -165,6 +171,12 @@ pub async fn update(
     }
     if let Some(v) = input.invoice_url {
         active.invoice_url = Set(v);
+    }
+    if let Some(v) = input.manufacturer_url {
+        active.manufacturer_url = Set(v);
+    }
+    if let Some(v) = input.retailer_url {
+        active.retailer_url = Set(v);
     }
     if let Some(v) = input.status {
         active.status = Set(v);

@@ -403,6 +403,8 @@ export interface Part {
   notes: string | null
   created_at: string
   updated_at: string
+  manufacturer_url: string | null
+  retailer_url: string | null
 }
 
 export interface CreatePart {
@@ -416,6 +418,8 @@ export interface CreatePart {
   cost_cents?: number | null
   cost_currency?: string | null
   invoice_url?: string | null
+  manufacturer_url?: string | null
+  retailer_url?: string | null
   status?: string
   installed_date?: string | null
   installed_odometer?: number | null

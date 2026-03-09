@@ -8,6 +8,7 @@ mod m20260301_000005_create_accident_tables;
 mod m20260301_000006_create_parts_tables;
 mod m20260301_000007_create_research_and_ai_tables;
 mod m20260301_000008_seed_vw_mqb_data;
+mod m20260301_000009_add_part_urls;
 
 pub struct Migrator;
 
@@ -23,6 +24,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260301_000006_create_parts_tables::Migration),
             Box::new(m20260301_000007_create_research_and_ai_tables::Migration),
             Box::new(m20260301_000008_seed_vw_mqb_data::Migration),
+            Box::new(m20260301_000009_add_part_urls::Migration),
         ]
     }
 }
