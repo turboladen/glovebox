@@ -84,6 +84,11 @@
     return allParts.filter(p => p.slot_id === null)
   }
 
+  function linkedService(part: Part): ServiceRecordWithLinks | undefined {
+    if (!part.installed_service_id) return undefined
+    return serviceRecords.find(s => s.id === part.installed_service_id)
+  }
+
   function groupedSlots(): Record<string, PartSlot[]> {
     const groups: Record<string, PartSlot[]> = {}
     for (const slot of slots) {
@@ -455,6 +460,20 @@
                   {/each}
                 </select>
               </div>
+              {#if partLinkedServiceId}
+                {@const selectedSvc = serviceRecords.find(s => s.id === partLinkedServiceId)}
+                {#if selectedSvc}
+                  <div class="linked-service-info">
+                    <span>Date: {formatDate(selectedSvc.service_date)}</span>
+                    {#if selectedSvc.mileage}
+                      <span>Mileage: {selectedSvc.mileage.toLocaleString()} mi</span>
+                    {/if}
+                    {#if selectedSvc.shop_name}
+                      <span>Shop: {selectedSvc.shop_name}</span>
+                    {/if}
+                  </div>
+                {/if}
+              {/if}
             {/if}
 
             {#if partServiceOption === 'create'}
@@ -539,16 +558,24 @@
               </div>
             </div>
             {#if installed}
+              {@const svc = linkedService(installed)}
               <div class="installed-part">
                 <span class="part-name">{installed.name}</span>
                 {#if installed.manufacturer}
                   <span class="part-meta">by {installed.manufacturer}</span>
                 {/if}
-                {#if installed.installed_date}
-                  <span class="part-meta">installed {formatDate(installed.installed_date)}</span>
-                {/if}
-                {#if installed.installed_odometer}
-                  <span class="part-meta">@ {installed.installed_odometer.toLocaleString()} mi</span>
+                {#if svc}
+                  <span class="part-meta">via service {formatDate(svc.service_date)}{svc.description ? ` — ${svc.description}` : ''}</span>
+                  {#if svc.mileage}
+                    <span class="part-meta">@ {svc.mileage.toLocaleString()} mi</span>
+                  {/if}
+                {:else}
+                  {#if installed.installed_date}
+                    <span class="part-meta">installed {formatDate(installed.installed_date)}</span>
+                  {/if}
+                  {#if installed.installed_odometer}
+                    <span class="part-meta">@ {installed.installed_odometer.toLocaleString()} mi</span>
+                  {/if}
                 {/if}
                 <span class="badge {statusBadgeClass(installed.status)}">{installed.status}</span>
               </div>
@@ -758,6 +785,18 @@
   .radio-label input[type="radio"] {
     width: auto;
     margin: 0;
+  }
+
+  .linked-service-info {
+    display: flex;
+    gap: var(--sp-3);
+    flex-wrap: wrap;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    padding: var(--sp-2) var(--sp-3);
+    background: var(--surface);
+    border-radius: var(--radius-sm);
+    margin-top: var(--sp-2);
   }
 
   .link-prompt {
