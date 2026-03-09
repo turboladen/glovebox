@@ -1,9 +1,22 @@
 <script lang="ts">
-  import type { RemindersResponse, ReminderStatus } from '../lib/types'
+  import { onMount } from 'svelte'
+  import { services as servicesApi } from '../lib/api'
+  import type { RemindersResponse, ReminderStatus, ServiceRecordWithLinks } from '../lib/types'
   import { formatDate } from '../lib/dates'
   import SuggestionsCard from './SuggestionsCard.svelte'
 
   let { reminderData, vehicleId }: { reminderData: RemindersResponse | null; vehicleId: number } = $props()
+
+  let allServices: ServiceRecordWithLinks[] = $state([])
+  let expandedItemId: number | null = $state(null)
+
+  onMount(async () => {
+    try {
+      allServices = await servicesApi.list(vehicleId)
+    } catch (e) {
+      console.error(e)
+    }
+  })
 
   function groupByStatus(reminders: ReminderStatus[]) {
     return {
@@ -13,8 +26,19 @@
     }
   }
 
+  function servicesForItem(itemId: number): ServiceRecordWithLinks[] {
+    return allServices
+      .filter(s => s.schedule_item_ids.includes(itemId))
+      .sort((a, b) => b.service_date.localeCompare(a.service_date))
+  }
+
   function formatMileage(n: number | null): string {
     return n != null ? n.toLocaleString() : '—'
+  }
+
+  function formatCents(cents: number | null): string {
+    if (cents == null) return ''
+    return `$${(cents / 100).toFixed(2)}`
   }
 
 </script>
@@ -59,6 +83,24 @@
           {:else}
             <div class="last-service">No service recorded</div>
           {/if}
+          {#if servicesForItem(reminder.schedule_item.id).length > 0}
+            <button class="history-toggle" onclick={() => expandedItemId = expandedItemId === reminder.schedule_item.id ? null : reminder.schedule_item.id}>
+              {servicesForItem(reminder.schedule_item.id).length} completion{servicesForItem(reminder.schedule_item.id).length !== 1 ? 's' : ''}
+              {expandedItemId === reminder.schedule_item.id ? '▾' : '▸'}
+            </button>
+          {/if}
+          {#if expandedItemId === reminder.schedule_item.id}
+            <div class="completion-history">
+              {#each servicesForItem(reminder.schedule_item.id) as svc (svc.id)}
+                <div class="completion-row">
+                  <span>{formatDate(svc.service_date)}</span>
+                  {#if svc.mileage}<span>{formatMileage(svc.mileage)} mi</span>{/if}
+                  {#if svc.total_cost_cents}<span>{formatCents(svc.total_cost_cents)}</span>{/if}
+                  {#if svc.shop_name}<span class="shop">at {svc.shop_name}</span>{/if}
+                </div>
+              {/each}
+            </div>
+          {/if}
         </div>
       {/each}
     </section>
@@ -88,6 +130,24 @@
               <span>/ {reminder.days_remaining} days remaining</span>
             {/if}
           </div>
+          {#if servicesForItem(reminder.schedule_item.id).length > 0}
+            <button class="history-toggle" onclick={() => expandedItemId = expandedItemId === reminder.schedule_item.id ? null : reminder.schedule_item.id}>
+              {servicesForItem(reminder.schedule_item.id).length} completion{servicesForItem(reminder.schedule_item.id).length !== 1 ? 's' : ''}
+              {expandedItemId === reminder.schedule_item.id ? '▾' : '▸'}
+            </button>
+          {/if}
+          {#if expandedItemId === reminder.schedule_item.id}
+            <div class="completion-history">
+              {#each servicesForItem(reminder.schedule_item.id) as svc (svc.id)}
+                <div class="completion-row">
+                  <span>{formatDate(svc.service_date)}</span>
+                  {#if svc.mileage}<span>{formatMileage(svc.mileage)} mi</span>{/if}
+                  {#if svc.total_cost_cents}<span>{formatCents(svc.total_cost_cents)}</span>{/if}
+                  {#if svc.shop_name}<span class="shop">at {svc.shop_name}</span>{/if}
+                </div>
+              {/each}
+            </div>
+          {/if}
         </div>
       {/each}
     </section>
@@ -120,6 +180,24 @@
               <span>or {formatDate(reminder.due_at_date)}</span>
             {/if}
           </div>
+          {#if servicesForItem(reminder.schedule_item.id).length > 0}
+            <button class="history-toggle" onclick={() => expandedItemId = expandedItemId === reminder.schedule_item.id ? null : reminder.schedule_item.id}>
+              {servicesForItem(reminder.schedule_item.id).length} completion{servicesForItem(reminder.schedule_item.id).length !== 1 ? 's' : ''}
+              {expandedItemId === reminder.schedule_item.id ? '▾' : '▸'}
+            </button>
+          {/if}
+          {#if expandedItemId === reminder.schedule_item.id}
+            <div class="completion-history">
+              {#each servicesForItem(reminder.schedule_item.id) as svc (svc.id)}
+                <div class="completion-row">
+                  <span>{formatDate(svc.service_date)}</span>
+                  {#if svc.mileage}<span>{formatMileage(svc.mileage)} mi</span>{/if}
+                  {#if svc.total_cost_cents}<span>{formatCents(svc.total_cost_cents)}</span>{/if}
+                  {#if svc.shop_name}<span class="shop">at {svc.shop_name}</span>{/if}
+                </div>
+              {/each}
+            </div>
+          {/if}
         </div>
       {/each}
     </section>
@@ -192,5 +270,43 @@
 
   .bundle-card p {
     margin: 0;
+  }
+
+  .history-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-1);
+    margin-top: var(--sp-2);
+    padding: 0;
+    border: none;
+    background: none;
+    font-size: 0.8rem;
+    color: var(--primary);
+    cursor: pointer;
+    font-weight: 500;
+  }
+
+  .history-toggle:hover {
+    text-decoration: underline;
+  }
+
+  .completion-history {
+    margin-top: var(--sp-2);
+    padding-left: var(--sp-3);
+    border-left: 2px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-1);
+  }
+
+  .completion-row {
+    display: flex;
+    gap: var(--sp-3);
+    font-size: 0.8rem;
+    color: var(--text-muted);
+  }
+
+  .completion-row .shop {
+    font-style: italic;
   }
 </style>
