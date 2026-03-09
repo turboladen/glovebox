@@ -147,6 +147,30 @@ For more details, see README.md and docs/QUICKSTART.md.
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
 
+## Code Quality
+
+### Clippy
+This codebase passes `cargo clippy -- -D clippy::pedantic` with zero warnings. Before submitting work:
+```bash
+cargo clippy -- -D clippy::pedantic   # Must pass with zero warnings
+cargo test                             # All 47+ tests must pass
+cargo fmt                              # Must be formatted
+cd frontend && bun run check           # svelte-check must pass
+```
+
+### Crate-level Lint Allows
+`main.rs` has `#![allow]` for intentional conventions — do NOT remove these:
+- `clippy::option_option` — update DTOs use `Option<Option<T>>` by design
+- `clippy::struct_field_names` — entity fields match DB column names
+- `clippy::wildcard_imports` — `sea_orm::*` is idiomatic
+
+### Required Patterns
+- **`require_vehicle`**: All vehicle sub-resource handlers must call `require_vehicle(&state.db, vehicle_id).await?` at the top
+- **`updated_at`**: All update handlers must explicitly set `updated_at` — SeaORM does NOT auto-set it
+- **Batch loading**: List endpoints with related data must use `is_in()` batch queries, never N+1 loops
+- **Path traversal**: File operations on user-provided paths must use `canonicalize()` + `starts_with()` checks
+- **Numeric safety**: Use `i32::try_from()` for `usize→i32` conversions, integer division for cents→dollars formatting
+
 ## Testing
 
 ### Test Plan

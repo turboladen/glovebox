@@ -1,6 +1,6 @@
 use axum::extract::{Path, State};
 use axum::Json;
-use sea_orm::{EntityTrait, TransactionTrait, QueryFilter, ColumnTrait, Set, Iden, ActiveModelTrait};
+use sea_orm::*;
 use serde::Serialize;
 
 use crate::entities::vehicle_attribute;

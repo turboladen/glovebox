@@ -1,5 +1,5 @@
 use chrono::{Datelike, NaiveDate};
-use sea_orm::{ActiveEnum, DatabaseConnection, DbErr, QuerySelect, QueryOrder, QueryFilter, EntityTrait, ColumnTrait, Iden, Iterable, ActiveModelBehavior, ActiveModelTrait};
+use sea_orm::*;
 use serde::Serialize;
 use std::collections::HashMap;
 
@@ -84,6 +84,7 @@ pub async fn estimate_mileage(
     let latest_date = parse_date(&latest.recorded_at).unwrap_or(today);
 
     // Calculate average daily miles from the entries we have
+    #[allow(clippy::cast_precision_loss)]
     let avg_daily = if entries.len() >= 2 {
         let oldest = entries.last().unwrap();
         let oldest_date = parse_date(&oldest.recorded_at).unwrap_or(latest_date);
@@ -105,12 +106,14 @@ pub async fn estimate_mileage(
 
     // Extrapolate from latest entry to today
     let days_since = (today - latest_date).num_days().max(0);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
     let estimated = latest.mileage + (avg_daily * days_since as f64) as i32;
 
     Ok((estimated, now_str, avg_daily))
 }
 
 /// Calculate reminders for a vehicle.
+#[allow(clippy::too_many_lines)]
 pub async fn calculate_reminders(
     db: &DatabaseConnection,
     vehicle_id: i32,
@@ -222,10 +225,8 @@ pub async fn calculate_reminders(
 
         let trigger = match (miles_status, time_status) {
             (Some(m), Some(t)) if m == t => Some("both"),
-            (Some("overdue" | "upcoming"), _) => Some("mileage"),
-            (_, Some("overdue" | "upcoming")) => Some("time"),
-            (Some(_), None) => Some("mileage"),
-            (None, Some(_)) => Some("time"),
+            (Some("overdue" | "upcoming"), _) | (Some(_), None) => Some("mileage"),
+            (_, Some("overdue" | "upcoming")) | (None, Some(_)) => Some("time"),
             _ => None,
         };
 
@@ -372,6 +373,11 @@ fn parse_date(s: &str) -> Option<NaiveDate> {
     NaiveDate::parse_from_str(date_part, "%Y-%m-%d").ok()
 }
 
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
 fn add_months(date: NaiveDate, months: i32) -> NaiveDate {
     if months <= 0 {
         return date;
@@ -386,7 +392,6 @@ fn add_months(date: NaiveDate, months: i32) -> NaiveDate {
 fn days_in_month(year: i32, month: u32) -> u32 {
     match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
         2 => {
             if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
                 29
@@ -394,6 +399,7 @@ fn days_in_month(year: i32, month: u32) -> u32 {
                 28
             }
         }
+        // 30-day months + unreachable fallback for invalid month values
         _ => 30,
     }
 }

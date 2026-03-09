@@ -86,7 +86,7 @@ pub async fn check_recalls(
         make: make.to_string(),
         model: model.to_string(),
         model_year,
-        recall_count: recalls.len() as i32,
+        recall_count: i32::try_from(recalls.len()).unwrap_or(i32::MAX),
         recalls,
     })
 }

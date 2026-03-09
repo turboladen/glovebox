@@ -59,12 +59,26 @@ Vite dev server proxies `/api` and `/files` to the backend at `:3000`. In produc
 - **Issue tracking**: Use `bd` (beads), never markdown TODOs
 - **Testing**: Update `TEST_PLAN.md` and add Playwright tests when changing UI
 - **Router**: `@keenmate/svelte-spa-router` uses `routeParams` (not `params`) in Svelte 5
-- **Currency**: Stored as cents (`i32`), displayed as dollars in frontend
+- **Currency**: Stored as cents (`i32`), displayed as dollars in frontend. Use integer division for formatting (not `as f64 / 100.0` which loses precision)
 - **DB datetimes**: `String` type at SeaORM boundary (SQLite TEXT)
 - **Migrations**: Use `Expr::cust()` for SQL expressions, not string literals
 - **Entity field order**: Must match physical DB column order. ALTER TABLE appends columns to the end, so new fields go after `created_at`/`updated_at` in the entity struct
 - **Axum routing**: Vehicle sub-resources use flat routes in `main.rs` (not nested), so `Path((vehicle_id, id))` tuple extraction works correctly
 - **Update DTOs**: Use `Option<Option<T>>` (double-option) to distinguish "not sent" vs "explicitly set to null"
+- **Vehicle ownership checks**: All vehicle sub-resource handlers must call `require_vehicle(&state.db, vehicle_id).await?` before accessing sub-resources
+- **updated_at**: All update handlers must explicitly set `active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string())` — SeaORM `ActiveModel::update()` does NOT auto-set it
+- **N+1 queries**: List endpoints that load related data must use batch loading with `is_in()` queries, not per-record queries in a loop
+- **Svelte 5 bind:this**: Elements used with `bind:this` must be declared with `$state(undefined)`, not bare `let`
+- **Imports**: Use `sea_orm::*` glob imports (idiomatic for SeaORM). Explicit imports create maintenance burden with unused-import warnings
+
+## Clippy
+
+Crate-level `#![allow]` in `main.rs` suppresses intentional pedantic lints:
+- `clippy::option_option` — update DTO convention (see above)
+- `clippy::struct_field_names` — entity fields map to DB column names
+- `clippy::wildcard_imports` — `sea_orm::*` is idiomatic
+
+Run `cargo clippy -- -D clippy::pedantic` to verify zero warnings. Add per-function `#[allow]` for unavoidable cases (e.g., `too_many_lines` on update handlers with many fields).
 
 ## Playwright Patterns
 

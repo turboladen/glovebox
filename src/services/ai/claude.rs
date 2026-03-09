@@ -28,9 +28,10 @@ impl ClaudeProvider {
             .iter()
             .map(|msg| {
                 let role = match msg.role {
-                    super::Role::User => "user".to_string(),
+                    // System messages are handled via the separate system param;
+                    // if one appears here, send it as a user message.
+                    super::Role::User | super::Role::System => "user".to_string(),
                     super::Role::Assistant => "assistant".to_string(),
-                    super::Role::System => "user".to_string(), // system handled separately
                 };
                 ClaudeMessage {
                     role,
@@ -133,7 +134,7 @@ impl AiProvider for ClaudeProvider {
             .into_iter()
             .filter_map(|block| match block {
                 ClaudeResponseBlock::Text { text } => Some(text),
-                _ => None,
+                ClaudeResponseBlock::Other => None,
             })
             .collect::<String>();
 

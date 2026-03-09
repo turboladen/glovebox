@@ -1,4 +1,4 @@
-use sea_orm::{DatabaseConnection, DbErr, EntityTrait, ActiveEnum, ActiveModelBehavior, QuerySelect, QueryOrder, QueryFilter, ColumnTrait, Iterable, ColIdx, IdenStatic};
+use sea_orm::*;
 use std::fmt::Write;
 
 use crate::entities::{observation, part, part_slot, service_record, vehicle};

@@ -1,6 +1,6 @@
 use axum::extract::{Path, State};
 use axum::Json;
-use sea_orm::{ActiveEnum, QueryOrder, QueryFilter, EntityTrait, ColumnTrait, Iterable};
+use sea_orm::*;
 use serde::Serialize;
 
 use crate::entities::{part, service_record};
@@ -47,7 +47,9 @@ pub struct VehicleExport {
 }
 
 fn fmt_cost(cents: i64) -> String {
-    format!("${:.2}", cents as f64 / 100.0)
+    let dollars = cents / 100;
+    let remainder = (cents % 100).unsigned_abs();
+    format!("${dollars}.{remainder:02}")
 }
 
 pub async fn export_history(
@@ -72,13 +74,13 @@ pub async fn export_history(
     let total_svc: i64 = services
         .iter()
         .filter_map(|s| s.total_cost_cents)
-        .map(|c| i64::from(c))
+        .map(i64::from)
         .sum();
 
     let total_prt: i64 = parts
         .iter()
         .filter_map(|p| p.cost_cents)
-        .map(|c| i64::from(c))
+        .map(i64::from)
         .sum();
 
     let records: Vec<ExportRecord> = services

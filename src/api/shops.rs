@@ -1,7 +1,7 @@
 use axum::extract::{Path, State};
 use axum::routing::get;
 use axum::{Json, Router};
-use sea_orm::{QueryOrder, EntityTrait, Set, ActiveEnum, ActiveModelTrait, ActiveModelBehavior};
+use sea_orm::*;
 use serde::Deserialize;
 
 use crate::entities::shop;

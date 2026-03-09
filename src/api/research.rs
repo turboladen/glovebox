@@ -1,6 +1,6 @@
 use axum::extract::{Path, State};
 use axum::Json;
-use sea_orm::{EntityTrait, Iden, QueryOrder, QueryFilter, ColumnTrait, ActiveModelBehavior, StatementBuilder, QueryTrait, TransactionTrait, Set, ActiveModelTrait, ColIdx, IdenStatic, QuerySelect};
+use sea_orm::*;
 use serde::{Deserialize, Serialize};
 
 use crate::entities::{research_finding, research_report, vehicle};
@@ -258,12 +258,12 @@ struct NewFinding {
 }
 
 fn build_community_wisdom_prompt(vehicle: &vehicle::Model) -> String {
-    let mut prompt = format!(
-        "For a {} ",
-        vehicle
-            .year
-            .map_or("unknown year".to_string(), |y| y.to_string())
-    );
+    let year_str = vehicle
+        .year
+        .map_or_else(|| "unknown year".to_string(), |y| y.to_string());
+    let mut prompt = String::from("For a ");
+    prompt.push_str(&year_str);
+    prompt.push(' ');
     if let Some(ref make) = vehicle.make {
         prompt.push_str(make);
         prompt.push(' ');
@@ -277,7 +277,9 @@ fn build_community_wisdom_prompt(vehicle: &vehicle::Model) -> String {
         prompt.push(' ');
     }
     if let Some(ref engine) = vehicle.engine {
-        prompt.push_str(&format!("with {engine} engine "));
+        prompt.push_str("with ");
+        prompt.push_str(engine);
+        prompt.push_str(" engine ");
     }
     prompt.push_str("— what are the most common issues, recommended preventive maintenance items beyond factory schedule, and popular upgrades reported by owners? Return as JSON array.");
     prompt

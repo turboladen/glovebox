@@ -1,6 +1,6 @@
 use axum::extract::{Path, State};
 use axum::Json;
-use sea_orm::{QueryOrder, QueryFilter, EntityTrait, ColumnTrait, Iterable, ActiveModelBehavior, Iden, ActiveModelTrait, ModelTrait};
+use sea_orm::*;
 use serde::Serialize;
 
 use crate::entities::{part, service_record};
@@ -52,25 +52,25 @@ pub async fn get_costs(
     let total_service_cost_cents: i64 = services
         .iter()
         .filter_map(|s| s.total_cost_cents)
-        .map(|c| i64::from(c))
+        .map(i64::from)
         .sum();
 
     let total_labor_cost_cents: i64 = services
         .iter()
         .filter_map(|s| s.labor_cost_cents)
-        .map(|c| i64::from(c))
+        .map(i64::from)
         .sum();
 
     let total_parts_cost_from_services: i64 = services
         .iter()
         .filter_map(|s| s.parts_cost_cents)
-        .map(|c| i64::from(c))
+        .map(i64::from)
         .sum();
 
     let total_parts_purchased: i64 = parts
         .iter()
         .filter_map(|p| p.cost_cents)
-        .map(|c| i64::from(c))
+        .map(i64::from)
         .sum();
 
     // Parts cost: use purchased parts total (more accurate than service-reported)

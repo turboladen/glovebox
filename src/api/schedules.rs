@@ -1,7 +1,7 @@
 use axum::extract::{Path, Query, State};
 use axum::routing::get;
 use axum::{Json, Router};
-use sea_orm::{EntityTrait, QueryFilter, ColumnTrait, PaginatorTrait, Iterable, Iden, Set, ActiveEnum, ActiveModelTrait, ActiveModelBehavior, ModelTrait};
+use sea_orm::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -53,6 +53,7 @@ pub struct ResolvedScheduleItem {
 }
 
 #[derive(Deserialize)]
+#[allow(clippy::struct_field_names)]
 pub struct ListQuery {
     pub platform_id: Option<i32>,
     pub model_template_id: Option<i32>,

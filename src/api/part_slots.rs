@@ -1,6 +1,6 @@
 use axum::extract::{Path, State};
 use axum::Json;
-use sea_orm::{EntityTrait, QueryOrder, QueryFilter, ColumnTrait, Set, ActiveEnum, ActiveModelTrait, ModelTrait, ActiveModelBehavior};
+use sea_orm::*;
 use serde::Deserialize;
 
 use crate::entities::{part_slot, vehicle};

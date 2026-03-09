@@ -57,6 +57,7 @@ impl OpenAiCompatProvider {
         }
     }
 
+    #[allow(clippy::unused_self)]
     fn build_messages(&self, request: &AiRequest) -> Vec<ApiMessage> {
         let mut messages = Vec::new();
 
@@ -80,12 +81,14 @@ impl OpenAiCompatProvider {
 
             // For user messages, append attachment info if present
             if msg.role == Role::User && !request.attachments.is_empty() {
+                use std::fmt::Write;
                 for attachment in &request.attachments {
-                    content.push_str(&format!(
+                    let _ = write!(
+                        content,
                         "\n[Attachment: {}, {} bytes — content not available for this provider]",
                         attachment.mime_type,
                         attachment.data.len()
-                    ));
+                    );
                 }
             }
 

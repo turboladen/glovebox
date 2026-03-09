@@ -1,3 +1,13 @@
+// Intentional conventions that conflict with clippy::pedantic:
+// - Option<Option<T>> in update DTOs distinguishes "not sent" vs "set to null"
+// - Entity field names like vehicle_name on Vehicle map to DB column names
+// - sea_orm::* glob imports are idiomatic for SeaORM (prelude-style)
+#![allow(
+    clippy::option_option,
+    clippy::struct_field_names,
+    clippy::wildcard_imports
+)]
+
 mod api;
 mod config;
 mod entities;
@@ -26,6 +36,7 @@ pub struct AppState {
 }
 
 #[tokio::main]
+#[allow(clippy::too_many_lines)]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(

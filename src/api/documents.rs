@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use axum::extract::{Multipart, Path, Query, State};
 use axum::Json;
-use sea_orm::{EntityTrait, QueryFilter, ColumnTrait, ColIdx, IdenStatic, QueryOrder, Iden, ActiveEnum, Iterable, QuerySelect, Set, ActiveModelTrait, ActiveModelBehavior};
+use sea_orm::*;
 use serde::Deserialize;
 
 use crate::entities::document;
@@ -54,10 +54,19 @@ pub async fn get_one(
         .ok_or_else(|| ApiError::NotFound(format!("Document {id} not found")))
 }
 
-pub async fn upload(
-    State(state): State<AppState>,
-    mut multipart: Multipart,
-) -> Result<Json<document::Model>> {
+struct ParsedUpload {
+    vehicle_id: Option<i32>,
+    title: Option<String>,
+    doc_type: Option<String>,
+    linked_entity_type: Option<String>,
+    linked_entity_id: Option<i32>,
+    notes: Option<String>,
+    file_name: Option<String>,
+    file_data: Vec<u8>,
+    mime_type: Option<String>,
+}
+
+async fn parse_multipart(mut multipart: Multipart) -> Result<ParsedUpload> {
     let mut vehicle_id: Option<i32> = None;
     let mut title: Option<String> = None;
     let mut doc_type: Option<String> = None;
@@ -142,18 +151,38 @@ pub async fn upload(
         }
     }
 
-    let file_data = file_data.ok_or_else(|| ApiError::BadRequest("No file provided".into()))?;
-    let original_name = file_name.unwrap_or_else(|| "unnamed".into());
-    let title = title.unwrap_or_else(|| original_name.clone());
+    Ok(ParsedUpload {
+        vehicle_id,
+        title,
+        doc_type,
+        linked_entity_type,
+        linked_entity_id,
+        notes,
+        file_name,
+        file_data: file_data.ok_or_else(|| ApiError::BadRequest("No file provided".into()))?,
+        mime_type,
+    })
+}
+
+pub async fn upload(
+    State(state): State<AppState>,
+    multipart: Multipart,
+) -> Result<Json<document::Model>> {
+    let parsed = parse_multipart(multipart).await?;
+
+    let original_name = parsed.file_name.unwrap_or_else(|| "unnamed".into());
+    let title = parsed.title.unwrap_or_else(|| original_name.clone());
 
     // Validate vehicle exists if provided
-    if let Some(vid) = vehicle_id {
+    if let Some(vid) = parsed.vehicle_id {
         require_vehicle(&state.db, vid).await?;
     }
 
     // Build storage path: {files_dir}/{vehicle_id or "general"}/{doc_type or "other"}/
-    let vid_dir = vehicle_id.map_or_else(|| "general".into(), |v| v.to_string());
-    let type_dir = sanitize_filename(doc_type.as_deref().unwrap_or("other"));
+    let vid_dir = parsed
+        .vehicle_id
+        .map_or_else(|| "general".into(), |v| v.to_string());
+    let type_dir = sanitize_filename(parsed.doc_type.as_deref().unwrap_or("other"));
     let dir: PathBuf = [&state.config.files_dir, &vid_dir, &type_dir]
         .iter()
         .collect();
@@ -167,7 +196,7 @@ pub async fn upload(
     let stored_name = format!("{timestamp}_{safe_name}");
     let full_path = dir.join(&stored_name);
 
-    tokio::fs::write(&full_path, &file_data)
+    tokio::fs::write(&full_path, &parsed.file_data)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
@@ -175,19 +204,19 @@ pub async fn upload(
     let relative_path = format!("{vid_dir}/{type_dir}/{stored_name}");
 
     let model = document::ActiveModel {
-        vehicle_id: Set(vehicle_id),
+        vehicle_id: Set(parsed.vehicle_id),
         title: Set(title),
         file_path: Set(relative_path),
         file_name: Set(original_name),
-        mime_type: Set(mime_type),
+        mime_type: Set(parsed.mime_type),
         file_size_bytes: Set(Some(
-            i32::try_from(file_data.len())
+            i32::try_from(parsed.file_data.len())
                 .map_err(|_| ApiError::BadRequest("File too large (max ~2GB)".into()))?,
         )),
-        doc_type: Set(doc_type),
-        linked_entity_type: Set(linked_entity_type),
-        linked_entity_id: Set(linked_entity_id),
-        notes: Set(notes),
+        doc_type: Set(parsed.doc_type),
+        linked_entity_type: Set(parsed.linked_entity_type),
+        linked_entity_id: Set(parsed.linked_entity_id),
+        notes: Set(parsed.notes),
         ..Default::default()
     };
     let result = model.insert(&state.db).await?;

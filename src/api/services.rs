@@ -1,6 +1,6 @@
 use axum::extract::{Path, State};
 use axum::Json;
-use sea_orm::{ConnectionTrait, QueryFilter, EntityTrait, ColumnTrait, QueryOrder, Iterable, ActiveModelBehavior, TransactionTrait, Set, ActiveModelTrait, Iden};
+use sea_orm::*;
 use serde::{Deserialize, Serialize};
 
 use crate::entities::{mileage_log, part, service_record, service_schedule_link};
@@ -230,6 +230,7 @@ pub async fn create(
     }))
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn update(
     State(state): State<AppState>,
     Path((vehicle_id, id)): Path<(i32, i32)>,

@@ -296,7 +296,9 @@ pub async fn fetch_models(
                 .iter()
                 .map(|m| ModelInfo {
                     id: m["id"].as_str().unwrap_or("").to_string(),
-                    display_name: m["display_name"].as_str().map(std::string::ToString::to_string),
+                    display_name: m["display_name"]
+                        .as_str()
+                        .map(std::string::ToString::to_string),
                 })
                 .filter(|m| !m.id.is_empty())
                 .collect();
