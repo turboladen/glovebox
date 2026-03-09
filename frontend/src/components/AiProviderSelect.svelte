@@ -40,6 +40,8 @@
       </option>
     {/each}
   </select>
+{:else if loaded && providers.length === 1}
+  <span class="provider-label">{providers[0].name}</span>
 {/if}
 
 <style>
@@ -52,5 +54,9 @@
     color: var(--text-secondary);
     min-width: 0;
     max-width: 180px;
+  }
+  .provider-label {
+    font-size: 0.75rem;
+    color: var(--text-muted);
   }
 </style>
