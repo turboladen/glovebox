@@ -22,11 +22,16 @@ pub async fn build_vehicle_context(
     write_vehicle_info(&mut ctx, &v);
 
     // Mileage estimate
-    let (est_mileage, mileage_as_of, avg_daily) =
+    let (est_mileage, mileage_as_of, avg_daily, is_estimate) =
         reminders::estimate_mileage(db, vehicle_id, &v).await?;
+    let mileage_label = if is_estimate {
+        "Estimated Mileage"
+    } else {
+        "Current Mileage"
+    };
     writeln!(
         ctx,
-        "Estimated Mileage: {est_mileage} (as of {mileage_as_of})"
+        "{mileage_label}: {est_mileage} (as of {mileage_as_of})"
     )
     .unwrap();
     writeln!(ctx, "Average Daily Miles: {avg_daily:.1}").unwrap();

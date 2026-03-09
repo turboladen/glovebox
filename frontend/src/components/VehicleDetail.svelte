@@ -124,9 +124,11 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
       {#if reminderData}
         <div class="mileage-readout">
           <span class="est-mileage">{formatMileage(reminderData.estimated_mileage)}</span>
-          <span class="mileage-unit">mi est.</span>
+          <span class="mileage-unit">mi{#if reminderData.mileage_is_estimate} est.{/if}</span>
         </div>
-        <span class="mileage-date">as of {reminderData.mileage_as_of}</span>
+        {#if reminderData.mileage_is_estimate}
+          <span class="mileage-date">as of {reminderData.mileage_as_of}</span>
+        {/if}
       {/if}
       <div class="actions">
         <button class="btn btn-secondary" onclick={() => (showMileageForm = !showMileageForm)}>

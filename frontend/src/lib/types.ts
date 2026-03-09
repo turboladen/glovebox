@@ -196,6 +196,7 @@ export interface BundleSuggestion {
 export interface RemindersResponse {
   vehicle_id: number
   estimated_mileage: number
+  mileage_is_estimate: boolean
   mileage_as_of: string
   avg_daily_miles: number
   reminders: ReminderStatus[]

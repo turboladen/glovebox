@@ -70,7 +70,8 @@ Playwright e2e tests. Keep it updated as features are added.
 | # | Step | Expected |
 |---|------|----------|
 | 1 | Navigate to `/vehicles/:id` | Vehicle name in heading, back link "← Garage" |
-| 2 | Status bar | Shows estimated mileage and "as of" date (or empty if no data) |
+| 2 | Status bar (estimated) | Shows mileage with "mi est." and "as of" date when last entry is older than today |
+| 2a | Status bar (exact) | Shows mileage with "mi" (no "est.") and no "as of" date when last entry is from today |
 | 3 | "Update Mileage" button | Toggles mileage entry form inline |
 | 4 | "Log Service" button | Toggles service form inline |
 | 5 | Schedule tab (default) | Active, shows reminder groups (overdue/upcoming/ok) |
@@ -83,7 +84,7 @@ Playwright e2e tests. Keep it updated as features are added.
 |---|------|----------|
 | 1 | Click "Update Mileage" | Form appears with odometer input and notes field |
 | 2 | Enter 0 or negative, submit | "Odometer must be greater than 0" error |
-| 3 | Enter valid mileage (e.g. 45000), submit | "Saving..." then form closes, estimated mileage in status bar updates |
+| 3 | Enter valid mileage (e.g. 45000), submit | "Saving..." then form closes, mileage in status bar updates, shows "mi" (no "est." since entry is from today) |
 | 4 | Click "Cancel" | Form closes without saving |
 
 ## TP-06: Log Service

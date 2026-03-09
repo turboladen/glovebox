@@ -75,6 +75,21 @@ test.describe('Update Mileage', () => {
     // Form should close after save
     await expect(page.getByLabel('Current Odometer')).not.toBeVisible()
   })
+
+  test('shows exact mileage without est. label after today entry', async ({ page }) => {
+    await page.goto(vehicleUrl)
+    // Submit mileage within this test so it doesn't depend on prior test state
+    await page.getByRole('button', { name: 'Update Mileage' }).click()
+    await page.getByLabel('Current Odometer').fill('50000')
+    await page.getByRole('button', { name: 'Save' }).click()
+    await expect(page.getByLabel('Current Odometer')).not.toBeVisible()
+    // After submitting mileage today, should show "mi" without "est."
+    const mileageUnit = page.locator('.mileage-unit')
+    await expect(mileageUnit).toBeVisible()
+    await expect(mileageUnit).toHaveText('mi')
+    // Should not show "as of" date for exact mileage
+    await expect(page.locator('.mileage-date')).not.toBeVisible()
+  })
 })
 
 // TP-06: Log Service

@@ -51,6 +51,7 @@ pub struct BundleItem {
 pub struct RemindersResponse {
     pub vehicle_id: i32,
     pub estimated_mileage: i32,
+    pub mileage_is_estimate: bool,
     pub mileage_as_of: String,
     pub avg_daily_miles: f64,
     pub reminders: Vec<ReminderStatus>,
@@ -64,7 +65,7 @@ pub async fn estimate_mileage(
     db: &DatabaseConnection,
     vehicle_id: i32,
     v: &vehicle::Model,
-) -> Result<(i32, String, f64), DbErr> {
+) -> Result<(i32, String, f64, bool), DbErr> {
     let entries = mileage_log::Entity::find()
         .filter(mileage_log::Column::VehicleId.eq(vehicle_id))
         .order_by_desc(mileage_log::Column::RecordedAt)
@@ -77,7 +78,7 @@ pub async fn estimate_mileage(
 
     if entries.is_empty() {
         let mileage = v.purchase_mileage.unwrap_or(0);
-        return Ok((mileage, now_str, 0.0));
+        return Ok((mileage, now_str, 0.0, true));
     }
 
     let latest = &entries[0];
@@ -106,10 +107,15 @@ pub async fn estimate_mileage(
 
     // Extrapolate from latest entry to today
     let days_since = (today - latest_date).num_days().max(0);
+    let is_estimate = days_since > 0;
     #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
     let estimated = latest.mileage + (avg_daily * days_since as f64) as i32;
 
-    Ok((estimated, now_str, avg_daily))
+    // When estimated, show the date of the last actual reading (what we extrapolated from).
+    // When exact, the date is today (same as latest_date).
+    let as_of = latest_date.format("%Y-%m-%d").to_string();
+
+    Ok((estimated, as_of, avg_daily, is_estimate))
 }
 
 /// Calculate reminders for a vehicle.
@@ -123,7 +129,7 @@ pub async fn calculate_reminders(
         .await?
         .ok_or_else(|| DbErr::RecordNotFound(format!("Vehicle {vehicle_id}")))?;
 
-    let (estimated_mileage, mileage_as_of, avg_daily_miles) =
+    let (estimated_mileage, mileage_as_of, avg_daily_miles, mileage_is_estimate) =
         estimate_mileage(db, vehicle_id, &v).await?;
 
     // Resolve the effective schedule (same algorithm as api::schedules::resolve)
@@ -267,6 +273,7 @@ pub async fn calculate_reminders(
     Ok(RemindersResponse {
         vehicle_id,
         estimated_mileage,
+        mileage_is_estimate,
         mileage_as_of,
         avg_daily_miles,
         reminders,
