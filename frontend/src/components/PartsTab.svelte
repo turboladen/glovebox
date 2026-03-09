@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import { partSlots as slotsApi, parts as partsApi } from '../lib/api'
   import type { PartSlot, Part } from '../lib/types'
+  import { formatDate } from '../lib/dates'
 
   let { vehicleId }: { vehicleId: number } = $props()
 
@@ -397,7 +398,7 @@
                   <span class="part-meta">by {installed.manufacturer}</span>
                 {/if}
                 {#if installed.installed_date}
-                  <span class="part-meta">installed {installed.installed_date}</span>
+                  <span class="part-meta">installed {formatDate(installed.installed_date)}</span>
                 {/if}
                 {#if installed.installed_odometer}
                   <span class="part-meta">@ {installed.installed_odometer.toLocaleString()} mi</span>

@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import { services as servicesApi, observations as obsApi } from '../lib/api'
   import type { ServiceRecordWithLinks, Observation } from '../lib/types'
+  import { formatDate } from '../lib/dates'
 
   let { vehicleId }: { vehicleId: number } = $props()
 
@@ -67,7 +68,7 @@
         <div class="history-card service-card">
           <div class="history-header">
             <span class="type-badge service-badge">Service</span>
-            <span class="date">{record.service_date}</span>
+            <span class="date">{formatDate(record.service_date)}</span>
             {#if record.total_cost_cents}
               <span class="cost">{formatCents(record.total_cost_cents)}</span>
             {/if}
@@ -92,7 +93,7 @@
         <div class="history-card obs-card" class:resolved={obs.resolved}>
           <div class="history-header">
             <span class="type-badge obs-badge">Observation</span>
-            <span class="date">{obs.observed_at.split(' ')[0]}</span>
+            <span class="date">{formatDate(obs.observed_at)}</span>
             {#if obs.resolved}
               <span class="resolved-badge">Resolved</span>
             {/if}

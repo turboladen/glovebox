@@ -1,6 +1,7 @@
 <script lang="ts">
   import { research as researchApi } from '../lib/api'
   import type { RecallCheckResult, ResearchReport, ReportWithFindings, ResearchFinding } from '../lib/types'
+  import { formatDate } from '../lib/dates'
 
   let { vehicleId }: { vehicleId: number } = $props()
 
@@ -112,13 +113,6 @@
     }
   }
 
-  function formatDate(dateStr: string): string {
-    try {
-      return new Date(dateStr).toLocaleDateString()
-    } catch {
-      return dateStr
-    }
-  }
 </script>
 
 <div class="research-tab">
@@ -161,7 +155,7 @@
                 <p class="recall-remedy"><strong>Remedy:</strong> {recall.remedy}</p>
               {/if}
               {#if recall.report_date}
-                <p class="recall-date">Reported: {recall.report_date}</p>
+                <p class="recall-date">Reported: {formatDate(recall.report_date)}</p>
               {/if}
             </div>
           {/each}

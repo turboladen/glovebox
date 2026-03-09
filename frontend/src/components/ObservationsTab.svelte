@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import { observations as obsApi } from '../lib/api'
   import type { Observation } from '../lib/types'
+  import { formatDate } from '../lib/dates'
 
   let { vehicleId }: { vehicleId: number } = $props()
 
@@ -131,7 +132,7 @@
         <div class="obs-card" class:resolved={obs.resolved}>
           <div class="obs-card-header">
             <span class="obs-category">{categoryLabel(obs.category)}</span>
-            <span class="obs-date">{obs.observed_at.split(' ')[0]}</span>
+            <span class="obs-date">{formatDate(obs.observed_at)}</span>
           </div>
           <div class="obs-title">{obs.title}</div>
           {#if obs.description}

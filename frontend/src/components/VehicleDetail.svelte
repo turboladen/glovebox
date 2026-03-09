@@ -3,6 +3,7 @@
   import { link } from '@keenmate/svelte-spa-router'
   import { vehicles as vehiclesApi, reminders as remindersApi, mileage as mileageApi, vehicleExport } from '../lib/api'
   import type { Vehicle, RemindersResponse } from '../lib/types'
+  import { formatDate } from '../lib/dates'
   import ScheduleTab from './ScheduleTab.svelte'
   import HistoryTab from './HistoryTab.svelte'
   import MileageEntry from './MileageEntry.svelte'
@@ -126,7 +127,7 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
           <span class="est-mileage">{formatMileage(reminderData.estimated_mileage)}</span>
           <span class="mileage-unit">mi{#if reminderData.mileage_is_estimate} est.{/if}</span>
         </div>
-        <span class="mileage-date">as of {reminderData.mileage_as_of}</span>
+        <span class="mileage-date">as of {formatDate(reminderData.mileage_as_of)}</span>
       {/if}
       <div class="actions">
         <button class="btn btn-secondary" onclick={() => (showMileageForm = !showMileageForm)}>

@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import { documents as docsApi, ai } from '../lib/api'
   import type { Document, ParsedInvoice } from '../lib/types'
+  import { formatDate } from '../lib/dates'
   import AiProviderSelect from './AiProviderSelect.svelte'
 
   let { vehicleId }: { vehicleId: number } = $props()
@@ -170,7 +171,7 @@
               {#if doc.file_size_bytes}
                 <span>{formatSize(doc.file_size_bytes)}</span>
               {/if}
-              <span>{doc.created_at.split(' ')[0]}</span>
+              <span>{formatDate(doc.created_at)}</span>
             </div>
             {#if doc.notes}
               <p class="doc-notes">{doc.notes}</p>
@@ -202,7 +203,7 @@
       <h4>Parsed Invoice Data</h4>
       <div class="parsed-fields">
         {#if parsedInvoice.service_date}
-          <div class="parsed-field"><strong>Date:</strong> {parsedInvoice.service_date}</div>
+          <div class="parsed-field"><strong>Date:</strong> {formatDate(parsedInvoice.service_date)}</div>
         {/if}
         {#if parsedInvoice.shop_name}
           <div class="parsed-field"><strong>Shop:</strong> {parsedInvoice.shop_name}</div>

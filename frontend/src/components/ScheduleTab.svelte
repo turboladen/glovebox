@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { RemindersResponse, ReminderStatus } from '../lib/types'
+  import { formatDate } from '../lib/dates'
   import SuggestionsCard from './SuggestionsCard.svelte'
 
   let { reminderData, vehicleId }: { reminderData: RemindersResponse | null; vehicleId: number } = $props()
@@ -16,9 +17,6 @@
     return n != null ? n.toLocaleString() : '—'
   }
 
-  function formatDate(d: string | null): string {
-    return d ?? '—'
-  }
 </script>
 
 <SuggestionsCard {vehicleId} />
@@ -55,7 +53,7 @@
           </div>
           {#if reminder.last_service}
             <div class="last-service">
-              Last: {reminder.last_service.date}
+              Last: {formatDate(reminder.last_service.date)}
               {#if reminder.last_service.odometer}@ {formatMileage(reminder.last_service.odometer)} mi{/if}
             </div>
           {:else}

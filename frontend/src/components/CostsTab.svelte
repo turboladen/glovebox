@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import { costs as costsApi } from '../lib/api'
   import type { CostSummary } from '../lib/types'
+  import { formatMonth } from '../lib/dates'
 
   let { vehicleId }: { vehicleId: number } = $props()
 
@@ -79,7 +80,7 @@
         <tbody>
           {#each data.monthly_costs as mc (mc.month)}
             <tr>
-              <td>{mc.month}</td>
+              <td>{formatMonth(mc.month)}</td>
               <td>{fmt(mc.service_cost_cents)}</td>
               <td>{fmt(mc.parts_cost_cents)}</td>
               <td class="total">{fmt(mc.total_cents)}</td>
