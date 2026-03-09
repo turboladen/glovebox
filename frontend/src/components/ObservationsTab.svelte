@@ -85,6 +85,15 @@
   function categoryLabel(c: string): string {
     return c.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
   }
+
+  function parseObdCodes(raw: string): string[] {
+    try {
+      const parsed = JSON.parse(raw)
+      return Array.isArray(parsed) ? parsed : [raw]
+    } catch {
+      return [raw]
+    }
+  }
 </script>
 
 <div class="observations">
@@ -162,7 +171,11 @@
             <span class="obs-meta">{obs.odometer.toLocaleString()} mi</span>
           {/if}
           {#if obs.obd_codes}
-            <span class="obs-meta obd">{obs.obd_codes}</span>
+            <div class="obd-codes">
+              {#each parseObdCodes(obs.obd_codes) as code}
+                <span class="obd-chip">{code}</span>
+              {/each}
+            </div>
           {/if}
           <div class="obs-actions">
             {#if obs.resolved}
@@ -251,7 +264,21 @@
   .obs-title { font-weight: 600; }
   .obs-desc { font-size: 0.85rem; color: var(--text-muted); margin: var(--sp-1) 0; }
   .obs-meta { font-size: 0.8rem; color: var(--text-muted); margin-right: var(--sp-2); }
-  .obs-meta.obd { font-family: var(--font-mono); }
+
+  .obd-codes {
+    display: flex; flex-wrap: wrap; gap: var(--sp-1); margin-top: var(--sp-1);
+  }
+
+  .obd-chip {
+    font-family: var(--font-mono, monospace);
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.1rem 0.5rem;
+    border-radius: var(--radius-sm);
+    background: var(--warning-bg);
+    color: var(--warning);
+    letter-spacing: 0.03em;
+  }
   .obs-actions { margin-top: var(--sp-2); display: flex; align-items: center; gap: var(--sp-2); }
 
   .resolved-info {
