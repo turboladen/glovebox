@@ -249,12 +249,19 @@
                     onkeydown={handleRenameKeydown}
                   />
                 {:else}
-                  <span class="convo-title" ondblclick={() => startRename(convo)}>{convo.title}</span>
-                  <button
-                    class="convo-delete"
-                    title="Delete conversation"
-                    onclick={(e: MouseEvent) => { e.stopPropagation(); deleteConversation(convo.id) }}
-                  >×</button>
+                  <span class="convo-title">{convo.title}</span>
+                  <span class="convo-actions">
+                    <button
+                      class="convo-action-btn"
+                      title="Rename"
+                      onclick={(e: MouseEvent) => { e.stopPropagation(); startRename(convo) }}
+                    >✎</button>
+                    <button
+                      class="convo-action-btn convo-action-delete"
+                      title="Delete"
+                      onclick={(e: MouseEvent) => { e.stopPropagation(); deleteConversation(convo.id) }}
+                    >×</button>
+                  </span>
                 {/if}
               </div>
             {/each}
@@ -352,8 +359,6 @@
     display: flex;
     flex: 1;
     min-height: 0;
-    gap: 1px;
-    background: var(--border-subtle);
   }
 
   /* Sidebar */
@@ -362,7 +367,8 @@
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
-    background: var(--bg-base);
+    background: var(--bg-raised);
+    border-right: 1px solid var(--border);
     transition: width 0.2s ease;
   }
 
@@ -375,7 +381,7 @@
     align-items: center;
     gap: var(--sp-2);
     padding: var(--sp-2);
-    border-bottom: 1px solid var(--border-subtle);
+    border-bottom: 1px solid var(--border);
   }
 
   .sidebar-header .btn-sm {
@@ -407,11 +413,11 @@
   }
 
   .convo-item:hover {
-    background: var(--bg-raised);
+    background: var(--surface);
   }
 
   .convo-item.active {
-    background: var(--primary-subtle, var(--bg-raised));
+    background: var(--primary-muted);
     font-weight: 500;
   }
 
@@ -422,24 +428,47 @@
     white-space: nowrap;
   }
 
-  .convo-delete {
+  .convo-actions {
+    display: flex;
+    gap: 2px;
     opacity: 0;
+    transition: opacity 0.15s ease;
+  }
+
+  .convo-item.active .convo-actions {
+    opacity: 1;
+  }
+
+  .convo-item:hover .convo-actions {
+    opacity: 1;
+  }
+
+  @media (hover: none) {
+    .convo-actions {
+      opacity: 1;
+    }
+  }
+
+  .convo-action-btn {
     background: none;
     border: none;
     color: var(--text-muted);
     cursor: pointer;
-    font-size: 1rem;
+    font-size: 0.85rem;
     line-height: 1;
-    padding: 0 var(--sp-1);
+    padding: 2px 4px;
+    border-radius: var(--radius-sm);
+    transition: background 0.15s ease, color 0.15s ease;
   }
 
-  .convo-item:hover .convo-delete {
-    opacity: 0.6;
+  .convo-action-btn:hover {
+    background: var(--surface-hover);
+    color: var(--text);
   }
 
-  .convo-delete:hover {
-    opacity: 1 !important;
+  .convo-action-delete:hover {
     color: var(--danger);
+    background: var(--danger-bg);
   }
 
   .rename-input {
@@ -448,7 +477,7 @@
     padding: var(--sp-1);
     border: 1px solid var(--primary);
     border-radius: var(--radius-sm);
-    background: var(--bg-base);
+    background: var(--surface);
   }
 
   .empty-sidebar {
