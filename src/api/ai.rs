@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::api::error::ApiError;
 use crate::api::serde_helpers::deserialize_optional;
-use crate::entities::{ai_provider_config, chat_message, document};
+use crate::entities::{ai_provider_config, chat_message, conversation, document};
 use crate::services::ai::{AiRequest, Attachment, ChatMessage, Role};
 use crate::AppState;
 
@@ -368,8 +368,10 @@ pub async fn fetch_models(
 #[derive(Debug, Deserialize)]
 pub struct ChatRequest {
     pub vehicle_id: Option<i32>,
+    pub conversation_id: i32,
     pub message: String,
     pub provider_id: Option<i32>,
+    pub document_id: Option<i32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -384,6 +386,7 @@ pub struct ChatHistoryQuery {
     pub vehicle_id: Option<i32>,
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn chat(
     State(state): State<AppState>,
     Json(body): Json<ChatRequest>,
@@ -394,15 +397,29 @@ pub async fn chat(
         .await
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
+    // Verify conversation exists and belongs to the specified vehicle
+    let convo_check = conversation::Entity::find_by_id(body.conversation_id)
+        .one(&state.db)
+        .await?
+        .ok_or_else(|| {
+            ApiError::NotFound(format!("Conversation {} not found", body.conversation_id))
+        })?;
+    if convo_check.vehicle_id != body.vehicle_id {
+        return Err(ApiError::BadRequest(
+            "Conversation does not belong to the specified vehicle".to_string(),
+        ));
+    }
+
     // Build vehicle context if vehicle_id is provided
     let preamble = crate::services::ai::context::GLOVEBOX_PREAMBLE;
+    let data_entry_instructions = crate::services::ai::context::DATA_ENTRY_INSTRUCTIONS;
     let system_prompt = if let Some(vid) = body.vehicle_id {
         let context = crate::services::ai::context::build_vehicle_context(&state.db, vid)
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
         format!(
             "{preamble}\n\nAnswer questions about the owner's vehicle based on the data below. \
-            Be concise and practical.\n\n{context}"
+            Be concise and practical.\n\n{context}\n{data_entry_instructions}"
         )
     } else {
         format!(
@@ -411,20 +428,16 @@ pub async fn chat(
         )
     };
 
-    // Load recent chat history (last 20 messages)
-    let mut history_query = chat_message::Entity::find();
-    if let Some(vid) = body.vehicle_id {
-        history_query = history_query.filter(chat_message::Column::VehicleId.eq(vid));
-    } else {
-        history_query = history_query.filter(chat_message::Column::VehicleId.is_null());
-    }
-    let history = history_query
+    // Load recent chat history (last 20 messages) scoped to conversation
+    let history = chat_message::Entity::find()
+        .filter(chat_message::Column::ConversationId.eq(body.conversation_id))
         .order_by_desc(chat_message::Column::CreatedAt)
         .limit(20)
         .all(&state.db)
         .await?;
 
     // Convert to AI messages (reverse to oldest-first for conversation order)
+    let is_first_exchange = history.is_empty();
     let mut messages: Vec<ChatMessage> = history
         .into_iter()
         .rev()
@@ -444,10 +457,40 @@ pub async fn chat(
         content: body.message.clone(),
     });
 
+    // Load document attachment if document_id is provided
+    let attachments = if let Some(doc_id) = body.document_id {
+        let doc = document::Entity::find_by_id(doc_id)
+            .one(&state.db)
+            .await?
+            .ok_or_else(|| ApiError::NotFound(format!("Document {doc_id} not found")))?;
+
+        let mime = doc.mime_type.as_deref().unwrap_or("application/octet-stream");
+        let files_dir = std::path::Path::new(&state.config.files_dir)
+            .canonicalize()
+            .map_err(|e| ApiError::Internal(format!("Invalid files_dir: {e}")))?;
+        let file_path = files_dir.join(&doc.file_path);
+        let file_path = file_path
+            .canonicalize()
+            .map_err(|_| ApiError::NotFound("Document file not found".to_string()))?;
+        if !file_path.starts_with(&files_dir) {
+            return Err(ApiError::BadRequest("Invalid file path".to_string()));
+        }
+        let file_data = tokio::fs::read(&file_path)
+            .await
+            .map_err(|e| ApiError::Internal(format!("Failed to read file: {e}")))?;
+
+        vec![Attachment {
+            mime_type: mime.to_string(),
+            data: file_data,
+        }]
+    } else {
+        vec![]
+    };
+
     let request = AiRequest {
         system_prompt,
         messages,
-        attachments: vec![],
+        attachments,
         max_tokens: None,
     };
 
@@ -461,19 +504,54 @@ pub async fn chat(
 
     let user_msg = chat_message::ActiveModel {
         vehicle_id: Set(body.vehicle_id),
+        conversation_id: Set(Some(body.conversation_id)),
         role: Set("user".to_string()),
-        content: Set(body.message),
+        content: Set(body.message.clone()),
         ..Default::default()
     };
     user_msg.insert(&txn).await?;
 
     let assistant_msg = chat_message::ActiveModel {
         vehicle_id: Set(body.vehicle_id),
+        conversation_id: Set(Some(body.conversation_id)),
         role: Set("assistant".to_string()),
         content: Set(response.content.clone()),
         ..Default::default()
     };
     let saved = assistant_msg.insert(&txn).await?;
+
+    // Auto-title: if this is the first exchange in a "New Chat" conversation,
+    // set the title from the user's first message (truncated to 60 chars)
+    if is_first_exchange {
+        if let Some(convo) = conversation::Entity::find_by_id(body.conversation_id)
+            .one(&txn)
+            .await?
+        {
+            if convo.title == "New Chat" {
+                let auto_title = if body.message.chars().count() > 60 {
+                    let truncated: String = body.message.chars().take(57).collect();
+                    format!("{truncated}...")
+                } else {
+                    body.message
+                };
+                let mut active: conversation::ActiveModel = convo.into();
+                active.title = Set(auto_title);
+                active.updated_at =
+                    Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
+                active.update(&txn).await?;
+            }
+        }
+    } else {
+        // Touch updated_at on the conversation
+        if let Some(convo) = conversation::Entity::find_by_id(body.conversation_id)
+            .one(&txn)
+            .await?
+        {
+            let mut active: conversation::ActiveModel = convo.into();
+            active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
+            active.update(&txn).await?;
+        }
+    }
 
     txn.commit().await?;
 

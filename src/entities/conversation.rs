@@ -2,16 +2,14 @@ use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
-#[sea_orm(table_name = "chat_messages")]
+#[sea_orm(table_name = "conversations")]
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
     pub vehicle_id: Option<i32>,
-    pub role: String,
-    pub content: String,
+    pub title: String,
     pub created_at: String,
-    // conversation_id is appended by ALTER TABLE in migration 10
-    pub conversation_id: Option<i32>,
+    pub updated_at: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -22,12 +20,8 @@ pub enum Relation {
         to = "super::vehicle::Column::Id"
     )]
     Vehicle,
-    #[sea_orm(
-        belongs_to = "super::conversation::Entity",
-        from = "Column::ConversationId",
-        to = "super::conversation::Column::Id"
-    )]
-    Conversation,
+    #[sea_orm(has_many = "super::chat_message::Entity")]
+    ChatMessages,
 }
 
 impl Related<super::vehicle::Entity> for Entity {
@@ -36,9 +30,9 @@ impl Related<super::vehicle::Entity> for Entity {
     }
 }
 
-impl Related<super::conversation::Entity> for Entity {
+impl Related<super::chat_message::Entity> for Entity {
     fn to() -> RelationDef {
-        Relation::Conversation.def()
+        Relation::ChatMessages.def()
     }
 }
 

@@ -5,7 +5,7 @@
   import { formatDate } from '../lib/dates'
   import AiProviderSelect from './AiProviderSelect.svelte'
 
-  let { vehicleId }: { vehicleId: number } = $props()
+  let { vehicleId, onAnalyzeWithAI }: { vehicleId: number; onAnalyzeWithAI?: (docId: number, docTitle: string) => void } = $props()
   let selectedProviderId: number | undefined = $state(undefined)
 
   let docs: Document[] = $state([])
@@ -293,6 +293,11 @@
             {#if isPdf(doc.mime_type)}
               <button class="btn btn-secondary" onclick={() => parseInvoice(doc.id)} disabled={parsing === doc.id}>
                 {parsing === doc.id ? 'Parsing...' : 'Parse with AI'}
+              </button>
+            {/if}
+            {#if onAnalyzeWithAI}
+              <button class="btn btn-secondary" onclick={() => onAnalyzeWithAI(doc.id, doc.title)}>
+                Analyze in Chat
               </button>
             {/if}
             <button class="btn btn-secondary" onclick={() => deleteDoc(doc.id)}>Delete</button>

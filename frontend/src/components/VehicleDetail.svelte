@@ -28,6 +28,19 @@
   let showMileageForm = $state(false)
   let showServiceForm = $state(false)
   let showEditForm = $state(false)
+  let chatDocumentId: number | undefined = $state(undefined)
+  let chatInitialMessage: string | undefined = $state(undefined)
+
+  function analyzeDocumentWithAI(docId: number, docTitle: string) {
+    chatDocumentId = docId
+    chatInitialMessage = `Extract service records, parts, and observations from this document: "${docTitle}"`
+    activeTab = 'ai'
+    // Clear after ChatTab mounts and consumes the props
+    setTimeout(() => {
+      chatDocumentId = undefined
+      chatInitialMessage = undefined
+    }, 0)
+  }
 
   async function loadData() {
     try {
@@ -221,7 +234,7 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
         {:else if activeTab === 'observations'}
           <ObservationsTab vehicleId={vehicle.id} estimatedMileage={reminderData?.estimated_mileage} />
         {:else if activeTab === 'documents'}
-          <DocumentsTab vehicleId={vehicle.id} />
+          <DocumentsTab vehicleId={vehicle.id} onAnalyzeWithAI={analyzeDocumentWithAI} />
         {:else if activeTab === 'accidents'}
           <AccidentsTab vehicleId={vehicle.id} />
         {:else if activeTab === 'costs'}
@@ -229,7 +242,7 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
         {:else if activeTab === 'research'}
           <ResearchTab vehicleId={vehicle.id} />
         {:else if activeTab === 'ai'}
-          <ChatTab vehicleId={vehicle.id} />
+          <ChatTab vehicleId={vehicle.id} initialDocumentId={chatDocumentId} initialMessage={chatInitialMessage} />
         {/if}
       </div>
     {/key}

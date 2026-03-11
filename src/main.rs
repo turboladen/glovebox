@@ -108,6 +108,20 @@ async fn main() -> anyhow::Result<()> {
             "/api/vehicles/{vehicle_id}/suggestions",
             get(api::ai::get_suggestions),
         )
+        // Conversations (per vehicle)
+        .route(
+            "/api/vehicles/{vehicle_id}/conversations",
+            get(api::conversations::list).post(api::conversations::create),
+        )
+        .route(
+            "/api/vehicles/{vehicle_id}/conversations/{id}",
+            axum::routing::put(api::conversations::rename)
+                .delete(api::conversations::delete),
+        )
+        .route(
+            "/api/vehicles/{vehicle_id}/conversations/{id}/messages",
+            get(api::conversations::messages),
+        )
         // Vehicle sub-resources (flat routes for correct path param extraction)
         .route(
             "/api/vehicles/{vehicle_id}/mileage",

@@ -1,6 +1,7 @@
 pub mod accidents;
 pub mod serde_helpers;
 pub mod ai;
+pub mod conversations;
 pub mod costs;
 pub mod documents;
 pub mod error;

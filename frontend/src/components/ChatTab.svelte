@@ -1,29 +1,71 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { marked } from 'marked'
-  import { ai } from '../lib/api'
-  import type { ChatMessage, AiStatus } from '../lib/types'
+  import { ai, conversations as convosApi } from '../lib/api'
+  import type { ChatMessage, AiStatus, Conversation } from '../lib/types'
   import AiProviderSelect from './AiProviderSelect.svelte'
+  import ProposedActionsCard from './ProposedActionsCard.svelte'
+
+  /** Extract glovebox_actions JSON from an assistant message.
+   *  Returns the parsed actions object and the message content with the JSON block removed. */
+  function extractActions(content: string): { text: string; actions: any | null } {
+    const re = /```glovebox_actions\s*\n([\s\S]*?)```/
+    const match = content.match(re)
+    if (!match) return { text: content, actions: null }
+    try {
+      const parsed = JSON.parse(match[1])
+      const actions = parsed.glovebox_actions ?? parsed
+      const text = content.replace(re, '').trim()
+      return { text, actions }
+    } catch {
+      return { text: content, actions: null }
+    }
+  }
 
   // Configure marked for safe, synchronous rendering
   marked.setOptions({ async: false, breaks: true })
 
-  let { vehicleId }: { vehicleId: number } = $props()
+  let { vehicleId, initialDocumentId, initialMessage }: {
+    vehicleId: number
+    initialDocumentId?: number
+    initialMessage?: string
+  } = $props()
 
+  let convos: Conversation[] = $state([])
+  let activeConvoId: number | null = $state(null)
   let messages: ChatMessage[] = $state([])
   let input = $state('')
   let sending = $state(false)
   let nextOptimisticId = $state(-1)
   let aiStatus: AiStatus | null = $state(null)
   let loading = $state(true)
+  let loadingMessages = $state(false)
   let messagesContainer: HTMLElement | undefined = $state(undefined)
   let selectedProviderId: number | undefined = $state(undefined)
+  let sidebarCollapsed = $state(false)
+  let editingConvoId: number | null = $state(null)
+  let editingTitle = $state('')
+  let pendingDocumentId: number | undefined = $state(undefined)
 
   onMount(async () => {
     try {
       aiStatus = await ai.status()
       if (aiStatus.providers.some(p => p.enabled)) {
-        messages = await ai.chatHistory(vehicleId)
+        convos = await convosApi.list(vehicleId)
+
+        // If launched with a document to analyze, create a new conversation and auto-send
+        if (initialDocumentId && initialMessage) {
+          pendingDocumentId = initialDocumentId
+          const convo = await convosApi.create(vehicleId, 'Document Analysis')
+          convos = [convo, ...convos]
+          await selectConversation(convo.id)
+          input = initialMessage
+          // Auto-send after mount
+          setTimeout(() => send(), 0)
+        } else if (convos.length > 0) {
+          // Auto-select most recent conversation
+          await selectConversation(convos[0].id)
+        }
       }
     } catch (e) {
       console.error('Failed to load AI status:', e)
@@ -41,17 +83,79 @@
     }
   }
 
+  async function selectConversation(id: number) {
+    activeConvoId = id
+    loadingMessages = true
+    try {
+      messages = await convosApi.messages(vehicleId, id)
+      scrollToBottom()
+    } catch (e) {
+      console.error('Failed to load messages:', e)
+      messages = []
+    } finally {
+      loadingMessages = false
+    }
+  }
+
+  async function newChat() {
+    try {
+      const convo = await convosApi.create(vehicleId)
+      convos = [convo, ...convos]
+      await selectConversation(convo.id)
+    } catch (e: any) {
+      console.error('Failed to create conversation:', e)
+    }
+  }
+
+  async function deleteConversation(id: number) {
+    try {
+      await convosApi.delete(vehicleId, id)
+      convos = convos.filter(c => c.id !== id)
+      if (activeConvoId === id) {
+        if (convos.length > 0) {
+          await selectConversation(convos[0].id)
+        } else {
+          activeConvoId = null
+          messages = []
+        }
+      }
+    } catch (e: any) {
+      console.error('Failed to delete conversation:', e)
+    }
+  }
+
+  function startRename(convo: Conversation) {
+    editingConvoId = convo.id
+    editingTitle = convo.title
+  }
+
+  async function finishRename() {
+    if (editingConvoId == null || !editingTitle.trim()) {
+      editingConvoId = null
+      return
+    }
+    try {
+      const updated = await convosApi.rename(vehicleId, editingConvoId, editingTitle.trim())
+      convos = convos.map(c => c.id === updated.id ? updated : c)
+    } catch (e: any) {
+      console.error('Failed to rename:', e)
+    } finally {
+      editingConvoId = null
+    }
+  }
+
   async function send() {
-    if (!input.trim() || sending) return
+    if (!input.trim() || sending || activeConvoId == null) return
     const msg = input.trim()
     input = ''
     sending = true
 
-    // Optimistically add user message with unique negative ID
+    // Optimistically add user message
     const tempId = nextOptimisticId--
     messages = [...messages, {
       id: tempId,
       vehicle_id: vehicleId,
+      conversation_id: activeConvoId,
       role: 'user',
       content: msg,
       created_at: new Date().toISOString(),
@@ -59,19 +163,25 @@
     scrollToBottom()
 
     try {
-      const resp = await ai.chat(vehicleId, msg, selectedProviderId)
-      // Replace optimistic user message (keep its stable tempId) and append assistant
+      const docId = pendingDocumentId
+      pendingDocumentId = undefined
+      const resp = await ai.chat(vehicleId, activeConvoId, msg, selectedProviderId, docId)
+      // Replace optimistic user message and append assistant
       messages = [...messages.slice(0, -1), {
         ...messages[messages.length - 1],
         created_at: resp.message.created_at,
       }, resp.message]
       scrollToBottom()
+
+      // Update conversation in sidebar (title may have auto-changed, updated_at changed)
+      const refreshed = await convosApi.list(vehicleId)
+      convos = refreshed
     } catch (e: any) {
-      // Remove optimistic message and show error
       messages = messages.slice(0, -1)
       messages = [...messages, {
         id: 0,
         vehicle_id: vehicleId,
+        conversation_id: activeConvoId,
         role: 'assistant',
         content: `Error: ${e.message}`,
         created_at: new Date().toISOString(),
@@ -88,6 +198,15 @@
       send()
     }
   }
+
+  function handleRenameKeydown(e: KeyboardEvent) {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      finishRename()
+    } else if (e.key === 'Escape') {
+      editingConvoId = null
+    }
+  }
 </script>
 
 <div class="chat-tab">
@@ -99,44 +218,108 @@
       <p class="hint">Set an AI provider in Settings to enable chat.</p>
     </div>
   {:else}
-    <div class="chat-messages" bind:this={messagesContainer}>
-      {#if messages.length === 0}
-        <p class="empty">No messages yet. Ask about your vehicle!</p>
-      {/if}
-      {#each messages as msg (msg.id + msg.created_at)}
-        <div class="message {msg.role}">
-          <div class="message-bubble">
-            {#if msg.role === 'assistant'}
-              <div class="message-content markdown">{@html marked.parse(msg.content)}</div>
-            {:else}
-              <div class="message-content">{msg.content}</div>
+    <div class="chat-layout">
+      <!-- Sidebar -->
+      <div class="chat-sidebar" class:collapsed={sidebarCollapsed}>
+        <div class="sidebar-header">
+          {#if !sidebarCollapsed}
+            <button class="btn btn-primary btn-sm" onclick={newChat}>+ New Chat</button>
+          {/if}
+          <button class="btn btn-ghost btn-sm toggle-btn" onclick={() => (sidebarCollapsed = !sidebarCollapsed)}
+            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
+            {sidebarCollapsed ? '▶' : '◀'}
+          </button>
+        </div>
+        {#if !sidebarCollapsed}
+          <div class="convo-list">
+            {#each convos as convo (convo.id)}
+              <div
+                class="convo-item"
+                class:active={convo.id === activeConvoId}
+                onclick={() => selectConversation(convo.id)}
+                role="button"
+                tabindex="0"
+                onkeydown={(e) => { if (e.key === 'Enter') selectConversation(convo.id) }}
+              >
+                {#if editingConvoId === convo.id}
+                  <input
+                    class="rename-input"
+                    bind:value={editingTitle}
+                    onblur={finishRename}
+                    onkeydown={handleRenameKeydown}
+                  />
+                {:else}
+                  <span class="convo-title" ondblclick={() => startRename(convo)}>{convo.title}</span>
+                  <button
+                    class="convo-delete"
+                    title="Delete conversation"
+                    onclick={(e: MouseEvent) => { e.stopPropagation(); deleteConversation(convo.id) }}
+                  >×</button>
+                {/if}
+              </div>
+            {/each}
+            {#if convos.length === 0}
+              <p class="empty-sidebar">No conversations yet</p>
             {/if}
           </div>
-        </div>
-      {/each}
-      {#if sending}
-        <div class="message assistant">
-          <div class="message-bubble">
-            <div class="message-content thinking">Thinking...</div>
-          </div>
-        </div>
-      {/if}
-    </div>
+        {/if}
+      </div>
 
-    <div class="chat-controls">
-      <AiProviderSelect bind:selectedProviderId />
-    </div>
-    <div class="chat-input">
-      <textarea
-        bind:value={input}
-        onkeydown={handleKeydown}
-        placeholder="Ask about your vehicle..."
-        rows="2"
-        disabled={sending}
-      ></textarea>
-      <button class="btn btn-primary" onclick={send} disabled={sending || !input.trim()}>
-        {sending ? '...' : 'Send'}
-      </button>
+      <!-- Main chat area -->
+      <div class="chat-main">
+        {#if activeConvoId == null}
+          <div class="no-convo">
+            <p>Start a new conversation to chat about your vehicle.</p>
+            <button class="btn btn-primary" onclick={newChat}>+ New Chat</button>
+          </div>
+        {:else if loadingMessages}
+          <p class="loading-messages">Loading messages...</p>
+        {:else}
+          <div class="chat-messages" bind:this={messagesContainer}>
+            {#if messages.length === 0}
+              <p class="empty">No messages yet. Ask about your vehicle!</p>
+            {/if}
+            {#each messages as msg (msg.id + msg.created_at)}
+              {@const extracted = msg.role === 'assistant' ? extractActions(msg.content) : null}
+              <div class="message {msg.role}">
+                <div class="message-bubble">
+                  {#if msg.role === 'assistant'}
+                    <div class="message-content markdown">{@html marked.parse(extracted?.text ?? msg.content)}</div>
+                  {:else}
+                    <div class="message-content">{msg.content}</div>
+                  {/if}
+                </div>
+              </div>
+              {#if extracted?.actions}
+                <ProposedActionsCard {vehicleId} actionsJson={extracted.actions} />
+              {/if}
+            {/each}
+            {#if sending}
+              <div class="message assistant">
+                <div class="message-bubble">
+                  <div class="message-content thinking">Thinking...</div>
+                </div>
+              </div>
+            {/if}
+          </div>
+
+          <div class="chat-controls">
+            <AiProviderSelect bind:selectedProviderId />
+          </div>
+          <div class="chat-input">
+            <textarea
+              bind:value={input}
+              onkeydown={handleKeydown}
+              placeholder="Ask about your vehicle..."
+              rows="2"
+              disabled={sending}
+            ></textarea>
+            <button class="btn btn-primary" onclick={send} disabled={sending || !input.trim()}>
+              {sending ? '...' : 'Send'}
+            </button>
+          </div>
+        {/if}
+      </div>
     </div>
   {/if}
 </div>
@@ -164,10 +347,146 @@
     font-size: 0.85rem;
   }
 
+  /* Layout */
+  .chat-layout {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    gap: 1px;
+    background: var(--border-subtle);
+  }
+
+  /* Sidebar */
+  .chat-sidebar {
+    width: 220px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-base);
+    transition: width 0.2s ease;
+  }
+
+  .chat-sidebar.collapsed {
+    width: 36px;
+  }
+
+  .sidebar-header {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    padding: var(--sp-2);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .sidebar-header .btn-sm {
+    font-size: 0.75rem;
+    padding: var(--sp-1) var(--sp-2);
+  }
+
+  .toggle-btn {
+    margin-left: auto;
+    font-size: 0.7rem;
+    opacity: 0.6;
+  }
+
+  .convo-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--sp-1);
+  }
+
+  .convo-item {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-1);
+    padding: var(--sp-2);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: 0.8rem;
+    transition: background 0.15s ease;
+  }
+
+  .convo-item:hover {
+    background: var(--bg-raised);
+  }
+
+  .convo-item.active {
+    background: var(--primary-subtle, var(--bg-raised));
+    font-weight: 500;
+  }
+
+  .convo-title {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .convo-delete {
+    opacity: 0;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+    padding: 0 var(--sp-1);
+  }
+
+  .convo-item:hover .convo-delete {
+    opacity: 0.6;
+  }
+
+  .convo-delete:hover {
+    opacity: 1 !important;
+    color: var(--danger);
+  }
+
+  .rename-input {
+    flex: 1;
+    font-size: 0.8rem;
+    padding: var(--sp-1);
+    border: 1px solid var(--primary);
+    border-radius: var(--radius-sm);
+    background: var(--bg-base);
+  }
+
+  .empty-sidebar {
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    padding: var(--sp-4) var(--sp-2);
+  }
+
+  /* Main chat area */
+  .chat-main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    background: var(--bg-base);
+  }
+
+  .no-convo {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    gap: var(--sp-4);
+    color: var(--text-muted);
+  }
+
+  .loading-messages {
+    text-align: center;
+    color: var(--text-muted);
+    padding: var(--sp-8) 0;
+  }
+
   .chat-messages {
     flex: 1;
     overflow-y: auto;
-    padding: var(--sp-4) 0;
+    padding: var(--sp-4);
     display: flex;
     flex-direction: column;
     gap: var(--sp-3);
@@ -290,13 +609,14 @@
   .chat-controls {
     display: flex;
     justify-content: flex-end;
-    padding: var(--sp-2) 0;
+    padding: var(--sp-2) var(--sp-4);
     border-top: 1px solid var(--border-subtle);
   }
 
   .chat-input {
     display: flex;
     gap: var(--sp-2);
+    padding: 0 var(--sp-4) var(--sp-2);
   }
 
   .chat-input textarea {
@@ -306,5 +626,19 @@
 
   .chat-input button {
     align-self: flex-end;
+  }
+
+  /* Responsive: collapse sidebar on narrow screens */
+  @media (max-width: 640px) {
+    .chat-sidebar {
+      width: 36px;
+    }
+    .chat-sidebar .convo-list,
+    .chat-sidebar .sidebar-header .btn-primary {
+      display: none;
+    }
+    .chat-sidebar.collapsed {
+      width: 36px;
+    }
   }
 </style>

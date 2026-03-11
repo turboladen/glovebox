@@ -528,12 +528,21 @@ export interface AiStatus {
   providers: ProviderSummary[]
 }
 
+export interface Conversation {
+  id: number
+  vehicle_id: number | null
+  title: string
+  created_at: string
+  updated_at: string
+}
+
 export interface ChatMessage {
   id: number
   vehicle_id: number | null
   role: 'user' | 'assistant'
   content: string
   created_at: string
+  conversation_id: number | null
 }
 
 export interface ChatResponse {

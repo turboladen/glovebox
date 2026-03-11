@@ -201,11 +201,24 @@ export const research = {
     request<ResearchFinding[]>(`/vehicles/${vehicleId}/research/findings${status ? `?status=${status}` : ''}`),
 }
 
+// Conversations
+export const conversations = {
+  list: (vehicleId: number) => request<Conversation[]>(`/vehicles/${vehicleId}/conversations`),
+  create: (vehicleId: number, title?: string) =>
+    request<Conversation>(`/vehicles/${vehicleId}/conversations`, { method: 'POST', body: JSON.stringify({ title }) }),
+  rename: (vehicleId: number, id: number, title: string) =>
+    request<Conversation>(`/vehicles/${vehicleId}/conversations/${id}`, { method: 'PUT', body: JSON.stringify({ title }) }),
+  delete: (vehicleId: number, id: number) =>
+    request<{ deleted: number }>(`/vehicles/${vehicleId}/conversations/${id}`, { method: 'DELETE' }),
+  messages: (vehicleId: number, id: number) =>
+    request<ChatMessage[]>(`/vehicles/${vehicleId}/conversations/${id}/messages`),
+}
+
 // AI
 export const ai = {
   status: () => request<AiStatus>('/ai/status'),
-  chat: (vehicleId: number, message: string, providerId?: number) =>
-    request<ChatResponse>('/ai/chat', { method: 'POST', body: JSON.stringify({ vehicle_id: vehicleId, message, provider_id: providerId }) }),
+  chat: (vehicleId: number, conversationId: number, message: string, providerId?: number, documentId?: number) =>
+    request<ChatResponse>('/ai/chat', { method: 'POST', body: JSON.stringify({ vehicle_id: vehicleId, conversation_id: conversationId, message, provider_id: providerId, document_id: documentId }) }),
   chatHistory: (vehicleId: number) => request<ChatMessage[]>(`/ai/chat/history?vehicle_id=${vehicleId}`),
   parseInvoice: (documentId: number, providerId?: number) =>
     request<ParsedInvoice>('/ai/parse-invoice', { method: 'POST', body: JSON.stringify({ document_id: documentId, provider_id: providerId }) }),
@@ -243,6 +256,6 @@ import type {
   PartSlot, CreatePartSlot, Part, CreatePart,
   CostSummary, VehicleExport,
   AiStatus, AiProvider, CreateAiProvider, UpdateAiProvider, ProviderSummary,
-  ChatMessage, ChatResponse, ParsedInvoice, AiSuggestion, ModelInfo,
+  Conversation, ChatMessage, ChatResponse, ParsedInvoice, AiSuggestion, ModelInfo,
   RecallCheckResult, ResearchReport, ReportWithFindings, ResearchFinding,
 } from './types'

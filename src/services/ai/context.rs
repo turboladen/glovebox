@@ -24,6 +24,75 @@ Glovebox capabilities and where to find them on the vehicle detail page:\n\
 When suggesting actions, direct the user to the specific tab or button within Glovebox.\
 ";
 
+/// Instructions appended to the chat system prompt when the conversation is
+/// scoped to a vehicle. Tells the AI how to propose structured data that the
+/// frontend can render as editable cards for one-click record creation.
+pub const DATA_ENTRY_INSTRUCTIONS: &str = r#"
+
+## Structured Data Entry
+
+When the user mentions service work, parts purchases, or vehicle issues, you SHOULD extract structured data and return a `glovebox_actions` JSON block at the END of your response (after your natural-language explanation).
+
+IMPORTANT: Only include the JSON block when there is concrete, actionable data to extract. Do NOT include it for general questions or advice.
+
+The JSON block must be fenced in a ```glovebox_actions code block:
+
+```glovebox_actions
+{"glovebox_actions": {
+  "service_records": [...],
+  "parts": [...],
+  "observations": [...]
+}}
+```
+
+### Field schemas
+
+**service_records** — each object:
+- `service_date` (string, REQUIRED, "YYYY-MM-DD")
+- `mileage` (integer or null, odometer reading)
+- `description` (string or null, brief summary)
+- `parts_cost_cents` (integer or null, total parts cost in cents)
+- `labor_cost_cents` (integer or null, total labor cost in cents)
+- `total_cost_cents` (integer or null, grand total in cents — multiply dollars by 100)
+- `shop_name` (string or null)
+- `notes` (string or null)
+
+**parts** — each object:
+- `name` (string, REQUIRED, e.g. "Mobil 1 0W-40 Full Synthetic")
+- `manufacturer` (string or null)
+- `part_number` (string or null)
+- `status` (string, default "installed")
+- `installed_date` (string or null, "YYYY-MM-DD")
+- `installed_odometer` (integer or null)
+- `cost_cents` (integer or null, unit cost in cents)
+- `seller` (string or null, where purchased)
+- `notes` (string or null)
+
+**observations** — each object:
+- `category` (string, REQUIRED, one of: "noise", "vibration", "warning_light", "smell", "visual", "performance", "other")
+- `title` (string, REQUIRED, short summary)
+- `description` (string or null, details)
+- `odometer` (integer or null)
+- `obd_codes` (string or null, comma-separated codes like "P0301, P0302")
+- `notes` (string or null)
+
+### Example
+
+User: "Got an oil change today at 45,000 miles, $75 at Joe's Auto. Used Mobil 1 0W-40."
+
+Your response should explain what you extracted, then end with:
+
+```glovebox_actions
+{"glovebox_actions": {
+  "service_records": [{"service_date": "2026-03-11", "mileage": 45000, "description": "Oil change", "total_cost_cents": 7500, "shop_name": "Joe's Auto"}],
+  "parts": [{"name": "Mobil 1 0W-40 Full Synthetic", "manufacturer": "Mobil", "status": "installed", "installed_date": "2026-03-11", "installed_odometer": 45000}],
+  "observations": []
+}}
+```
+
+Always use today's date if the user says "today" or doesn't specify a date. Convert all dollar amounts to cents (multiply by 100).
+"#;
+
 /// Build a structured text context for a vehicle, suitable for AI system prompts.
 /// Gathers vehicle details, recent services, installed parts, active observations,
 /// and maintenance schedule status.
