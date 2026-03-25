@@ -15,6 +15,7 @@ pub mod platform;
 pub mod research_finding;
 pub mod research_report;
 pub mod service_record;
+pub mod service_record_line_item;
 pub mod service_schedule_link;
 pub mod shop;
 pub mod vehicle;

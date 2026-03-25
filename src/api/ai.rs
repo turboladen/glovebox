@@ -70,10 +70,17 @@ pub async fn status(State(state): State<AppState>) -> Result<Json<AiStatusRespon
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AiSuggestion {
+    #[serde(alias = "name", alias = "action", alias = "task")]
     pub title: String,
+    #[serde(alias = "description", alias = "explanation")]
     pub reason: String,
+    #[serde(default = "default_urgency")]
     pub urgency: String,
     pub estimated_cost_range: Option<String>,
+}
+
+fn default_urgency() -> String {
+    "medium".to_string()
 }
 
 /// Strip markdown code fences from AI responses (shared helper).
@@ -112,14 +119,19 @@ pub async fn get_suggestions(
         system_prompt: format!(
             "{preamble}\n\nBased on the vehicle data provided, suggest maintenance actions the \
             owner should prioritize in the next 3 months. Consider wear patterns, seasonal \
-            factors, mileage-based intervals, and manufacturer recommendations. \
-            Return ONLY a valid JSON array (no markdown)."
+            factors, mileage-based intervals, and manufacturer recommendations.\n\
+            Return ONLY a valid JSON array (no markdown) where each object has exactly these fields:\n\
+            - \"title\": string (short name of the maintenance action)\n\
+            - \"reason\": string (why this is needed)\n\
+            - \"urgency\": string (\"high\", \"medium\", or \"low\")\n\
+            - \"estimated_cost_range\": string or null (e.g. \"$50-$100\")"
         ),
         messages: vec![ChatMessage {
             role: Role::User,
             content: format!(
                 "{context}\n\nBased on this vehicle data, what maintenance should I prioritize \
-                in the next 3 months? Return as a JSON array of objects."
+                in the next 3 months? Return as a JSON array of objects with fields: \
+                title, reason, urgency, estimated_cost_range."
             ),
         }],
         attachments: vec![],
@@ -160,6 +172,12 @@ pub struct ParsedInvoice {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LineItem {
     pub description: String,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub quantity: Option<f64>,
+    #[serde(default)]
+    pub unit_cost_cents: Option<i32>,
     pub cost_cents: Option<i32>,
 }
 
@@ -169,13 +187,13 @@ const INVOICE_SYSTEM_PROMPT: &str = r#"You are analyzing an automotive service i
   "shop_name": "string or null",
   "mileage": integer or null,
   "description": "brief summary of work performed",
-  "line_items": [{"description": "string", "cost_cents": integer or null}],
+  "line_items": [{"description": "string", "category": "part" | "labor" | "fee" | "tax" | "other" | null, "quantity": number or null, "unit_cost_cents": integer or null, "cost_cents": integer or null}],
   "parts_cost_cents": integer or null (total parts cost in cents),
   "labor_cost_cents": integer or null (total labor cost in cents),
   "total_cost_cents": integer or null (grand total in cents),
   "notes": "any other relevant information or null"
 }
-All costs should be in cents (multiply dollar amounts by 100). Return ONLY the JSON object."#;
+All costs should be in cents (multiply dollar amounts by 100). For each line item, classify its category as "part" (parts/materials), "labor" (work/time), "fee" (shop supplies, environmental fees, etc.), "tax" (sales tax, etc.), or "other". Return ONLY the JSON object."#;
 
 pub async fn parse_invoice(
     State(state): State<AppState>,
@@ -894,5 +912,60 @@ mod tests {
         let item: LineItem = serde_json::from_str(json).unwrap();
         assert_eq!(item.description, "Unknown part");
         assert!(item.cost_cents.is_none());
+        // New optional fields default to None when absent
+        assert!(item.category.is_none());
+        assert!(item.quantity.is_none());
+        assert!(item.unit_cost_cents.is_none());
+    }
+
+    #[test]
+    fn line_item_with_enriched_fields() {
+        let json = r#"{
+            "description": "Oil filter",
+            "category": "part",
+            "quantity": 1.0,
+            "unit_cost_cents": 1299,
+            "cost_cents": 1299
+        }"#;
+        let item: LineItem = serde_json::from_str(json).unwrap();
+        assert_eq!(item.description, "Oil filter");
+        assert_eq!(item.category.as_deref(), Some("part"));
+        assert_eq!(item.quantity, Some(1.0));
+        assert_eq!(item.unit_cost_cents, Some(1299));
+        assert_eq!(item.cost_cents, Some(1299));
+    }
+
+    #[test]
+    fn line_item_backward_compat_no_new_fields() {
+        // Old format without category/quantity/unit_cost_cents still works
+        let json = r#"{"description": "Brake pads", "cost_cents": 5000}"#;
+        let item: LineItem = serde_json::from_str(json).unwrap();
+        assert_eq!(item.description, "Brake pads");
+        assert_eq!(item.cost_cents, Some(5000));
+        assert!(item.category.is_none());
+        assert!(item.quantity.is_none());
+        assert!(item.unit_cost_cents.is_none());
+    }
+
+    #[test]
+    fn parse_invoice_with_enriched_line_items() {
+        let json = r#"{
+            "service_date": "2024-06-15",
+            "shop_name": "AutoZone Service",
+            "description": "Brake job",
+            "line_items": [
+                {"description": "Brake pads (front)", "category": "part", "quantity": 1, "unit_cost_cents": 4500, "cost_cents": 4500},
+                {"description": "Labor - brake replacement", "category": "labor", "cost_cents": 12000},
+                {"description": "Shop supplies", "category": "fee", "cost_cents": 500}
+            ],
+            "total_cost_cents": 17000
+        }"#;
+        let parsed: ParsedInvoice = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.line_items.len(), 3);
+        assert_eq!(parsed.line_items[0].category.as_deref(), Some("part"));
+        assert_eq!(parsed.line_items[0].quantity, Some(1.0));
+        assert_eq!(parsed.line_items[1].category.as_deref(), Some("labor"));
+        assert!(parsed.line_items[1].quantity.is_none());
+        assert_eq!(parsed.line_items[2].category.as_deref(), Some("fee"));
     }
 }

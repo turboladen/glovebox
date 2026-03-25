@@ -144,6 +144,15 @@
         total_cost_cents: parsedInvoice.total_cost_cents ?? undefined,
         shop_name: parsedInvoice.shop_name ?? undefined,
         notes: parsedInvoice.notes ?? undefined,
+        line_items: parsedInvoice.line_items.length > 0
+          ? parsedInvoice.line_items.map(li => ({
+              description: li.description,
+              category: li.category ?? undefined,
+              quantity: li.quantity ?? undefined,
+              unit_cost_cents: li.unit_cost_cents ?? undefined,
+              cost_cents: li.cost_cents ?? undefined,
+            }))
+          : undefined,
       })
       serviceCreated = true
     } catch (e: any) {
@@ -335,7 +344,13 @@
             <strong>Line Items:</strong>
             <ul>
               {#each parsedInvoice.line_items as item}
-                <li>{item.description} {item.cost_cents != null ? formatCents(item.cost_cents) : ''}</li>
+                <li>
+                  {#if item.category}<span class="line-item-cat-tag">{item.category}</span>{/if}
+                  {item.description}
+                  {#if item.quantity != null} (x{item.quantity}){/if}
+                  {#if item.unit_cost_cents != null} @ {formatCents(item.unit_cost_cents)} ea{/if}
+                  {#if item.cost_cents != null} — {formatCents(item.cost_cents)}{/if}
+                </li>
               {/each}
             </ul>
           </div>
@@ -442,6 +457,17 @@
   .parsed-fields { display: flex; flex-direction: column; gap: var(--sp-2); font-size: 0.9rem; }
   .parsed-field ul { margin: var(--sp-1) 0 0; padding-left: var(--sp-5); }
   .parsed-field li { font-size: 0.85rem; }
+  .line-item-cat-tag {
+    font-size: 0.65rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    background: var(--surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: 0 3px;
+    margin-right: 4px;
+  }
   .parsed-actions { margin-top: var(--sp-3); display: flex; gap: var(--sp-2); justify-content: flex-end; align-items: center; }
   .service-created-notice { font-size: 0.85rem; color: var(--success); font-weight: 500; }
 </style>

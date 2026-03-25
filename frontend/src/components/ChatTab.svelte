@@ -25,10 +25,11 @@
   // Configure marked for safe, synchronous rendering
   marked.setOptions({ async: false, breaks: true })
 
-  let { vehicleId, initialDocumentId, initialMessage }: {
+  let { vehicleId, initialDocumentId, initialMessage, onNavigate }: {
     vehicleId: number
     initialDocumentId?: number
     initialMessage?: string
+    onNavigate?: (tab: string) => void
   } = $props()
 
   let convos: Conversation[] = $state([])
@@ -199,6 +200,32 @@
     }
   }
 
+  function isAlreadyCreated(msgIndex: number): boolean {
+    // Check if any subsequent message is a "[Created from suggestions: ...]" confirmation
+    for (let i = msgIndex + 1; i < messages.length; i++) {
+      if (messages[i].role === 'user' && messages[i].content.startsWith('Created from suggestions')) {
+        return true
+      }
+      // Stop scanning once we hit another assistant message with actions
+      if (messages[i].role === 'assistant' && extractActions(messages[i].content).actions) {
+        break
+      }
+    }
+    return false
+  }
+
+  async function handleActionsCreated(summary: string) {
+    if (activeConvoId == null) return
+    const content = `Created from suggestions:\n${summary}`
+    try {
+      const saved = await convosApi.addMessage(vehicleId, activeConvoId, 'user', content)
+      messages = [...messages, saved]
+      scrollToBottom()
+    } catch (e) {
+      console.error('Failed to save confirmation message:', e)
+    }
+  }
+
   function handleRenameKeydown(e: KeyboardEvent) {
     if (e.key === 'Enter') {
       e.preventDefault()
@@ -286,7 +313,7 @@
             {#if messages.length === 0}
               <p class="empty">No messages yet. Ask about your vehicle!</p>
             {/if}
-            {#each messages as msg (msg.id + msg.created_at)}
+            {#each messages as msg, msgIdx (msg.id + msg.created_at)}
               {@const extracted = msg.role === 'assistant' ? extractActions(msg.content) : null}
               <div class="message {msg.role}">
                 <div class="message-bubble">
@@ -298,7 +325,13 @@
                 </div>
               </div>
               {#if extracted?.actions}
-                <ProposedActionsCard {vehicleId} actionsJson={extracted.actions} />
+                <ProposedActionsCard
+                  {vehicleId}
+                  actionsJson={extracted.actions}
+                  alreadyCreated={isAlreadyCreated(msgIdx)}
+                  onActionsCreated={handleActionsCreated}
+                  {onNavigate}
+                />
               {/if}
             {/each}
             {#if sending}
@@ -454,11 +487,16 @@
     border: none;
     color: var(--text-muted);
     cursor: pointer;
-    font-size: 0.85rem;
+    font-size: 1rem;
     line-height: 1;
-    padding: 2px 4px;
+    padding: 4px 6px;
     border-radius: var(--radius-sm);
     transition: background 0.15s ease, color 0.15s ease;
+    min-width: 24px;
+    min-height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .convo-action-btn:hover {

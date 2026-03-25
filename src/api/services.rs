@@ -3,7 +3,7 @@ use axum::Json;
 use sea_orm::*;
 use serde::{Deserialize, Serialize};
 
-use crate::entities::{mileage_log, part, service_record, service_schedule_link};
+use crate::entities::{mileage_log, part, service_record, service_record_line_item, service_schedule_link};
 use crate::AppState;
 
 use super::error::ApiError;
@@ -11,6 +11,15 @@ use super::require_vehicle;
 use super::serde_helpers::deserialize_optional;
 
 type Result<T> = std::result::Result<T, ApiError>;
+
+#[derive(Deserialize)]
+pub struct CreateLineItem {
+    pub description: String,
+    pub category: Option<String>,
+    pub quantity: Option<f64>,
+    pub unit_cost_cents: Option<i32>,
+    pub cost_cents: Option<i32>,
+}
 
 #[derive(Deserialize)]
 pub struct CreateServiceRecord {
@@ -28,6 +37,7 @@ pub struct CreateServiceRecord {
     pub notes: Option<String>,
     pub schedule_item_ids: Option<Vec<i32>>,
     pub part_ids: Option<Vec<i32>>,
+    pub line_items: Option<Vec<CreateLineItem>>,
 }
 
 #[derive(Deserialize)]
@@ -57,6 +67,7 @@ pub struct UpdateServiceRecord {
     pub notes: Option<Option<String>>,
     pub schedule_item_ids: Option<Vec<i32>>,
     pub part_ids: Option<Vec<i32>>,
+    pub line_items: Option<Vec<CreateLineItem>>,
 }
 
 #[derive(Serialize)]
@@ -65,13 +76,14 @@ pub struct ServiceRecordWithLinks {
     pub record: service_record::Model,
     pub schedule_item_ids: Vec<i32>,
     pub part_ids: Vec<i32>,
+    pub line_items: Vec<service_record_line_item::Model>,
 }
 
-/// Load schedule link IDs and part IDs for a single service record.
+/// Load schedule link IDs, part IDs, and line items for a single service record.
 async fn load_service_links(
     db: &impl ConnectionTrait,
     record_id: i32,
-) -> Result<(Vec<i32>, Vec<i32>)> {
+) -> Result<(Vec<i32>, Vec<i32>, Vec<service_record_line_item::Model>)> {
     let links = service_schedule_link::Entity::find()
         .filter(service_schedule_link::Column::ServiceRecordId.eq(record_id))
         .all(db)
@@ -84,7 +96,34 @@ async fn load_service_links(
         .await?;
     let part_ids = parts.into_iter().map(|p| p.id).collect();
 
-    Ok((schedule_item_ids, part_ids))
+    let line_items = service_record_line_item::Entity::find()
+        .filter(service_record_line_item::Column::ServiceRecordId.eq(record_id))
+        .order_by_asc(service_record_line_item::Column::Id)
+        .all(db)
+        .await?;
+
+    Ok((schedule_item_ids, part_ids, line_items))
+}
+
+/// Insert line items for a service record within a transaction.
+async fn insert_line_items(
+    txn: &impl ConnectionTrait,
+    record_id: i32,
+    items: Vec<CreateLineItem>,
+) -> Result<()> {
+    for item in items {
+        let li = service_record_line_item::ActiveModel {
+            service_record_id: Set(record_id),
+            description: Set(item.description),
+            category: Set(item.category),
+            quantity: Set(item.quantity),
+            unit_cost_cents: Set(item.unit_cost_cents),
+            cost_cents: Set(item.cost_cents),
+            ..Default::default()
+        };
+        li.insert(txn).await?;
+    }
+    Ok(())
 }
 
 pub async fn list(
@@ -99,7 +138,7 @@ pub async fn list(
         .all(&state.db)
         .await?;
 
-    // Batch-load all schedule links and parts for these records (avoids N+1)
+    // Batch-load all schedule links, parts, and line items for these records (avoids N+1)
     let record_ids: Vec<i32> = records.iter().map(|r| r.id).collect();
 
     let all_links = if record_ids.is_empty() {
@@ -115,7 +154,17 @@ pub async fn list(
         vec![]
     } else {
         part::Entity::find()
-            .filter(part::Column::InstalledServiceId.is_in(record_ids))
+            .filter(part::Column::InstalledServiceId.is_in(record_ids.clone()))
+            .all(&state.db)
+            .await?
+    };
+
+    let all_line_items = if record_ids.is_empty() {
+        vec![]
+    } else {
+        service_record_line_item::Entity::find()
+            .filter(service_record_line_item::Column::ServiceRecordId.is_in(record_ids))
+            .order_by_asc(service_record_line_item::Column::Id)
             .all(&state.db)
             .await?
     };
@@ -133,10 +182,16 @@ pub async fn list(
                 .filter(|p| p.installed_service_id == Some(record.id))
                 .map(|p| p.id)
                 .collect();
+            let line_items = all_line_items
+                .iter()
+                .filter(|li| li.service_record_id == record.id)
+                .cloned()
+                .collect();
             ServiceRecordWithLinks {
                 record,
                 schedule_item_ids,
                 part_ids,
+                line_items,
             }
         })
         .collect();
@@ -156,12 +211,14 @@ pub async fn get_one(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Service record {id} not found")))?;
 
-    let (schedule_item_ids, part_ids) = load_service_links(&state.db, record.id).await?;
+    let (schedule_item_ids, part_ids, line_items) =
+        load_service_links(&state.db, record.id).await?;
 
     Ok(Json(ServiceRecordWithLinks {
         record,
         schedule_item_ids,
         part_ids,
+        line_items,
     }))
 }
 
@@ -220,6 +277,10 @@ pub async fn create(
         active_part.update(&txn).await?;
     }
 
+    // Insert line items
+    let line_items_input = input.line_items.unwrap_or_default();
+    insert_line_items(&txn, record.id, line_items_input).await?;
+
     // Also create a mileage log entry if mileage was provided
     if let Some(miles) = record.mileage {
         let mileage_entry = mileage_log::ActiveModel {
@@ -233,12 +294,20 @@ pub async fn create(
         mileage_entry.insert(&txn).await?;
     }
 
+    // Load back the inserted line items to return
+    let line_items = service_record_line_item::Entity::find()
+        .filter(service_record_line_item::Column::ServiceRecordId.eq(record.id))
+        .order_by_asc(service_record_line_item::Column::Id)
+        .all(&txn)
+        .await?;
+
     txn.commit().await?;
 
     Ok(Json(ServiceRecordWithLinks {
         record,
         schedule_item_ids,
         part_ids,
+        line_items,
     }))
 }
 
@@ -367,11 +436,73 @@ pub async fn update(
         parts.into_iter().map(|p| p.id).collect()
     };
 
+    // Handle line items: replace-all semantics when provided
+    if let Some(new_line_items) = input.line_items {
+        service_record_line_item::Entity::delete_many()
+            .filter(service_record_line_item::Column::ServiceRecordId.eq(record.id))
+            .exec(&txn)
+            .await?;
+        insert_line_items(&txn, record.id, new_line_items).await?;
+    }
+
+    let line_items = service_record_line_item::Entity::find()
+        .filter(service_record_line_item::Column::ServiceRecordId.eq(record.id))
+        .order_by_asc(service_record_line_item::Column::Id)
+        .all(&txn)
+        .await?;
+
     txn.commit().await?;
 
     Ok(Json(ServiceRecordWithLinks {
         record,
         schedule_item_ids,
         part_ids,
+        line_items,
     }))
+}
+
+pub async fn delete(
+    State(state): State<AppState>,
+    Path((vehicle_id, id)): Path<(i32, i32)>,
+) -> Result<Json<serde_json::Value>> {
+    require_vehicle(&state.db, vehicle_id).await?;
+
+    let existing = service_record::Entity::find_by_id(id)
+        .filter(service_record::Column::VehicleId.eq(vehicle_id))
+        .one(&state.db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Service record {id} not found")))?;
+
+    let txn = state.db.begin().await?;
+
+    // Unlink parts installed during this service (revert to purchased)
+    let linked_parts = part::Entity::find()
+        .filter(part::Column::InstalledServiceId.eq(existing.id))
+        .all(&txn)
+        .await?;
+    for p in linked_parts {
+        let mut active_part: part::ActiveModel = p.into();
+        active_part.status = Set("purchased".to_string());
+        active_part.installed_service_id = Set(None);
+        active_part.installed_date = Set(None);
+        active_part.installed_odometer = Set(None);
+        active_part.update(&txn).await?;
+    }
+
+    // Remove schedule links and line items
+    service_schedule_link::Entity::delete_many()
+        .filter(service_schedule_link::Column::ServiceRecordId.eq(existing.id))
+        .exec(&txn)
+        .await?;
+    service_record_line_item::Entity::delete_many()
+        .filter(service_record_line_item::Column::ServiceRecordId.eq(existing.id))
+        .exec(&txn)
+        .await?;
+
+    // Delete the service record
+    existing.delete(&txn).await?;
+
+    txn.commit().await?;
+
+    Ok(Json(serde_json::json!({ "deleted": id })))
 }

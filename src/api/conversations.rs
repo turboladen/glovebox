@@ -119,3 +119,54 @@ pub async fn messages(
 
     Ok(Json(msgs))
 }
+
+#[derive(Debug, Deserialize)]
+pub struct AddMessage {
+    pub role: String,
+    pub content: String,
+}
+
+pub async fn add_message(
+    State(state): State<AppState>,
+    Path((vehicle_id, id)): Path<(i32, i32)>,
+    Json(input): Json<AddMessage>,
+) -> Result<Json<chat_message::Model>> {
+    require_vehicle(&state.db, vehicle_id).await?;
+
+    // Verify conversation belongs to vehicle
+    conversation::Entity::find_by_id(id)
+        .filter(conversation::Column::VehicleId.eq(vehicle_id))
+        .one(&state.db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Conversation {id} not found")))?;
+
+    if input.role != "user" && input.role != "assistant" {
+        return Err(ApiError::BadRequest(
+            "role must be 'user' or 'assistant'".into(),
+        ));
+    }
+
+    let now = chrono::Utc::now()
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string();
+
+    let msg = chat_message::ActiveModel {
+        vehicle_id: Set(Some(vehicle_id)),
+        conversation_id: Set(Some(id)),
+        role: Set(input.role),
+        content: Set(input.content),
+        created_at: Set(now.clone()),
+        ..Default::default()
+    };
+    let saved = msg.insert(&state.db).await?;
+
+    // Touch conversation updated_at
+    let mut convo_active = conversation::ActiveModel {
+        id: Set(id),
+        ..Default::default()
+    };
+    convo_active.updated_at = Set(now);
+    convo_active.update(&state.db).await?;
+
+    Ok(Json(saved))
+}

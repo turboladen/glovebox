@@ -242,7 +242,7 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
         {:else if activeTab === 'research'}
           <ResearchTab vehicleId={vehicle.id} />
         {:else if activeTab === 'ai'}
-          <ChatTab vehicleId={vehicle.id} initialDocumentId={chatDocumentId} initialMessage={chatInitialMessage} />
+          <ChatTab vehicleId={vehicle.id} initialDocumentId={chatDocumentId} initialMessage={chatInitialMessage} onNavigate={(tab) => (activeTab = tab)} />
         {/if}
       </div>
     {/key}

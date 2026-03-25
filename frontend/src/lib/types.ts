@@ -111,9 +111,30 @@ export interface ServiceRecord {
   updated_at: string
 }
 
+export interface LineItem {
+  id: number
+  service_record_id: number
+  description: string
+  category: string | null
+  quantity: number | null
+  unit_cost_cents: number | null
+  cost_cents: number | null
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateLineItem {
+  description: string
+  category?: string | null
+  quantity?: number | null
+  unit_cost_cents?: number | null
+  cost_cents?: number | null
+}
+
 export interface ServiceRecordWithLinks extends ServiceRecord {
   schedule_item_ids: number[]
   part_ids: number[]
+  line_items: LineItem[]
 }
 
 export interface CreateServiceRecord {
@@ -131,6 +152,7 @@ export interface CreateServiceRecord {
   notes?: string | null
   schedule_item_ids?: number[]
   part_ids?: number[]
+  line_items?: CreateLineItem[]
 }
 
 export interface ScheduleItem {
@@ -556,7 +578,7 @@ export interface ParsedInvoice {
   shop_name: string | null
   mileage: number | null
   description: string | null
-  line_items: { description: string; cost_cents: number | null }[]
+  line_items: { description: string; category?: string | null; quantity?: number | null; unit_cost_cents?: number | null; cost_cents: number | null }[]
   parts_cost_cents: number | null
   labor_cost_cents: number | null
   total_cost_cents: number | null

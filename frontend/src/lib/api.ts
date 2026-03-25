@@ -57,6 +57,8 @@ export const services = {
     request<ServiceRecordWithLinks>(`/vehicles/${vehicleId}/services`, { method: 'POST', body: JSON.stringify(data) }),
   update: (vehicleId: number, id: number, data: Partial<CreateServiceRecord>) =>
     request<ServiceRecordWithLinks>(`/vehicles/${vehicleId}/services/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  delete: (vehicleId: number, id: number) =>
+    request<{ deleted: number }>(`/vehicles/${vehicleId}/services/${id}`, { method: 'DELETE' }),
 }
 
 // Schedules
@@ -212,6 +214,10 @@ export const conversations = {
     request<{ deleted: number }>(`/vehicles/${vehicleId}/conversations/${id}`, { method: 'DELETE' }),
   messages: (vehicleId: number, id: number) =>
     request<ChatMessage[]>(`/vehicles/${vehicleId}/conversations/${id}/messages`),
+  addMessage: (vehicleId: number, id: number, role: string, content: string) =>
+    request<ChatMessage>(`/vehicles/${vehicleId}/conversations/${id}/messages`, {
+      method: 'POST', body: JSON.stringify({ role, content }),
+    }),
 }
 
 // AI
@@ -248,7 +254,7 @@ export const aiProviders = {
 import type {
   Vehicle, CreateVehicle, Platform, ModelTemplate,
   MileageEntry, CreateMileageEntry,
-  ServiceRecordWithLinks, CreateServiceRecord,
+  ServiceRecordWithLinks, CreateServiceRecord, CreateLineItem,
   ScheduleItem, CreateScheduleItem, ResolvedScheduleItem,
   RemindersResponse, VinDecodeResponse,
   Shop, Observation, CreateObservation, Document,

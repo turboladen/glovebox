@@ -120,7 +120,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .route(
             "/api/vehicles/{vehicle_id}/conversations/{id}/messages",
-            get(api::conversations::messages),
+            get(api::conversations::messages).post(api::conversations::add_message),
         )
         // Vehicle sub-resources (flat routes for correct path param extraction)
         .route(
@@ -133,7 +133,9 @@ async fn main() -> anyhow::Result<()> {
         )
         .route(
             "/api/vehicles/{vehicle_id}/services/{id}",
-            get(api::services::get_one).put(api::services::update),
+            get(api::services::get_one)
+                .put(api::services::update)
+                .delete(api::services::delete),
         )
         .route(
             "/api/vehicles/{vehicle_id}/schedule",

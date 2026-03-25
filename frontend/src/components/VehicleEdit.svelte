@@ -13,31 +13,55 @@
     onCancel: () => void
   } = $props()
 
-  // Vehicle info fields
-  let name = $state(vehicle.name)
-  let year = $state<number | undefined>(vehicle.year ?? undefined)
-  let make = $state(vehicle.make ?? '')
-  let model = $state(vehicle.model ?? '')
-  let trimLevel = $state(vehicle.trim_level ?? '')
-  let bodyStyle = $state(vehicle.body_style ?? '')
-  let engine = $state(vehicle.engine ?? '')
-  let transmission = $state(vehicle.transmission ?? '')
-  let drivetrain = $state(vehicle.drivetrain ?? '')
-  let vin = $state(vehicle.vin ?? '')
-  let licensePlate = $state(vehicle.license_plate ?? '')
-  let color = $state(vehicle.color ?? '')
-  let notes = $state(vehicle.notes ?? '')
-  let modelTemplateId = $state<number | undefined>(vehicle.model_template_id ?? undefined)
+  // Vehicle info fields — synced from vehicle prop via $effect.pre below
+  let name = $state('')
+  let year = $state<number | undefined>(undefined)
+  let make = $state('')
+  let model = $state('')
+  let trimLevel = $state('')
+  let bodyStyle = $state('')
+  let engine = $state('')
+  let transmission = $state('')
+  let drivetrain = $state('')
+  let vin = $state('')
+  let licensePlate = $state('')
+  let color = $state('')
+  let notes = $state('')
+  let modelTemplateId = $state<number | undefined>(undefined)
 
   // Purchase fields
-  let purchaseDate = $state(vehicle.purchase_date ?? '')
-  let purchasePriceDollars = $state(vehicle.purchase_price_cents != null ? (vehicle.purchase_price_cents / 100).toFixed(2) : '')
-  let purchaseMileage = $state<number | undefined>(vehicle.purchase_mileage ?? undefined)
+  let purchaseDate = $state('')
+  let purchasePriceDollars = $state('')
+  let purchaseMileage = $state<number | undefined>(undefined)
 
   // Sold fields
-  let soldDate = $state(vehicle.sold_date ?? '')
-  let soldPriceDollars = $state(vehicle.sold_price_cents != null ? (vehicle.sold_price_cents / 100).toFixed(2) : '')
-  let soldMileage = $state<number | undefined>(vehicle.sold_mileage ?? undefined)
+  let soldDate = $state('')
+  let soldPriceDollars = $state('')
+  let soldMileage = $state<number | undefined>(undefined)
+
+  // Sync form fields from vehicle prop (runs before first render and on prop change)
+  $effect.pre(() => {
+    name = vehicle.name
+    year = vehicle.year ?? undefined
+    make = vehicle.make ?? ''
+    model = vehicle.model ?? ''
+    trimLevel = vehicle.trim_level ?? ''
+    bodyStyle = vehicle.body_style ?? ''
+    engine = vehicle.engine ?? ''
+    transmission = vehicle.transmission ?? ''
+    drivetrain = vehicle.drivetrain ?? ''
+    vin = vehicle.vin ?? ''
+    licensePlate = vehicle.license_plate ?? ''
+    color = vehicle.color ?? ''
+    notes = vehicle.notes ?? ''
+    modelTemplateId = vehicle.model_template_id ?? undefined
+    purchaseDate = vehicle.purchase_date ?? ''
+    purchasePriceDollars = vehicle.purchase_price_cents != null ? (vehicle.purchase_price_cents / 100).toFixed(2) : ''
+    purchaseMileage = vehicle.purchase_mileage ?? undefined
+    soldDate = vehicle.sold_date ?? ''
+    soldPriceDollars = vehicle.sold_price_cents != null ? (vehicle.sold_price_cents / 100).toFixed(2) : ''
+    soldMileage = vehicle.sold_mileage ?? undefined
+  })
 
   let templates: ModelTemplate[] = $state([])
   let saving = $state(false)

@@ -56,6 +56,13 @@ The JSON block must be fenced in a ```glovebox_actions code block:
 - `total_cost_cents` (integer or null, grand total in cents — multiply dollars by 100)
 - `shop_name` (string or null)
 - `notes` (string or null)
+- `schedule_item_ids` (array of integers or null — IDs of maintenance schedule items this service fulfills; use the `[id=N]` values from Maintenance Status above when the service clearly covers those scheduled items, e.g. an oil change covers the "Oil Change" schedule item)
+- `line_items` (array or null — itemized breakdown of work/parts/fees):
+  - `description` (string, REQUIRED)
+  - `category` (string or null: "part", "labor", "fee", "tax", "other")
+  - `quantity` (number or null)
+  - `unit_cost_cents` (integer or null)
+  - `cost_cents` (integer or null)
 
 **parts** — each object:
 - `name` (string, REQUIRED, e.g. "Mobil 1 0W-40 Full Synthetic")
@@ -84,13 +91,15 @@ Your response should explain what you extracted, then end with:
 
 ```glovebox_actions
 {"glovebox_actions": {
-  "service_records": [{"service_date": "2026-03-11", "mileage": 45000, "description": "Oil change", "total_cost_cents": 7500, "shop_name": "Joe's Auto"}],
+  "service_records": [{"service_date": "2026-03-11", "mileage": 45000, "description": "Oil change", "total_cost_cents": 7500, "shop_name": "Joe's Auto", "schedule_item_ids": [3], "line_items": [{"description": "Oil filter", "category": "part", "quantity": 1, "cost_cents": 1200}, {"description": "Synthetic oil 5qt", "category": "part", "quantity": 1, "cost_cents": 3500}, {"description": "Labor", "category": "labor", "cost_cents": 2800}]}],
   "parts": [{"name": "Mobil 1 0W-40 Full Synthetic", "manufacturer": "Mobil", "status": "installed", "installed_date": "2026-03-11", "installed_odometer": 45000}],
   "observations": []
 }}
 ```
 
 Always use today's date if the user says "today" or doesn't specify a date. Convert all dollar amounts to cents (multiply by 100).
+
+If a follow-up message confirms that suggested items were already created (e.g., "Created from suggestions:" followed by a bulleted list), do NOT re-propose those same items. Only suggest new actions based on new information.
 "#;
 
 /// Build a structured text context for a vehicle, suitable for AI system prompts.
@@ -323,7 +332,8 @@ async fn write_reminders(
     for r in &reminder_resp.reminders {
         write!(
             ctx,
-            "- {}: {}",
+            "- [id={}] {}: {}",
+            r.schedule_item.id,
             r.schedule_item.name,
             r.status.to_uppercase()
         )

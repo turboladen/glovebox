@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { services as servicesApi, observations as obsApi, parts as partsApi } from '../lib/api'
-  import type { ServiceRecordWithLinks, Observation, Part } from '../lib/types'
+  import { services as servicesApi, observations as obsApi, parts as partsApi, shops as shopsApi } from '../lib/api'
+  import type { ServiceRecordWithLinks, Observation, Part, Shop } from '../lib/types'
   import { formatDate } from '../lib/dates'
 
   let { vehicleId }: { vehicleId: number } = $props()
@@ -13,19 +13,36 @@
   let entries: TimelineEntry[] = $state([])
   let allParts: Part[] = $state([])
   let allObservations: Observation[] = $state([])
+  let shopList: Shop[] = $state([])
   let loading = $state(true)
   let filter = $state<'all' | 'services' | 'observations'>('all')
 
+  // Expanded/editing state
+  let expandedId: string | null = $state(null)
+  let editing = $state(false)
+  let editDate = $state('')
+  let editMileage = $state('')
+  let editDescription = $state('')
+  let editCostDollars = $state('')
+  let editShopName = $state('')
+  let editShopId: number | null = $state(null)
+  let editNotes = $state('')
+  let saving = $state(false)
+  let deleting = $state(false)
+  let confirmDelete = $state(false)
+
   onMount(async () => {
     try {
-      const [svcList, obsList, partsList] = await Promise.all([
+      const [svcList, obsList, partsList, shops] = await Promise.all([
         servicesApi.list(vehicleId),
         obsApi.list(vehicleId),
         partsApi.list(vehicleId),
+        shopsApi.list(),
       ])
 
       allParts = partsList
       allObservations = obsList
+      shopList = shops
 
       const timeline: TimelineEntry[] = [
         ...svcList.map((s): TimelineEntry => ({ type: 'service', date: s.service_date, data: s })),
@@ -64,6 +81,84 @@
   function formatMileage(n: number | null): string {
     return n != null ? n.toLocaleString() + ' mi' : ''
   }
+
+  function entryKey(entry: TimelineEntry): string {
+    return entry.type + '-' + entry.data.id
+  }
+
+  function toggleExpand(key: string) {
+    if (expandedId === key) {
+      expandedId = null
+      editing = false
+      confirmDelete = false
+    } else {
+      expandedId = key
+      editing = false
+      confirmDelete = false
+    }
+  }
+
+  function startEdit(record: ServiceRecordWithLinks) {
+    editing = true
+    editDate = record.service_date
+    editMileage = record.mileage != null ? String(record.mileage) : ''
+    editDescription = record.description ?? ''
+    editCostDollars = record.total_cost_cents != null ? (record.total_cost_cents / 100).toFixed(2) : ''
+    editShopName = record.shop_name ?? ''
+    editShopId = record.shop_id ?? null
+    editNotes = record.notes ?? ''
+  }
+
+  function cancelEdit() {
+    editing = false
+    confirmDelete = false
+  }
+
+  function shopForName(name: string): Shop | undefined {
+    return shopList.find(s => s.name.toLowerCase() === name.toLowerCase())
+  }
+
+  async function saveEdit(record: ServiceRecordWithLinks) {
+    saving = true
+    try {
+      const costCents = editCostDollars ? Math.round(parseFloat(editCostDollars) * 100) : null
+      const matchedShop = shopForName(editShopName)
+      const updated = await servicesApi.update(vehicleId, record.id, {
+        service_date: editDate,
+        mileage: editMileage ? parseInt(editMileage) : null,
+        description: editDescription || null,
+        total_cost_cents: costCents,
+        shop_name: editShopName || null,
+        shop_id: matchedShop?.id ?? editShopId ?? null,
+        notes: editNotes || null,
+      })
+      // Update in entries
+      entries = entries.map(e =>
+        e.type === 'service' && e.data.id === record.id
+          ? { type: 'service', date: updated.service_date, data: updated }
+          : e
+      )
+      editing = false
+    } catch (e) {
+      console.error('Failed to update service record:', e)
+    } finally {
+      saving = false
+    }
+  }
+
+  async function deleteService(id: number) {
+    deleting = true
+    try {
+      await servicesApi.delete(vehicleId, id)
+      entries = entries.filter(e => !(e.type === 'service' && e.data.id === id))
+      expandedId = null
+      confirmDelete = false
+    } catch (e) {
+      console.error('Failed to delete service record:', e)
+    } finally {
+      deleting = false
+    }
+  }
 </script>
 
 {#if loading}
@@ -78,10 +173,19 @@
   </div>
 
   <div class="history-list">
-    {#each filtered as entry (entry.type + '-' + (entry.type === 'service' ? entry.data.id : entry.data.id))}
+    {#each filtered as entry (entryKey(entry))}
+      {@const key = entryKey(entry)}
+      {@const isExpanded = expandedId === key}
       {#if entry.type === 'service'}
         {@const record = entry.data}
-        <div class="history-card service-card">
+        <div
+          class="history-card service-card"
+          class:expanded={isExpanded}
+          onclick={() => toggleExpand(key)}
+          role="button"
+          tabindex="0"
+          onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleExpand(key) } }}
+        >
           <div class="history-header">
             <span class="type-badge service-badge">Service</span>
             <span class="date">{formatDate(record.service_date)}</span>
@@ -100,26 +204,112 @@
               <span>at {record.shop_name}</span>
             {/if}
           </div>
-          {#if record.notes}
-            <p class="notes">{record.notes}</p>
-          {/if}
-          {#if partsForService(record).length > 0}
-            <div class="linked-items">
-              <span class="linked-label">Parts:</span>
-              {#each partsForService(record) as part (part.id)}
-                <span class="linked-chip part-chip">{part.name}</span>
-              {/each}
-            </div>
-          {/if}
-          {#if resolvedObsForService(record.id).length > 0}
-            <div class="linked-items">
-              <span class="linked-label">Resolved:</span>
-              {#each resolvedObsForService(record.id) as obs (obs.id)}
-                <span class="linked-chip obs-chip">{obs.title}</span>
-              {/each}
-            </div>
+          {#if !isExpanded}
+            {#if record.notes}
+              <p class="notes">{record.notes}</p>
+            {/if}
+            {#if partsForService(record).length > 0}
+              <div class="linked-items">
+                <span class="linked-label">Parts:</span>
+                {#each partsForService(record) as part (part.id)}
+                  <span class="linked-chip part-chip">{part.name}</span>
+                {/each}
+              </div>
+            {/if}
+            {#if resolvedObsForService(record.id).length > 0}
+              <div class="linked-items">
+                <span class="linked-label">Resolved:</span>
+                {#each resolvedObsForService(record.id) as obs (obs.id)}
+                  <span class="linked-chip obs-chip">{obs.title}</span>
+                {/each}
+              </div>
+            {/if}
           {/if}
         </div>
+        {#if isExpanded}
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <div class="expanded-panel" onclick={(e) => e.stopPropagation()}>
+            {#if editing}
+              <div class="edit-form">
+                <div class="form-row">
+                  <div class="field">
+                    <label for="edit-date-{record.id}">Date</label>
+                    <input id="edit-date-{record.id}" type="date" bind:value={editDate} />
+                  </div>
+                  <div class="field">
+                    <label for="edit-mileage-{record.id}">Mileage</label>
+                    <input id="edit-mileage-{record.id}" type="number" bind:value={editMileage} min="0" />
+                  </div>
+                </div>
+                <div class="field">
+                  <label for="edit-desc-{record.id}">Description</label>
+                  <input id="edit-desc-{record.id}" type="text" bind:value={editDescription} />
+                </div>
+                <div class="form-row">
+                  <div class="field">
+                    <label for="edit-cost-{record.id}">Total Cost ($)</label>
+                    <input id="edit-cost-{record.id}" type="number" step="0.01" min="0" bind:value={editCostDollars} />
+                  </div>
+                  <div class="field">
+                    <label for="edit-shop-{record.id}">Shop</label>
+                    <input id="edit-shop-{record.id}" type="text" bind:value={editShopName} />
+                  </div>
+                </div>
+                <div class="field">
+                  <label for="edit-notes-{record.id}">Notes</label>
+                  <textarea id="edit-notes-{record.id}" bind:value={editNotes} rows="2"></textarea>
+                </div>
+                <div class="edit-actions">
+                  <button class="btn btn-secondary btn-sm" onclick={cancelEdit} disabled={saving}>Cancel</button>
+                  <button class="btn btn-primary btn-sm" onclick={() => saveEdit(record)} disabled={saving}>
+                    {saving ? 'Saving...' : 'Save'}
+                  </button>
+                </div>
+              </div>
+            {:else}
+              <div class="detail-section">
+                {#if record.parts_cost_cents != null}
+                  <span><strong>Parts cost:</strong> {formatCents(record.parts_cost_cents)}</span>
+                {/if}
+                {#if record.labor_cost_cents != null}
+                  <span><strong>Labor cost:</strong> {formatCents(record.labor_cost_cents)}</span>
+                {/if}
+                {#if record.notes}
+                  <p class="notes">{record.notes}</p>
+                {/if}
+                {#if partsForService(record).length > 0}
+                  <div class="linked-items">
+                    <span class="linked-label">Parts:</span>
+                    {#each partsForService(record) as part (part.id)}
+                      <span class="linked-chip part-chip">{part.name}</span>
+                    {/each}
+                  </div>
+                {/if}
+                {#if resolvedObsForService(record.id).length > 0}
+                  <div class="linked-items">
+                    <span class="linked-label">Resolved:</span>
+                    {#each resolvedObsForService(record.id) as obs (obs.id)}
+                      <span class="linked-chip obs-chip">{obs.title}</span>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+              <div class="expand-actions">
+                <button class="btn btn-secondary btn-sm" onclick={() => startEdit(record)}>Edit</button>
+                {#if confirmDelete}
+                  <span class="confirm-text">Delete this record?</span>
+                  <button class="btn btn-danger btn-sm" onclick={() => deleteService(record.id)} disabled={deleting}>
+                    {deleting ? 'Deleting...' : 'Yes, Delete'}
+                  </button>
+                  <button class="btn btn-secondary btn-sm" onclick={() => (confirmDelete = false)}>Cancel</button>
+                {:else}
+                  <button class="btn btn-danger-outline btn-sm" onclick={() => (confirmDelete = true)}>Delete</button>
+                {/if}
+              </div>
+            {/if}
+          </div>
+        {/if}
       {:else}
         {@const obs = entry.data}
         <div class="history-card obs-card" class:resolved={obs.resolved}>
@@ -166,7 +356,7 @@
 
   .history-card {
     padding: var(--sp-3) var(--sp-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
-    background: var(--bg-raised);
+    background: var(--bg-raised); cursor: pointer;
     transition:
       border-color var(--duration-base) var(--ease-out),
       box-shadow var(--duration-base) var(--ease-out),
@@ -177,6 +367,12 @@
     border-color: var(--border);
     box-shadow: var(--shadow-sm);
     transform: translateY(-1px);
+  }
+
+  .history-card.expanded {
+    border-color: var(--primary);
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
   }
 
   .history-card.resolved { opacity: 0.6; }
@@ -219,4 +415,92 @@
 
   .part-chip { background: var(--success-bg); color: var(--success); }
   .obs-chip { background: var(--warning-bg); color: var(--warning); }
+
+  /* Expanded panel */
+  .expanded-panel {
+    border: 1px solid var(--primary);
+    border-top: none;
+    border-bottom-left-radius: var(--radius-md);
+    border-bottom-right-radius: var(--radius-md);
+    background: var(--bg-raised);
+    padding: var(--sp-3) var(--sp-4);
+  }
+
+  .detail-section {
+    display: flex; flex-direction: column; gap: var(--sp-2);
+    margin-bottom: var(--sp-3);
+    font-size: 0.85rem;
+  }
+
+  .expand-actions {
+    display: flex; align-items: center; gap: var(--sp-2);
+    padding-top: var(--sp-2);
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .confirm-text {
+    font-size: 0.8rem;
+    color: var(--danger);
+    font-weight: 500;
+  }
+
+  .btn-danger {
+    background: var(--danger);
+    color: white;
+    border: 1px solid var(--danger);
+  }
+
+  .btn-danger:hover {
+    opacity: 0.9;
+  }
+
+  .btn-danger-outline {
+    background: none;
+    color: var(--danger);
+    border: 1px solid var(--danger);
+  }
+
+  .btn-danger-outline:hover {
+    background: var(--danger-bg);
+  }
+
+  .btn-sm {
+    font-size: 0.75rem;
+    padding: var(--sp-1) var(--sp-2);
+  }
+
+  /* Edit form */
+  .edit-form {
+    display: flex; flex-direction: column; gap: var(--sp-2);
+  }
+
+  .form-row {
+    display: flex; gap: var(--sp-3);
+  }
+
+  .form-row .field {
+    flex: 1;
+  }
+
+  .field {
+    display: flex; flex-direction: column; gap: var(--sp-1);
+  }
+
+  .field label {
+    font-size: 0.75rem; font-weight: 600; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.03em;
+  }
+
+  .field input, .field textarea {
+    padding: var(--sp-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-base);
+    font-size: 0.85rem;
+  }
+
+  .edit-actions {
+    display: flex; justify-content: flex-end; gap: var(--sp-2);
+    margin-top: var(--sp-2);
+  }
 </style>

@@ -384,7 +384,7 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="modal-backdrop" onclick={() => (linkPickerFinding = null)} onkeydown={(e) => e.key === 'Escape' && (linkPickerFinding = null)}>
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="modal-content" onclick={(e) => e.stopPropagation()}>
+    <div class="modal-content" onclick={(e) => e.stopPropagation()} onkeydown={() => {}}>
       <h4>Mark as Completed</h4>
       <p class="modal-desc">Optionally link this finding to a service record or part that addressed it.</p>
 

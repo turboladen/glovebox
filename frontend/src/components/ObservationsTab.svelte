@@ -17,7 +17,7 @@
   let title = $state('')
   let description = $state('')
   let observedAt = $state(new Date().toISOString().slice(0, 10))
-  let odometer = $state<number | undefined>(estimatedMileage)
+  let odometer = $state<number | undefined>(undefined)
   // If estimatedMileage arrives after mount and odometer hasn't been manually set, update it
   let odometerTouched = $state(false)
   $effect(() => {
