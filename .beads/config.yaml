@@ -52,3 +52,11 @@
 # - linear.api-key
 # - github.org
 # - github.repo
+
+
+sync.git-remote: "ssh://git@github.com/turboladen/glovebox.git"
+
+# dolt:
+#   port: 3308
+
+dolt.shared-server: true

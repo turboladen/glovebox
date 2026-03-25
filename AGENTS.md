@@ -36,92 +36,27 @@ cp -rf source dest          # NOT: cp -r source dest
 - `apt-get` - use `-y` flag
 - `brew` - use `HOMEBREW_NO_AUTO_UPDATE=1` env var
 
-<!-- BEGIN BEADS INTEGRATION -->
-## Issue Tracking with bd (beads)
+<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
+## Beads Issue Tracker
 
-**IMPORTANT**: This project uses **bd (beads)** for ALL issue tracking. Do NOT use markdown TODOs, task lists, or other tracking methods.
+This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
 
-### Why bd?
-
-- Dependency-aware: Track blockers and relationships between issues
-- Version-controlled: Built on Dolt with cell-level merge
-- Agent-optimized: JSON output, ready work detection, discovered-from links
-- Prevents duplicate tracking systems and confusion
-
-### Quick Start
-
-**Check for ready work:**
+### Quick Reference
 
 ```bash
-bd ready --json
+bd ready              # Find available work
+bd show <id>          # View issue details
+bd update <id> --claim  # Claim work
+bd close <id>         # Complete work
 ```
 
-**Create new issues:**
+### Rules
 
-```bash
-bd create "Issue title" --description="Detailed context" -t bug|feature|task -p 0-4 --json
-bd create "Issue title" --description="What this issue is about" -p 1 --deps discovered-from:bd-123 --json
-```
+- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
+- Run `bd prime` for detailed command reference and session close protocol
+- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
 
-**Claim and update:**
-
-```bash
-bd update <id> --claim --json
-bd update bd-42 --priority 1 --json
-```
-
-**Complete work:**
-
-```bash
-bd close bd-42 --reason "Completed" --json
-```
-
-### Issue Types
-
-- `bug` - Something broken
-- `feature` - New functionality
-- `task` - Work item (tests, docs, refactoring)
-- `epic` - Large feature with subtasks
-- `chore` - Maintenance (dependencies, tooling)
-
-### Priorities
-
-- `0` - Critical (security, data loss, broken builds)
-- `1` - High (major features, important bugs)
-- `2` - Medium (default, nice-to-have)
-- `3` - Low (polish, optimization)
-- `4` - Backlog (future ideas)
-
-### Workflow for AI Agents
-
-1. **Check ready work**: `bd ready` shows unblocked issues
-2. **Claim your task atomically**: `bd update <id> --claim`
-3. **Work on it**: Implement, test, document
-4. **Discover new work?** Create linked issue:
-   - `bd create "Found bug" --description="Details about what was found" -p 1 --deps discovered-from:<parent-id>`
-5. **Complete**: `bd close <id> --reason "Done"`
-
-### Auto-Sync
-
-bd automatically syncs with git:
-
-- Exports to `.beads/issues.jsonl` after changes (5s debounce)
-- Imports from JSONL when newer (e.g., after `git pull`)
-- No manual export/import needed!
-
-### Important Rules
-
-- ✅ Use bd for ALL task tracking
-- ✅ Always use `--json` flag for programmatic use
-- ✅ Link discovered work with `discovered-from` dependencies
-- ✅ Check `bd ready` before asking "what should I work on?"
-- ❌ Do NOT create markdown TODO lists
-- ❌ Do NOT use external issue trackers
-- ❌ Do NOT duplicate tracking systems
-
-For more details, see README.md and docs/QUICKSTART.md.
-
-## Landing the Plane (Session Completion)
+## Session Completion
 
 **When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
 
@@ -133,7 +68,7 @@ For more details, see README.md and docs/QUICKSTART.md.
 4. **PUSH TO REMOTE** - This is MANDATORY:
    ```bash
    git pull --rebase
-   bd sync
+   bd dolt push
    git push
    git status  # MUST show "up to date with origin"
    ```
@@ -146,54 +81,4 @@ For more details, see README.md and docs/QUICKSTART.md.
 - NEVER stop before pushing - that leaves work stranded locally
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
-
-## Code Quality
-
-### Clippy
-This codebase passes `cargo clippy -- -D clippy::pedantic` with zero warnings. Before submitting work:
-```bash
-cargo clippy -- -D clippy::pedantic   # Must pass with zero warnings
-cargo test                             # All 47+ tests must pass
-cargo fmt                              # Must be formatted
-cd frontend && bun run check           # svelte-check must pass
-```
-
-### Crate-level Lint Allows
-`main.rs` has `#![allow]` for intentional conventions — do NOT remove these:
-- `clippy::option_option` — update DTOs use `Option<Option<T>>` by design
-- `clippy::struct_field_names` — entity fields match DB column names
-- `clippy::wildcard_imports` — `sea_orm::*` is idiomatic
-
-### Required Patterns
-- **`require_vehicle`**: All vehicle sub-resource handlers must call `require_vehicle(&state.db, vehicle_id).await?` at the top
-- **`updated_at`**: All update handlers must explicitly set `updated_at` — SeaORM does NOT auto-set it
-- **Batch loading**: List endpoints with related data must use `is_in()` batch queries, never N+1 loops
-- **Path traversal**: File operations on user-provided paths must use `canonicalize()` + `starts_with()` checks
-- **Numeric safety**: Use `i32::try_from()` for `usize→i32` conversions, integer division for cents→dollars formatting
-
-## Testing
-
-### Test Plan
-`TEST_PLAN.md` is the living test plan. It contains manual smoke test steps (TP-01
-through TP-12) and maps to Playwright e2e tests in `frontend/e2e/`.
-
-**When adding or changing features:**
-1. Update the relevant `TP-XX` section in `TEST_PLAN.md`
-2. Add or update the corresponding Playwright test in `frontend/e2e/`
-3. If adding a new feature area, create a new `TP-XX` section and spec file
-
-### Running Tests
-```bash
-just test-e2e          # headless (requires `just dev` in another terminal)
-just test-e2e-ui       # headed browser for debugging
-cargo test             # backend unit tests
-```
-
-### Playwright Conventions
-- Tests live in `frontend/e2e/*.spec.ts`
-- Config at `frontend/playwright.config.ts`
-- Tests run against `http://localhost:5173` (Vite dev server proxies API to backend)
-- Use `test.beforeAll` to create test fixtures (vehicles, etc.) via the UI
-- Prefer `getByRole`, `getByLabel`, `getByText` selectors over CSS selectors
-
 <!-- END BEADS INTEGRATION -->
