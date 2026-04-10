@@ -18,6 +18,7 @@ export const vehicles = {
   get: (id: number) => request<Vehicle>(`/vehicles/${id}`),
   create: (data: CreateVehicle) => request<Vehicle>('/vehicles', { method: 'POST', body: JSON.stringify(data) }),
   update: (id: number, data: Partial<Vehicle>) => request<Vehicle>(`/vehicles/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  delete: (id: number) => request<{ deleted: number }>(`/vehicles/${id}`, { method: 'DELETE' }),
   uploadPhoto: async (id: number, file: File): Promise<Vehicle> => {
     const formData = new FormData()
     formData.append('file', file)

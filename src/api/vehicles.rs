@@ -82,6 +82,8 @@ pub struct UpdateVehicle {
     pub photo_path: Option<Option<String>>,
     #[serde(default, deserialize_with = "deserialize_optional")]
     pub notes: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    pub archived_at: Option<Option<String>>,
 }
 
 async fn list(State(state): State<AppState>) -> Result<Json<Vec<vehicle::Model>>> {
@@ -211,6 +213,9 @@ async fn update(
     if let Some(v) = input.notes {
         active.notes = Set(v);
     }
+    if let Some(v) = input.archived_at {
+        active.archived_at = Set(v);
+    }
 
     active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
 
@@ -271,9 +276,36 @@ async fn upload_photo(
     Ok(Json(result))
 }
 
+async fn delete(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+) -> Result<Json<serde_json::Value>> {
+    vehicle::Entity::find_by_id(id)
+        .one(&state.db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Vehicle {id} not found")))?;
+
+    vehicle::Entity::delete_by_id(id).exec(&state.db).await?;
+
+    // Remove vehicle's file directory from disk
+    let files_dir = std::path::Path::new(&state.config.files_dir)
+        .canonicalize()
+        .unwrap_or_else(|_| std::path::PathBuf::from(&state.config.files_dir));
+    let vehicle_dir = files_dir.join(id.to_string());
+    if vehicle_dir.exists() {
+        if let Ok(canonical) = vehicle_dir.canonicalize() {
+            if canonical.starts_with(&files_dir) {
+                let _ = tokio::fs::remove_dir_all(&canonical).await;
+            }
+        }
+    }
+
+    Ok(Json(serde_json::json!({ "deleted": id })))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list).post(create))
-        .route("/{id}", get(get_one).put(update))
+        .route("/{id}", get(get_one).put(update).delete(delete))
         .route("/{id}/photo", axum::routing::post(upload_photo))
 }

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { link } from '@keenmate/svelte-spa-router'
+  import { link, push } from '@keenmate/svelte-spa-router'
   import { vehicles as vehiclesApi, reminders as remindersApi, mileage as mileageApi, vehicleExport, research } from '../lib/api'
   import type { Vehicle, RemindersResponse } from '../lib/types'
   import { formatDate } from '../lib/dates'
@@ -136,6 +136,28 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
       console.error('Export failed:', e)
     }
   }
+
+  async function archiveVehicle() {
+    if (!vehicle) return
+    const now = new Date().toISOString().replace('T', ' ').slice(0, 19)
+    vehicle = await vehiclesApi.update(vehicle.id, { archived_at: now })
+  }
+
+  async function unarchiveVehicle() {
+    if (!vehicle) return
+    vehicle = await vehiclesApi.update(vehicle.id, { archived_at: null })
+  }
+
+  async function deleteVehicle() {
+    if (!vehicle) return
+    if (!confirm(`Are you sure? This will permanently delete all of "${vehicle.name}"'s data.`)) return
+    try {
+      await vehiclesApi.delete(vehicle.id)
+      push('/')
+    } catch (e: any) {
+      error = e.message
+    }
+  }
 </script>
 
 {#if loading}
@@ -151,6 +173,9 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
         <p class="vehicle-subtitle">
           {[vehicle.year, vehicle.make, vehicle.model, vehicle.trim_level].filter(Boolean).join(' ')}
         </p>
+      {/if}
+      {#if vehicle.archived_at}
+        <span class="archived-badge">Archived</span>
       {/if}
       {#if vehicle.sold_date}
         <span class="sold-badge">Sold {formatDate(vehicle.sold_date)}</span>
@@ -177,6 +202,18 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
         </button>
         <button class="btn btn-secondary" onclick={exportHistory}>
           Export History
+        </button>
+        {#if vehicle.archived_at}
+          <button class="btn btn-secondary" onclick={unarchiveVehicle}>
+            Unarchive
+          </button>
+        {:else}
+          <button class="btn btn-secondary" onclick={archiveVehicle}>
+            Archive
+          </button>
+        {/if}
+        <button class="btn btn-delete" onclick={deleteVehicle}>
+          Delete
         </button>
       </div>
     </div>
@@ -284,6 +321,7 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
     color: var(--text-muted);
   }
 
+  .archived-badge,
   .sold-badge {
     display: inline-block;
     margin-top: var(--sp-2);
@@ -292,9 +330,28 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.05em;
+    border-radius: var(--radius-sm);
+  }
+
+  .archived-badge {
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    margin-right: var(--sp-2);
+  }
+
+  .sold-badge {
     color: var(--warning);
     border: 1px solid var(--warning);
-    border-radius: var(--radius-sm);
+  }
+
+  .btn-delete {
+    color: var(--danger);
+    border-color: var(--danger);
+  }
+
+  .btn-delete:hover {
+    background: var(--danger);
+    color: white;
   }
 
   /* --- Instrument cluster status bar --- */
