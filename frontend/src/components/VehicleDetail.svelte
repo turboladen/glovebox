@@ -139,13 +139,20 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
 
   async function archiveVehicle() {
     if (!vehicle) return
-    const now = new Date().toISOString().replace('T', ' ').slice(0, 19)
-    vehicle = await vehiclesApi.update(vehicle.id, { archived_at: now })
+    try {
+      vehicle = await vehiclesApi.archive(vehicle.id)
+    } catch (e: any) {
+      error = e.message
+    }
   }
 
   async function unarchiveVehicle() {
     if (!vehicle) return
-    vehicle = await vehiclesApi.update(vehicle.id, { archived_at: null })
+    try {
+      vehicle = await vehiclesApi.unarchive(vehicle.id)
+    } catch (e: any) {
+      error = e.message
+    }
   }
 
   async function deleteVehicle() {
@@ -207,14 +214,14 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
           <button class="btn btn-secondary" onclick={unarchiveVehicle}>
             Unarchive
           </button>
+          <button class="btn btn-delete" onclick={deleteVehicle}>
+            Delete
+          </button>
         {:else}
           <button class="btn btn-secondary" onclick={archiveVehicle}>
             Archive
           </button>
         {/if}
-        <button class="btn btn-delete" onclick={deleteVehicle}>
-          Delete
-        </button>
       </div>
     </div>
 

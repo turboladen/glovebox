@@ -174,6 +174,9 @@
       </div>
     </div>
   {:else}
+    {#if activeVehicles.length === 0 && archivedVehicles.length > 0}
+      <p class="all-archived-msg">All vehicles are archived.</p>
+    {/if}
     <div class="vehicle-grid">
       {#each activeVehicles as vehicle, i (vehicle.id)}
         {@const summary = statusSummary(reminderMap.get(vehicle.id))}
@@ -239,7 +242,7 @@
           <span class="archived-chevron" class:open={showArchived}>&#9654;</span>
           Archived ({archivedVehicles.length})
         </button>
-        {#if showArchived}
+        {#if showArchived || activeVehicles.length === 0}
           <div class="vehicle-grid">
             {#each archivedVehicles as vehicle (vehicle.id)}
               <a
@@ -593,6 +596,12 @@
 
   .step-label {
     flex: 1;
+  }
+
+  .all-archived-msg {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    margin-bottom: var(--sp-2);
   }
 
   /* --- Archived section --- */

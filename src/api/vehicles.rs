@@ -82,8 +82,6 @@ pub struct UpdateVehicle {
     pub photo_path: Option<Option<String>>,
     #[serde(default, deserialize_with = "deserialize_optional")]
     pub notes: Option<Option<String>>,
-    #[serde(default, deserialize_with = "deserialize_optional")]
-    pub archived_at: Option<Option<String>>,
 }
 
 async fn list(State(state): State<AppState>) -> Result<Json<Vec<vehicle::Model>>> {
@@ -213,10 +211,6 @@ async fn update(
     if let Some(v) = input.notes {
         active.notes = Set(v);
     }
-    if let Some(v) = input.archived_at {
-        active.archived_at = Set(v);
-    }
-
     active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
 
     let result = active.update(&state.db).await?;
@@ -276,26 +270,66 @@ async fn upload_photo(
     Ok(Json(result))
 }
 
-async fn delete(
+async fn archive(
     State(state): State<AppState>,
     Path(id): Path<i32>,
-) -> Result<Json<serde_json::Value>> {
-    vehicle::Entity::find_by_id(id)
+) -> Result<Json<vehicle::Model>> {
+    let existing = vehicle::Entity::find_by_id(id)
         .one(&state.db)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Vehicle {id} not found")))?;
 
+    let mut active: vehicle::ActiveModel = existing.into();
+    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    active.archived_at = Set(Some(now));
+    active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
+    let result = active.update(&state.db).await?;
+    Ok(Json(result))
+}
+
+async fn unarchive(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+) -> Result<Json<vehicle::Model>> {
+    let existing = vehicle::Entity::find_by_id(id)
+        .one(&state.db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Vehicle {id} not found")))?;
+
+    let mut active: vehicle::ActiveModel = existing.into();
+    active.archived_at = Set(None);
+    active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
+    let result = active.update(&state.db).await?;
+    Ok(Json(result))
+}
+
+async fn delete(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+) -> Result<Json<serde_json::Value>> {
+    let existing = vehicle::Entity::find_by_id(id)
+        .one(&state.db)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Vehicle {id} not found")))?;
+
+    if existing.archived_at.is_none() {
+        return Err(ApiError::BadRequest(
+            "Vehicle must be archived before it can be deleted".into(),
+        ));
+    }
+
     vehicle::Entity::delete_by_id(id).exec(&state.db).await?;
 
     // Remove vehicle's file directory from disk
-    let files_dir = std::path::Path::new(&state.config.files_dir)
-        .canonicalize()
-        .unwrap_or_else(|_| std::path::PathBuf::from(&state.config.files_dir));
-    let vehicle_dir = files_dir.join(id.to_string());
-    if vehicle_dir.exists() {
-        if let Ok(canonical) = vehicle_dir.canonicalize() {
-            if canonical.starts_with(&files_dir) {
-                let _ = tokio::fs::remove_dir_all(&canonical).await;
+    if let Ok(files_dir) = std::path::Path::new(&state.config.files_dir).canonicalize() {
+        let vehicle_dir = files_dir.join(id.to_string());
+        if vehicle_dir.exists() {
+            if let Ok(canonical) = vehicle_dir.canonicalize() {
+                if canonical.starts_with(&files_dir) {
+                    if let Err(e) = tokio::fs::remove_dir_all(&canonical).await {
+                        tracing::warn!("Failed to remove vehicle files at {}: {e}", canonical.display());
+                    }
+                }
             }
         }
     }
@@ -307,5 +341,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list).post(create))
         .route("/{id}", get(get_one).put(update).delete(delete))
+        .route("/{id}/archive", axum::routing::post(archive))
+        .route("/{id}/unarchive", axum::routing::post(unarchive))
         .route("/{id}/photo", axum::routing::post(upload_photo))
 }
