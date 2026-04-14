@@ -13,6 +13,7 @@
 
   let activeVehicles = $derived(vehicleList.filter(v => !v.archived_at))
   let archivedVehicles = $derived(vehicleList.filter(v => v.archived_at))
+  let isArchivedOpen = $derived(showArchived || activeVehicles.length === 0)
 
   onMount(async () => {
     try {
@@ -239,10 +240,10 @@
     {#if archivedVehicles.length > 0}
       <div class="archived-section">
         <button class="archived-header" onclick={() => (showArchived = !showArchived)}>
-          <span class="archived-chevron" class:open={showArchived}>&#9654;</span>
+          <span class="archived-chevron" class:open={isArchivedOpen}>&#9654;</span>
           Archived ({archivedVehicles.length})
         </button>
-        {#if showArchived || activeVehicles.length === 0}
+        {#if isArchivedOpen}
           <div class="vehicle-grid">
             {#each archivedVehicles as vehicle (vehicle.id)}
               <a
