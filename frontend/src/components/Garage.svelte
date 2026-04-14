@@ -9,25 +9,31 @@
   let plannedCountMap: Map<number, number> = $state(new Map())
   let loading = $state(true)
   let error = $state('')
+  let showArchived = $state(false)
+
+  let activeVehicles = $derived(vehicleList.filter(v => !v.archived_at))
+  let archivedVehicles = $derived(vehicleList.filter(v => v.archived_at))
+  let isArchivedOpen = $derived(showArchived || activeVehicles.length === 0)
 
   onMount(async () => {
     try {
       vehicleList = await vehiclesApi.list()
-      // Fetch reminders and planned findings counts in parallel
+      // Fetch reminders and planned findings counts for active vehicles only
+      const active = vehicleList.filter(v => !v.archived_at)
       const [reminderResults, plannedResults] = await Promise.all([
-        Promise.allSettled(vehicleList.map((v) => remindersApi.get(v.id))),
-        Promise.allSettled(vehicleList.map((v) => research.listFindings(v.id, 'planned'))),
+        Promise.allSettled(active.map((v) => remindersApi.get(v.id))),
+        Promise.allSettled(active.map((v) => research.listFindings(v.id, 'planned'))),
       ])
       for (let i = 0; i < reminderResults.length; i++) {
         const result = reminderResults[i]
         if (result.status === 'fulfilled') {
-          reminderMap.set(vehicleList[i].id, result.value)
+          reminderMap.set(active[i].id, result.value)
         }
       }
       for (let i = 0; i < plannedResults.length; i++) {
         const result = plannedResults[i]
         if (result.status === 'fulfilled') {
-          plannedCountMap.set(vehicleList[i].id, result.value.length)
+          plannedCountMap.set(active[i].id, result.value.length)
         }
       }
       reminderMap = reminderMap // trigger reactivity
@@ -57,8 +63,8 @@
     <div class="garage-header">
       <div>
         <h1>Garage</h1>
-        {#if !loading && vehicleList.length > 0}
-          <p class="garage-count">{vehicleList.length} vehicle{vehicleList.length !== 1 ? 's' : ''}</p>
+        {#if !loading && activeVehicles.length > 0}
+          <p class="garage-count">{activeVehicles.length} vehicle{activeVehicles.length !== 1 ? 's' : ''}</p>
         {/if}
       </div>
       <a href="/vehicles/new" use:link class="btn btn-primary">+ Add Car</a>
@@ -169,8 +175,11 @@
       </div>
     </div>
   {:else}
+    {#if activeVehicles.length === 0 && archivedVehicles.length > 0}
+      <p class="all-archived-msg">All vehicles are archived.</p>
+    {/if}
     <div class="vehicle-grid">
-      {#each vehicleList as vehicle, i (vehicle.id)}
+      {#each activeVehicles as vehicle, i (vehicle.id)}
         {@const summary = statusSummary(reminderMap.get(vehicle.id))}
         {@const est = reminderMap.get(vehicle.id)?.estimated_mileage}
         {@const planned = plannedCountMap.get(vehicle.id) ?? 0}
@@ -227,6 +236,52 @@
         </a>
       {/each}
     </div>
+
+    {#if archivedVehicles.length > 0}
+      <div class="archived-section">
+        <button class="archived-header" onclick={() => (showArchived = !showArchived)}>
+          <span class="archived-chevron" class:open={isArchivedOpen}>&#9654;</span>
+          Archived ({archivedVehicles.length})
+        </button>
+        {#if isArchivedOpen}
+          <div class="vehicle-grid">
+            {#each archivedVehicles as vehicle (vehicle.id)}
+              <a
+                href="/vehicles/{vehicle.id}"
+                use:link
+                class="vehicle-card archived-card"
+              >
+                <div class="card-photo">
+                  {#if vehicle.photo_path}
+                    <img src="/files/{vehicle.photo_path}" alt={vehicle.name} />
+                  {:else}
+                    <div class="placeholder-photo">
+                      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M7 17m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" />
+                        <path d="M17 17m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" />
+                        <path d="M5 17H3v-6l2-5h9l4 5h1a2 2 0 0 1 2 2v4h-2m-4 0H9" />
+                        <path d="M10 6l-1 5h-4" />
+                      </svg>
+                    </div>
+                  {/if}
+                  <div class="card-photo-overlay"></div>
+                </div>
+                <div class="card-body">
+                  <div class="card-info">
+                    <h2>{vehicle.name}</h2>
+                    {#if vehicle.year || vehicle.make || vehicle.model}
+                      <p class="subtitle">
+                        {vehicle.year ?? ''} {vehicle.make ?? ''} {vehicle.model ?? ''}
+                      </p>
+                    {/if}
+                  </div>
+                </div>
+              </a>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    {/if}
   {/if}
 </div>
 
@@ -542,6 +597,53 @@
 
   .step-label {
     flex: 1;
+  }
+
+  .all-archived-msg {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    margin-bottom: var(--sp-2);
+  }
+
+  /* --- Archived section --- */
+  .archived-section {
+    margin-top: var(--sp-8);
+  }
+
+  .archived-header {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    padding: var(--sp-2) 0;
+    margin-bottom: var(--sp-4);
+    transition: color var(--duration-fast) var(--ease-out);
+  }
+
+  .archived-header:hover {
+    color: var(--text);
+  }
+
+  .archived-chevron {
+    font-size: 0.65rem;
+    transition: transform var(--duration-fast) var(--ease-out);
+  }
+
+  .archived-chevron.open {
+    transform: rotate(90deg);
+  }
+
+  .archived-card {
+    opacity: 0.6;
+  }
+
+  .archived-card:hover {
+    opacity: 1;
   }
 
   /* --- Skeleton loading --- */
