@@ -1,8 +1,7 @@
 {
   "database": "dolt",
   "backend": "dolt",
-  "dolt_mode": "server",
-  "dolt_server_port": 13712,
+  "dolt_mode": "embedded",
   "dolt_database": "glovebox",
-  "project_id": "1204d918-9040-41cd-bc29-2d3c5d4d75ca"
+  "project_id": "3e2a4512-96c8-430b-b725-70d49d9b97ab"
 }
