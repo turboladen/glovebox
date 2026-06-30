@@ -480,6 +480,7 @@ mod tests {
             notes: None,
             created_at: String::new(),
             updated_at: String::new(),
+            archived_at: None,
         };
         let prompt = build_community_wisdom_prompt(&vehicle);
         assert!(prompt.contains("2017"));
@@ -522,6 +523,7 @@ mod tests {
             notes: None,
             created_at: String::new(),
             updated_at: String::new(),
+            archived_at: None,
         };
         let prompt = build_community_wisdom_prompt(&vehicle);
         assert!(prompt.contains("unknown year"));

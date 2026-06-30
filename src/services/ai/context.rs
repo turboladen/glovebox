@@ -404,6 +404,7 @@ mod tests {
             notes: None,
             created_at: "2026-01-01".into(),
             updated_at: "2026-01-01".into(),
+            archived_at: None,
         };
         let mut ctx = String::new();
         write_vehicle_info(&mut ctx, &v);
@@ -456,6 +457,7 @@ mod tests {
             notes: None,
             created_at: "2026-01-01".into(),
             updated_at: "2026-01-01".into(),
+            archived_at: None,
         }
     }
 }
