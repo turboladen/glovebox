@@ -323,14 +323,12 @@ async fn delete(
     // Remove vehicle's file directory from disk
     if let Ok(files_dir) = std::path::Path::new(&state.config.files_dir).canonicalize() {
         let vehicle_dir = files_dir.join(id.to_string());
-        if vehicle_dir.exists() {
-            if let Ok(canonical) = vehicle_dir.canonicalize() {
-                if canonical.starts_with(&files_dir) {
-                    if let Err(e) = tokio::fs::remove_dir_all(&canonical).await {
-                        tracing::warn!("Failed to remove vehicle files at {}: {e}", canonical.display());
-                    }
-                }
-            }
+        if vehicle_dir.exists()
+            && let Ok(canonical) = vehicle_dir.canonicalize()
+            && canonical.starts_with(&files_dir)
+            && let Err(e) = tokio::fs::remove_dir_all(&canonical).await
+        {
+            tracing::warn!("Failed to remove vehicle files at {}: {e}", canonical.display());
         }
     }
 

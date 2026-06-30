@@ -331,42 +331,41 @@ fn calculate_bundles(reminders: &[ReminderStatus], bundling_window: i32) -> Vec<
     let mut suggestions = Vec::new();
 
     for reminder in reminders {
-        if reminder.status == "ok" {
-            if let Some(miles) = reminder.miles_remaining {
-                if miles <= bundling_window {
-                    // This item is within bundling window of being due
-                    let due_items: Vec<&ReminderStatus> = reminders
-                        .iter()
-                        .filter(|r| r.status == "overdue" || r.status == "upcoming")
-                        .collect();
+        if reminder.status == "ok"
+            && let Some(miles) = reminder.miles_remaining
+            && miles <= bundling_window
+        {
+            // This item is within bundling window of being due
+            let due_items: Vec<&ReminderStatus> = reminders
+                .iter()
+                .filter(|r| r.status == "overdue" || r.status == "upcoming")
+                .collect();
 
-                    if !due_items.is_empty() {
-                        let mut items: Vec<BundleItem> = due_items
-                            .iter()
-                            .map(|r| BundleItem {
-                                id: r.schedule_item.id,
-                                name: r.schedule_item.name.clone(),
-                                status: r.status.clone(),
-                                due_in_miles: r.miles_remaining,
-                            })
-                            .collect();
+            if !due_items.is_empty() {
+                let mut items: Vec<BundleItem> = due_items
+                    .iter()
+                    .map(|r| BundleItem {
+                        id: r.schedule_item.id,
+                        name: r.schedule_item.name.clone(),
+                        status: r.status.clone(),
+                        due_in_miles: r.miles_remaining,
+                    })
+                    .collect();
 
-                        items.push(BundleItem {
-                            id: reminder.schedule_item.id,
-                            name: reminder.schedule_item.name.clone(),
-                            status: reminder.status.clone(),
-                            due_in_miles: reminder.miles_remaining,
-                        });
+                items.push(BundleItem {
+                    id: reminder.schedule_item.id,
+                    name: reminder.schedule_item.name.clone(),
+                    status: reminder.status.clone(),
+                    due_in_miles: reminder.miles_remaining,
+                });
 
-                        suggestions.push(BundleSuggestion {
-                            reason: format!(
-                                "{} is due within {} miles — consider doing it with upcoming services",
-                                reminder.schedule_item.name, miles
-                            ),
-                            items,
-                        });
-                    }
-                }
+                suggestions.push(BundleSuggestion {
+                    reason: format!(
+                        "{} is due within {} miles — consider doing it with upcoming services",
+                        reminder.schedule_item.name, miles
+                    ),
+                    items,
+                });
             }
         }
     }

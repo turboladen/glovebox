@@ -544,20 +544,18 @@ pub async fn chat(
         if let Some(convo) = conversation::Entity::find_by_id(body.conversation_id)
             .one(&txn)
             .await?
+            && convo.title == "New Chat"
         {
-            if convo.title == "New Chat" {
-                let auto_title = if body.message.chars().count() > 60 {
-                    let truncated: String = body.message.chars().take(57).collect();
-                    format!("{truncated}...")
-                } else {
-                    body.message
-                };
-                let mut active: conversation::ActiveModel = convo.into();
-                active.title = Set(auto_title);
-                active.updated_at =
-                    Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
-                active.update(&txn).await?;
-            }
+            let auto_title = if body.message.chars().count() > 60 {
+                let truncated: String = body.message.chars().take(57).collect();
+                format!("{truncated}...")
+            } else {
+                body.message
+            };
+            let mut active: conversation::ActiveModel = convo.into();
+            active.title = Set(auto_title);
+            active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
+            active.update(&txn).await?;
         }
     } else {
         // Touch updated_at on the conversation
