@@ -8,7 +8,7 @@ pub struct AppConfig {
     pub db_path: String,
 
     /// Address to listen on
-    #[arg(long, default_value = "0.0.0.0:8000", env = "GLOVEBOX_LISTEN")]
+    #[arg(long, default_value = "0.0.0.0:3003", env = "GLOVEBOX_LISTEN")]
     pub listen: String,
 
     /// Directory for uploaded files

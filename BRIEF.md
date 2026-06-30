@@ -825,7 +825,7 @@ Only the bare minimum needed to start the server. Sensible defaults mean these r
 
 ```
 GLOVEBOX_DB_PATH=./data/glovebox.db      # or --db-path
-GLOVEBOX_LISTEN=0.0.0.0:3000             # or --listen
+GLOVEBOX_LISTEN=0.0.0.0:3003             # or --listen
 GLOVEBOX_FILES_DIR=./data/files           # or --files-dir
 ```
 
