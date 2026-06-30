@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on a PR branch, but let push-to-main runs finish so no
+# main commit ever records a cancelled check.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Least privilege: CI only needs to read the repo.
+permissions:
+  contents: read
+
+env:
+  # Single source of truth for the bun version; keep in sync with local dev.
+  BUN_VERSION: "1.3.14"
+
+jobs:
+  # Decide whether the change touches code. Docs-only / beads-only / markdown-only
+  # changes skip the heavy build jobs. This is also how CI stays beads-independent:
+  # .beads/ is excluded here and bd is never invoked anywhere in CI.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            code:
+              - '**/*'
+              - '!**/*.md'
+              - '!.beads/**'
+              - '!docs/**'
+              - '!.gitignore'
+
+  backend:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - name: Backend gates (build, test, clippy)
+        run: just ci-backend
+
+  frontend:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - name: Frontend gates (type-check, build)
+        run: just ci-frontend
+
+  # Single required status check for branch protection. Passes when every needed
+  # job succeeded or was skipped (docs-only change); fails if any failed/cancelled.
+  all-checks:
+    needs: [changes, backend, frontend]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify required jobs
+        run: |
+          if ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}; then
+            echo "A required job failed or was cancelled."
+            exit 1
+          fi
+          echo "All required jobs passed (or were skipped for a non-code change)."
