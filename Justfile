@@ -62,3 +62,43 @@ ci-frontend:
 
 # Run all CI gates locally (everything CI runs except e2e)
 ci: fmt-check ci-backend ci-frontend
+
+# Full e2e for CI: boots backend + vite against a throwaway DB, waits for both
+# ports, runs Playwright (single worker — the suite shares one backend DB), tears
+# down. Assumes Playwright browsers are installed (CI caches them; locally run
+# `cd frontend && bunx playwright install chromium` once).
+test-e2e-ci:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    DB=data/e2e.db
+    FILES=data/e2e-files
+    backend_port=3003
+    frontend_port=5373
+
+    # Free the ports (LISTEN-scoped — deliberately not `pkill -f`).
+    for p in $backend_port $frontend_port; do
+        pids=$(lsof -ti tcp:$p -sTCP:LISTEN 2>/dev/null || true)
+        [ -n "$pids" ] && kill $pids 2>/dev/null || true
+    done
+
+    rm -f "$DB" "$DB-shm" "$DB-wal"
+    rm -rf "$FILES"; mkdir -p "$FILES"
+
+    cargo build --locked
+
+    GLOVEBOX_DB_PATH="$DB" GLOVEBOX_FILES_DIR="$FILES" GLOVEBOX_LISTEN=0.0.0.0:$backend_port \
+        ./target/debug/glovebox >/tmp/glovebox-e2e-backend.log 2>&1 &
+    backend_pid=$!
+    ( cd frontend && bun run dev >/tmp/glovebox-e2e-frontend.log 2>&1 ) &
+    frontend_pid=$!
+    trap 'kill $backend_pid $frontend_pid 2>/dev/null || true' EXIT
+
+    echo "Waiting for backend on :$backend_port ..."
+    for _ in $(seq 1 60); do curl -sf "http://localhost:$backend_port/api/health" >/dev/null 2>&1 && break; sleep 1; done
+    curl -sf "http://localhost:$backend_port/api/health" >/dev/null 2>&1 || { echo "Backend did not start:"; cat /tmp/glovebox-e2e-backend.log; exit 1; }
+
+    echo "Waiting for frontend on :$frontend_port ..."
+    for _ in $(seq 1 60); do curl -sf "http://localhost:$frontend_port/" >/dev/null 2>&1 && break; sleep 1; done
+    curl -sf "http://localhost:$frontend_port/" >/dev/null 2>&1 || { echo "Frontend did not start:"; cat /tmp/glovebox-e2e-frontend.log; exit 1; }
+
+    cd frontend && bunx playwright test --workers=1
