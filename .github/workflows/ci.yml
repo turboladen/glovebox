@@ -41,6 +41,24 @@ jobs:
               - '!docs/**'
               - '!.gitignore'
 
+  # rustfmt uses nightly-only options (see rustfmt.toml), so the format gate runs
+  # on the nightly toolchain.
+  format:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - name: Format check
+        run: just fmt-check
+
   backend:
     needs: changes
     if: ${{ needs.changes.outputs.code == 'true' }}
@@ -77,7 +95,7 @@ jobs:
   # Single required status check for branch protection. Passes when every needed
   # job succeeded or was skipped (docs-only change); fails if any failed/cancelled.
   all-checks:
-    needs: [changes, backend, frontend]
+    needs: [changes, format, backend, frontend]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
