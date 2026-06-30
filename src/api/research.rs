@@ -219,35 +219,35 @@ pub async fn generate_report(
     }
 
     // If AI is configured and report type includes community wisdom, query AI
-    if report_type == "full_check" || report_type == "community_wisdom" {
-        if let Ok(provider) = state.ai.resolve(body.provider_id).await {
-            let prompt = build_community_wisdom_prompt(&vehicle);
-            match provider
-                .complete(crate::services::ai::AiRequest {
-                    system_prompt: format!(
-                        "{}\n\nReturn ONLY a valid JSON array — no narrative text, no markdown. \
-                        Provide findings as a JSON array of objects with fields: title, description, \
-                        severity (critical/recommended/optional/informational), category (one of: \
-                        forum_report, suggested_maintenance, upgrade_idea).",
-                        crate::services::ai::context::GLOVEBOX_PREAMBLE
-                    ),
-                    messages: vec![crate::services::ai::ChatMessage {
-                        role: crate::services::ai::Role::User,
-                        content: prompt,
-                    }],
-                    attachments: vec![],
-                    max_tokens: None,
-                })
-                .await
-            {
-                Ok(response) => {
-                    if let Ok(ai_findings) = parse_ai_findings(&response.content) {
-                        all_findings.extend(ai_findings);
-                    }
+    if (report_type == "full_check" || report_type == "community_wisdom")
+        && let Ok(provider) = state.ai.resolve(body.provider_id).await
+    {
+        let prompt = build_community_wisdom_prompt(&vehicle);
+        match provider
+            .complete(crate::services::ai::AiRequest {
+                system_prompt: format!(
+                    "{}\n\nReturn ONLY a valid JSON array — no narrative text, no markdown. \
+                    Provide findings as a JSON array of objects with fields: title, description, \
+                    severity (critical/recommended/optional/informational), category (one of: \
+                    forum_report, suggested_maintenance, upgrade_idea).",
+                    crate::services::ai::context::GLOVEBOX_PREAMBLE
+                ),
+                messages: vec![crate::services::ai::ChatMessage {
+                    role: crate::services::ai::Role::User,
+                    content: prompt,
+                }],
+                attachments: vec![],
+                max_tokens: None,
+            })
+            .await
+        {
+            Ok(response) => {
+                if let Ok(ai_findings) = parse_ai_findings(&response.content) {
+                    all_findings.extend(ai_findings);
                 }
-                Err(e) => {
-                    tracing::warn!("AI community wisdom query failed: {:?}", e);
-                }
+            }
+            Err(e) => {
+                tracing::warn!("AI community wisdom query failed: {:?}", e);
             }
         }
     }
