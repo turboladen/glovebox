@@ -1,0 +1,26 @@
+version: 2
+updates:
+  # Rust dependencies. Group non-major bumps so we get one PR instead of many.
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # Keep the GitHub Actions used by this workflow current (and patched).
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        update-types:
+          - minor
+          - patch
+# Note: the frontend uses bun; Dependabot does not yet support bun.lock, so the
+# npm ecosystem is intentionally omitted until support lands.
