@@ -11,8 +11,8 @@ Car maintenance tracker: Rust backend (Axum + SeaORM + SQLite) + Svelte 5 fronte
 ```bash
 # Development
 just dev                  # Run backend (cargo run) + frontend (bun run dev) together
-cargo run                 # Backend only (listens on :3000, serves SPA from frontend/dist/)
-cd frontend && bun run dev # Frontend dev server only (Vite on :5173, proxies /api + /files to :3000)
+cargo run                 # Backend only (listens on :3003, serves SPA from frontend/dist/)
+cd frontend && bun run dev # Frontend dev server only (Vite on :5373, proxies /api + /files to :3003)
 
 # Build
 cargo build               # Backend
@@ -52,7 +52,7 @@ cd frontend && bun run check  # svelte-check + TypeScript check
 
 Svelte 5 SPA using `@keenmate/svelte-spa-router`. Three routes: Garage (list), VehicleNew, VehicleDetail. VehicleDetail uses tab-based navigation (History, Schedule, Parts, Costs, Documents, Observations, Chat, Research, Suggestions).
 
-Vite dev server proxies `/api` and `/files` to the backend at `:3000`. In production, the backend serves `frontend/dist/` as SPA fallback.
+Vite dev server proxies `/api` and `/files` to the backend at `:3003`. In production, the backend serves `frontend/dist/` as SPA fallback.
 
 ## Conventions
 
