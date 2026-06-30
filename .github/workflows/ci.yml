@@ -92,10 +92,50 @@ jobs:
       - name: Frontend gates (type-check, build)
         run: just ci-frontend
 
+  e2e:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - name: Install frontend deps
+        run: cd frontend && bun install --frozen-lockfile
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('frontend/bun.lock') }}
+      - name: Install Playwright (browser + system deps)
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: cd frontend && bunx playwright install --with-deps chromium
+      - name: Install Playwright system deps (cache hit)
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: cd frontend && bunx playwright install-deps chromium
+      - name: Run e2e
+        run: just test-e2e-ci
+      - name: Upload Playwright results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results
+          path: frontend/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
   # Single required status check for branch protection. Passes when every needed
   # job succeeded or was skipped (docs-only change); fails if any failed/cancelled.
   all-checks:
-    needs: [changes, format, backend, frontend]
+    needs: [changes, format, backend, frontend, e2e]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
