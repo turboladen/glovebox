@@ -1,0 +1,4 @@
+# https://github.com/rust-lang/rustfmt/blob/master/Configurations.md
+# All options below are nightly-only — run `cargo +nightly fmt` (see CI / CLAUDE.md).
+imports_granularity = "Crate"
+format_strings = true

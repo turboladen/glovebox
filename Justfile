@@ -37,6 +37,14 @@ dev:
 # --- CI ---
 # These recipes are what GitHub Actions runs, so `just ci` reproduces CI locally.
 
+# Format check: nightly rustfmt (rustfmt.toml uses nightly-only options)
+fmt-check:
+    cargo +nightly fmt --all --check
+
+# Apply formatting
+fmt:
+    cargo +nightly fmt --all
+
 # Backend gates: build, test, clippy (matches CLAUDE.md's pedantic convention)
 ci-backend:
     cargo build --locked
@@ -53,4 +61,4 @@ ci-frontend:
     bun run build
 
 # Run all CI gates locally (everything CI runs except e2e)
-ci: ci-backend ci-frontend
+ci: fmt-check ci-backend ci-frontend

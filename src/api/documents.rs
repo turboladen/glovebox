@@ -1,15 +1,15 @@
 use std::path::PathBuf;
 
-use axum::extract::{Multipart, Path, Query, State};
-use axum::Json;
+use axum::{
+    Json,
+    extract::{Multipart, Path, Query, State},
+};
 use sea_orm::*;
 use serde::Deserialize;
 
-use crate::entities::document;
-use crate::AppState;
+use crate::{AppState, entities::document};
 
-use super::error::ApiError;
-use super::require_vehicle;
+use super::{error::ApiError, require_vehicle};
 
 type Result<T> = std::result::Result<T, ApiError>;
 

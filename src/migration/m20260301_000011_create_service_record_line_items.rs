@@ -30,9 +30,7 @@ impl MigrationTrait for Migration {
                     )
                     .col(ColumnDef::new(ServiceRecordLineItems::Category).text())
                     .col(ColumnDef::new(ServiceRecordLineItems::Quantity).double())
-                    .col(
-                        ColumnDef::new(ServiceRecordLineItems::UnitCostCents).integer(),
-                    )
+                    .col(ColumnDef::new(ServiceRecordLineItems::UnitCostCents).integer())
                     .col(ColumnDef::new(ServiceRecordLineItems::CostCents).integer())
                     .col(
                         ColumnDef::new(ServiceRecordLineItems::CreatedAt)

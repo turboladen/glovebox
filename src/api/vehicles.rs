@@ -1,14 +1,14 @@
-use axum::extract::{Multipart, Path, State};
-use axum::routing::get;
-use axum::{Json, Router};
+use axum::{
+    Json, Router,
+    extract::{Multipart, Path, State},
+    routing::get,
+};
 use sea_orm::*;
 use serde::Deserialize;
 
-use crate::entities::vehicle;
-use crate::AppState;
+use crate::{AppState, entities::vehicle};
 
-use super::error::ApiError;
-use super::serde_helpers::deserialize_optional;
+use super::{error::ApiError, serde_helpers::deserialize_optional};
 
 type Result<T> = std::result::Result<T, ApiError>;
 
@@ -328,7 +328,10 @@ async fn delete(
             && canonical.starts_with(&files_dir)
             && let Err(e) = tokio::fs::remove_dir_all(&canonical).await
         {
-            tracing::warn!("Failed to remove vehicle files at {}: {e}", canonical.display());
+            tracing::warn!(
+                "Failed to remove vehicle files at {}: {e}",
+                canonical.display()
+            );
         }
     }
 

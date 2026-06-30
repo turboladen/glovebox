@@ -1,17 +1,20 @@
-use axum::extract::{Path, Query, State};
-use axum::response::IntoResponse;
-use axum::Json;
+use axum::{
+    Json,
+    extract::{Path, Query, State},
+    response::IntoResponse,
+};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set,
     TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::api::error::ApiError;
-use crate::api::serde_helpers::deserialize_optional;
-use crate::entities::{ai_provider_config, chat_message, conversation, document};
-use crate::services::ai::{AiRequest, Attachment, ChatMessage, Role};
-use crate::AppState;
+use crate::{
+    AppState,
+    api::{error::ApiError, serde_helpers::deserialize_optional},
+    entities::{ai_provider_config, chat_message, conversation, document},
+    services::ai::{AiRequest, Attachment, ChatMessage, Role},
+};
 
 #[derive(Serialize)]
 pub struct AiStatusResponse {
@@ -118,20 +121,19 @@ pub async fn get_suggestions(
     let request = AiRequest {
         system_prompt: format!(
             "{preamble}\n\nBased on the vehicle data provided, suggest maintenance actions the \
-            owner should prioritize in the next 3 months. Consider wear patterns, seasonal \
-            factors, mileage-based intervals, and manufacturer recommendations.\n\
-            Return ONLY a valid JSON array (no markdown) where each object has exactly these fields:\n\
-            - \"title\": string (short name of the maintenance action)\n\
-            - \"reason\": string (why this is needed)\n\
-            - \"urgency\": string (\"high\", \"medium\", or \"low\")\n\
-            - \"estimated_cost_range\": string or null (e.g. \"$50-$100\")"
+             owner should prioritize in the next 3 months. Consider wear patterns, seasonal \
+             factors, mileage-based intervals, and manufacturer recommendations.\nReturn ONLY a \
+             valid JSON array (no markdown) where each object has exactly these fields:\n- \
+             \"title\": string (short name of the maintenance action)\n- \"reason\": string (why \
+             this is needed)\n- \"urgency\": string (\"high\", \"medium\", or \"low\")\n- \
+             \"estimated_cost_range\": string or null (e.g. \"$50-$100\")"
         ),
         messages: vec![ChatMessage {
             role: Role::User,
             content: format!(
-                "{context}\n\nBased on this vehicle data, what maintenance should I prioritize \
-                in the next 3 months? Return as a JSON array of objects with fields: \
-                title, reason, urgency, estimated_cost_range."
+                "{context}\n\nBased on this vehicle data, what maintenance should I prioritize in \
+                 the next 3 months? Return as a JSON array of objects with fields: title, reason, \
+                 urgency, estimated_cost_range."
             ),
         }],
         attachments: vec![],
@@ -436,13 +438,13 @@ pub async fn chat(
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
         format!(
-            "{preamble}\n\nAnswer questions about the owner's vehicle based on the data below. \
-            Be concise and practical.\n\n{context}\n{data_entry_instructions}"
+            "{preamble}\n\nAnswer questions about the owner's vehicle based on the data below. Be \
+             concise and practical.\n\n{context}\n{data_entry_instructions}"
         )
     } else {
         format!(
-            "{preamble}\n\nAnswer questions about car maintenance, repairs, and ownership. \
-            Be concise and practical."
+            "{preamble}\n\nAnswer questions about car maintenance, repairs, and ownership. Be \
+             concise and practical."
         )
     };
 
@@ -482,7 +484,10 @@ pub async fn chat(
             .await?
             .ok_or_else(|| ApiError::NotFound(format!("Document {doc_id} not found")))?;
 
-        let mime = doc.mime_type.as_deref().unwrap_or("application/octet-stream");
+        let mime = doc
+            .mime_type
+            .as_deref()
+            .unwrap_or("application/octet-stream");
         let files_dir = std::path::Path::new(&state.config.files_dir)
             .canonicalize()
             .map_err(|e| ApiError::Internal(format!("Invalid files_dir: {e}")))?;

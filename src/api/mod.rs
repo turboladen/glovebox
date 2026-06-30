@@ -1,5 +1,4 @@
 pub mod accidents;
-pub mod serde_helpers;
 pub mod ai;
 pub mod conversations;
 pub mod costs;
@@ -16,6 +15,7 @@ pub mod platforms;
 pub mod reminders;
 pub mod research;
 pub mod schedules;
+pub mod serde_helpers;
 pub mod services;
 pub mod shops;
 pub mod vehicles;

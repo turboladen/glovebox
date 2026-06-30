@@ -1,15 +1,18 @@
-use axum::extract::{Path, Query, State};
-use axum::routing::get;
-use axum::{Json, Router};
+use axum::{
+    Json, Router,
+    extract::{Path, Query, State},
+    routing::get,
+};
 use sea_orm::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::entities::{maintenance_schedule_item, model_template, vehicle};
-use crate::AppState;
+use crate::{
+    AppState,
+    entities::{maintenance_schedule_item, model_template, vehicle},
+};
 
-use super::error::ApiError;
-use super::serde_helpers::deserialize_optional;
+use super::{error::ApiError, serde_helpers::deserialize_optional};
 
 type Result<T> = std::result::Result<T, ApiError>;
 
