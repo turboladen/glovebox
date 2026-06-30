@@ -276,9 +276,11 @@ mod tests {
 
         let messages = provider.build_messages(&request);
         assert_eq!(messages.len(), 2);
-        assert!(messages[1]
-            .content
-            .contains("[Attachment: application/pdf, 100 bytes"));
+        assert!(
+            messages[1]
+                .content
+                .contains("[Attachment: application/pdf, 100 bytes")
+        );
     }
 
     #[test]

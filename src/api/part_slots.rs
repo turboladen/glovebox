@@ -1,13 +1,16 @@
-use axum::extract::{Path, State};
-use axum::Json;
+use axum::{
+    Json,
+    extract::{Path, State},
+};
 use sea_orm::*;
 use serde::Deserialize;
 
-use crate::entities::{part_slot, vehicle};
-use crate::AppState;
+use crate::{
+    AppState,
+    entities::{part_slot, vehicle},
+};
 
-use super::error::ApiError;
-use super::serde_helpers::deserialize_optional;
+use super::{error::ApiError, serde_helpers::deserialize_optional};
 
 type Result<T> = std::result::Result<T, ApiError>;
 

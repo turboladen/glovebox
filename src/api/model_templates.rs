@@ -1,14 +1,14 @@
-use axum::extract::{Path, State};
-use axum::routing::get;
-use axum::{Json, Router};
+use axum::{
+    Json, Router,
+    extract::{Path, State},
+    routing::get,
+};
 use sea_orm::*;
 use serde::Deserialize;
 
-use crate::entities::model_template;
-use crate::AppState;
+use crate::{AppState, entities::model_template};
 
-use super::error::ApiError;
-use super::serde_helpers::deserialize_optional;
+use super::{error::ApiError, serde_helpers::deserialize_optional};
 
 type Result<T> = std::result::Result<T, ApiError>;
 

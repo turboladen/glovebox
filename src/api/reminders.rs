@@ -1,8 +1,12 @@
-use axum::extract::{Path, State};
-use axum::Json;
+use axum::{
+    Json,
+    extract::{Path, State},
+};
 
-use crate::services::reminders::{self, RemindersResponse};
-use crate::AppState;
+use crate::{
+    AppState,
+    services::reminders::{self, RemindersResponse},
+};
 
 use super::error::ApiError;
 

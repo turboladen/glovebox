@@ -1,11 +1,11 @@
-use axum::extract::{Path, State};
-use axum::Json;
+use axum::{
+    Json,
+    extract::{Path, State},
+};
 use sea_orm::*;
 use serde::Serialize;
 
-use crate::entities::vehicle_attribute;
-use crate::services::vin_decode;
-use crate::AppState;
+use crate::{AppState, entities::vehicle_attribute, services::vin_decode};
 
 use super::error::ApiError;
 

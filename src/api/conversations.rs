@@ -1,12 +1,15 @@
-use axum::extract::{Path, State};
-use axum::Json;
+use axum::{
+    Json,
+    extract::{Path, State},
+};
 use sea_orm::*;
 use serde::Deserialize;
 
-use crate::api::error::ApiError;
-use crate::api::require_vehicle;
-use crate::entities::{chat_message, conversation};
-use crate::AppState;
+use crate::{
+    AppState,
+    api::{error::ApiError, require_vehicle},
+    entities::{chat_message, conversation},
+};
 
 type Result<T> = std::result::Result<T, ApiError>;
 
@@ -146,9 +149,7 @@ pub async fn add_message(
         ));
     }
 
-    let now = chrono::Utc::now()
-        .format("%Y-%m-%d %H:%M:%S")
-        .to_string();
+    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
     let msg = chat_message::ActiveModel {
         vehicle_id: Set(Some(vehicle_id)),

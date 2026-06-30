@@ -32,13 +32,16 @@ impl MigrationTrait for Migration {
                 FOREIGN KEY (platform_id) REFERENCES platforms(id) ON DELETE SET NULL,
                 FOREIGN KEY (model_template_id) REFERENCES model_templates(id) ON DELETE SET NULL,
                 FOREIGN KEY (vehicle_id) REFERENCES vehicles(id) ON DELETE CASCADE,
-                FOREIGN KEY (overrides_item_id) REFERENCES maintenance_schedule_items(id) ON DELETE SET NULL,
+                FOREIGN KEY (overrides_item_id) REFERENCES maintenance_schedule_items(id) ON \
+             DELETE SET NULL,
                 CHECK (
-                    (platform_id IS NOT NULL AND model_template_id IS NULL AND vehicle_id IS NULL) OR
-                    (platform_id IS NULL AND model_template_id IS NOT NULL AND vehicle_id IS NULL) OR
+                    (platform_id IS NOT NULL AND model_template_id IS NULL AND vehicle_id IS NULL) \
+             OR
+                    (platform_id IS NULL AND model_template_id IS NOT NULL AND vehicle_id IS NULL) \
+             OR
                     (platform_id IS NULL AND model_template_id IS NULL AND vehicle_id IS NOT NULL)
                 )
-            )"
+            )",
         )
         .await?;
 

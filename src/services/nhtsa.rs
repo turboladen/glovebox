@@ -78,7 +78,11 @@ pub async fn check_recalls(
         match fetch_recalls(make, &shorter, model_year).await {
             Ok(result) => return Ok(result),
             Err(NhtsaError::BadRequest(_)) => {
-                let next = if end > 1 { words[..end - 1].join(" ") } else { "none".to_string() };
+                let next = if end > 1 {
+                    words[..end - 1].join(" ")
+                } else {
+                    "none".to_string()
+                };
                 tracing::warn!("NHTSA 400 for model '{shorter}', retrying with '{next}'");
             }
             Err(e) => return Err(e.to_string()),

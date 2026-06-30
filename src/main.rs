@@ -14,15 +14,16 @@ mod entities;
 mod migration;
 mod services;
 
-use std::path::Path;
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
-use axum::{routing::get, Router};
+use axum::{Router, routing::get};
 use clap::Parser;
 use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 use sea_orm_migration::MigratorTrait;
-use tower_http::cors::CorsLayer;
-use tower_http::services::{ServeDir, ServeFile};
+use tower_http::{
+    cors::CorsLayer,
+    services::{ServeDir, ServeFile},
+};
 
 use config::AppConfig;
 use migration::Migrator;
@@ -115,8 +116,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .route(
             "/api/vehicles/{vehicle_id}/conversations/{id}",
-            axum::routing::put(api::conversations::rename)
-                .delete(api::conversations::delete),
+            axum::routing::put(api::conversations::rename).delete(api::conversations::delete),
         )
         .route(
             "/api/vehicles/{vehicle_id}/conversations/{id}/messages",

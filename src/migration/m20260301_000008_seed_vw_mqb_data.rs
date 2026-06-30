@@ -11,18 +11,26 @@ impl MigrationTrait for Migration {
 
         // Platform: VW MQB (EA888)
         db.execute_unprepared(
-            "INSERT INTO platforms (name, notes) VALUES ('VW MQB (EA888)', 'Modular Transverse Matrix platform, 2.0L EA888 turbo inline-4, 2015-2021')"
-        ).await?;
+            "INSERT INTO platforms (name, notes) VALUES ('VW MQB (EA888)', 'Modular Transverse \
+             Matrix platform, 2.0L EA888 turbo inline-4, 2015-2021')",
+        )
+        .await?;
 
         // Model Template: 2017 Golf GTI Mk7 (6MT, FWD)
         db.execute_unprepared(
-            "INSERT INTO model_templates (platform_id, year, make, model, trim_level, engine, transmission, drivetrain) VALUES (1, 2017, 'Volkswagen', 'Golf GTI', 'SE', '2.0L TSI (EA888 Gen3)', '6MT', 'FWD')"
-        ).await?;
+            "INSERT INTO model_templates (platform_id, year, make, model, trim_level, engine, \
+             transmission, drivetrain) VALUES (1, 2017, 'Volkswagen', 'Golf GTI', 'SE', '2.0L TSI \
+             (EA888 Gen3)', '6MT', 'FWD')",
+        )
+        .await?;
 
         // Model Template: 2017 Golf Alltrack Mk7 (DSG, 4MOTION)
         db.execute_unprepared(
-            "INSERT INTO model_templates (platform_id, year, make, model, trim_level, engine, transmission, drivetrain) VALUES (1, 2017, 'Volkswagen', 'Golf Alltrack', 'SEL', '1.8L TSI (EA888 Gen3)', 'DSG (DQ250)', '4MOTION')"
-        ).await?;
+            "INSERT INTO model_templates (platform_id, year, make, model, trim_level, engine, \
+             transmission, drivetrain) VALUES (1, 2017, 'Volkswagen', 'Golf Alltrack', 'SEL', \
+             '1.8L TSI (EA888 Gen3)', 'DSG (DQ250)', '4MOTION')",
+        )
+        .await?;
 
         // Platform-level schedule items (shared by both cars)
         let platform_items = [
@@ -79,8 +87,12 @@ impl MigrationTrait for Migration {
             };
 
             db.execute_unprepared(&format!(
-                "INSERT INTO maintenance_schedule_items (platform_id, name, interval_miles, interval_months, labor_categories, notes, source, is_factory_recommended) VALUES ((SELECT id FROM platforms WHERE name = 'VW MQB (EA888)'), '{name}', {miles_clause}, {months_clause}, '{categories}', {notes_clause}, 'factory', TRUE)"
-            )).await?;
+                "INSERT INTO maintenance_schedule_items (platform_id, name, interval_miles, \
+                 interval_months, labor_categories, notes, source, is_factory_recommended) VALUES \
+                 ((SELECT id FROM platforms WHERE name = 'VW MQB (EA888)'), '{name}', \
+                 {miles_clause}, {months_clause}, '{categories}', {notes_clause}, 'factory', TRUE)"
+            ))
+            .await?;
         }
 
         // GTI model template items
@@ -113,8 +125,11 @@ impl MigrationTrait for Migration {
 
         for (name, miles, categories, notes) in &gti_items {
             db.execute_unprepared(&format!(
-                "INSERT INTO maintenance_schedule_items (model_template_id, name, interval_miles, labor_categories, notes, source) VALUES ((SELECT id FROM model_templates WHERE model = 'Golf GTI'), '{name}', {miles}, '{categories}', '{notes}', 'community')"
-            )).await?;
+                "INSERT INTO maintenance_schedule_items (model_template_id, name, interval_miles, \
+                 labor_categories, notes, source) VALUES ((SELECT id FROM model_templates WHERE \
+                 model = 'Golf GTI'), '{name}', {miles}, '{categories}', '{notes}', 'community')"
+            ))
+            .await?;
         }
 
         // Alltrack model template items
@@ -153,8 +168,12 @@ impl MigrationTrait for Migration {
 
         for (name, miles, categories, notes) in &alltrack_items {
             db.execute_unprepared(&format!(
-                "INSERT INTO maintenance_schedule_items (model_template_id, name, interval_miles, labor_categories, notes, source) VALUES ((SELECT id FROM model_templates WHERE model = 'Golf Alltrack'), '{name}', {miles}, '{categories}', '{notes}', 'community')"
-            )).await?;
+                "INSERT INTO maintenance_schedule_items (model_template_id, name, interval_miles, \
+                 labor_categories, notes, source) VALUES ((SELECT id FROM model_templates WHERE \
+                 model = 'Golf Alltrack'), '{name}', {miles}, '{categories}', '{notes}', \
+                 'community')"
+            ))
+            .await?;
         }
 
         Ok(())

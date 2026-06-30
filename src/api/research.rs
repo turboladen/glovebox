@@ -1,13 +1,16 @@
-use axum::extract::{Path, Query, State};
-use axum::Json;
+use axum::{
+    Json,
+    extract::{Path, Query, State},
+};
 use sea_orm::*;
 use serde::{Deserialize, Serialize};
 
-use crate::entities::{research_finding, research_report, vehicle};
-use crate::AppState;
+use crate::{
+    AppState,
+    entities::{research_finding, research_report, vehicle},
+};
 
-use super::error::ApiError;
-use super::serde_helpers::deserialize_optional;
+use super::{error::ApiError, serde_helpers::deserialize_optional};
 
 // --- Recall check ---
 
@@ -227,9 +230,9 @@ pub async fn generate_report(
             .complete(crate::services::ai::AiRequest {
                 system_prompt: format!(
                     "{}\n\nReturn ONLY a valid JSON array — no narrative text, no markdown. \
-                    Provide findings as a JSON array of objects with fields: title, description, \
-                    severity (critical/recommended/optional/informational), category (one of: \
-                    forum_report, suggested_maintenance, upgrade_idea).",
+                     Provide findings as a JSON array of objects with fields: title, description, \
+                     severity (critical/recommended/optional/informational), category (one of: \
+                     forum_report, suggested_maintenance, upgrade_idea).",
                     crate::services::ai::context::GLOVEBOX_PREAMBLE
                 ),
                 messages: vec![crate::services::ai::ChatMessage {
@@ -438,7 +441,12 @@ fn build_community_wisdom_prompt(vehicle: &vehicle::Model) -> String {
         prompt.push_str(transmission);
         prompt.push_str(" transmission ");
     }
-    prompt.push_str("— what are the most common issues, recommended preventive maintenance items beyond factory schedule, and popular upgrades reported by owners? Only include issues that apply to this exact configuration (e.g., do not include AWD-specific issues for a FWD vehicle, or manual transmission issues for an automatic). Return as JSON array.");
+    prompt.push_str(
+        "— what are the most common issues, recommended preventive maintenance items beyond \
+         factory schedule, and popular upgrades reported by owners? Only include issues that \
+         apply to this exact configuration (e.g., do not include AWD-specific issues for a FWD \
+         vehicle, or manual transmission issues for an automatic). Return as JSON array.",
+    );
     prompt
 }
 
@@ -539,7 +547,9 @@ mod tests {
 
     #[test]
     fn parse_ai_findings_code_fenced() {
-        let json = "```json\n[{\"category\":\"suggested_maintenance\",\"title\":\"Carbon buildup\",\"description\":\"Direct injection causes carbon buildup\",\"severity\":\"recommended\"}]\n```";
+        let json = "```json\n[{\"category\":\"suggested_maintenance\",\"title\":\"Carbon \
+                    buildup\",\"description\":\"Direct injection causes carbon \
+                    buildup\",\"severity\":\"recommended\"}]\n```";
         let findings = parse_ai_findings(json).unwrap();
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].category, "suggested_maintenance");
