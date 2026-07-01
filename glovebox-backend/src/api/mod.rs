@@ -21,7 +21,7 @@ pub mod shops;
 pub mod vehicles;
 pub mod vin;
 
-use crate::entities::vehicle;
+use glovebox_shared::entities::vehicle;
 use error::ApiError;
 use sea_orm::{DatabaseConnection, EntityTrait};
 

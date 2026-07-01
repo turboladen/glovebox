@@ -8,8 +8,8 @@ use serde::Deserialize;
 use crate::{
     AppState,
     api::{error::ApiError, require_vehicle},
-    entities::{chat_message, conversation},
 };
+use glovebox_shared::entities::{chat_message, conversation};
 
 type Result<T> = std::result::Result<T, ApiError>;
 

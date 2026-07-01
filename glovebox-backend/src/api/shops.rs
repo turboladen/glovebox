@@ -6,7 +6,8 @@ use axum::{
 use sea_orm::*;
 use serde::Deserialize;
 
-use crate::{AppState, entities::shop};
+use crate::AppState;
+use glovebox_shared::entities::shop;
 
 use super::{error::ApiError, serde_helpers::deserialize_optional};
 

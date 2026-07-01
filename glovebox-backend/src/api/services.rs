@@ -5,11 +5,9 @@ use axum::{
 use sea_orm::*;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    AppState,
-    entities::{
-        mileage_log, part, service_record, service_record_line_item, service_schedule_link,
-    },
+use crate::AppState;
+use glovebox_shared::entities::{
+    mileage_log, part, service_record, service_record_line_item, service_schedule_link,
 };
 
 use super::{error::ApiError, require_vehicle, serde_helpers::deserialize_optional};

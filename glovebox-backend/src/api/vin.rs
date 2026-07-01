@@ -5,7 +5,8 @@ use axum::{
 use sea_orm::*;
 use serde::Serialize;
 
-use crate::{AppState, entities::vehicle_attribute, services::vin_decode};
+use crate::AppState;
+use glovebox_shared::{entities::vehicle_attribute, services::vin_decode};
 
 use super::error::ApiError;
 
@@ -32,7 +33,7 @@ pub async fn decode_and_store(
     State(state): State<AppState>,
     Path((vehicle_id, vin)): Path<(i32, String)>,
 ) -> Result<Json<VinDecodeResponse>> {
-    use crate::entities::vehicle;
+    use glovebox_shared::entities::vehicle;
 
     // Verify vehicle exists
     vehicle::Entity::find_by_id(vehicle_id)
