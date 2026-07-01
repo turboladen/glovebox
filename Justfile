@@ -23,7 +23,7 @@ dev:
     fi
 
     # Start backend
-    cargo run &
+    cargo run -p glovebox-backend &
     BACKEND_PID=$!
 
     # Start frontend dev server
@@ -47,9 +47,9 @@ fmt:
 
 # Backend gates: build, test, clippy (matches CLAUDE.md's pedantic convention)
 ci-backend:
-    cargo build --locked
-    cargo test --locked
-    cargo clippy -- -D clippy::pedantic
+    cargo build --workspace --locked
+    cargo test --workspace --locked
+    cargo clippy --workspace -- -D clippy::pedantic
 
 # Frontend gates: type-check + production build
 ci-frontend:
@@ -84,10 +84,10 @@ test-e2e-ci:
     rm -f "$DB" "$DB-shm" "$DB-wal"
     rm -rf "$FILES"; mkdir -p "$FILES"
 
-    cargo build --locked
+    cargo build --workspace --locked
 
     GLOVEBOX_DB_PATH="$DB" GLOVEBOX_FILES_DIR="$FILES" GLOVEBOX_LISTEN=0.0.0.0:$backend_port \
-        ./target/debug/glovebox >/tmp/glovebox-e2e-backend.log 2>&1 &
+        ./target/debug/glovebox-backend >/tmp/glovebox-e2e-backend.log 2>&1 &
     backend_pid=$!
     ( cd frontend && bun run dev >/tmp/glovebox-e2e-frontend.log 2>&1 ) &
     frontend_pid=$!
