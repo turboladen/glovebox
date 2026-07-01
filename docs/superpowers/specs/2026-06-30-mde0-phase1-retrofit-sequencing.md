@@ -37,7 +37,7 @@ Stay typed and domain-specific; the four words are how we *think* cross-app, not
 | Entity   | Vehicle                                            |
 | Event    | Service, Mileage, Observation, Accident            |
 | Document | Receipt, manual, photo (file + extracted text)     |
-| Goal     | Mileage target, "replace timing belt by X", build target (modeling TBD — see Stage 0) |
+| Goal     | Form only — maps to two car-native concepts: recurring maintenance (`maintenance_schedule_item`, exists) + one-shot `build` (new). See Stage 0 decision. |
 
 ---
 
@@ -64,14 +64,33 @@ so the shared `search()` should exist before that MCP verb is wired.
 
 ## What each child delivers + acceptance criteria
 
-### Stage 0 — `0qiq`: Decide Goal/Plan modeling
-A recorded `bd decision`: Goal modeled as an **Entity** (with its own Events, Homie-style) **or** as a
-**distinct primitive** (Financier-style), with rationale. glovebox today has `maintenance_schedule_items`
-(the Plan-template: intervals in miles/months) but no per-vehicle Goal primitive.
+### Stage 0 — `0qiq`: Decide Goal/Plan modeling — ✅ RESOLVED 2026-06-30
 
-**Done when:** the decision is captured via `bd decision`, the README's open question ("Entities vs
-separate primitive") is answerable for glovebox, and other apps can follow the same choice. No schema
-change required in Phase 1 unless trivial.
+**Decision:** "Goal" is a cross-app *form*, not a glovebox table (discipline: type things
+domain-specifically; the four words are vocabulary, not table/trait names). The Goal form maps to two
+glovebox-native concepts, and only one is a gap:
+
+1. **Recurring maintenance targets** (10k service, oil every 5k) → **already served** by the existing
+   `maintenance_schedule_item` (recurring Plan-template). No new primitive.
+2. **One-shot upgrade / build / restoration targets** (upgrade turbo, engine swap, get it road-legal)
+   → **new `build` primitive** (`builds` table, `Build` entity). Car-native name, deliberately not
+   `goal`/`project` (Form-level names a converging sibling app would collide on).
+
+**`build` modeling:** lightweight per-vehicle primitive (FK → vehicle), **not** event-sourced.
+Progress **derived at query time** from linked typed Events/Parts (`service_record`, `part`,
+`observation`) plus a lifecycle status/phase. No polymorphic `*_event` junction (glovebox's split
+event tables make that awkward) — single-FK links or existing junction patterns, decided at
+implementation time.
+
+**Scope:** Plan-steps table deferred (YAGNI). "Hit 100k miles" milestone out of Phase 1 (derivable).
+Latitude to restructure existing tables (`part`/`part_slot`/`service_record`) to seat `build` cleanly.
+
+**Note:** Homie/Financier are pre-implementation and were **not** used as models — they should
+converge on this decision, not the reverse.
+
+**Captured in:** `0qiq` design field + `bd remember` key `mde0-goal-maps-to-build`.
+**Done.** The build primitive is a candidate follow-up issue (implementation), tracked separately from
+this decision.
 
 ### Stage 1 — `puby`: Workspace split (the gate)
 - Create a cargo workspace.
@@ -114,7 +133,7 @@ language; resources are stable addressable URIs).
 
 | ID | Type     | Statement | Disposition |
 | -- | -------- | --------- | ----------- |
-| D1 | Decision | Goal = Entity (own Events) vs distinct primitive | Resolve FIRST as `0qiq` (Stage 0). |
+| D1 | Decision | Goal = Entity (own Events) vs distinct primitive | ✅ RESOLVED 2026-06-30 (`0qiq`): Goal is a form; new car-native `build` primitive (lightweight, derived progress) + existing `maintenance_schedule_item`. |
 | D2 | Decision | MCP mount: standalone binary (Homie) vs `/mcp` on the backend port (fewd) | Decide at `mmiv` start. Read both refs first. Standalone keeps surfaces independently deployable; same-port keeps one binary. |
 | R1 | Risk     | Business logic embedded in `src/api/` handlers | Stage 1 needs a **handler audit** to pull logic down into `shared`. The move is behaviorally a no-op; test coverage is the safety net. |
 | R2 | Risk     | Single-deployable-binary + startup migration auto-run | Must survive the split — backend keeps baking `frontend/dist` and running `Migrator::up()` on boot. |
