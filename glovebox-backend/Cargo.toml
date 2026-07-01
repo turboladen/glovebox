@@ -1,0 +1,25 @@
+[package]
+name = "glovebox-backend"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "glovebox-backend"
+path = "src/main.rs"
+
+[dependencies]
+glovebox-shared = { path = "../glovebox-shared" }
+axum = { version = "0.8", features = ["multipart"] }
+tokio.workspace = true
+sea-orm.workspace = true
+sea-orm-migration.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tower-http = { version = "0.6", features = ["fs", "cors", "trace"] }
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+base64.workspace = true

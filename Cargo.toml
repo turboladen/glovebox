@@ -1,24 +1,18 @@
-[package]
-name = "glovebox"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+resolver = "2"
+members = ["glovebox-shared", "glovebox-backend"]
 
-[dependencies]
-axum = { version = "0.8", features = ["multipart"] }
-tokio = { version = "1", features = ["full"] }
-sea-orm = { version = "1.1", features = [
-    "sqlx-sqlite",
-    "runtime-tokio-rustls",
-    "macros",
-    "with-chrono",
-] }
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+
+[workspace.dependencies]
+sea-orm = { version = "1.1", features = ["sqlx-sqlite", "runtime-tokio-rustls", "macros", "with-chrono"] }
 sea-orm-migration = "1.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
-tower-http = { version = "0.6", features = ["fs", "cors", "trace"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio = { version = "1", features = ["full"] }
 thiserror = "2"
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
@@ -27,3 +21,9 @@ rusty-money = { version = "0.4", features = ["iso"] }
 async-trait = "0.1"
 base64 = "0.22"
 sqlx = { version = "0.8", features = ["sqlite"], default-features = false }
+tracing = "0.1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
