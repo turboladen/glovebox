@@ -133,6 +133,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn update_rejects_blank_name() {
+        let db = test_db().await;
+        let p = create(
+            &db,
+            NewPlatform {
+                name: "A".into(),
+                website_url: None,
+                api_base_url: None,
+                notes: None,
+            },
+        )
+        .await
+        .unwrap();
+        let err = update(
+            &db,
+            p.id,
+            UpdatePlatform {
+                name: Some("   ".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Invalid { .. }));
+    }
+
+    #[tokio::test]
     async fn get_missing_is_not_found() {
         let db = test_db().await;
         assert!(matches!(
