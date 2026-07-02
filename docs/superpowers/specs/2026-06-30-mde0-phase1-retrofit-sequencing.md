@@ -105,6 +105,13 @@ this decision.
 baked-in `frontend/dist`; migrations still auto-run on startup via `Migrator::up()`; Playwright e2e
 green. Behaviorally a no-op — the move re-homes code, it does not change behavior.
 
+**Status (2026-07-02): resolved.** Split done via the Phase A mechanical move (PR #16) followed by
+per-domain handler thinning B0–B16 (PRs #17, #18, #19). The layering boundary is enforced in CI by
+`scripts/check-layering.sh` (no SeaORM usage in `glovebox-backend/src/api`, no axum in
+`glovebox-shared`). The error model gained `DomainError::BadRequest` (verbatim 400s alongside the
+field-attributed `Invalid`). Follow-up: ownership-check audit (move `vehicle::require` from handlers
+into sub-resource service fns) filed as `glovebox-paxy`.
+
 ### Stage 2a — `mq9r`: `search(query, scope)`
 - FTS5 virtual tables (migration) over Entity + Event text (service notes, observation, accident, etc.)
   and Document extracted text.

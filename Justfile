@@ -45,6 +45,10 @@ fmt-check:
 fmt:
     cargo +nightly fmt --all
 
+# Layering gate: no SQL in glovebox-backend handlers, no axum in glovebox-shared
+check-layering:
+    ./scripts/check-layering.sh
+
 # Backend gates: build, test, clippy (matches CLAUDE.md's pedantic convention)
 ci-backend:
     cargo build --workspace --locked
@@ -61,7 +65,7 @@ ci-frontend:
     bun run build
 
 # Run all CI gates locally (everything CI runs except e2e)
-ci: fmt-check ci-backend ci-frontend
+ci: fmt-check check-layering ci-backend ci-frontend
 
 # Full e2e for CI: boots backend + vite against a throwaway DB, waits for both
 # ports, runs Playwright (single worker — the suite shares one backend DB), tears
