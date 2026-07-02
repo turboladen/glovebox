@@ -2,11 +2,12 @@ use axum::{
     Json,
     extract::{Path, State},
 };
-use sea_orm::*;
 use serde::Deserialize;
 
 use crate::AppState;
-use glovebox_shared::entities::mileage_log;
+use glovebox_shared::{
+    entities::mileage_log, inputs::mileage::NewMileageEntry, services::mileage as svc,
+};
 
 use super::{error::ApiError, require_vehicle};
 
@@ -25,13 +26,7 @@ pub async fn list(
     Path(vehicle_id): Path<i32>,
 ) -> Result<Json<Vec<mileage_log::Model>>> {
     require_vehicle(&state.db, vehicle_id).await?;
-
-    let entries = mileage_log::Entity::find()
-        .filter(mileage_log::Column::VehicleId.eq(vehicle_id))
-        .order_by_desc(mileage_log::Column::RecordedAt)
-        .all(&state.db)
-        .await?;
-    Ok(Json(entries))
+    Ok(Json(svc::list(&state.db, vehicle_id).await?))
 }
 
 pub async fn create(
@@ -40,16 +35,16 @@ pub async fn create(
     Json(input): Json<CreateMileageEntry>,
 ) -> Result<Json<mileage_log::Model>> {
     require_vehicle(&state.db, vehicle_id).await?;
-
-    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    let model = mileage_log::ActiveModel {
-        vehicle_id: Set(vehicle_id),
-        mileage: Set(input.mileage),
-        recorded_at: Set(input.recorded_at.unwrap_or(now)),
-        source: Set(input.source.or(Some("manual".to_string()))),
-        notes: Set(input.notes),
-        ..Default::default()
-    };
-    let result = model.insert(&state.db).await?;
-    Ok(Json(result))
+    let created = svc::create(
+        &state.db,
+        vehicle_id,
+        NewMileageEntry {
+            mileage: input.mileage,
+            recorded_at: input.recorded_at,
+            source: input.source,
+            notes: input.notes,
+        },
+    )
+    .await?;
+    Ok(Json(created))
 }

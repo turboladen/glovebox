@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod mileage;
 pub mod model_template;
 pub mod nhtsa;
 pub mod platform;
