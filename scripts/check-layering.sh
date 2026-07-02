@@ -42,7 +42,13 @@ fi
 # RecordNotFound match) — and those reference it fully qualified today. Any
 # other sea_orm import (especially `use sea_orm::*`) is a sign a handler is
 # about to run queries.
-if grep -rn 'use sea_orm' glovebox-backend/src/api | grep -v 'DbErr'; then
+#
+# NOTE: we allow-list the exact solo-DbErr import form (`use sea_orm::DbErr;`
+# or braced `use sea_orm::{DbErr};`), not just any line containing the
+# substring "DbErr" — a plain `grep -v 'DbErr'` would also filter out mixed
+# imports like `use sea_orm::{DbErr, Condition};`, silently allowing a
+# query-building type in through the back door.
+if grep -rn 'use sea_orm' glovebox-backend/src/api | grep -vE 'use sea_orm::\{?DbErr\}?;'; then
   echo "FAIL: sea_orm import (other than DbErr) found in glovebox-backend/src/api"
   fail=1
 fi
