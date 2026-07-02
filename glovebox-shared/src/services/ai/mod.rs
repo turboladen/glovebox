@@ -156,6 +156,30 @@ mod tests {
         assert_eq!(provider.provider_name(), "none");
     }
 
+    #[test]
+    fn strip_code_fences_json_block() {
+        let input = "```json\n[{\"title\": \"test\"}]\n```";
+        assert_eq!(strip_code_fences(input), "[{\"title\": \"test\"}]");
+    }
+
+    #[test]
+    fn strip_code_fences_plain_block() {
+        let input = "```\n[{\"title\": \"test\"}]\n```";
+        assert_eq!(strip_code_fences(input), "[{\"title\": \"test\"}]");
+    }
+
+    #[test]
+    fn strip_code_fences_no_fences() {
+        let input = "[{\"title\": \"test\"}]";
+        assert_eq!(strip_code_fences(input), "[{\"title\": \"test\"}]");
+    }
+
+    #[test]
+    fn strip_code_fences_with_whitespace() {
+        let input = "  ```json\n[{\"title\": \"test\"}]\n```  ";
+        assert_eq!(strip_code_fences(input), "[{\"title\": \"test\"}]");
+    }
+
     #[tokio::test]
     async fn noop_returns_not_configured() {
         let provider = noop::NoOpProvider;

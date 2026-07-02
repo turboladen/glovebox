@@ -2,6 +2,7 @@
 //! HTTP request DTOs in glovebox-backend map INTO these; the MCP surface builds them directly.
 
 pub mod accident;
+pub mod ai_provider;
 pub mod document;
 pub mod mileage;
 pub mod model_template;
