@@ -11,7 +11,7 @@ use glovebox_shared::{
     services::observation as svc,
 };
 
-use super::{error::ApiError, require_vehicle, serde_helpers::deserialize_optional};
+use super::{error::ApiError, serde_helpers::deserialize_optional};
 
 type Result<T> = std::result::Result<T, ApiError>;
 
@@ -48,7 +48,7 @@ pub async fn list(
     State(state): State<AppState>,
     Path(vehicle_id): Path<i32>,
 ) -> Result<Json<Vec<observation::Model>>> {
-    require_vehicle(&state.db, vehicle_id).await?;
+    glovebox_shared::services::vehicle::require(&state.db, vehicle_id).await?;
     Ok(Json(svc::list(&state.db, vehicle_id).await?))
 }
 
@@ -64,7 +64,7 @@ pub async fn create(
     Path(vehicle_id): Path<i32>,
     Json(input): Json<CreateObservation>,
 ) -> Result<Json<observation::Model>> {
-    require_vehicle(&state.db, vehicle_id).await?;
+    glovebox_shared::services::vehicle::require(&state.db, vehicle_id).await?;
     let created = svc::create(
         &state.db,
         vehicle_id,

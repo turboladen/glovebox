@@ -7,7 +7,7 @@ use serde::Deserialize;
 
 use crate::{
     AppState,
-    api::{error::ApiError, require_vehicle},
+    api::error::ApiError,
 };
 use glovebox_shared::entities::{chat_message, conversation};
 
@@ -17,7 +17,7 @@ pub async fn list(
     State(state): State<AppState>,
     Path(vehicle_id): Path<i32>,
 ) -> Result<Json<Vec<conversation::Model>>> {
-    require_vehicle(&state.db, vehicle_id).await?;
+    glovebox_shared::services::vehicle::require(&state.db, vehicle_id).await?;
 
     let convos = conversation::Entity::find()
         .filter(conversation::Column::VehicleId.eq(vehicle_id))
@@ -38,7 +38,7 @@ pub async fn create(
     Path(vehicle_id): Path<i32>,
     Json(input): Json<CreateConversation>,
 ) -> Result<Json<conversation::Model>> {
-    require_vehicle(&state.db, vehicle_id).await?;
+    glovebox_shared::services::vehicle::require(&state.db, vehicle_id).await?;
 
     let model = conversation::ActiveModel {
         vehicle_id: Set(Some(vehicle_id)),
@@ -60,7 +60,7 @@ pub async fn rename(
     Path((vehicle_id, id)): Path<(i32, i32)>,
     Json(input): Json<RenameConversation>,
 ) -> Result<Json<conversation::Model>> {
-    require_vehicle(&state.db, vehicle_id).await?;
+    glovebox_shared::services::vehicle::require(&state.db, vehicle_id).await?;
 
     let existing = conversation::Entity::find_by_id(id)
         .filter(conversation::Column::VehicleId.eq(vehicle_id))
@@ -80,7 +80,7 @@ pub async fn delete(
     State(state): State<AppState>,
     Path((vehicle_id, id)): Path<(i32, i32)>,
 ) -> Result<Json<serde_json::Value>> {
-    require_vehicle(&state.db, vehicle_id).await?;
+    glovebox_shared::services::vehicle::require(&state.db, vehicle_id).await?;
 
     // Delete associated chat messages first (no FK cascade on ALTER TABLE ADD COLUMN in SQLite)
     chat_message::Entity::delete_many()
@@ -105,7 +105,7 @@ pub async fn messages(
     State(state): State<AppState>,
     Path((vehicle_id, id)): Path<(i32, i32)>,
 ) -> Result<Json<Vec<chat_message::Model>>> {
-    require_vehicle(&state.db, vehicle_id).await?;
+    glovebox_shared::services::vehicle::require(&state.db, vehicle_id).await?;
 
     // Verify conversation belongs to this vehicle
     conversation::Entity::find_by_id(id)
@@ -134,7 +134,7 @@ pub async fn add_message(
     Path((vehicle_id, id)): Path<(i32, i32)>,
     Json(input): Json<AddMessage>,
 ) -> Result<Json<chat_message::Model>> {
-    require_vehicle(&state.db, vehicle_id).await?;
+    glovebox_shared::services::vehicle::require(&state.db, vehicle_id).await?;
 
     // Verify conversation belongs to vehicle
     conversation::Entity::find_by_id(id)

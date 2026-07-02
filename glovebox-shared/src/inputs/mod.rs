@@ -11,3 +11,4 @@ pub mod platform;
 pub mod schedule;
 pub mod service_record;
 pub mod shop;
+pub mod vehicle;

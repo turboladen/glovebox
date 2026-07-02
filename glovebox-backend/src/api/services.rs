@@ -12,7 +12,7 @@ use glovebox_shared::{
     services::service_record::{self as svc, ServiceRecordWithLinks},
 };
 
-use super::{error::ApiError, require_vehicle, serde_helpers::deserialize_optional};
+use super::{error::ApiError, serde_helpers::deserialize_optional};
 
 type Result<T> = std::result::Result<T, ApiError>;
 
@@ -90,7 +90,7 @@ pub async fn list(
     State(state): State<AppState>,
     Path(vehicle_id): Path<i32>,
 ) -> Result<Json<Vec<ServiceRecordWithLinks>>> {
-    require_vehicle(&state.db, vehicle_id).await?;
+    glovebox_shared::services::vehicle::require(&state.db, vehicle_id).await?;
     Ok(Json(svc::list(&state.db, vehicle_id).await?))
 }
 
@@ -98,7 +98,7 @@ pub async fn get_one(
     State(state): State<AppState>,
     Path((vehicle_id, id)): Path<(i32, i32)>,
 ) -> Result<Json<ServiceRecordWithLinks>> {
-    require_vehicle(&state.db, vehicle_id).await?;
+    glovebox_shared::services::vehicle::require(&state.db, vehicle_id).await?;
     Ok(Json(svc::get(&state.db, vehicle_id, id).await?))
 }
 
@@ -107,7 +107,7 @@ pub async fn create(
     Path(vehicle_id): Path<i32>,
     Json(input): Json<CreateServiceRecord>,
 ) -> Result<Json<ServiceRecordWithLinks>> {
-    require_vehicle(&state.db, vehicle_id).await?;
+    glovebox_shared::services::vehicle::require(&state.db, vehicle_id).await?;
     let created = svc::create(
         &state.db,
         vehicle_id,
@@ -140,7 +140,7 @@ pub async fn update(
     Path((vehicle_id, id)): Path<(i32, i32)>,
     Json(input): Json<UpdateServiceRecord>,
 ) -> Result<Json<ServiceRecordWithLinks>> {
-    require_vehicle(&state.db, vehicle_id).await?;
+    glovebox_shared::services::vehicle::require(&state.db, vehicle_id).await?;
     let updated = svc::update(
         &state.db,
         vehicle_id,
@@ -173,7 +173,7 @@ pub async fn delete(
     State(state): State<AppState>,
     Path((vehicle_id, id)): Path<(i32, i32)>,
 ) -> Result<Json<serde_json::Value>> {
-    require_vehicle(&state.db, vehicle_id).await?;
+    glovebox_shared::services::vehicle::require(&state.db, vehicle_id).await?;
     svc::delete(&state.db, vehicle_id, id).await?;
     Ok(Json(serde_json::json!({ "deleted": id })))
 }

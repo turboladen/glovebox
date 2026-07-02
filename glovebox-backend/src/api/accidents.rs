@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::AppState;
 use glovebox_shared::entities::{accident, accident_correspondence, accident_service_link};
 
-use super::{error::ApiError, require_vehicle, serde_helpers::deserialize_optional};
+use super::{error::ApiError, serde_helpers::deserialize_optional};
 
 type Result<T> = std::result::Result<T, ApiError>;
 
@@ -119,7 +119,7 @@ pub async fn list(
     State(state): State<AppState>,
     Path(vehicle_id): Path<i32>,
 ) -> Result<Json<Vec<AccidentWithDetails>>> {
-    require_vehicle(&state.db, vehicle_id).await?;
+    glovebox_shared::services::vehicle::require(&state.db, vehicle_id).await?;
 
     let accidents = accident::Entity::find()
         .filter(accident::Column::VehicleId.eq(vehicle_id))
@@ -177,7 +177,7 @@ pub async fn get_one(
     State(state): State<AppState>,
     Path((vehicle_id, id)): Path<(i32, i32)>,
 ) -> Result<Json<AccidentWithDetails>> {
-    require_vehicle(&state.db, vehicle_id).await?;
+    glovebox_shared::services::vehicle::require(&state.db, vehicle_id).await?;
 
     let acc = accident::Entity::find_by_id(id)
         .filter(accident::Column::VehicleId.eq(vehicle_id))
@@ -199,7 +199,7 @@ pub async fn create(
     Path(vehicle_id): Path<i32>,
     Json(input): Json<CreateAccident>,
 ) -> Result<Json<AccidentWithDetails>> {
-    require_vehicle(&state.db, vehicle_id).await?;
+    glovebox_shared::services::vehicle::require(&state.db, vehicle_id).await?;
 
     let txn = state.db.begin().await?;
 
@@ -246,7 +246,7 @@ pub async fn update(
     Path((vehicle_id, id)): Path<(i32, i32)>,
     Json(input): Json<UpdateAccident>,
 ) -> Result<Json<AccidentWithDetails>> {
-    require_vehicle(&state.db, vehicle_id).await?;
+    glovebox_shared::services::vehicle::require(&state.db, vehicle_id).await?;
 
     let existing = accident::Entity::find_by_id(id)
         .filter(accident::Column::VehicleId.eq(vehicle_id))

@@ -8,7 +8,7 @@ use serde::Serialize;
 use crate::AppState;
 use glovebox_shared::entities::{part, service_record};
 
-use super::{error::ApiError, require_vehicle};
+use super::error::ApiError;
 
 type Result<T> = std::result::Result<T, ApiError>;
 
@@ -57,7 +57,7 @@ pub async fn export_history(
     State(state): State<AppState>,
     Path(vehicle_id): Path<i32>,
 ) -> Result<Json<VehicleExport>> {
-    let v = require_vehicle(&state.db, vehicle_id).await?;
+    let v = glovebox_shared::services::vehicle::require(&state.db, vehicle_id).await?;
 
     let services = service_record::Entity::find()
         .filter(service_record::Column::VehicleId.eq(vehicle_id))
