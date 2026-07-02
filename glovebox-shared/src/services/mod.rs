@@ -10,5 +10,6 @@ pub mod part_slot;
 pub mod platform;
 pub mod reminders;
 pub mod schedule;
+pub mod service_record;
 pub mod shop;
 pub mod vin_decode;
