@@ -211,7 +211,9 @@ async fn upload_photo(
 
     let relative_path = format!("{id}/photos/{stored_name}");
 
-    Ok(Json(svc::set_photo_path(&state.db, id, relative_path).await?))
+    Ok(Json(
+        svc::set_photo_path(&state.db, id, relative_path).await?,
+    ))
 }
 
 async fn archive(

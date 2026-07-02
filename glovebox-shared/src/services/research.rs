@@ -38,17 +38,24 @@ pub async fn check_recalls<C: ConnectionTrait + TransactionTrait>(
         .await?
         .ok_or_else(|| DomainError::NotFound("Vehicle not found".to_string()))?;
 
-    let make = vehicle
-        .make
-        .as_deref()
-        .ok_or_else(|| DomainError::invalid("make", "Vehicle has no make set — required for recall lookup"))?;
-    let model = vehicle
-        .model
-        .as_deref()
-        .ok_or_else(|| DomainError::invalid("model", "Vehicle has no model set — required for recall lookup"))?;
-    let year = vehicle
-        .year
-        .ok_or_else(|| DomainError::invalid("year", "Vehicle has no year set — required for recall lookup"))?;
+    let make = vehicle.make.as_deref().ok_or_else(|| {
+        DomainError::invalid(
+            "make",
+            "Vehicle has no make set — required for recall lookup",
+        )
+    })?;
+    let model = vehicle.model.as_deref().ok_or_else(|| {
+        DomainError::invalid(
+            "model",
+            "Vehicle has no model set — required for recall lookup",
+        )
+    })?;
+    let year = vehicle.year.ok_or_else(|| {
+        DomainError::invalid(
+            "year",
+            "Vehicle has no year set — required for recall lookup",
+        )
+    })?;
 
     let result = nhtsa::check_recalls(make, model, year)
         .await
@@ -323,8 +330,8 @@ pub async fn list_findings(
         return Ok(vec![]);
     }
 
-    let mut select =
-        research_finding::Entity::find().filter(research_finding::Column::ReportId.is_in(report_ids));
+    let mut select = research_finding::Entity::find()
+        .filter(research_finding::Column::ReportId.is_in(report_ids));
 
     if let Some(status) = status {
         select = select.filter(research_finding::Column::Status.eq(status));
@@ -365,7 +372,11 @@ pub async fn update_finding(
         if !valid.contains(&status.as_str()) {
             return Err(DomainError::invalid(
                 "status",
-                format!("Invalid status '{}'. Must be one of: {}", status, valid.join(", ")),
+                format!(
+                    "Invalid status '{}'. Must be one of: {}",
+                    status,
+                    valid.join(", ")
+                ),
             ));
         }
         active.status = Set(status);

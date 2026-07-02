@@ -7,7 +7,7 @@ use crate::{
     error::{DomainError, DomainResult},
     inputs::ai_provider::{ChatInput, NewProvider, UpdateProvider},
     services::ai::{
-        AiError, AiRequest, Attachment, ChatMessage, Role, context, registry::AiProviderRegistry,
+        AiRequest, Attachment, ChatMessage, Role, context, registry::AiProviderRegistry,
         strip_code_fences,
     },
 };
@@ -97,7 +97,7 @@ pub async fn suggestions(
     let provider = registry
         .resolve(provider_id)
         .await
-        .map_err(resolve_err)?;
+        .map_err(|e| DomainError::invalid("provider", e.to_string()))?;
 
     let context = context::build_vehicle_context(db, vehicle_id)
         .await
@@ -186,7 +186,10 @@ pub async fn parse_invoice(
     document_id: i32,
     provider_id: Option<i32>,
 ) -> DomainResult<ParsedInvoice> {
-    let provider = registry.resolve(provider_id).await.map_err(resolve_err)?;
+    let provider = registry
+        .resolve(provider_id)
+        .await
+        .map_err(|e| DomainError::invalid("provider", e.to_string()))?;
 
     // Look up document
     let doc = document::Entity::find_by_id(document_id)
@@ -204,10 +207,7 @@ pub async fn parse_invoice(
 
     // Build AI request
     let request = AiRequest {
-        system_prompt: format!(
-            "{}\n\n{INVOICE_SYSTEM_PROMPT}",
-            context::GLOVEBOX_PREAMBLE
-        ),
+        system_prompt: format!("{}\n\n{INVOICE_SYSTEM_PROMPT}", context::GLOVEBOX_PREAMBLE),
         messages: vec![ChatMessage {
             role: Role::User,
             content: "Please extract the service record data from this attached invoice/receipt."
@@ -258,7 +258,10 @@ pub async fn chat(
     config: &AppConfig,
     input: ChatInput,
 ) -> DomainResult<ChatResult> {
-    let provider = registry.resolve(input.provider_id).await.map_err(resolve_err)?;
+    let provider = registry
+        .resolve(input.provider_id)
+        .await
+        .map_err(|e| DomainError::invalid("provider", e.to_string()))?;
 
     // Verify conversation exists and belongs to the specified vehicle
     let convo_check = conversation::Entity::find_by_id(input.conversation_id)
@@ -449,9 +452,7 @@ impl From<ai_provider_config::Model> for ProviderResponse {
     }
 }
 
-pub async fn list_providers(
-    db: &impl ConnectionTrait,
-) -> DomainResult<Vec<ProviderResponse>> {
+pub async fn list_providers(db: &impl ConnectionTrait) -> DomainResult<Vec<ProviderResponse>> {
     let providers = ai_provider_config::Entity::find().all(db).await?;
     Ok(providers.into_iter().map(ProviderResponse::from).collect())
 }
@@ -539,7 +540,9 @@ pub async fn update_provider<C: ConnectionTrait + TransactionTrait>(
 }
 
 pub async fn delete_provider(db: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
-    let result = ai_provider_config::Entity::delete_by_id(id).exec(db).await?;
+    let result = ai_provider_config::Entity::delete_by_id(id)
+        .exec(db)
+        .await?;
 
     if result.rows_affected == 0 {
         return Err(DomainError::NotFound(format!("AI provider {id} not found")));
@@ -562,10 +565,6 @@ async fn clear_default_provider(db: &impl ConnectionTrait) -> DomainResult<()> {
 }
 
 // --- Helpers ---
-
-fn resolve_err(e: AiError) -> DomainError {
-    DomainError::invalid("provider", e.to_string())
-}
 
 /// Read a document's file from disk, validating the resolved path stays within `files_dir`.
 async fn read_document_file(config: &AppConfig, file_path: &str) -> DomainResult<Vec<u8>> {

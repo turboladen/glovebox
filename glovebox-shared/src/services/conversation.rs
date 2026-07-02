@@ -62,7 +62,9 @@ pub async fn delete(db: &impl ConnectionTrait, vehicle_id: i32, id: i32) -> Doma
         .await?;
 
     if result.rows_affected == 0 {
-        return Err(DomainError::NotFound(format!("Conversation {id} not found")));
+        return Err(DomainError::NotFound(format!(
+            "Conversation {id} not found"
+        )));
     }
 
     Ok(())

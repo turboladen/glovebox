@@ -45,7 +45,9 @@ pub async fn rename(
     Json(input): Json<RenameConversation>,
 ) -> Result<Json<conversation::Model>> {
     vehicle_svc::require(&state.db, vehicle_id).await?;
-    Ok(Json(svc::rename(&state.db, vehicle_id, id, input.title).await?))
+    Ok(Json(
+        svc::rename(&state.db, vehicle_id, id, input.title).await?,
+    ))
 }
 
 pub async fn delete(

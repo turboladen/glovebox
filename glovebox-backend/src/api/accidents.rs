@@ -7,9 +7,7 @@ use serde::Deserialize;
 use crate::AppState;
 use glovebox_shared::{
     entities::accident_correspondence,
-    inputs::accident::{
-        NewAccident, NewCorrespondence, UpdateAccident as UpdateAccidentInput,
-    },
+    inputs::accident::{NewAccident, NewCorrespondence, UpdateAccident as UpdateAccidentInput},
     services::{
         accident::{self as svc, AccidentWithDetails},
         vehicle as vehicle_svc,
@@ -183,7 +181,9 @@ pub async fn list_correspondence(
     State(state): State<AppState>,
     Path((_vehicle_id, accident_id)): Path<(i32, i32)>,
 ) -> Result<Json<Vec<accident_correspondence::Model>>> {
-    Ok(Json(svc::list_correspondence(&state.db, accident_id).await?))
+    Ok(Json(
+        svc::list_correspondence(&state.db, accident_id).await?,
+    ))
 }
 
 pub async fn create_correspondence(

@@ -2,7 +2,9 @@ use sea_orm::*;
 use serde::Serialize;
 
 use crate::{
-    entities::{mileage_log, part, service_record, service_record_line_item, service_schedule_link},
+    entities::{
+        mileage_log, part, service_record, service_record_line_item, service_schedule_link,
+    },
     error::{DomainError, DomainResult},
     inputs::service_record::{NewLineItem, NewServiceRecord, UpdateServiceRecord},
 };
