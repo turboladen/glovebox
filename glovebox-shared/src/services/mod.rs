@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod costs;
+pub mod document;
 pub mod mileage;
 pub mod model_template;
 pub mod nhtsa;
