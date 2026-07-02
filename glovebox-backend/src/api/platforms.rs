@@ -3,11 +3,14 @@ use axum::{
     extract::{Path, State},
     routing::get,
 };
-use sea_orm::*;
 use serde::Deserialize;
 
 use crate::AppState;
-use glovebox_shared::entities::platform;
+use glovebox_shared::{
+    entities::platform,
+    inputs::platform::{NewPlatform, UpdatePlatform as UpdatePlatformInput},
+    services::platform as svc,
+};
 
 use super::{error::ApiError, serde_helpers::deserialize_optional};
 
@@ -33,34 +36,31 @@ pub struct UpdatePlatform {
 }
 
 async fn list(State(state): State<AppState>) -> Result<Json<Vec<platform::Model>>> {
-    let items = platform::Entity::find().all(&state.db).await?;
-    Ok(Json(items))
+    Ok(Json(svc::list(&state.db).await?))
 }
 
 async fn get_one(
     State(state): State<AppState>,
     Path(id): Path<i32>,
 ) -> Result<Json<platform::Model>> {
-    platform::Entity::find_by_id(id)
-        .one(&state.db)
-        .await?
-        .map(Json)
-        .ok_or_else(|| ApiError::NotFound(format!("Platform {id} not found")))
+    Ok(Json(svc::get(&state.db, id).await?))
 }
 
 async fn create(
     State(state): State<AppState>,
     Json(input): Json<CreatePlatform>,
 ) -> Result<Json<platform::Model>> {
-    let model = platform::ActiveModel {
-        name: Set(input.name),
-        website_url: Set(input.website_url),
-        api_base_url: Set(input.api_base_url),
-        notes: Set(input.notes),
-        ..Default::default()
-    };
-    let result = model.insert(&state.db).await?;
-    Ok(Json(result))
+    let created = svc::create(
+        &state.db,
+        NewPlatform {
+            name: input.name,
+            website_url: input.website_url,
+            api_base_url: input.api_base_url,
+            notes: input.notes,
+        },
+    )
+    .await?;
+    Ok(Json(created))
 }
 
 async fn update(
@@ -68,28 +68,18 @@ async fn update(
     Path(id): Path<i32>,
     Json(input): Json<UpdatePlatform>,
 ) -> Result<Json<platform::Model>> {
-    let existing = platform::Entity::find_by_id(id)
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Platform {id} not found")))?;
-
-    let mut active: platform::ActiveModel = existing.into();
-
-    if let Some(v) = input.name {
-        active.name = Set(v);
-    }
-    if let Some(v) = input.website_url {
-        active.website_url = Set(v);
-    }
-    if let Some(v) = input.api_base_url {
-        active.api_base_url = Set(v);
-    }
-    if let Some(v) = input.notes {
-        active.notes = Set(v);
-    }
-
-    let result = active.update(&state.db).await?;
-    Ok(Json(result))
+    let updated = svc::update(
+        &state.db,
+        id,
+        UpdatePlatformInput {
+            name: input.name,
+            website_url: input.website_url,
+            api_base_url: input.api_base_url,
+            notes: input.notes,
+        },
+    )
+    .await?;
+    Ok(Json(updated))
 }
 
 pub fn router() -> Router<AppState> {
