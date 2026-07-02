@@ -1,5 +1,14 @@
 pub mod ai;
+pub mod costs;
+pub mod document;
+pub mod mileage;
+pub mod model_template;
 pub mod nhtsa;
+pub mod observation;
+pub mod part;
+pub mod part_slot;
 pub mod platform;
 pub mod reminders;
+pub mod schedule;
+pub mod shop;
 pub mod vin_decode;

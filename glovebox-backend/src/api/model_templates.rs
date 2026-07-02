@@ -3,11 +3,14 @@ use axum::{
     extract::{Path, State},
     routing::get,
 };
-use sea_orm::*;
 use serde::Deserialize;
 
 use crate::AppState;
-use glovebox_shared::entities::model_template;
+use glovebox_shared::{
+    entities::model_template,
+    inputs::model_template::{NewModelTemplate, UpdateModelTemplate as UpdateModelTemplateInput},
+    services::model_template as svc,
+};
 
 use super::{error::ApiError, serde_helpers::deserialize_optional};
 
@@ -52,40 +55,37 @@ pub struct UpdateModelTemplate {
 }
 
 async fn list(State(state): State<AppState>) -> Result<Json<Vec<model_template::Model>>> {
-    let items = model_template::Entity::find().all(&state.db).await?;
-    Ok(Json(items))
+    Ok(Json(svc::list(&state.db).await?))
 }
 
 async fn get_one(
     State(state): State<AppState>,
     Path(id): Path<i32>,
 ) -> Result<Json<model_template::Model>> {
-    model_template::Entity::find_by_id(id)
-        .one(&state.db)
-        .await?
-        .map(Json)
-        .ok_or_else(|| ApiError::NotFound(format!("Model template {id} not found")))
+    Ok(Json(svc::get(&state.db, id).await?))
 }
 
 async fn create(
     State(state): State<AppState>,
     Json(input): Json<CreateModelTemplate>,
 ) -> Result<Json<model_template::Model>> {
-    let model = model_template::ActiveModel {
-        platform_id: Set(input.platform_id),
-        platform_ref: Set(input.platform_ref),
-        year: Set(input.year),
-        make: Set(input.make),
-        model: Set(input.model),
-        trim_level: Set(input.trim_level),
-        body_style: Set(input.body_style),
-        engine: Set(input.engine),
-        transmission: Set(input.transmission),
-        drivetrain: Set(input.drivetrain),
-        ..Default::default()
-    };
-    let result = model.insert(&state.db).await?;
-    Ok(Json(result))
+    let created = svc::create(
+        &state.db,
+        NewModelTemplate {
+            platform_id: input.platform_id,
+            platform_ref: input.platform_ref,
+            year: input.year,
+            make: input.make,
+            model: input.model,
+            trim_level: input.trim_level,
+            body_style: input.body_style,
+            engine: input.engine,
+            transmission: input.transmission,
+            drivetrain: input.drivetrain,
+        },
+    )
+    .await?;
+    Ok(Json(created))
 }
 
 async fn update(
@@ -93,46 +93,24 @@ async fn update(
     Path(id): Path<i32>,
     Json(input): Json<UpdateModelTemplate>,
 ) -> Result<Json<model_template::Model>> {
-    let existing = model_template::Entity::find_by_id(id)
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Model template {id} not found")))?;
-
-    let mut active: model_template::ActiveModel = existing.into();
-
-    if let Some(v) = input.platform_id {
-        active.platform_id = Set(v);
-    }
-    if let Some(v) = input.platform_ref {
-        active.platform_ref = Set(v);
-    }
-    if let Some(v) = input.year {
-        active.year = Set(v);
-    }
-    if let Some(v) = input.make {
-        active.make = Set(v);
-    }
-    if let Some(v) = input.model {
-        active.model = Set(v);
-    }
-    if let Some(v) = input.trim_level {
-        active.trim_level = Set(v);
-    }
-    if let Some(v) = input.body_style {
-        active.body_style = Set(v);
-    }
-    if let Some(v) = input.engine {
-        active.engine = Set(v);
-    }
-    if let Some(v) = input.transmission {
-        active.transmission = Set(v);
-    }
-    if let Some(v) = input.drivetrain {
-        active.drivetrain = Set(v);
-    }
-
-    let result = active.update(&state.db).await?;
-    Ok(Json(result))
+    let updated = svc::update(
+        &state.db,
+        id,
+        UpdateModelTemplateInput {
+            platform_id: input.platform_id,
+            platform_ref: input.platform_ref,
+            year: input.year,
+            make: input.make,
+            model: input.model,
+            trim_level: input.trim_level,
+            body_style: input.body_style,
+            engine: input.engine,
+            transmission: input.transmission,
+            drivetrain: input.drivetrain,
+        },
+    )
+    .await?;
+    Ok(Json(updated))
 }
 
 pub fn router() -> Router<AppState> {

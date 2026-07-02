@@ -2,13 +2,16 @@ use axum::{
     Json,
     extract::{Path, State},
 };
-use sea_orm::*;
 use serde::Deserialize;
 
 use crate::AppState;
-use glovebox_shared::entities::{part_slot, vehicle};
+use glovebox_shared::{
+    entities::part_slot,
+    inputs::part_slot::{NewPartSlot, UpdatePartSlot as UpdatePartSlotInput},
+    services::part_slot as svc,
+};
 
-use super::{error::ApiError, serde_helpers::deserialize_optional};
+use super::{error::ApiError, require_vehicle, serde_helpers::deserialize_optional};
 
 type Result<T> = std::result::Result<T, ApiError>;
 
@@ -38,30 +41,15 @@ pub async fn list(
     State(state): State<AppState>,
     Path(vehicle_id): Path<i32>,
 ) -> Result<Json<Vec<part_slot::Model>>> {
-    vehicle::Entity::find_by_id(vehicle_id)
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Vehicle {vehicle_id} not found")))?;
-
-    let slots = part_slot::Entity::find()
-        .filter(part_slot::Column::VehicleId.eq(vehicle_id))
-        .order_by_asc(part_slot::Column::Category)
-        .order_by_asc(part_slot::Column::Name)
-        .all(&state.db)
-        .await?;
-    Ok(Json(slots))
+    require_vehicle(&state.db, vehicle_id).await?;
+    Ok(Json(svc::list(&state.db, vehicle_id).await?))
 }
 
 pub async fn get_one(
     State(state): State<AppState>,
     Path((vehicle_id, id)): Path<(i32, i32)>,
 ) -> Result<Json<part_slot::Model>> {
-    part_slot::Entity::find_by_id(id)
-        .filter(part_slot::Column::VehicleId.eq(vehicle_id))
-        .one(&state.db)
-        .await?
-        .map(Json)
-        .ok_or_else(|| ApiError::NotFound(format!("Part slot {id} not found")))
+    Ok(Json(svc::get(&state.db, vehicle_id, id).await?))
 }
 
 pub async fn create(
@@ -69,23 +57,20 @@ pub async fn create(
     Path(vehicle_id): Path<i32>,
     Json(input): Json<CreatePartSlot>,
 ) -> Result<Json<part_slot::Model>> {
-    vehicle::Entity::find_by_id(vehicle_id)
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Vehicle {vehicle_id} not found")))?;
-
-    let model = part_slot::ActiveModel {
-        vehicle_id: Set(vehicle_id),
-        name: Set(input.name),
-        category: Set(input.category),
-        oe_spec: Set(input.oe_spec),
-        oe_part_number: Set(input.oe_part_number),
-        notes: Set(input.notes),
-        ..Default::default()
-    };
-
-    let result = model.insert(&state.db).await?;
-    Ok(Json(result))
+    require_vehicle(&state.db, vehicle_id).await?;
+    let created = svc::create(
+        &state.db,
+        vehicle_id,
+        NewPartSlot {
+            name: input.name,
+            category: input.category,
+            oe_spec: input.oe_spec,
+            oe_part_number: input.oe_part_number,
+            notes: input.notes,
+        },
+    )
+    .await?;
+    Ok(Json(created))
 }
 
 pub async fn update(
@@ -93,44 +78,26 @@ pub async fn update(
     Path((vehicle_id, id)): Path<(i32, i32)>,
     Json(input): Json<UpdatePartSlot>,
 ) -> Result<Json<part_slot::Model>> {
-    let existing = part_slot::Entity::find_by_id(id)
-        .filter(part_slot::Column::VehicleId.eq(vehicle_id))
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Part slot {id} not found")))?;
-
-    let mut active: part_slot::ActiveModel = existing.into();
-
-    if let Some(v) = input.name {
-        active.name = Set(v);
-    }
-    if let Some(v) = input.category {
-        active.category = Set(v);
-    }
-    if let Some(v) = input.oe_spec {
-        active.oe_spec = Set(v);
-    }
-    if let Some(v) = input.oe_part_number {
-        active.oe_part_number = Set(v);
-    }
-    if let Some(v) = input.notes {
-        active.notes = Set(v);
-    }
-
-    let result = active.update(&state.db).await?;
-    Ok(Json(result))
+    let updated = svc::update(
+        &state.db,
+        vehicle_id,
+        id,
+        UpdatePartSlotInput {
+            name: input.name,
+            category: input.category,
+            oe_spec: input.oe_spec,
+            oe_part_number: input.oe_part_number,
+            notes: input.notes,
+        },
+    )
+    .await?;
+    Ok(Json(updated))
 }
 
 pub async fn delete(
     State(state): State<AppState>,
     Path((vehicle_id, id)): Path<(i32, i32)>,
 ) -> Result<Json<serde_json::Value>> {
-    let existing = part_slot::Entity::find_by_id(id)
-        .filter(part_slot::Column::VehicleId.eq(vehicle_id))
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Part slot {id} not found")))?;
-
-    existing.delete(&state.db).await?;
+    svc::delete(&state.db, vehicle_id, id).await?;
     Ok(Json(serde_json::json!({"deleted": true})))
 }

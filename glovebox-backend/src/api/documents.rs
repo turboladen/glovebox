@@ -4,11 +4,14 @@ use axum::{
     Json,
     extract::{Multipart, Path, Query, State},
 };
-use sea_orm::*;
 use serde::Deserialize;
 
 use crate::AppState;
-use glovebox_shared::entities::document;
+use glovebox_shared::{
+    entities::document,
+    inputs::document::{DocumentFilter, NewDocument},
+    services::document as svc,
+};
 
 use super::{error::ApiError, require_vehicle};
 
@@ -25,22 +28,15 @@ pub async fn list(
     State(state): State<AppState>,
     Query(query): Query<DocumentQuery>,
 ) -> Result<Json<Vec<document::Model>>> {
-    let mut select = document::Entity::find();
-
-    if let Some(vid) = query.vehicle_id {
-        select = select.filter(document::Column::VehicleId.eq(vid));
-    }
-    if let Some(ref etype) = query.linked_entity_type {
-        select = select.filter(document::Column::LinkedEntityType.eq(etype.as_str()));
-    }
-    if let Some(eid) = query.linked_entity_id {
-        select = select.filter(document::Column::LinkedEntityId.eq(eid));
-    }
-
-    let docs = select
-        .order_by_desc(document::Column::CreatedAt)
-        .all(&state.db)
-        .await?;
+    let docs = svc::list(
+        &state.db,
+        DocumentFilter {
+            vehicle_id: query.vehicle_id,
+            linked_entity_type: query.linked_entity_type,
+            linked_entity_id: query.linked_entity_id,
+        },
+    )
+    .await?;
     Ok(Json(docs))
 }
 
@@ -48,11 +44,7 @@ pub async fn get_one(
     State(state): State<AppState>,
     Path(id): Path<i32>,
 ) -> Result<Json<document::Model>> {
-    document::Entity::find_by_id(id)
-        .one(&state.db)
-        .await?
-        .map(Json)
-        .ok_or_else(|| ApiError::NotFound(format!("Document {id} not found")))
+    Ok(Json(svc::get(&state.db, id).await?))
 }
 
 struct ParsedUpload {
@@ -204,23 +196,25 @@ pub async fn upload(
     // Store relative path (from files_dir root)
     let relative_path = format!("{vid_dir}/{type_dir}/{stored_name}");
 
-    let model = document::ActiveModel {
-        vehicle_id: Set(parsed.vehicle_id),
-        title: Set(title),
-        file_path: Set(relative_path),
-        file_name: Set(original_name),
-        mime_type: Set(parsed.mime_type),
-        file_size_bytes: Set(Some(
-            i32::try_from(parsed.file_data.len())
-                .map_err(|_| ApiError::BadRequest("File too large (max ~2GB)".into()))?,
-        )),
-        doc_type: Set(parsed.doc_type),
-        linked_entity_type: Set(parsed.linked_entity_type),
-        linked_entity_id: Set(parsed.linked_entity_id),
-        notes: Set(parsed.notes),
-        ..Default::default()
-    };
-    let result = model.insert(&state.db).await?;
+    let file_size_bytes = i32::try_from(parsed.file_data.len())
+        .map_err(|_| ApiError::BadRequest("File too large (max ~2GB)".into()))?;
+
+    let result = svc::create(
+        &state.db,
+        NewDocument {
+            vehicle_id: parsed.vehicle_id,
+            title,
+            file_path: relative_path,
+            file_name: original_name,
+            mime_type: parsed.mime_type,
+            file_size_bytes: Some(file_size_bytes),
+            doc_type: parsed.doc_type,
+            linked_entity_type: parsed.linked_entity_type,
+            linked_entity_id: parsed.linked_entity_id,
+            notes: parsed.notes,
+        },
+    )
+    .await?;
     Ok(Json(result))
 }
 
@@ -228,10 +222,7 @@ pub async fn delete(
     State(state): State<AppState>,
     Path(id): Path<i32>,
 ) -> Result<Json<serde_json::Value>> {
-    let doc = document::Entity::find_by_id(id)
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Document {id} not found")))?;
+    let doc = svc::get(&state.db, id).await?;
 
     // Delete file from disk (with path traversal check)
     let files_dir = std::path::Path::new(&state.config.files_dir)
@@ -250,7 +241,7 @@ pub async fn delete(
             .map_err(|e| ApiError::Internal(e.to_string()))?;
     }
 
-    document::Entity::delete_by_id(id).exec(&state.db).await?;
+    svc::delete(&state.db, id).await?;
     Ok(Json(serde_json::json!({ "deleted": id })))
 }
 
