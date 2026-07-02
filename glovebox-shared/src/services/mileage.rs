@@ -23,7 +23,7 @@ pub async fn create(
         vehicle_id: Set(vehicle_id),
         mileage: Set(input.mileage),
         recorded_at: Set(input.recorded_at.unwrap_or(now)),
-        source: Set(input.source.or(Some("manual".to_string()))),
+        source: Set(input.source.or_else(|| Some("manual".to_string()))),
         notes: Set(input.notes),
         ..Default::default()
     };

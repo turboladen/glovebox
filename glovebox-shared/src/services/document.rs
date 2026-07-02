@@ -58,7 +58,10 @@ pub async fn create(
 }
 
 pub async fn delete(db: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
-    document::Entity::delete_by_id(id).exec(db).await?;
+    let result = document::Entity::delete_by_id(id).exec(db).await?;
+    if result.rows_affected == 0 {
+        return Err(DomainError::NotFound(format!("Document {id} not found")));
+    }
     Ok(())
 }
 

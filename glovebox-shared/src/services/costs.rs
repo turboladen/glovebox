@@ -3,7 +3,7 @@ use serde::Serialize;
 
 use crate::{
     entities::{part, service_record, vehicle},
-    error::DomainResult,
+    error::{DomainError, DomainResult},
 };
 
 #[derive(Serialize)]
@@ -30,10 +30,11 @@ pub struct MonthlyCost {
 /// Aggregate cost totals for a vehicle. Currency is always `i32`/`i64` cents;
 /// integer arithmetic only (no float division).
 pub async fn summary(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult<CostSummary> {
-    let purchase_mileage = vehicle::Entity::find_by_id(vehicle_id)
+    let vehicle = vehicle::Entity::find_by_id(vehicle_id)
         .one(db)
         .await?
-        .and_then(|v| v.purchase_mileage);
+        .ok_or_else(|| DomainError::NotFound(format!("Vehicle {vehicle_id} not found")))?;
+    let purchase_mileage = vehicle.purchase_mileage;
 
     let services = service_record::Entity::find()
         .filter(service_record::Column::VehicleId.eq(vehicle_id))
