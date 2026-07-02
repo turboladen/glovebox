@@ -39,3 +39,17 @@ impl From<sea_orm::DbErr> for ApiError {
         ApiError::Internal(err.to_string())
     }
 }
+
+impl From<glovebox_shared::error::DomainError> for ApiError {
+    fn from(err: glovebox_shared::error::DomainError) -> Self {
+        use glovebox_shared::error::DomainError;
+        match err {
+            DomainError::NotFound(m) => ApiError::NotFound(m),
+            DomainError::Invalid { field, message } => {
+                ApiError::BadRequest(format!("{field}: {message}"))
+            }
+            DomainError::Db(e) => ApiError::Internal(e.to_string()),
+            DomainError::Internal(m) => ApiError::Internal(m),
+        }
+    }
+}
