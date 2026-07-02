@@ -5,10 +5,8 @@ use axum::{
 use sea_orm::*;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    AppState,
-    entities::{research_finding, research_report, vehicle},
-};
+use crate::AppState;
+use glovebox_shared::entities::{research_finding, research_report, vehicle};
 
 use super::{error::ApiError, serde_helpers::deserialize_optional};
 
@@ -17,7 +15,7 @@ use super::{error::ApiError, serde_helpers::deserialize_optional};
 pub async fn check_recalls(
     State(state): State<AppState>,
     Path(vehicle_id): Path<i32>,
-) -> Result<Json<crate::services::nhtsa::RecallCheckResult>, ApiError> {
+) -> Result<Json<glovebox_shared::services::nhtsa::RecallCheckResult>, ApiError> {
     let vehicle = vehicle::Entity::find_by_id(vehicle_id)
         .one(&state.db)
         .await?
@@ -33,7 +31,7 @@ pub async fn check_recalls(
         ApiError::BadRequest("Vehicle has no year set — required for recall lookup".to_string())
     })?;
 
-    let result = crate::services::nhtsa::check_recalls(make, model, year)
+    let result = glovebox_shared::services::nhtsa::check_recalls(make, model, year)
         .await
         .map_err(ApiError::Internal)?;
 
@@ -49,7 +47,7 @@ pub async fn check_recalls(
 async fn persist_recall_findings(
     db: &DatabaseConnection,
     vehicle_id: i32,
-    recalls: &[crate::services::nhtsa::RecallInfo],
+    recalls: &[glovebox_shared::services::nhtsa::RecallInfo],
 ) -> Result<(), ApiError> {
     // Collect existing recall source_urls for this vehicle to deduplicate
     let existing_reports = research_report::Entity::find()
@@ -200,7 +198,7 @@ pub async fn generate_report(
 
     // Check NHTSA recalls if vehicle has make/model/year
     if let (Some(make), Some(model), Some(year)) = (&vehicle.make, &vehicle.model, vehicle.year) {
-        match crate::services::nhtsa::check_recalls(make, model, year).await {
+        match glovebox_shared::services::nhtsa::check_recalls(make, model, year).await {
             Ok(result) => {
                 for recall in &result.recalls {
                     all_findings.push(NewFinding {
@@ -227,16 +225,16 @@ pub async fn generate_report(
     {
         let prompt = build_community_wisdom_prompt(&vehicle);
         match provider
-            .complete(crate::services::ai::AiRequest {
+            .complete(glovebox_shared::services::ai::AiRequest {
                 system_prompt: format!(
                     "{}\n\nReturn ONLY a valid JSON array — no narrative text, no markdown. \
                      Provide findings as a JSON array of objects with fields: title, description, \
                      severity (critical/recommended/optional/informational), category (one of: \
                      forum_report, suggested_maintenance, upgrade_idea).",
-                    crate::services::ai::context::GLOVEBOX_PREAMBLE
+                    glovebox_shared::services::ai::context::GLOVEBOX_PREAMBLE
                 ),
-                messages: vec![crate::services::ai::ChatMessage {
-                    role: crate::services::ai::Role::User,
+                messages: vec![glovebox_shared::services::ai::ChatMessage {
+                    role: glovebox_shared::services::ai::Role::User,
                     content: prompt,
                 }],
                 attachments: vec![],

@@ -5,7 +5,8 @@ use axum::{
 use sea_orm::*;
 use serde::Deserialize;
 
-use crate::{AppState, entities::mileage_log};
+use crate::AppState;
+use glovebox_shared::entities::mileage_log;
 
 use super::{error::ApiError, require_vehicle};
 

@@ -14,7 +14,7 @@
 - `glovebox-shared` MUST NOT depend on `axum` (no HTTP types in the domain).
 - `glovebox-backend` MUST NOT contain SeaORM query calls (`.filter/.insert/.one/.all/.update/.delete/.exec`) outside DTO→input mapping.
 - Single-deployable-binary preserved: backend serves the SPA from `frontend/dist` and runs `Migrator::up()` on startup.
-- Regression gate = existing `cargo test` (51 unit tests) + 53 Playwright e2e in `frontend/e2e/`. Keep both green at every commit.
+- **Authoritative gate = `just ci` then `just test-e2e-ci`.** `just ci` runs `just fmt-check` (nightly `cargo +nightly fmt --all --check` — `rustfmt.toml` uses nightly-only `imports_granularity`/`format_strings`), backend build/test/clippy-pedantic, and frontend check/build. Plain `cargo fmt`/`cargo test` are NOT sufficient — CI's `format` job runs nightly rustfmt and will fail otherwise. Run `just ci` (not ad-hoc cargo commands) before declaring any task green; keep it + the 53 e2e green at every commit.
 - Update DTO convention preserved: HTTP request DTOs keep `Option<Option<T>>` + `deserialize_optional` for "not sent" vs "set null". Domain input structs use plain `Option<T>` for create and a per-field `Option<Option<T>>` (or dedicated patch type) only where null-vs-absent matters.
 - Currency stays `i32` cents; DB datetimes stay `String`; `updated_at` set explicitly on every update via `chrono::Utc::now().format("%Y-%m-%d %H:%M:%S")`.
 - Crate-level clippy allows (`option_option`, `struct_field_names`, `wildcard_imports`) carry over to whichever crate the code lands in.

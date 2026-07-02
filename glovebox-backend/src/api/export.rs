@@ -5,10 +5,8 @@ use axum::{
 use sea_orm::*;
 use serde::Serialize;
 
-use crate::{
-    AppState,
-    entities::{part, service_record},
-};
+use crate::AppState;
+use glovebox_shared::entities::{part, service_record};
 
 use super::{error::ApiError, require_vehicle};
 

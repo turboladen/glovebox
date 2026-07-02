@@ -5,10 +5,8 @@ use axum::{
 use sea_orm::*;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    AppState,
-    entities::{accident, accident_correspondence, accident_service_link},
-};
+use crate::AppState;
+use glovebox_shared::entities::{accident, accident_correspondence, accident_service_link};
 
 use super::{error::ApiError, require_vehicle, serde_helpers::deserialize_optional};
 

@@ -7,10 +7,8 @@ use sea_orm::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::{
-    AppState,
-    entities::{maintenance_schedule_item, model_template, vehicle},
-};
+use crate::AppState;
+use glovebox_shared::entities::{maintenance_schedule_item, model_template, vehicle};
 
 use super::{error::ApiError, serde_helpers::deserialize_optional};
 

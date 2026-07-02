@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AppState,
     api::{error::ApiError, serde_helpers::deserialize_optional},
+};
+use glovebox_shared::{
     entities::{ai_provider_config, chat_message, conversation, document},
     services::ai::{AiRequest, Attachment, ChatMessage, Role},
 };
@@ -113,11 +115,12 @@ pub async fn get_suggestions(
         .await
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
-    let context = crate::services::ai::context::build_vehicle_context(&state.db, vehicle_id)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let context =
+        glovebox_shared::services::ai::context::build_vehicle_context(&state.db, vehicle_id)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-    let preamble = crate::services::ai::context::GLOVEBOX_PREAMBLE;
+    let preamble = glovebox_shared::services::ai::context::GLOVEBOX_PREAMBLE;
     let request = AiRequest {
         system_prompt: format!(
             "{preamble}\n\nBased on the vehicle data provided, suggest maintenance actions the \
@@ -238,7 +241,7 @@ pub async fn parse_invoice(
     let request = AiRequest {
         system_prompt: format!(
             "{}\n\n{INVOICE_SYSTEM_PROMPT}",
-            crate::services::ai::context::GLOVEBOX_PREAMBLE
+            glovebox_shared::services::ai::context::GLOVEBOX_PREAMBLE
         ),
         messages: vec![ChatMessage {
             role: Role::User,
@@ -431,10 +434,10 @@ pub async fn chat(
     }
 
     // Build vehicle context if vehicle_id is provided
-    let preamble = crate::services::ai::context::GLOVEBOX_PREAMBLE;
-    let data_entry_instructions = crate::services::ai::context::DATA_ENTRY_INSTRUCTIONS;
+    let preamble = glovebox_shared::services::ai::context::GLOVEBOX_PREAMBLE;
+    let data_entry_instructions = glovebox_shared::services::ai::context::DATA_ENTRY_INSTRUCTIONS;
     let system_prompt = if let Some(vid) = body.vehicle_id {
-        let context = crate::services::ai::context::build_vehicle_context(&state.db, vid)
+        let context = glovebox_shared::services::ai::context::build_vehicle_context(&state.db, vid)
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
         format!(

@@ -3,10 +3,8 @@ use axum::{
     extract::{Path, State},
 };
 
-use crate::{
-    AppState,
-    services::reminders::{self, RemindersResponse},
-};
+use crate::AppState;
+use glovebox_shared::services::reminders::{self, RemindersResponse};
 
 use super::error::ApiError;
 
