@@ -9,6 +9,7 @@ pub mod observation;
 pub mod part;
 pub mod part_slot;
 pub mod platform;
+pub mod research;
 pub mod schedule;
 pub mod service_record;
 pub mod shop;

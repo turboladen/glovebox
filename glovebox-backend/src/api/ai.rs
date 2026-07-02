@@ -88,16 +88,7 @@ fn default_urgency() -> String {
     "medium".to_string()
 }
 
-/// Strip markdown code fences from AI responses (shared helper).
-pub fn strip_code_fences(s: &str) -> &str {
-    let s = s.trim();
-    let s = s
-        .strip_prefix("```json")
-        .or_else(|| s.strip_prefix("```"))
-        .unwrap_or(s);
-    let s = s.strip_suffix("```").unwrap_or(s);
-    s.trim()
-}
+pub use glovebox_shared::services::ai::strip_code_fences;
 
 #[derive(Debug, Deserialize)]
 pub struct SuggestionsQuery {

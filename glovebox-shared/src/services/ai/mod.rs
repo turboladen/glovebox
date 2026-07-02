@@ -69,6 +69,17 @@ pub trait AiProvider: Send + Sync {
     fn is_configured(&self) -> bool;
 }
 
+/// Strip markdown code fences from AI responses (shared helper).
+pub fn strip_code_fences(s: &str) -> &str {
+    let s = s.trim();
+    let s = s
+        .strip_prefix("```json")
+        .or_else(|| s.strip_prefix("```"))
+        .unwrap_or(s);
+    let s = s.strip_suffix("```").unwrap_or(s);
+    s.trim()
+}
+
 /// Construct the appropriate AI provider based on the `ai.provider` setting value.
 /// Additional settings (API keys, URLs, models) are passed as key-value pairs.
 pub fn create_provider(
