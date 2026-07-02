@@ -48,25 +48,31 @@ pub async fn rename(
     Ok(active.update(db).await?)
 }
 
-pub async fn delete(db: &impl ConnectionTrait, vehicle_id: i32, id: i32) -> DomainResult<()> {
+pub async fn delete<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    id: i32,
+) -> DomainResult<()> {
+    // Verify the conversation belongs to this vehicle BEFORE deleting anything —
+    // deleting messages first would destroy another vehicle's conversation data
+    // whenever the ids don't match.
+    conversation::Entity::find_by_id(id)
+        .filter(conversation::Column::VehicleId.eq(vehicle_id))
+        .one(db)
+        .await?
+        .ok_or_else(|| DomainError::NotFound(format!("Conversation {id} not found")))?;
+
+    let txn = db.begin().await?;
+
     // Delete associated chat messages first (no FK cascade on ALTER TABLE ADD COLUMN in SQLite)
     chat_message::Entity::delete_many()
         .filter(chat_message::Column::ConversationId.eq(id))
-        .exec(db)
+        .exec(&txn)
         .await?;
 
-    let result = conversation::Entity::delete_many()
-        .filter(conversation::Column::Id.eq(id))
-        .filter(conversation::Column::VehicleId.eq(vehicle_id))
-        .exec(db)
-        .await?;
+    conversation::Entity::delete_by_id(id).exec(&txn).await?;
 
-    if result.rows_affected == 0 {
-        return Err(DomainError::NotFound(format!(
-            "Conversation {id} not found"
-        )));
-    }
-
+    txn.commit().await?;
     Ok(())
 }
 
@@ -217,5 +223,26 @@ mod tests {
             delete(&db, vid, 999).await.unwrap_err(),
             DomainError::NotFound(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn delete_wrong_vehicle_is_not_found_and_preserves_messages() {
+        let db = test_db().await;
+        let owner = seed_vehicle(&db).await;
+        let other = seed_vehicle(&db).await;
+        let c = create(&db, owner, None).await.unwrap();
+        add_message(&db, owner, c.id, "user".into(), "keep me".into())
+            .await
+            .unwrap();
+
+        // Deleting through the wrong vehicle must 404 without touching the
+        // conversation's messages (regression guard for cross-vehicle data loss).
+        assert!(matches!(
+            delete(&db, other, c.id).await.unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+        let msgs = messages(&db, owner, c.id).await.unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].content, "keep me");
     }
 }
