@@ -39,22 +39,13 @@ pub async fn check_recalls<C: ConnectionTrait + TransactionTrait>(
         .ok_or_else(|| DomainError::NotFound("Vehicle not found".to_string()))?;
 
     let make = vehicle.make.as_deref().ok_or_else(|| {
-        DomainError::invalid(
-            "make",
-            "Vehicle has no make set — required for recall lookup",
-        )
+        DomainError::BadRequest("Vehicle has no make set — required for recall lookup".to_string())
     })?;
     let model = vehicle.model.as_deref().ok_or_else(|| {
-        DomainError::invalid(
-            "model",
-            "Vehicle has no model set — required for recall lookup",
-        )
+        DomainError::BadRequest("Vehicle has no model set — required for recall lookup".to_string())
     })?;
     let year = vehicle.year.ok_or_else(|| {
-        DomainError::invalid(
-            "year",
-            "Vehicle has no year set — required for recall lookup",
-        )
+        DomainError::BadRequest("Vehicle has no year set — required for recall lookup".to_string())
     })?;
 
     let result = nhtsa::check_recalls(make, model, year)
@@ -370,14 +361,11 @@ pub async fn update_finding(
     if let Some(status) = input.status {
         let valid = ["new", "dismissed", "planned", "completed"];
         if !valid.contains(&status.as_str()) {
-            return Err(DomainError::invalid(
-                "status",
-                format!(
-                    "Invalid status '{}'. Must be one of: {}",
-                    status,
-                    valid.join(", ")
-                ),
-            ));
+            return Err(DomainError::BadRequest(format!(
+                "Invalid status '{}'. Must be one of: {}",
+                status,
+                valid.join(", ")
+            )));
         }
         active.status = Set(status);
     }
@@ -606,7 +594,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(matches!(err, DomainError::Invalid { .. }));
+        assert!(matches!(err, DomainError::BadRequest(_)));
 
         // Valid status is applied
         let updated = update_finding(

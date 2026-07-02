@@ -104,9 +104,8 @@ pub async fn add_message(
         .ok_or_else(|| DomainError::NotFound(format!("Conversation {id} not found")))?;
 
     if role != "user" && role != "assistant" {
-        return Err(DomainError::invalid(
-            "role",
-            "role must be 'user' or 'assistant'",
+        return Err(DomainError::BadRequest(
+            "role must be 'user' or 'assistant'".to_string(),
         ));
     }
 
@@ -184,7 +183,7 @@ mod tests {
             add_message(&db, vid, c.id, "system".into(), "x".into())
                 .await
                 .unwrap_err(),
-            DomainError::Invalid { .. }
+            DomainError::BadRequest(_)
         ));
         add_message(&db, vid, c.id, "user".into(), "hello".into())
             .await

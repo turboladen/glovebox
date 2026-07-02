@@ -97,7 +97,7 @@ pub async fn suggestions(
     let provider = registry
         .resolve(provider_id)
         .await
-        .map_err(|e| DomainError::invalid("provider", e.to_string()))?;
+        .map_err(|e| DomainError::BadRequest(e.to_string()))?;
 
     let context = context::build_vehicle_context(db, vehicle_id)
         .await
@@ -189,7 +189,7 @@ pub async fn parse_invoice(
     let provider = registry
         .resolve(provider_id)
         .await
-        .map_err(|e| DomainError::invalid("provider", e.to_string()))?;
+        .map_err(|e| DomainError::BadRequest(e.to_string()))?;
 
     // Look up document
     let doc = document::Entity::find_by_id(document_id)
@@ -200,7 +200,7 @@ pub async fn parse_invoice(
     // Verify it's a PDF
     let mime = doc.mime_type.as_deref().unwrap_or("");
     if !mime.contains("pdf") {
-        return Err(DomainError::invalid("document", "Document is not a PDF"));
+        return Err(DomainError::BadRequest("Document is not a PDF".to_string()));
     }
 
     let file_data = read_document_file(config, &doc.file_path).await?;
@@ -261,7 +261,7 @@ pub async fn chat(
     let provider = registry
         .resolve(input.provider_id)
         .await
-        .map_err(|e| DomainError::invalid("provider", e.to_string()))?;
+        .map_err(|e| DomainError::BadRequest(e.to_string()))?;
 
     // Verify conversation exists and belongs to the specified vehicle
     let convo_check = conversation::Entity::find_by_id(input.conversation_id)
@@ -271,9 +271,8 @@ pub async fn chat(
             DomainError::NotFound(format!("Conversation {} not found", input.conversation_id))
         })?;
     if convo_check.vehicle_id != input.vehicle_id {
-        return Err(DomainError::invalid(
-            "conversation",
-            "Conversation does not belong to the specified vehicle",
+        return Err(DomainError::BadRequest(
+            "Conversation does not belong to the specified vehicle".to_string(),
         ));
     }
 
@@ -576,7 +575,7 @@ async fn read_document_file(config: &AppConfig, file_path: &str) -> DomainResult
         .canonicalize()
         .map_err(|_| DomainError::NotFound("Document file not found".to_string()))?;
     if !resolved.starts_with(&files_dir) {
-        return Err(DomainError::invalid("file_path", "Invalid file path"));
+        return Err(DomainError::BadRequest("Invalid file path".to_string()));
     }
     tokio::fs::read(&resolved)
         .await

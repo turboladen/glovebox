@@ -168,9 +168,8 @@ pub async fn delete(db: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
     let existing = require(db, id).await?;
 
     if existing.archived_at.is_none() {
-        return Err(DomainError::invalid(
-            "archived_at",
-            "Vehicle must be archived before it can be deleted",
+        return Err(DomainError::BadRequest(
+            "Vehicle must be archived before it can be deleted".to_string(),
         ));
     }
 
@@ -245,7 +244,7 @@ mod tests {
         // Not archived -> rejected
         assert!(matches!(
             delete(&db, v.id).await.unwrap_err(),
-            DomainError::Invalid { .. }
+            DomainError::BadRequest(_)
         ));
         // Archive then delete succeeds
         archive(&db, v.id).await.unwrap();
