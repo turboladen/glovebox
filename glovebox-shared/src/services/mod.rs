@@ -4,6 +4,7 @@ pub mod mileage;
 pub mod model_template;
 pub mod nhtsa;
 pub mod observation;
+pub mod part_slot;
 pub mod platform;
 pub mod reminders;
 pub mod shop;
