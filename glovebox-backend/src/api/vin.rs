@@ -2,11 +2,10 @@ use axum::{
     Json,
     extract::{Path, State},
 };
-use sea_orm::*;
 use serde::Serialize;
 
 use crate::AppState;
-use glovebox_shared::{entities::vehicle_attribute, services::vin_decode};
+use glovebox_shared::services::{vehicle as vehicle_svc, vin_decode};
 
 use super::error::ApiError;
 
@@ -33,39 +32,14 @@ pub async fn decode_and_store(
     State(state): State<AppState>,
     Path((vehicle_id, vin)): Path<(i32, String)>,
 ) -> Result<Json<VinDecodeResponse>> {
-    use glovebox_shared::entities::vehicle;
-
-    // Verify vehicle exists
-    vehicle::Entity::find_by_id(vehicle_id)
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Vehicle {vehicle_id} not found")))?;
+    // Verify vehicle exists (404 before attempting the decode)
+    vehicle_svc::require(&state.db, vehicle_id).await?;
 
     let decoded = vin_decode::decode_vin(&vin)
         .await
         .map_err(ApiError::BadRequest)?;
 
-    let txn = state.db.begin().await?;
-
-    // Delete any existing vin_decode attributes for this vehicle, then re-insert
-    vehicle_attribute::Entity::delete_many()
-        .filter(vehicle_attribute::Column::VehicleId.eq(vehicle_id))
-        .filter(vehicle_attribute::Column::Source.eq("vin_decode"))
-        .exec(&txn)
-        .await?;
-
-    for (key, value) in &decoded.all_attributes {
-        let attr = vehicle_attribute::ActiveModel {
-            vehicle_id: Set(vehicle_id),
-            key: Set(key.clone()),
-            value: Set(value.clone()),
-            source: Set(Some("vin_decode".to_string())),
-            ..Default::default()
-        };
-        attr.insert(&txn).await?;
-    }
-
-    txn.commit().await?;
+    vin_decode::store_attributes(&state.db, vehicle_id, &decoded).await?;
 
     Ok(Json(VinDecodeResponse { vin, decoded }))
 }
