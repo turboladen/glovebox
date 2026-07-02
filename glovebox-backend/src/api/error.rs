@@ -48,6 +48,7 @@ impl From<glovebox_shared::error::DomainError> for ApiError {
             DomainError::Invalid { field, message } => {
                 ApiError::BadRequest(format!("{field}: {message}"))
             }
+            DomainError::BadRequest(m) => ApiError::BadRequest(m),
             DomainError::Db(e) => ApiError::Internal(e.to_string()),
             DomainError::Internal(m) => ApiError::Internal(m),
         }

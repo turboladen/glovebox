@@ -11,7 +11,7 @@ use glovebox_shared::{
     services::part_slot as svc,
 };
 
-use super::{error::ApiError, require_vehicle, serde_helpers::deserialize_optional};
+use super::{error::ApiError, serde_helpers::deserialize_optional};
 
 type Result<T> = std::result::Result<T, ApiError>;
 
@@ -41,7 +41,7 @@ pub async fn list(
     State(state): State<AppState>,
     Path(vehicle_id): Path<i32>,
 ) -> Result<Json<Vec<part_slot::Model>>> {
-    require_vehicle(&state.db, vehicle_id).await?;
+    glovebox_shared::services::vehicle::require(&state.db, vehicle_id).await?;
     Ok(Json(svc::list(&state.db, vehicle_id).await?))
 }
 
@@ -57,7 +57,7 @@ pub async fn create(
     Path(vehicle_id): Path<i32>,
     Json(input): Json<CreatePartSlot>,
 ) -> Result<Json<part_slot::Model>> {
-    require_vehicle(&state.db, vehicle_id).await?;
+    glovebox_shared::services::vehicle::require(&state.db, vehicle_id).await?;
     let created = svc::create(
         &state.db,
         vehicle_id,

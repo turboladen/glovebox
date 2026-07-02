@@ -3,11 +3,14 @@ use axum::{
     extract::{Multipart, Path, State},
     routing::get,
 };
-use sea_orm::*;
 use serde::Deserialize;
 
 use crate::AppState;
-use glovebox_shared::entities::vehicle;
+use glovebox_shared::{
+    entities::vehicle,
+    inputs::vehicle::{NewVehicle, UpdateVehicle as UpdateVehicleInput},
+    services::vehicle as svc,
+};
 
 use super::{error::ApiError, serde_helpers::deserialize_optional};
 
@@ -86,49 +89,46 @@ pub struct UpdateVehicle {
 }
 
 async fn list(State(state): State<AppState>) -> Result<Json<Vec<vehicle::Model>>> {
-    let vehicles = vehicle::Entity::find().all(&state.db).await?;
-    Ok(Json(vehicles))
+    Ok(Json(svc::list(&state.db).await?))
 }
 
 async fn get_one(
     State(state): State<AppState>,
     Path(id): Path<i32>,
 ) -> Result<Json<vehicle::Model>> {
-    vehicle::Entity::find_by_id(id)
-        .one(&state.db)
-        .await?
-        .map(Json)
-        .ok_or_else(|| ApiError::NotFound(format!("Vehicle {id} not found")))
+    Ok(Json(svc::get(&state.db, id).await?))
 }
 
 async fn create(
     State(state): State<AppState>,
     Json(input): Json<CreateVehicle>,
 ) -> Result<Json<vehicle::Model>> {
-    let model = vehicle::ActiveModel {
-        name: Set(input.name),
-        model_template_id: Set(input.model_template_id),
-        year: Set(input.year),
-        make: Set(input.make),
-        model: Set(input.model),
-        trim_level: Set(input.trim_level),
-        body_style: Set(input.body_style),
-        engine: Set(input.engine),
-        transmission: Set(input.transmission),
-        drivetrain: Set(input.drivetrain),
-        vin: Set(input.vin),
-        license_plate: Set(input.license_plate),
-        color: Set(input.color),
-        purchase_date: Set(input.purchase_date),
-        purchase_price_cents: Set(input.purchase_price_cents),
-        purchase_price_currency: Set(input.purchase_price_currency),
-        purchase_mileage: Set(input.purchase_mileage),
-        photo_path: Set(input.photo_path),
-        notes: Set(input.notes),
-        ..Default::default()
-    };
-    let result = model.insert(&state.db).await?;
-    Ok(Json(result))
+    let created = svc::create(
+        &state.db,
+        NewVehicle {
+            name: input.name,
+            model_template_id: input.model_template_id,
+            year: input.year,
+            make: input.make,
+            model: input.model,
+            trim_level: input.trim_level,
+            body_style: input.body_style,
+            engine: input.engine,
+            transmission: input.transmission,
+            drivetrain: input.drivetrain,
+            vin: input.vin,
+            license_plate: input.license_plate,
+            color: input.color,
+            purchase_date: input.purchase_date,
+            purchase_price_cents: input.purchase_price_cents,
+            purchase_price_currency: input.purchase_price_currency,
+            purchase_mileage: input.purchase_mileage,
+            photo_path: input.photo_path,
+            notes: input.notes,
+        },
+    )
+    .await?;
+    Ok(Json(created))
 }
 
 async fn update(
@@ -136,86 +136,37 @@ async fn update(
     Path(id): Path<i32>,
     Json(input): Json<UpdateVehicle>,
 ) -> Result<Json<vehicle::Model>> {
-    let existing = vehicle::Entity::find_by_id(id)
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Vehicle {id} not found")))?;
-
-    let mut active: vehicle::ActiveModel = existing.into();
-
-    if let Some(v) = input.name {
-        active.name = Set(v);
-    }
-    if let Some(v) = input.model_template_id {
-        active.model_template_id = Set(v);
-    }
-    if let Some(v) = input.year {
-        active.year = Set(v);
-    }
-    if let Some(v) = input.make {
-        active.make = Set(v);
-    }
-    if let Some(v) = input.model {
-        active.model = Set(v);
-    }
-    if let Some(v) = input.trim_level {
-        active.trim_level = Set(v);
-    }
-    if let Some(v) = input.body_style {
-        active.body_style = Set(v);
-    }
-    if let Some(v) = input.engine {
-        active.engine = Set(v);
-    }
-    if let Some(v) = input.transmission {
-        active.transmission = Set(v);
-    }
-    if let Some(v) = input.drivetrain {
-        active.drivetrain = Set(v);
-    }
-    if let Some(v) = input.vin {
-        active.vin = Set(v);
-    }
-    if let Some(v) = input.license_plate {
-        active.license_plate = Set(v);
-    }
-    if let Some(v) = input.color {
-        active.color = Set(v);
-    }
-    if let Some(v) = input.purchase_date {
-        active.purchase_date = Set(v);
-    }
-    if let Some(v) = input.purchase_price_cents {
-        active.purchase_price_cents = Set(v);
-    }
-    if let Some(v) = input.purchase_price_currency {
-        active.purchase_price_currency = Set(v);
-    }
-    if let Some(v) = input.purchase_mileage {
-        active.purchase_mileage = Set(v);
-    }
-    if let Some(v) = input.sold_date {
-        active.sold_date = Set(v);
-    }
-    if let Some(v) = input.sold_price_cents {
-        active.sold_price_cents = Set(v);
-    }
-    if let Some(v) = input.sold_price_currency {
-        active.sold_price_currency = Set(v);
-    }
-    if let Some(v) = input.sold_mileage {
-        active.sold_mileage = Set(v);
-    }
-    if let Some(v) = input.photo_path {
-        active.photo_path = Set(v);
-    }
-    if let Some(v) = input.notes {
-        active.notes = Set(v);
-    }
-    active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
-
-    let result = active.update(&state.db).await?;
-    Ok(Json(result))
+    let updated = svc::update(
+        &state.db,
+        id,
+        UpdateVehicleInput {
+            name: input.name,
+            model_template_id: input.model_template_id,
+            year: input.year,
+            make: input.make,
+            model: input.model,
+            trim_level: input.trim_level,
+            body_style: input.body_style,
+            engine: input.engine,
+            transmission: input.transmission,
+            drivetrain: input.drivetrain,
+            vin: input.vin,
+            license_plate: input.license_plate,
+            color: input.color,
+            purchase_date: input.purchase_date,
+            purchase_price_cents: input.purchase_price_cents,
+            purchase_price_currency: input.purchase_price_currency,
+            purchase_mileage: input.purchase_mileage,
+            sold_date: input.sold_date,
+            sold_price_cents: input.sold_price_cents,
+            sold_price_currency: input.sold_price_currency,
+            sold_mileage: input.sold_mileage,
+            photo_path: input.photo_path,
+            notes: input.notes,
+        },
+    )
+    .await?;
+    Ok(Json(updated))
 }
 
 async fn upload_photo(
@@ -223,10 +174,8 @@ async fn upload_photo(
     Path(id): Path<i32>,
     mut multipart: Multipart,
 ) -> Result<Json<vehicle::Model>> {
-    let existing = vehicle::Entity::find_by_id(id)
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Vehicle {id} not found")))?;
+    // Verify the vehicle exists before touching the filesystem.
+    svc::require(&state.db, id).await?;
 
     // Extract file from multipart
     let field = multipart
@@ -262,64 +211,30 @@ async fn upload_photo(
 
     let relative_path = format!("{id}/photos/{stored_name}");
 
-    // Update vehicle photo_path
-    let mut active: vehicle::ActiveModel = existing.into();
-    active.photo_path = Set(Some(relative_path));
-    active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
-    let result = active.update(&state.db).await?;
-
-    Ok(Json(result))
+    Ok(Json(
+        svc::set_photo_path(&state.db, id, relative_path).await?,
+    ))
 }
 
 async fn archive(
     State(state): State<AppState>,
     Path(id): Path<i32>,
 ) -> Result<Json<vehicle::Model>> {
-    let existing = vehicle::Entity::find_by_id(id)
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Vehicle {id} not found")))?;
-
-    let mut active: vehicle::ActiveModel = existing.into();
-    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    active.archived_at = Set(Some(now));
-    active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
-    let result = active.update(&state.db).await?;
-    Ok(Json(result))
+    Ok(Json(svc::archive(&state.db, id).await?))
 }
 
 async fn unarchive(
     State(state): State<AppState>,
     Path(id): Path<i32>,
 ) -> Result<Json<vehicle::Model>> {
-    let existing = vehicle::Entity::find_by_id(id)
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Vehicle {id} not found")))?;
-
-    let mut active: vehicle::ActiveModel = existing.into();
-    active.archived_at = Set(None);
-    active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
-    let result = active.update(&state.db).await?;
-    Ok(Json(result))
+    Ok(Json(svc::unarchive(&state.db, id).await?))
 }
 
 async fn delete(
     State(state): State<AppState>,
     Path(id): Path<i32>,
 ) -> Result<Json<serde_json::Value>> {
-    let existing = vehicle::Entity::find_by_id(id)
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Vehicle {id} not found")))?;
-
-    if existing.archived_at.is_none() {
-        return Err(ApiError::BadRequest(
-            "Vehicle must be archived before it can be deleted".into(),
-        ));
-    }
-
-    vehicle::Entity::delete_by_id(id).exec(&state.db).await?;
+    svc::delete(&state.db, id).await?;
 
     // Remove vehicle's file directory from disk
     if let Ok(files_dir) = std::path::Path::new(&state.config.files_dir).canonicalize() {

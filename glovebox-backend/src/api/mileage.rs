@@ -9,7 +9,7 @@ use glovebox_shared::{
     entities::mileage_log, inputs::mileage::NewMileageEntry, services::mileage as svc,
 };
 
-use super::{error::ApiError, require_vehicle};
+use super::error::ApiError;
 
 type Result<T> = std::result::Result<T, ApiError>;
 
@@ -25,7 +25,7 @@ pub async fn list(
     State(state): State<AppState>,
     Path(vehicle_id): Path<i32>,
 ) -> Result<Json<Vec<mileage_log::Model>>> {
-    require_vehicle(&state.db, vehicle_id).await?;
+    glovebox_shared::services::vehicle::require(&state.db, vehicle_id).await?;
     Ok(Json(svc::list(&state.db, vehicle_id).await?))
 }
 
@@ -34,7 +34,7 @@ pub async fn create(
     Path(vehicle_id): Path<i32>,
     Json(input): Json<CreateMileageEntry>,
 ) -> Result<Json<mileage_log::Model>> {
-    require_vehicle(&state.db, vehicle_id).await?;
+    glovebox_shared::services::vehicle::require(&state.db, vehicle_id).await?;
     let created = svc::create(
         &state.db,
         vehicle_id,

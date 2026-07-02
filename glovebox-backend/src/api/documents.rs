@@ -13,7 +13,7 @@ use glovebox_shared::{
     services::document as svc,
 };
 
-use super::{error::ApiError, require_vehicle};
+use super::error::ApiError;
 
 type Result<T> = std::result::Result<T, ApiError>;
 
@@ -168,7 +168,7 @@ pub async fn upload(
 
     // Validate vehicle exists if provided
     if let Some(vid) = parsed.vehicle_id {
-        require_vehicle(&state.db, vid).await?;
+        glovebox_shared::services::vehicle::require(&state.db, vid).await?;
     }
 
     // Build storage path: {files_dir}/{vehicle_id or "general"}/{doc_type or "other"}/

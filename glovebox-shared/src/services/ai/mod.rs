@@ -69,6 +69,17 @@ pub trait AiProvider: Send + Sync {
     fn is_configured(&self) -> bool;
 }
 
+/// Strip markdown code fences from AI responses (shared helper).
+pub fn strip_code_fences(s: &str) -> &str {
+    let s = s.trim();
+    let s = s
+        .strip_prefix("```json")
+        .or_else(|| s.strip_prefix("```"))
+        .unwrap_or(s);
+    let s = s.strip_suffix("```").unwrap_or(s);
+    s.trim()
+}
+
 /// Construct the appropriate AI provider based on the `ai.provider` setting value.
 /// Additional settings (API keys, URLs, models) are passed as key-value pairs.
 pub fn create_provider(
@@ -143,6 +154,30 @@ mod tests {
         let settings = HashMap::new();
         let provider = create_provider("nonexistent", &settings);
         assert_eq!(provider.provider_name(), "none");
+    }
+
+    #[test]
+    fn strip_code_fences_json_block() {
+        let input = "```json\n[{\"title\": \"test\"}]\n```";
+        assert_eq!(strip_code_fences(input), "[{\"title\": \"test\"}]");
+    }
+
+    #[test]
+    fn strip_code_fences_plain_block() {
+        let input = "```\n[{\"title\": \"test\"}]\n```";
+        assert_eq!(strip_code_fences(input), "[{\"title\": \"test\"}]");
+    }
+
+    #[test]
+    fn strip_code_fences_no_fences() {
+        let input = "[{\"title\": \"test\"}]";
+        assert_eq!(strip_code_fences(input), "[{\"title\": \"test\"}]");
+    }
+
+    #[test]
+    fn strip_code_fences_with_whitespace() {
+        let input = "  ```json\n[{\"title\": \"test\"}]\n```  ";
+        assert_eq!(strip_code_fences(input), "[{\"title\": \"test\"}]");
     }
 
     #[tokio::test]

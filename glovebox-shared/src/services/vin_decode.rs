@@ -1,5 +1,8 @@
+use sea_orm::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+use crate::{entities::vehicle_attribute, error::DomainResult};
 
 const NHTSA_API_URL: &str = "https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues";
 
@@ -137,4 +140,35 @@ pub async fn decode_vin(vin: &str) -> Result<VinDecodeResult, String> {
         drivetrain,
         all_attributes,
     })
+}
+
+/// Replace a vehicle's `vin_decode`-sourced attributes with the freshly decoded set.
+/// The caller is responsible for verifying the vehicle exists first.
+pub async fn store_attributes<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    decoded: &VinDecodeResult,
+) -> DomainResult<()> {
+    let txn = db.begin().await?;
+
+    // Delete any existing vin_decode attributes for this vehicle, then re-insert
+    vehicle_attribute::Entity::delete_many()
+        .filter(vehicle_attribute::Column::VehicleId.eq(vehicle_id))
+        .filter(vehicle_attribute::Column::Source.eq("vin_decode"))
+        .exec(&txn)
+        .await?;
+
+    for (key, value) in &decoded.all_attributes {
+        let attr = vehicle_attribute::ActiveModel {
+            vehicle_id: Set(vehicle_id),
+            key: Set(key.clone()),
+            value: Set(value.clone()),
+            source: Set(Some("vin_decode".to_string())),
+            ..Default::default()
+        };
+        attr.insert(&txn).await?;
+    }
+
+    txn.commit().await?;
+    Ok(())
 }
