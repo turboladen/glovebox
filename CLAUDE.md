@@ -5,48 +5,71 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What Is This
 
 Car maintenance tracker: Rust backend (Axum + SeaORM + SQLite) + Svelte 5 frontend SPA.
+The Rust side is a two-crate cargo workspace: `glovebox-shared` (domain library) +
+`glovebox-backend` (thin Axum binary).
 
 ## Commands
 
 ```bash
 # Development
-just dev                  # Run backend (cargo run) + frontend (bun run dev) together
-cargo run                 # Backend only (listens on :3003, serves SPA from frontend/dist/)
+just dev                  # Run backend + frontend (bun run dev) together
+cargo run -p glovebox-backend  # Backend only (listens on :3003, serves SPA from frontend/dist/)
 cd frontend && bun run dev # Frontend dev server only (Vite on :5373, proxies /api + /files to :3003)
 
 # Build
-cargo build               # Backend
+cargo build --workspace   # Both Rust crates
 cd frontend && bun run build  # Frontend (outputs to frontend/dist/)
 
 # Test
-cargo test                # Rust unit tests
-cargo test -- test_name   # Single Rust test
+cargo test --workspace    # Rust unit tests (bulk live in glovebox-shared service modules)
+cargo test -p glovebox-shared test_name  # Single Rust test
 just test-e2e             # Playwright e2e (needs `just dev` running)
+just test-e2e-ci          # Self-contained e2e: boots backend+vite on a throwaway DB, runs Playwright, tears down
 just test-e2e-ui          # Playwright e2e with visible browser
-cd frontend && bunx playwright test tests/garage.spec.ts  # Single e2e test file
+cd frontend && bunx playwright test e2e/garage.spec.ts  # Single e2e test file
 
 # Lint / Check
-cargo clippy              # Rust lints
+just ci                   # Everything CI runs except e2e (nightly fmt-check, layering, backend, frontend)
+just check-layering       # Layering gate only (scripts/check-layering.sh)
+cargo clippy --workspace -- -D clippy::pedantic  # Rust lints (pedantic is the CI gate)
 cd frontend && bun run check  # svelte-check + TypeScript check
 ```
 
 ## Architecture
 
-### Backend (`src/`)
+### Workspace layout
 
-**AppState** (`main.rs`): Axum shared state holds `DatabaseConnection`, `Arc<AppConfig>`, and `Arc<dyn AiProvider>`. All handlers extract `State(state)`.
+- **`glovebox-shared/`** (lib crate `glovebox_shared`) — the HTTP-agnostic domain:
+  `src/{entities,migration,services,inputs,config.rs,error.rs,test_support.rs}`. All SQL,
+  validation, and business logic live here. Never depends on axum.
+- **`glovebox-backend/`** (bin crate) — the thin Axum surface: `src/{api,main.rs}`. Handlers
+  map HTTP DTOs to domain inputs, call shared services, and map errors back.
+- The split exists so a second surface (`glovebox-mcp`) can sit on the same domain library.
+  `scripts/check-layering.sh` (run by CI and `just ci`) enforces the boundary.
+
+### Backend binary (`glovebox-backend/src/`)
+
+**AppState** (`main.rs`): Axum shared state holds `DatabaseConnection`, `Arc<AppConfig>`, and `Arc<AiProviderRegistry>`. All handlers extract `State(state)`.
 
 **Routing split**: Top-level CRUD resources (`vehicles`, `platforms`, `model_templates`, `schedules`, `shops`) use `.nest()` with their own `Router`. Vehicle sub-resources (`mileage`, `services`, `observations`, `accidents`, `parts`, `documents`, `research`, etc.) use flat `.route()` calls directly in `main.rs` so `Path((vehicle_id, id))` tuple extraction works correctly.
 
-**API handlers** (`src/api/`): Each module defines `Create*`/`Update*` DTOs, uses `Result<T> = std::result::Result<T, ApiError>`, and returns `Json<>`. Errors go through `ApiError` enum → `IntoResponse`.
+**API handlers** (`api/`): Each module defines `Create*`/`Update*` DTOs (HTTP serde only), uses `Result<T> = std::result::Result<T, ApiError>`, and returns `Json<>`. Handlers are thin: map DTO → `glovebox_shared::inputs::*`, call `glovebox_shared::services::*`, return the result. Errors go through `DomainError → ApiError` (`api/error.rs`) → `IntoResponse`.
 
-**Entities** (`src/entities/`): Hand-written `DeriveEntityModel` structs (not generated). Parent entities declare `has_many` relations; junction tables have `via()` impls. 20 entity files.
+### Domain library (`glovebox-shared/src/`)
 
-**Services** (`src/services/`): Business logic — `ai/` (pluggable provider trait), `reminders`, `vin_decode`, `nhtsa`.
+**Entities** (`entities/`): Hand-written `DeriveEntityModel` structs (not generated). Parent entities declare `has_many` relations; junction tables have `via()` impls. 22 entity files.
 
-**AI layer** (`src/services/ai/`): `AiProvider` trait with implementations for Claude API, OpenAI-compatible (Ollama/LM Studio), mock (testing), and noop. Provider is selected at startup from `ai_providers` table. Context builder in `context.rs` assembles vehicle data into system prompts.
+**Inputs** (`inputs/`): Plain domain input structs (`New*`/`Update*`) consumed by service functions. No HTTP serde.
 
-**Migrations** (`src/migration/`): 8 consolidated migration files, auto-run on startup via `Migrator::up()`.
+**Services** (`services/`): One module per domain (`vehicle`, `service_record`, `platform`, ...) of free functions taking `db: &impl ConnectionTrait` first, returning `DomainResult<T>`; plus the pre-existing `ai/` (pluggable provider trait), `reminders`, `vin_decode`, `nhtsa`.
+
+**Errors** (`error.rs`): `DomainError::{NotFound, Invalid{field,message}, BadRequest, Db, Internal}` with `DomainResult<T>` alias.
+
+**AI layer** (`services/ai/`): `AiProvider` trait with implementations for Claude API, OpenAI-compatible (Ollama/LM Studio), mock (testing), and noop. Provider is selected at startup from `ai_providers` table. Context builder in `context.rs` assembles vehicle data into system prompts.
+
+**Migrations** (`migration/`): 12 migration files, auto-run on startup via `Migrator::up()`.
+
+**Test harness** (`test_support.rs`, `#[cfg(test)]`): `test_db()` — in-memory SQLite with migrations applied, for service-layer unit tests.
 
 ### Frontend (`frontend/`)
 
@@ -55,6 +78,17 @@ Svelte 5 SPA using `@keenmate/svelte-spa-router`. Three routes: Garage (list), V
 Vite dev server proxies `/api` and `/files` to the backend at `:3003`. In production, the backend serves `frontend/dist/` as SPA fallback.
 
 ## Conventions
+
+### Layering (enforced by `scripts/check-layering.sh` in CI)
+
+- Domain inputs + validation + SQL live in `glovebox-shared::{inputs,services}`. Backend handlers ONLY map HTTP DTO ↔ domain input and rely on `DomainError → ApiError` conversion — no SeaORM queries, `ActiveModel`s, or business logic in `glovebox-backend/src/api/`
+- `glovebox-shared` never imports axum (domain stays HTTP-agnostic)
+- Service fns take `db: &impl ConnectionTrait` as the first param (+ `&AppConfig` / `&AiProviderRegistry` as explicit params where needed) — never `AppState`
+- **Error model**: services return `DomainResult<T>`; `DomainError::{NotFound, Invalid{field,message}, BadRequest, Db, Internal}`. `Invalid` renders as `"{field}: {message}"` (400); `BadRequest` renders its message verbatim (400); `Db`/`Internal` become 500
+- **updated_at stamping lives in shared service update fns**, not handlers: every update fn sets `active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string())` — SeaORM `ActiveModel::update()` does NOT auto-set it
+- New domain logic gets service-level unit tests in `glovebox-shared` (via `test_support::test_db()`) plus e2e coverage
+
+### General
 
 - **Issue tracking**: Use `bd` (beads), never markdown TODOs
 - **Testing**: Update `TEST_PLAN.md` and add Playwright tests when changing UI
@@ -65,20 +99,21 @@ Vite dev server proxies `/api` and `/files` to the backend at `:3003`. In produc
 - **Entity field order**: Must match physical DB column order. ALTER TABLE appends columns to the end, so new fields go after `created_at`/`updated_at` in the entity struct
 - **Axum routing**: Vehicle sub-resources use flat routes in `main.rs` (not nested), so `Path((vehicle_id, id))` tuple extraction works correctly
 - **Update DTOs**: Use `Option<Option<T>>` (double-option) to distinguish "not sent" vs "explicitly set to null"
-- **Vehicle ownership checks**: All vehicle sub-resource handlers must call `require_vehicle(&state.db, vehicle_id).await?` before accessing sub-resources
-- **updated_at**: All update handlers must explicitly set `active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string())` — SeaORM `ActiveModel::update()` does NOT auto-set it
+- **Vehicle ownership checks**: All vehicle sub-resource handlers must call `glovebox_shared::services::vehicle::require(&state.db, vehicle_id).await?` before delegating to the sub-resource service (moving the check into service fns is tracked as `glovebox-paxy`)
 - **N+1 queries**: List endpoints that load related data must use batch loading with `is_in()` queries, not per-record queries in a loop
 - **Svelte 5 bind:this**: Elements used with `bind:this` must be declared with `$state(undefined)`, not bare `let`
 - **Imports**: Use `sea_orm::*` glob imports (idiomatic for SeaORM). Explicit imports create maintenance burden with unused-import warnings
 
 ## Clippy
 
-Crate-level `#![allow]` in `main.rs` suppresses intentional pedantic lints:
+Crate-level `#![allow]`s live in BOTH crate roots (`glovebox-backend/src/main.rs` and `glovebox-shared/src/lib.rs`) and suppress intentional pedantic lints:
 - `clippy::option_option` — update DTO convention (see above)
 - `clippy::struct_field_names` — entity fields map to DB column names
 - `clippy::wildcard_imports` — `sea_orm::*` is idiomatic
 
-Run `cargo clippy -- -D clippy::pedantic` to verify zero warnings. Add per-function `#[allow]` for unavoidable cases (e.g., `too_many_lines` on update handlers with many fields).
+`glovebox-shared/src/lib.rs` additionally allows `clippy::missing_errors_doc`, `clippy::missing_panics_doc`, `clippy::must_use_candidate`, and `clippy::implicit_hasher` — these lints target public-API surface and only fired once the domain became a library crate; rationale is in a comment in `lib.rs`.
+
+Run `cargo clippy --workspace -- -D clippy::pedantic` to verify zero warnings. Add per-function `#[allow]` for unavoidable cases (e.g., `too_many_lines` on update handlers with many fields).
 
 ## Playwright Patterns
 

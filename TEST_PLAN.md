@@ -354,6 +354,37 @@ Playwright e2e tests. Keep it updated as features are added.
 
 ---
 
+## Shared-Service Unit Tests (glovebox-shared)
+
+Domain logic lives in `glovebox-shared/src/services/` and is unit-tested there, below the
+Playwright layer.
+
+**Harness:** `glovebox_shared::test_support::test_db()` returns a fresh in-memory SQLite
+`DatabaseConnection` with all migrations applied. The pool is pinned to a single connection
+(`sqlite::memory:` databases are per-connection, so a second pooled connection would see an
+empty schema); each test gets its own isolated DB.
+
+```rust
+#[cfg(test)]
+mod tests {
+    use crate::test_support::test_db;
+
+    #[tokio::test]
+    async fn create_then_get_round_trips() {
+        let db = test_db().await;
+        // call service fns against `db` ...
+    }
+}
+```
+
+**Convention:** new domain logic gets service-level unit tests in the shared crate — at
+minimum a create→get round-trip, an update-mutates-field test, and a rejection test per
+validation rule — in addition to Playwright e2e coverage of the user flow.
+
+Run: `cargo test -p glovebox-shared` (or `cargo test --workspace`).
+
+---
+
 ## Playwright Test Structure
 
 Tests live in `frontend/e2e/` and mirror this plan:
