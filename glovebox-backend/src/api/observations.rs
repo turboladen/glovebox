@@ -2,11 +2,14 @@ use axum::{
     Json,
     extract::{Path, State},
 };
-use sea_orm::*;
 use serde::Deserialize;
 
 use crate::AppState;
-use glovebox_shared::entities::observation;
+use glovebox_shared::{
+    entities::observation,
+    inputs::observation::{NewObservation, UpdateObservation as UpdateObservationInput},
+    services::observation as svc,
+};
 
 use super::{error::ApiError, require_vehicle, serde_helpers::deserialize_optional};
 
@@ -46,25 +49,14 @@ pub async fn list(
     Path(vehicle_id): Path<i32>,
 ) -> Result<Json<Vec<observation::Model>>> {
     require_vehicle(&state.db, vehicle_id).await?;
-
-    let observations = observation::Entity::find()
-        .filter(observation::Column::VehicleId.eq(vehicle_id))
-        .order_by_desc(observation::Column::ObservedAt)
-        .all(&state.db)
-        .await?;
-    Ok(Json(observations))
+    Ok(Json(svc::list(&state.db, vehicle_id).await?))
 }
 
 pub async fn get_one(
     State(state): State<AppState>,
     Path((vehicle_id, id)): Path<(i32, i32)>,
 ) -> Result<Json<observation::Model>> {
-    observation::Entity::find_by_id(id)
-        .filter(observation::Column::VehicleId.eq(vehicle_id))
-        .one(&state.db)
-        .await?
-        .map(Json)
-        .ok_or_else(|| ApiError::NotFound(format!("Observation {id} not found")))
+    Ok(Json(svc::get(&state.db, vehicle_id, id).await?))
 }
 
 pub async fn create(
@@ -73,24 +65,21 @@ pub async fn create(
     Json(input): Json<CreateObservation>,
 ) -> Result<Json<observation::Model>> {
     require_vehicle(&state.db, vehicle_id).await?;
-
-    let mut model = observation::ActiveModel {
-        vehicle_id: Set(vehicle_id),
-        category: Set(input.category),
-        title: Set(input.title),
-        description: Set(input.description),
-        odometer: Set(input.odometer),
-        obd_codes: Set(input.obd_codes),
-        notes: Set(input.notes),
-        ..Default::default()
-    };
-
-    if let Some(observed_at) = input.observed_at {
-        model.observed_at = Set(observed_at);
-    }
-
-    let result = model.insert(&state.db).await?;
-    Ok(Json(result))
+    let created = svc::create(
+        &state.db,
+        vehicle_id,
+        NewObservation {
+            category: input.category,
+            title: input.title,
+            description: input.description,
+            odometer: input.odometer,
+            observed_at: input.observed_at,
+            obd_codes: input.obd_codes,
+            notes: input.notes,
+        },
+    )
+    .await?;
+    Ok(Json(created))
 }
 
 pub async fn update(
@@ -98,44 +87,22 @@ pub async fn update(
     Path((vehicle_id, id)): Path<(i32, i32)>,
     Json(input): Json<UpdateObservation>,
 ) -> Result<Json<observation::Model>> {
-    let existing = observation::Entity::find_by_id(id)
-        .filter(observation::Column::VehicleId.eq(vehicle_id))
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Observation {id} not found")))?;
-
-    let mut active: observation::ActiveModel = existing.into();
-
-    if let Some(v) = input.category {
-        active.category = Set(v);
-    }
-    if let Some(v) = input.title {
-        active.title = Set(v);
-    }
-    if let Some(v) = input.description {
-        active.description = Set(v);
-    }
-    if let Some(v) = input.odometer {
-        active.odometer = Set(v);
-    }
-    if let Some(v) = input.observed_at {
-        active.observed_at = Set(v);
-    }
-    if let Some(v) = input.obd_codes {
-        active.obd_codes = Set(v);
-    }
-    if let Some(v) = input.resolved {
-        active.resolved = Set(v);
-    }
-    if let Some(v) = input.resolved_service_id {
-        active.resolved_service_id = Set(v);
-    }
-    if let Some(v) = input.notes {
-        active.notes = Set(v);
-    }
-
-    active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
-
-    let result = active.update(&state.db).await?;
-    Ok(Json(result))
+    let updated = svc::update(
+        &state.db,
+        vehicle_id,
+        id,
+        UpdateObservationInput {
+            category: input.category,
+            title: input.title,
+            description: input.description,
+            odometer: input.odometer,
+            observed_at: input.observed_at,
+            obd_codes: input.obd_codes,
+            resolved: input.resolved,
+            resolved_service_id: input.resolved_service_id,
+            notes: input.notes,
+        },
+    )
+    .await?;
+    Ok(Json(updated))
 }

@@ -3,5 +3,6 @@
 
 pub mod mileage;
 pub mod model_template;
+pub mod observation;
 pub mod platform;
 pub mod shop;
