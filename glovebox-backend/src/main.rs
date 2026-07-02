@@ -21,9 +21,9 @@ use tower_http::{
     services::{ServeDir, ServeFile},
 };
 
-use glovebox_shared::config::AppConfig;
-use glovebox_shared::migration::Migrator;
-use glovebox_shared::services::ai::registry::AiProviderRegistry;
+use glovebox_shared::{
+    config::AppConfig, migration::Migrator, services::ai::registry::AiProviderRegistry,
+};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -37,10 +37,9 @@ pub struct AppState {
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| {
-                    "glovebox_backend=debug,glovebox_shared=debug,tower_http=debug".into()
-                }),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                "glovebox_backend=debug,glovebox_shared=debug,tower_http=debug".into()
+            }),
         )
         .init();
 

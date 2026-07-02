@@ -1,5 +1,9 @@
 // Intentional conventions that conflict with clippy::pedantic (see CLAUDE.md):
-#![allow(clippy::option_option, clippy::struct_field_names, clippy::wildcard_imports)]
+#![allow(
+    clippy::option_option,
+    clippy::struct_field_names,
+    clippy::wildcard_imports
+)]
 // These pedantic lints target public-API surface. They did not fire while this
 // code lived in the `glovebox` binary crate (nothing was externally reachable);
 // they surface now only because the domain became a library. Phase A is a

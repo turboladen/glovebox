@@ -115,9 +115,10 @@ pub async fn get_suggestions(
         .await
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
-    let context = glovebox_shared::services::ai::context::build_vehicle_context(&state.db, vehicle_id)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let context =
+        glovebox_shared::services::ai::context::build_vehicle_context(&state.db, vehicle_id)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
 
     let preamble = glovebox_shared::services::ai::context::GLOVEBOX_PREAMBLE;
     let request = AiRequest {

@@ -21,8 +21,8 @@ pub mod shops;
 pub mod vehicles;
 pub mod vin;
 
-use glovebox_shared::entities::vehicle;
 use error::ApiError;
+use glovebox_shared::entities::vehicle;
 use sea_orm::{DatabaseConnection, EntityTrait};
 
 /// Shared helper to verify a vehicle exists, returning the model or a 404 error.
