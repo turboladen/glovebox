@@ -137,7 +137,9 @@ pub async fn delete(db: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
         .exec(db)
         .await?;
     if result.rows_affected == 0 {
-        return Err(DomainError::NotFound(format!("Schedule item {id} not found")));
+        return Err(DomainError::NotFound(format!(
+            "Schedule item {id} not found"
+        )));
     }
     Ok(())
 }

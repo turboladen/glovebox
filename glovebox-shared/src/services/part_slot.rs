@@ -6,7 +6,10 @@ use crate::{
     inputs::part_slot::{NewPartSlot, UpdatePartSlot},
 };
 
-pub async fn list(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult<Vec<part_slot::Model>> {
+pub async fn list(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+) -> DomainResult<Vec<part_slot::Model>> {
     Ok(part_slot::Entity::find()
         .filter(part_slot::Column::VehicleId.eq(vehicle_id))
         .order_by_asc(part_slot::Column::Category)

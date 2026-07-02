@@ -37,7 +37,10 @@ pub async fn get(db: &impl ConnectionTrait, id: i32) -> DomainResult<document::M
 
 /// Persist a document row. The file bytes must already be written to disk by
 /// the caller; `input.file_path` is the stored relative path.
-pub async fn create(db: &impl ConnectionTrait, input: NewDocument) -> DomainResult<document::Model> {
+pub async fn create(
+    db: &impl ConnectionTrait,
+    input: NewDocument,
+) -> DomainResult<document::Model> {
     let model = document::ActiveModel {
         vehicle_id: Set(input.vehicle_id),
         title: Set(input.title),

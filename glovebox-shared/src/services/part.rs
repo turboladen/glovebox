@@ -20,10 +20,7 @@ pub async fn list(
         query = query.filter(part::Column::Status.eq(status));
     }
 
-    Ok(query
-        .order_by_desc(part::Column::CreatedAt)
-        .all(db)
-        .await?)
+    Ok(query.order_by_desc(part::Column::CreatedAt).all(db).await?)
 }
 
 pub async fn get(db: &impl ConnectionTrait, vehicle_id: i32, id: i32) -> DomainResult<part::Model> {
@@ -337,7 +334,10 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(list(&db, vid, PartFilter::default()).await.unwrap().len(), 2);
+        assert_eq!(
+            list(&db, vid, PartFilter::default()).await.unwrap().len(),
+            2
+        );
         assert_eq!(
             list(
                 &db,
