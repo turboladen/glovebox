@@ -26,6 +26,10 @@ seaorm_tokens+='|ActiveModel|IntoActiveModel'
 seaorm_tokens+='|find_by_id|delete_many|update_many|insert_many'
 seaorm_tokens+='|\.exec\(|\.begin\('
 seaorm_tokens+='|QueryFilter|ColumnTrait|EntityTrait|TransactionTrait|PaginatorTrait|QueryOrder|QuerySelect'
+# Raw-SQL escape hatches: sea_orm::Statement / db.execute(...) needs Statement
+# or ConnectionTrait in scope, sea_query builds SQL, and sqlx is a shared-only
+# dependency — any of these in api/ is a leak even without the idiomatic verbs.
+seaorm_tokens+='|Statement|sea_query|ConnectionTrait|sqlx::'
 if grep -rnE "$seaorm_tokens" glovebox-backend/src/api; then
   echo "FAIL: SeaORM query/persistence usage found in glovebox-backend/src/api (must live in glovebox-shared/src/services)"
   fail=1
