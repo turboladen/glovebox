@@ -73,6 +73,8 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: just
+      - name: Layering gate (no SQL in handlers, no axum in shared)
+        run: just check-layering
       - name: Backend gates (build, test, clippy)
         run: just ci-backend
 
