@@ -21,18 +21,21 @@ use sea_orm::DatabaseConnection;
 use serde::{Serialize, de::DeserializeOwned};
 
 use glovebox_shared::{
+    entities::work_item,
     error::{DomainError, DomainResult},
     inputs::build::UpdateBuild,
     services::{
-        activity, build, costs, incident, mileage, part, reminders, research, schedule, search,
-        search::SearchScope, service_record, vehicle,
+        activity, budget, budget::BudgetForecast, build, costs, incident, mileage, part, reminders,
+        reminders::RemindersResponse, research, schedule, search, search::SearchScope,
+        service_record, vehicle, visit, visit::VisitWithItems, work_item as work_item_svc,
     },
 };
 
 use crate::schemas::{
-    BuildParams, DismissScheduleItemInput, EmptyParams, FileResearchFindingInput,
-    FindDocumentsInput, LogIncidentInput, LogMileageInput, RecordPartInput, RecordServiceInput,
-    SaveNoteInput, SearchRecordsInput, SummarizeActivityInput, UpdateBuildStatusInput,
+    BuildParams, CompleteVisitInput, DismissScheduleItemInput, EmptyParams,
+    FileResearchFindingInput, FindDocumentsInput, ListPlannedWorkInput, LogIncidentInput,
+    LogMileageInput, PlanWorkInput, RecordPartInput, RecordServiceInput, SaveNoteInput,
+    ScheduleVisitInput, SearchRecordsInput, SummarizeActivityInput, UpdateBuildStatusInput,
     VehicleBrief, VehicleParams,
 };
 
@@ -186,18 +189,34 @@ impl GloveboxMcp {
 
     #[tool(
         name = "check_due_maintenance",
-        description = "Answer \"what does this car need?\" — the vehicle's maintenance schedule evaluated against its estimated current mileage: each item's status (ok/due_soon/overdue), when it's due, and bundle suggestions for combining work. Call before recommending any maintenance. When recorded work satisfies an item, link it via `record_service`'s `schedule_item_ids` so the reminder clears; for an item that doesn't apply to this vehicle, use `dismiss_schedule_item`.",
+        description = "Answer \"what does this car need?\" — the vehicle's maintenance schedule evaluated against its estimated current mileage: each item's status (ok/due_soon/overdue), when it's due, bundle suggestions for combining work, a 12-month budget forecast, and the warranty status (possibly_covered — remind the user to check coverage before paying). Call before recommending any maintenance. For due/overdue items, offer to plan_work them (linked via schedule_item_id) so the work lands on the to-do list; when recorded work satisfies an item, link it via `record_service`'s `schedule_item_ids` so the reminder clears; for an item that doesn't apply to this vehicle, use `dismiss_schedule_item`.",
         input_schema = rmcp::handler::server::common::schema_for_type::<VehicleParams>()
     )]
     async fn check_due_maintenance(
         &self,
         params: LenientParameters<VehicleParams>,
     ) -> Result<CallToolResult, McpError> {
+        // Composed payload (unit G): reminders (incl. warranty) + the
+        // 12-month budget forecast in one call.
+        #[derive(Serialize)]
+        struct DueMaintenance {
+            #[serde(flatten)]
+            reminders: RemindersResponse,
+            budget: BudgetForecast,
+        }
         let p = match params.into_tool_input("check_due_maintenance") {
             Ok(v) => v,
             Err(e) => return Ok(e),
         };
-        domain_result(reminders::calculate_reminders(&self.db, p.vehicle_id).await)
+        let reminders = match reminders::calculate_reminders(&self.db, p.vehicle_id).await {
+            Ok(v) => v,
+            Err(e) => return domain_error(e),
+        };
+        let budget = match budget::forecast(&self.db, p.vehicle_id).await {
+            Ok(v) => v,
+            Err(e) => return domain_error(e),
+        };
+        tool_json_result(&DueMaintenance { reminders, budget })
     }
 
     #[tool(
@@ -298,7 +317,7 @@ impl GloveboxMcp {
 
     #[tool(
         name = "check_recalls",
-        description = "Check NHTSA for open safety recalls on this vehicle (requires make/model/year on the record; makes a live web request). New recalls are also saved as research findings.",
+        description = "Check NHTSA for open safety recalls on this vehicle (requires make/model/year on the record; makes a live web request). New recalls are also saved as research findings. When a recall needs action, offer to plan_work it (linked via research_finding_id) — completing that work later closes the recall automatically.",
         input_schema = rmcp::handler::server::common::schema_for_type::<VehicleParams>()
     )]
     async fn check_recalls(
@@ -387,6 +406,87 @@ impl GloveboxMcp {
             .await,
         )
     }
+
+    #[tool(
+        name = "plan_work",
+        description = "Add something to the vehicle's to-do list — work the user intends to do or have done. Link the source so completing the work closes the loop (a recall finding from check_recalls, an overdue schedule item from check_due_maintenance, an incident, a build). Group planned items into a visit with schedule_visit; close them out with complete_visit.",
+        input_schema = rmcp::handler::server::common::schema_for_type::<PlanWorkInput>()
+    )]
+    async fn plan_work(
+        &self,
+        params: LenientParameters<PlanWorkInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = match params.into_tool_input("plan_work") {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        };
+        let (vehicle_id, input) = p.into_domain();
+        domain_result(work_item_svc::create(&*self.db, vehicle_id, input).await)
+    }
+
+    #[tool(
+        name = "list_planned_work",
+        description = "The vehicle's planning state: open work items (the to-do list) and open visits with their attached items and estimated-cost rollups. Set include_done to also see finished/dropped work and completed/canceled visits.",
+        input_schema = rmcp::handler::server::common::schema_for_type::<ListPlannedWorkInput>()
+    )]
+    async fn list_planned_work(
+        &self,
+        params: LenientParameters<ListPlannedWorkInput>,
+    ) -> Result<CallToolResult, McpError> {
+        #[derive(Serialize)]
+        struct PlannedWork {
+            items: Vec<work_item::Model>,
+            visits: Vec<VisitWithItems>,
+        }
+        let p = match params.into_tool_input("list_planned_work") {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        };
+        let include_done = p.include_done.unwrap_or(false);
+        let items = match work_item_svc::list(&*self.db, p.vehicle_id, include_done).await {
+            Ok(v) => v,
+            Err(e) => return domain_error(e),
+        };
+        let visits = match visit::list(&*self.db, p.vehicle_id, include_done).await {
+            Ok(v) => v,
+            Err(e) => return domain_error(e),
+        };
+        tool_json_result(&PlannedWork { items, visits })
+    }
+
+    #[tool(
+        name = "schedule_visit",
+        description = "Group planned work into a shop visit (or DIY session) with a date and estimated cost. Attached work items (from plan_work) flip to scheduled and their est_cost_cents roll up. When the visit happens, close it out with complete_visit.",
+        input_schema = rmcp::handler::server::common::schema_for_type::<ScheduleVisitInput>()
+    )]
+    async fn schedule_visit(
+        &self,
+        params: LenientParameters<ScheduleVisitInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = match params.into_tool_input("schedule_visit") {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        };
+        let (vehicle_id, input) = p.into_domain();
+        domain_result(visit::create(&*self.db, vehicle_id, input).await)
+    }
+
+    #[tool(
+        name = "complete_visit",
+        description = "Close out a visit with the actuals: creates the service record (payer-aware), clears satisfied reminders via the items' schedule links, resolves linked recalls and incidents, and marks the work done — one atomic operation. Providing `mileage` also logs an odometer reading.",
+        input_schema = rmcp::handler::server::common::schema_for_type::<CompleteVisitInput>()
+    )]
+    async fn complete_visit(
+        &self,
+        params: LenientParameters<CompleteVisitInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = match params.into_tool_input("complete_visit") {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        };
+        let (vehicle_id, visit_id, input) = p.into_domain();
+        domain_result(visit::complete(&*self.db, vehicle_id, visit_id, input).await)
+    }
 }
 
 #[tool_handler]
@@ -404,17 +504,22 @@ impl ServerHandler for GloveboxMcp {
                 "glovebox MCP: car maintenance tracking. Canonical workflow: (1) ORIENT — \
                  `list_vehicles` for ids, then `summarize_recent_activity` for the vehicle's \
                  recent history. (2) ANSWER \"what does it need?\" — `check_due_maintenance` \
-                 before recommending any work; `check_recalls` for safety recalls. Resolve \
-                 due/overdue items by linking completed work (`record_service` with \
-                 `schedule_item_ids`) or waiving ones that don't apply (`dismiss_schedule_item`). \
-                 (3) CAPTURE what happened — `record_service` for completed work, `record_part` \
-                 for parts bought or installed, `log_incident` for symptoms/damage/accidents, \
-                 `save_note` for facts worth remembering, `log_mileage` whenever the user \
-                 mentions an odometer reading. (4) LOOK THINGS UP — `find_documents` for \
-                 receipts/manuals, `search_records` for anything else, `cost_summary` for spend. \
-                 (5) PROJECTS — `list_builds` / `get_build_progress` / `update_build_status` for \
-                 upgrade or restoration builds. All money is integer cents; all dates are \
-                 YYYY-MM-DD.",
+                 before recommending any work (it includes the 12-month budget forecast and \
+                 warranty status); `check_recalls` for safety recalls. Resolve due/overdue items \
+                 by linking completed work (`record_service` with `schedule_item_ids`) or waiving \
+                 ones that don't apply (`dismiss_schedule_item`). (3) PLAN — when the user \
+                 intends to do something about a recall, an overdue item, or an incident, \
+                 `plan_work` it with the source linked; group items into a shop visit or DIY \
+                 session with `schedule_visit`; review with `list_planned_work`; when the work \
+                 happens, `complete_visit` records the service, clears the reminders, and closes \
+                 the linked recalls/incidents in one step. (4) CAPTURE what happened outside a \
+                 visit — `record_service` for completed work, `record_part` for parts bought or \
+                 installed, `log_incident` for symptoms/damage/accidents, `save_note` for facts \
+                 worth remembering, `log_mileage` whenever the user mentions an odometer reading. \
+                 (5) LOOK THINGS UP — `find_documents` for receipts/manuals, `search_records` for \
+                 anything else, `cost_summary` for spend. (6) PROJECTS — `list_builds` / \
+                 `get_build_progress` / `update_build_status` for upgrade or restoration builds. \
+                 All money is integer cents; all dates are YYYY-MM-DD.",
             )
     }
 

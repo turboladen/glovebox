@@ -17,6 +17,9 @@ pub struct NewPart {
     pub notes: Option<String>,
     pub build_id: Option<i32>,
     pub location: Option<String>,
+    /// Warranty expiry (decision ⑩): date (`YYYY-MM-DD`) and/or mileage.
+    pub warranty_expires_on: Option<String>,
+    pub warranty_expires_miles: Option<i32>,
 }
 
 #[derive(Default)]
@@ -41,6 +44,8 @@ pub struct UpdatePart {
     pub notes: Option<Option<String>>,
     pub build_id: Option<Option<i32>>,
     pub location: Option<Option<String>>,
+    pub warranty_expires_on: Option<Option<String>>,
+    pub warranty_expires_miles: Option<Option<i32>>,
 }
 
 /// Filter for listing parts within a vehicle.

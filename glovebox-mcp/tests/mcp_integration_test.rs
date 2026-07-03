@@ -240,6 +240,10 @@ async fn tools_list_advertises_the_full_verb_set() {
         "list_builds",
         "get_build_progress",
         "update_build_status",
+        "plan_work",
+        "list_planned_work",
+        "schedule_visit",
+        "complete_visit",
     ] {
         assert!(
             body.contains(&format!("\"{tool}\"")),
@@ -254,7 +258,7 @@ async fn tools_list_advertises_the_full_verb_set() {
     let tools = parsed["result"]["tools"]
         .as_array()
         .unwrap_or_else(|| panic!("tools/list result must carry a tools array; got: {body}"));
-    assert_eq!(tools.len(), 18, "expected exactly 18 tools; got: {body}");
+    assert_eq!(tools.len(), 22, "expected exactly 22 tools; got: {body}");
     for tool in tools {
         let name = tool["name"].as_str().expect("tool name");
         if name == "list_vehicles" {
@@ -396,6 +400,7 @@ fn schedule_item_every_12_months(vehicle_id: i32, name: &str) -> NewScheduleItem
         notes: None,
         is_factory_recommended: None,
         labor_categories: None,
+        est_cost_cents: None,
     }
 }
 
@@ -1204,6 +1209,340 @@ async fn file_research_finding_persists_and_is_readable() {
     )
     .await;
     assert_tool_error(&err);
+}
+
+/// The unit-G loop, end-to-end over the protocol: file a recall finding,
+/// plan work from it (plus an overdue schedule item), group the work into a
+/// visit, complete the visit — then the finding is completed, the reminder
+/// clears, the payer-aware service record exists, and the items are done.
+#[tokio::test]
+async fn recall_plan_schedule_complete_loop_over_the_protocol() {
+    let (app, db) = setup().await;
+    let session = handshake(&app).await;
+    let v = vehicle::create(
+        &db,
+        NewVehicle {
+            purchase_date: Some("2020-01-01".into()),
+            ..new_vehicle("Daily")
+        },
+    )
+    .await
+    .unwrap();
+    let overdue = schedule_svc::create(
+        &db,
+        schedule_item_every_12_months(v.id, "Water pump replacement"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        reminder_status(&app, &session, v.id, "Water pump replacement").await,
+        "overdue"
+    );
+
+    // A recall finding, filed over the protocol.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "file_research_finding",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "category": "recall",
+                "title": "Recall: coolant pump may seize",
+                "severity": "critical"
+            }),
+        ),
+    )
+    .await;
+    assert_success(&body);
+    let finding_id = tool_payload(&body)["id"].as_i64().expect("finding id");
+
+    // Plan both pieces of work, each linked to its source.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "plan_work",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "title": "Coolant pump recall fix",
+                "research_finding_id": finding_id,
+                "est_cost_cents": 0
+            }),
+        ),
+    )
+    .await;
+    assert_success(&body);
+    let recall_item = tool_payload(&body)["id"].as_i64().expect("item id");
+
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "plan_work",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "title": "Water pump replacement",
+                "schedule_item_id": overdue.id,
+                "est_cost_cents": 65_000
+            }),
+        ),
+    )
+    .await;
+    assert_success(&body);
+    let sched_item = tool_payload(&body)["id"].as_i64().expect("item id");
+
+    // Group them into a visit; the rollup carries the estimates.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "schedule_visit",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "planned_date": "2026-07-10",
+                "shop_name": "Joe's Garage",
+                "work_item_ids": [recall_item, sched_item]
+            }),
+        ),
+    )
+    .await;
+    assert_success(&body);
+    let visit_payload = tool_payload(&body);
+    let visit_id = visit_payload["id"].as_i64().expect("visit id");
+    assert_eq!(visit_payload["est_total_cents"], 65_000);
+    assert_eq!(visit_payload["items"].as_array().map(Vec::len), Some(2));
+
+    // list_planned_work shows the scheduled items and the open visit.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "list_planned_work",
+            serde_json::json!({ "vehicle_id": v.id }),
+        ),
+    )
+    .await;
+    assert_success(&body);
+    let planned = tool_payload(&body);
+    assert_eq!(planned["items"].as_array().map(Vec::len), Some(2));
+    assert_eq!(planned["visits"].as_array().map(Vec::len), Some(1));
+
+    // The budget forecast in check_due_maintenance counts the open visit.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "check_due_maintenance",
+            serde_json::json!({ "vehicle_id": v.id }),
+        ),
+    )
+    .await;
+    assert_success(&body);
+    let due = tool_payload(&body);
+    assert_eq!(due["budget"]["planned_visits_cents"], 65_000);
+
+    // Complete the visit with the actuals.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "complete_visit",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "visit_id": visit_id,
+                "service_date": "2026-06-25",
+                "mileage": 62_000,
+                "total_cost_cents": 61_250,
+                "paid_by": "insurance",
+                "payer_note": "recall campaign, dealer covered"
+            }),
+        ),
+    )
+    .await;
+    assert_success(&body);
+    let done = tool_payload(&body);
+    assert_eq!(done["visit"]["status"], "completed");
+    assert_eq!(done["service_record"]["paid_by"], "insurance");
+    assert_eq!(
+        done["service_record"]["description"],
+        "Coolant pump recall fix, Water pump replacement"
+    );
+    assert!(
+        done["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i["status"] == "done")
+    );
+
+    // Every loop closed: reminder ok, finding completed, record persisted.
+    assert_eq!(
+        reminder_status(&app, &session, v.id, "Water pump replacement").await,
+        "ok"
+    );
+    let findings =
+        glovebox_shared::services::research::list_findings(&db, v.id, Some("completed".into()))
+            .await
+            .unwrap();
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0].id, i32::try_from(finding_id).unwrap());
+    let records = svc_svc::list(&db, v.id).await.unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].record.paid_by, "insurance");
+    assert_eq!(records[0].schedule_item_ids, vec![overdue.id]);
+
+    // The open-work list is empty again (include_done still shows history).
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "list_planned_work",
+            serde_json::json!({ "vehicle_id": v.id }),
+        ),
+    )
+    .await;
+    let planned = tool_payload(&body);
+    assert_eq!(planned["items"].as_array().map(Vec::len), Some(0));
+    assert_eq!(planned["visits"].as_array().map(Vec::len), Some(0));
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "list_planned_work",
+            serde_json::json!({ "vehicle_id": v.id, "include_done": true }),
+        ),
+    )
+    .await;
+    let planned = tool_payload(&body);
+    assert_eq!(planned["items"].as_array().map(Vec::len), Some(2));
+    assert_eq!(planned["visits"].as_array().map(Vec::len), Some(1));
+}
+
+#[tokio::test]
+async fn planning_tools_reject_wrong_vehicle_and_malformed_args() {
+    let (app, db) = setup().await;
+    let session = handshake(&app).await;
+    let v = vehicle::create(&db, new_vehicle("Mine")).await.unwrap();
+    let other = vehicle::create(&db, new_vehicle("Other")).await.unwrap();
+    let foreign_item = schedule_svc::create(&db, schedule_item_every_12_months(v.id, "Oil"))
+        .await
+        .unwrap();
+
+    // plan_work: another vehicle's schedule item reads as missing; nothing
+    // is created.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "plan_work",
+            serde_json::json!({
+                "vehicle_id": other.id,
+                "title": "Not my item",
+                "schedule_item_id": foreign_item.id
+            }),
+        ),
+    )
+    .await;
+    assert_tool_error(&body);
+    assert!(body.contains("not found"), "got: {body}");
+
+    // schedule_visit: another vehicle's work item reads as missing.
+    let mine = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "plan_work",
+            serde_json::json!({ "vehicle_id": v.id, "title": "Mine" }),
+        ),
+    )
+    .await;
+    let mine_id = tool_payload(&mine)["id"].as_i64().unwrap();
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "schedule_visit",
+            serde_json::json!({ "vehicle_id": other.id, "work_item_ids": [mine_id] }),
+        ),
+    )
+    .await;
+    assert_tool_error(&body);
+    assert!(body.contains("not found"), "got: {body}");
+
+    // complete_visit: another vehicle's visit reads as missing.
+    let visit = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "schedule_visit",
+            serde_json::json!({ "vehicle_id": v.id, "work_item_ids": [mine_id] }),
+        ),
+    )
+    .await;
+    let visit_id = tool_payload(&visit)["id"].as_i64().unwrap();
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "complete_visit",
+            serde_json::json!({
+                "vehicle_id": other.id,
+                "visit_id": visit_id,
+                "service_date": "2026-06-25"
+            }),
+        ),
+    )
+    .await;
+    assert_tool_error(&body);
+    assert!(body.contains("not found"), "got: {body}");
+
+    // list_planned_work: nonexistent vehicle is a clean tool error.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "list_planned_work",
+            serde_json::json!({ "vehicle_id": 999 }),
+        ),
+    )
+    .await;
+    assert_tool_error(&body);
+
+    // Malformed args: missing required title points at the schema.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool("plan_work", serde_json::json!({ "vehicle_id": v.id })),
+    )
+    .await;
+    assert_tool_error(&body);
+    assert!(
+        body.contains("title") && body.contains("input schema"),
+        "must name the missing field and point at the schema; got: {body}"
+    );
+
+    // The bad-payer rollback reaches the LLM as an actionable tool error.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "complete_visit",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "visit_id": visit_id,
+                "service_date": "2026-06-25",
+                "paid_by": "my neighbor"
+            }),
+        ),
+    )
+    .await;
+    assert_tool_error(&body);
+    assert!(body.contains("third_party"), "got: {body}");
+    assert!(
+        svc_svc::list(&db, v.id).await.unwrap().is_empty(),
+        "rejected completion must record nothing"
+    );
 }
 
 #[tokio::test]

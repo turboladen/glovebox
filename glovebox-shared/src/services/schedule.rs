@@ -81,6 +81,7 @@ pub async fn create(
         notes: Set(input.notes),
         is_factory_recommended: Set(input.is_factory_recommended),
         labor_categories: Set(input.labor_categories),
+        est_cost_cents: Set(input.est_cost_cents),
         ..Default::default()
     };
     Ok(model.insert(db).await?)
@@ -126,6 +127,9 @@ pub async fn update(
     }
     if let Some(v) = input.labor_categories {
         active.labor_categories = Set(v);
+    }
+    if let Some(v) = input.est_cost_cents {
+        active.est_cost_cents = Set(v);
     }
 
     active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
@@ -324,6 +328,7 @@ pub async fn dismiss_for_vehicle(
         notes: Set(append_dismiss_reason(item.notes.clone(), reason.as_deref())),
         is_factory_recommended: Set(item.is_factory_recommended),
         labor_categories: Set(item.labor_categories.clone()),
+        est_cost_cents: Set(item.est_cost_cents),
         ..Default::default()
     };
     Ok(shadow.insert(db).await?)
@@ -398,6 +403,7 @@ mod tests {
                 notes: None,
                 is_factory_recommended: None,
                 labor_categories: None,
+                est_cost_cents: None,
             },
         )
         .await
@@ -427,6 +433,7 @@ mod tests {
                 notes: None,
                 is_factory_recommended: None,
                 labor_categories: None,
+                est_cost_cents: None,
             },
         )
         .await
@@ -472,6 +479,7 @@ mod tests {
                 notes: None,
                 is_factory_recommended: None,
                 labor_categories: None,
+                est_cost_cents: None,
             },
         )
         .await
@@ -494,6 +502,7 @@ mod tests {
                 notes: None,
                 is_factory_recommended: None,
                 labor_categories: None,
+                est_cost_cents: None,
             },
         )
         .await
@@ -531,6 +540,7 @@ mod tests {
             notes: None,
             is_factory_recommended: None,
             labor_categories: None,
+            est_cost_cents: None,
         }
     }
 

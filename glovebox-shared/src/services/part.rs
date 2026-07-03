@@ -75,6 +75,8 @@ pub async fn create(
         notes: Set(input.notes),
         build_id: Set(input.build_id),
         location: Set(input.location),
+        warranty_expires_on: Set(input.warranty_expires_on),
+        warranty_expires_miles: Set(input.warranty_expires_miles),
         ..Default::default()
     };
     Ok(model.insert(db).await?)
@@ -157,6 +159,12 @@ pub async fn update(
     if let Some(v) = input.location {
         active.location = Set(v);
     }
+    if let Some(v) = input.warranty_expires_on {
+        active.warranty_expires_on = Set(v);
+    }
+    if let Some(v) = input.warranty_expires_miles {
+        active.warranty_expires_miles = Set(v);
+    }
 
     active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
     Ok(active.update(db).await?)
@@ -218,6 +226,8 @@ mod tests {
             notes: None,
             build_id: None,
             location: None,
+            warranty_expires_on: None,
+            warranty_expires_miles: None,
         }
     }
 
