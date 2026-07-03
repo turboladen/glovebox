@@ -377,6 +377,11 @@ mod tests {
 }
 ```
 
+**Covered here (no UI yet):** `services::search::search()` (FTS5 full-text search, `GET
+/api/search`) is unit-tested in `glovebox-shared/src/services/search.rs` — kind/id/vehicle_id
+correctness, scope + vehicle filtering, trigger sync on update/delete, line-item folding,
+FTS5 operator/quote injection safety, empty-query and missing-vehicle rejection.
+
 **Convention:** new domain logic gets service-level unit tests in the shared crate — at
 minimum a create→get round-trip, an update-mutates-field test, and a rejection test per
 validation rule — in addition to Playwright e2e coverage of the user flow.
