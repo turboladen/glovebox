@@ -6,12 +6,11 @@
   import Dashboard from './Dashboard.svelte'
   import PlanTab from './PlanTab.svelte'
   import TimelineTab from './TimelineTab.svelte'
+  import BuildsTab from './BuildsTab.svelte'
+  import RecordsTab from './RecordsTab.svelte'
   import MileageEntry from './MileageEntry.svelte'
   import ServiceForm from './ServiceForm.svelte'
-  import DocumentsTab from './DocumentsTab.svelte'
-  import PartsTab from './PartsTab.svelte'
   import CostsTab from './CostsTab.svelte'
-  import ResearchTab from './ResearchTab.svelte'
   import VehicleEdit from './VehicleEdit.svelte'
 
   let { routeParams = {} }: { routeParams?: Record<string, string> } = $props()
@@ -252,17 +251,14 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
       <button class="tab" class:active={activeTab === 'plan'} onclick={() => openTab('plan')}>
         Plan
       </button>
-      <button class="tab" class:active={activeTab === 'parts'} onclick={() => openTab('parts')}>
-        Parts
+      <button class="tab" class:active={activeTab === 'builds'} onclick={() => openTab('builds')}>
+        Builds
       </button>
-      <button class="tab" class:active={activeTab === 'documents'} onclick={() => openTab('documents')}>
-        Docs
+      <button class="tab" class:active={activeTab === 'records'} onclick={() => openTab('records')}>
+        Records{#if plannedCount > 0} <span class="badge badge-planned">{plannedCount}</span>{/if}
       </button>
       <button class="tab" class:active={activeTab === 'costs'} onclick={() => openTab('costs')}>
         Costs
-      </button>
-      <button class="tab" class:active={activeTab === 'research'} onclick={() => openTab('research')}>
-        Research{#if plannedCount > 0} <span class="badge badge-planned">{plannedCount}</span>{/if}
       </button>
     </div>
 
@@ -274,14 +270,12 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
           <TimelineTab vehicleId={vehicle.id} estimatedMileage={reminderData?.estimated_mileage} onChanged={refreshReminders} />
         {:else if activeTab === 'plan'}
           <PlanTab vehicleId={vehicle.id} {reminderData} sub={routeParams.sub ?? 'due'} onScheduleChanged={refreshReminders} />
-        {:else if activeTab === 'parts'}
-          <PartsTab vehicleId={vehicle.id} />
-        {:else if activeTab === 'documents'}
-          <DocumentsTab vehicleId={vehicle.id} />
+        {:else if activeTab === 'builds'}
+          <BuildsTab vehicleId={vehicle.id} />
+        {:else if activeTab === 'records'}
+          <RecordsTab vehicleId={vehicle.id} sub={routeParams.sub ?? 'parts'} />
         {:else if activeTab === 'costs'}
           <CostsTab vehicleId={vehicle.id} />
-        {:else if activeTab === 'research'}
-          <ResearchTab vehicleId={vehicle.id} />
         {/if}
       </div>
     {/key}
