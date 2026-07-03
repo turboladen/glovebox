@@ -121,11 +121,11 @@
               <path d="M12 3l1.912 5.813a2 2 0 0 0 1.275 1.275L21 12l-5.813 1.912a2 2 0 0 0-1.275 1.275L12 21l-1.912-5.813a2 2 0 0 0-1.275-1.275L3 12l5.813-1.912a2 2 0 0 0 1.275-1.275L12 3z" />
             </svg>
           </div>
-          <h3>AI-Powered Insights</h3>
-          <p>Chat about your vehicle, get suggestions, and auto-parse invoices.</p>
+          <h3>Research &amp; Recalls</h3>
+          <p>Check NHTSA recalls and track research findings for your exact car.</p>
           <div class="feature-tags">
-            <span class="tag">Chat</span>
-            <span class="tag">Suggestions</span>
+            <span class="tag">Recalls</span>
+            <span class="tag">Findings</span>
             <span class="tag">Research</span>
           </div>
         </div>
@@ -157,11 +157,6 @@
           <a href="/vehicles/new" use:link class="setup-step">
             <span class="step-indicator"></span>
             <span class="step-label">Add your first vehicle</span>
-          </a>
-          <a href="/settings" use:link class="setup-step">
-            <span class="step-indicator"></span>
-            <span class="step-label">Configure an AI provider</span>
-            <span class="tag tag-muted">Optional</span>
           </a>
           <div class="setup-step disabled">
             <span class="step-indicator"></span>
@@ -522,12 +517,6 @@
     padding: 2px var(--sp-2);
     border-radius: var(--radius-sm);
     background: var(--surface);
-    color: var(--text-muted);
-  }
-
-  .tag-muted {
-    background: transparent;
-    border: 1px solid var(--border);
     color: var(--text-muted);
   }
 

@@ -501,91 +501,6 @@ export interface VehicleExport {
   record_count: number
 }
 
-// AI Provider types
-export interface AiProvider {
-  id: number
-  name: string
-  provider_type: string
-  api_key_set: boolean
-  api_base: string | null
-  model: string | null
-  is_default: boolean
-  enabled: boolean
-  created_at: string
-  updated_at: string
-}
-
-export interface CreateAiProvider {
-  name: string
-  provider_type: string
-  api_key?: string | null
-  api_base?: string | null
-  model?: string | null
-  is_default?: boolean
-  enabled?: boolean
-}
-
-export interface UpdateAiProvider {
-  name?: string
-  provider_type?: string
-  api_key?: string | null
-  api_base?: string | null
-  model?: string | null
-  is_default?: boolean
-  enabled?: boolean
-}
-
-export interface ProviderSummary {
-  id: number
-  name: string
-  provider_type: string
-  is_default: boolean
-  enabled: boolean
-}
-
-// AI types
-export interface AiStatus {
-  provider: string
-  configured: boolean
-  default_provider_id: number | null
-  providers: ProviderSummary[]
-}
-
-export interface Conversation {
-  id: number
-  vehicle_id: number | null
-  title: string
-  created_at: string
-  updated_at: string
-}
-
-export interface ChatMessage {
-  id: number
-  vehicle_id: number | null
-  role: 'user' | 'assistant'
-  content: string
-  created_at: string
-  conversation_id: number | null
-}
-
-export interface ChatResponse {
-  message: ChatMessage
-  input_tokens: number | null
-  output_tokens: number | null
-}
-
-export interface ParsedInvoice {
-  service_date: string | null
-  shop_name: string | null
-  mileage: number | null
-  description: string | null
-  line_items: { description: string; category?: string | null; quantity?: number | null; unit_cost_cents?: number | null; cost_cents: number | null }[]
-  parts_cost_cents: number | null
-  labor_cost_cents: number | null
-  total_cost_cents: number | null
-  notes: string | null
-}
-
 // Research types
 export interface RecallInfo {
   campaign_number: string
@@ -635,16 +550,4 @@ export interface ResearchFinding {
 
 export interface ReportWithFindings extends ResearchReport {
   findings: ResearchFinding[]
-}
-
-export interface ModelInfo {
-  id: string
-  display_name: string | null
-}
-
-export interface AiSuggestion {
-  title: string
-  reason: string
-  urgency: 'high' | 'medium' | 'low'
-  estimated_cost_range: string | null
 }

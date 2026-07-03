@@ -34,12 +34,11 @@ Playwright e2e tests. Keep it updated as features are added.
 | 1 | Navigate to `/` with empty DB | Welcome dashboard shown (not "Your garage is empty") |
 | 2 | Hero banner | "Welcome to Glovebox" heading, "Your precision maintenance tracker" subtitle, Guards Red accent line |
 | 3 | Primary CTA | "Add Your First Vehicle" button visible, links to `/vehicles/new` via SPA navigation |
-| 4 | Feature showcase grid | Three cards: "Track Maintenance", "AI-Powered Insights", "Complete History" |
+| 4 | Feature showcase grid | Three cards: "Track Maintenance", "Research & Recalls", "Complete History" |
 | 5 | Feature card hover | Border turns Guards Red, shadow appears, subtle lift |
-| 6 | AI card settings link | "Configure in Settings" link navigates to `/settings` |
-| 7 | Quick-start checklist | Four steps shown: "Add your first vehicle" (active), "Configure an AI provider" (active, optional tag), "Add a trusted shop" (greyed), "Log your first service" (greyed) |
-| 8 | Checklist active links | Steps 1 and 2 are clickable, navigate via SPA routing |
-| 9 | Checklist greyed items | Steps 3 and 4 are visually muted, not interactive |
+| 6 | Quick-start checklist | Three steps shown: "Add your first vehicle" (active), "Add a trusted shop" (greyed), "Log your first service" (greyed) |
+| 7 | Checklist active links | Step 1 is clickable, navigates via SPA routing |
+| 8 | Checklist greyed items | Steps 2 and 3 are visually muted, not interactive |
 | 10 | Responsive layout | Feature cards stack to single column below 640px |
 | 11 | Staggered animations | Cards animate in with increasing delay (respects prefers-reduced-motion) |
 | 12 | Add a vehicle, return to `/` | Normal vehicle grid shown instead of welcome dashboard |
@@ -153,7 +152,7 @@ Playwright e2e tests. Keep it updated as features are added.
 | 2 | `GET /api/vehicles` with empty DB | Returns `[]` |
 | 3 | `GET /api/vehicles/99999` | 404 error |
 | 4 | `POST /api/vehicles` with empty body | 400/422 error |
-| 5 | `GET /api/ai/status` | Returns AI configuration status |
+| 5 | `GET /api/ai/status` | 404 (in-app AI retired; Claude connects over `/mcp`) |
 
 ## TP-13: Shops
 
@@ -257,100 +256,52 @@ Playwright e2e tests. Keep it updated as features are added.
 | 2 | Select parts and save service | Parts marked as "installed" with service date/mileage |
 | 3 | Parts status updated | On Parts tab, linked parts show "installed" badge |
 
-## TP-22: AI Provider Management
+## TP-22 – TP-25: Retired (in-app AI removed)
 
-| # | Step | Expected |
-|---|------|----------|
-| 1 | Navigate to Settings page | "AI Providers" section visible with "Add Provider" button |
-| 2 | No providers initially | "No AI providers configured." hint message |
-| 3 | Click "Add Provider" | Form appears with name, type, API key, model fields |
-| 4 | Select type "Claude" | API key field shown (required), model field shown |
-| 5 | Select type "OpenAI-Compatible" | API base URL field shown, API key marked optional |
-| 6 | Click "Fetch Models" with valid API key | Models dropdown populated from provider API |
-| 7 | Submit with name and API key | Provider created, appears in list with type and model |
-| 8 | First provider auto-checked as default | "Default" badge shown next to provider name |
-| 9 | Click "Edit" on a provider | Edit form pre-filled (API key blank for security) |
-| 10 | Click "Set Default" on non-default provider | Provider becomes default, previous default cleared |
-| 11 | Click "Disable" on a provider | Provider row dimmed, not available for AI features |
-| 12 | Click "Delete" on a provider | Provider removed from list |
-| 13 | `GET /api/ai/status` | Returns providers array, default_provider_id, configured flag |
-| 14 | `GET /api/ai/providers` | Returns list with api_key masked (api_key_set boolean) |
-| 15 | `POST /api/ai/providers` | Creates provider, enforces is_default uniqueness |
-| 16 | `PUT /api/ai/providers/:id` | Updates provider, double-option for nullable fields |
-| 17 | `DELETE /api/ai/providers/:id` | Deletes provider |
-| 18 | AI-dependent endpoints with no providers | Return 400 with "AI is not configured" message |
+The in-app AI features these sections covered are retired; Claude replaces them over `/mcp`:
 
-## TP-23: AI Chat
+- **TP-22 AI Provider Management** — removed; there is no provider config (MCP client brings its own model).
+- **TP-23 AI Chat** — removed; chat happens in the MCP client (e.g. Claude) using the `/mcp` tools.
+- **TP-24 Invoice PDF Parsing** — removed; document upload + extracted text stay (TP-15), extraction questions go through MCP `find_documents`.
+- **TP-25 Proactive Suggestions** — removed; MCP `check_due_maintenance` answers "what does it need?".
 
-| # | Step | Expected |
-|---|------|----------|
-| 1 | Click "AI" tab on vehicle detail | Chat tab visible with message input |
-| 2 | No AI providers enabled | "AI is not configured" message shown, input disabled |
-| 3 | Send a chat message (provider configured) | Message appears right-aligned, loading spinner shown, assistant response appears left-aligned |
-| 4 | Provider selector (multiple providers) | Dropdown appears above chat input to select provider |
-| 5 | Provider selector (single provider) | Dropdown hidden (only shown with 2+ providers) |
-| 6 | Send message with non-default provider | Request uses selected provider_id |
-| 7 | Chat history persists | Reload page, previous messages still shown |
-| 8 | `GET /api/ai/chat/history?vehicle_id=N` | Returns messages ordered by created_at |
-| 9 | `POST /api/ai/chat` with provider_id | Uses specified provider instead of default |
-
-## TP-24: Invoice PDF Parsing
-
-| # | Step | Expected |
-|---|------|----------|
-| 1 | Upload a PDF document | "Parse with AI" button appears on PDF documents |
-| 2 | Non-PDF documents | No "Parse with AI" button shown |
-| 3 | Provider selector next to Parse button | Dropdown shown when multiple providers exist |
-| 4 | Click "Parse with AI" (no providers) | Error message shown |
-| 5 | Click "Parse with AI" (provider configured) | Loading state, then parsed results shown in review modal |
-| 6 | Review modal shows extracted fields | Date, shop, mileage, line items, costs editable |
-| 7 | Click "Create Service Record" | Service created with parsed/edited data, redirects to history |
-
-## TP-25: Proactive Suggestions
-
-| # | Step | Expected |
-|---|------|----------|
-| 1 | Schedule tab with AI configured | Suggestions card shown with AI-generated recommendations |
-| 2 | No AI providers enabled | Suggestions card not shown |
-| 3 | Provider selector in card header | Dropdown shown when multiple providers exist |
-| 4 | Each suggestion shows | Title, reason, urgency badge (high/medium/low) |
-| 5 | `GET /api/vehicles/:id/suggestions` | Returns JSON array of suggestions with title, reason, urgency |
-| 6 | `GET /api/vehicles/:id/suggestions?provider_id=N` | Uses specified provider |
+MCP surface coverage lives in `glovebox-mcp/tests/mcp_integration_test.rs` (15 tools, incl. `file_research_finding`).
 
 ## TP-26: NHTSA Recall Check
 
 | # | Step | Expected |
 |---|------|----------|
-| 1 | Click "Research" tab on vehicle detail | Research tab visible with "Check Recalls" and "Run Full Check" buttons |
+| 1 | Click "Research" tab on vehicle detail | Research tab visible with "Check Recalls" button |
 | 2 | No data initially | "No research reports yet." message |
 | 3 | Click "Check Recalls" | Loading state, then recall results or "No open recalls found" message |
 | 4 | Vehicle missing make/model/year | Error message about missing required fields |
 | 5 | `GET /api/vehicles/:id/recalls` | Returns recall data with campaign numbers, subjects, remedies |
 
-## TP-27: Research Reports
+## TP-27: Research Reports & Findings
+
+Reports are created by recall checks (`recalls_only`) and by findings filed over MCP
+(`file_research_finding` → `external_research` anchor report). There is no in-app
+"generate report" action anymore.
 
 | # | Step | Expected |
 |---|------|----------|
-| 1 | Click "Run Full Check" | Progress indicator shows staged steps ("Fetching vehicle data...", "Checking NHTSA recalls...", etc.), then report with findings shown |
-| 2 | Report shows summary | Summary text describes number of findings |
-| 3 | Section description visible | "AI-generated analysis of common issues..." subtitle below "Research Reports" heading |
-| 4 | Findings grouped by category | Section headers for Recall, Suggested Maintenance, Forum Report, Upgrade Idea |
-| 5 | Severity filter chips | Critical, recommended, optional, informational toggle chips; clicking filters findings |
-| 6 | Each finding shows | Severity badge, status badge, title, description |
-| 7 | Sources/citations | Collapsible "Sources" disclosure on findings with source_url |
-| 8 | Finding status actions | "Dismiss", "Plan", "Complete" buttons update status |
-| 9 | Dismissed findings | Card becomes dimmed |
-| 10 | Completed findings | Card border turns green, opacity reduced |
-| 11 | Reports list | Previous reports shown with type, date, and summary preview |
-| 12 | Click a report row | Expands to show findings for that report |
-| 9 | `POST /api/vehicles/:id/research` | Creates report with findings from NHTSA + AI |
-| 10 | `GET /api/vehicles/:id/research` | Returns list of reports ordered by generated_at desc |
-| 11 | `GET /api/vehicles/:id/research/:id` | Returns report with findings array |
-| 13 | AI model selector | Provider dropdown shown next to "Run Full Check" when 2+ providers configured |
-| 14 | Complete with linking | "Complete" opens picker to link finding to service record or part |
-| 15 | Complete without linking | "Complete without linking" option marks done without association |
-| 16 | Linked finding display | Completed + linked findings show "Linked to service #N" label |
-| 17 | `PUT /api/vehicles/:id/research/:rid/findings/:id` | Updates finding status and linked entity |
+| 1 | Report shows summary | Summary text describes the report contents |
+| 2 | Findings grouped by category | Section headers for Recall, Suggested Maintenance, Forum Report, Upgrade Idea |
+| 3 | Severity filter chips | Critical, recommended, optional, informational toggle chips; clicking filters findings |
+| 4 | Each finding shows | Severity badge, status badge, title, description |
+| 5 | Sources/citations | Collapsible "Sources" disclosure on findings with source_url |
+| 6 | Finding status actions | "Dismiss", "Plan", "Complete" buttons update status |
+| 7 | Dismissed findings | Card becomes dimmed |
+| 8 | Completed findings | Card border turns green, opacity reduced |
+| 9 | Reports list | Reports shown with type, date, and summary preview |
+| 10 | Click a report row | Expands to show findings for that report |
+| 11 | `GET /api/vehicles/:id/research` | Returns list of reports ordered by generated_at desc |
+| 12 | `GET /api/vehicles/:id/research/:id` | Returns report with findings array |
+| 13 | Complete with linking | "Complete" opens picker to link finding to service record or part |
+| 14 | Complete without linking | "Complete without linking" option marks done without association |
+| 15 | Linked finding display | Completed + linked findings show "Linked to service #N" label |
+| 16 | `PUT /api/vehicles/:id/research/:rid/findings/:id` | Updates finding status and linked entity |
+| 17 | MCP `file_research_finding` | Filed finding appears under an "External Research" report in this tab |
 
 ---
 
@@ -405,10 +356,6 @@ frontend/e2e/
   observations.spec.ts  # TP-14
   documents.spec.ts     # TP-15
   parts.spec.ts         # TP-18, TP-19, TP-21
-  ai-providers.spec.ts  # TP-22
-  chat.spec.ts          # TP-23
-  invoice-parse.spec.ts # TP-24
-  suggestions.spec.ts   # TP-25
   research.spec.ts      # TP-26, TP-27
 ```
 

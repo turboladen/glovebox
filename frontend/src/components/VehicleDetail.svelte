@@ -12,7 +12,6 @@
   import DocumentsTab from './DocumentsTab.svelte'
   import PartsTab from './PartsTab.svelte'
   import CostsTab from './CostsTab.svelte'
-  import ChatTab from './ChatTab.svelte'
   import ResearchTab from './ResearchTab.svelte'
   import AccidentsTab from './AccidentsTab.svelte'
   import VehicleEdit from './VehicleEdit.svelte'
@@ -28,19 +27,6 @@
   let showMileageForm = $state(false)
   let showServiceForm = $state(false)
   let showEditForm = $state(false)
-  let chatDocumentId: number | undefined = $state(undefined)
-  let chatInitialMessage: string | undefined = $state(undefined)
-
-  function analyzeDocumentWithAI(docId: number, docTitle: string) {
-    chatDocumentId = docId
-    chatInitialMessage = `Extract service records, parts, and observations from this document: "${docTitle}"`
-    activeTab = 'ai'
-    // Clear after ChatTab mounts and consumes the props
-    setTimeout(() => {
-      chatDocumentId = undefined
-      chatInitialMessage = undefined
-    }, 0)
-  }
 
   async function loadData() {
     try {
@@ -262,9 +248,6 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
       <button class="tab" class:active={activeTab === 'research'} onclick={() => (activeTab = 'research')}>
         Research{#if plannedCount > 0} <span class="badge badge-planned">{plannedCount}</span>{/if}
       </button>
-      <button class="tab" class:active={activeTab === 'ai'} onclick={() => (activeTab = 'ai')}>
-        AI
-      </button>
     </div>
 
     {#key activeTab}
@@ -278,15 +261,13 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
         {:else if activeTab === 'observations'}
           <ObservationsTab vehicleId={vehicle.id} estimatedMileage={reminderData?.estimated_mileage} />
         {:else if activeTab === 'documents'}
-          <DocumentsTab vehicleId={vehicle.id} onAnalyzeWithAI={analyzeDocumentWithAI} />
+          <DocumentsTab vehicleId={vehicle.id} />
         {:else if activeTab === 'accidents'}
           <AccidentsTab vehicleId={vehicle.id} />
         {:else if activeTab === 'costs'}
           <CostsTab vehicleId={vehicle.id} />
         {:else if activeTab === 'research'}
           <ResearchTab vehicleId={vehicle.id} />
-        {:else if activeTab === 'ai'}
-          <ChatTab vehicleId={vehicle.id} initialDocumentId={chatDocumentId} initialMessage={chatInitialMessage} onNavigate={(tab) => (activeTab = tab)} />
         {/if}
       </div>
     {/key}
