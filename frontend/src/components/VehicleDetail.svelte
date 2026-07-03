@@ -8,12 +8,11 @@
   import HistoryTab from './HistoryTab.svelte'
   import MileageEntry from './MileageEntry.svelte'
   import ServiceForm from './ServiceForm.svelte'
-  import ObservationsTab from './ObservationsTab.svelte'
+  import IncidentsTab from './IncidentsTab.svelte'
   import DocumentsTab from './DocumentsTab.svelte'
   import PartsTab from './PartsTab.svelte'
   import CostsTab from './CostsTab.svelte'
   import ResearchTab from './ResearchTab.svelte'
-  import AccidentsTab from './AccidentsTab.svelte'
   import VehicleEdit from './VehicleEdit.svelte'
 
   let { routeParams = {} }: { routeParams?: Record<string, string> } = $props()
@@ -233,14 +232,11 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
       <button class="tab" class:active={activeTab === 'parts'} onclick={() => (activeTab = 'parts')}>
         Parts
       </button>
-      <button class="tab" class:active={activeTab === 'observations'} onclick={() => (activeTab = 'observations')}>
-        Obs.
+      <button class="tab" class:active={activeTab === 'incidents'} onclick={() => (activeTab = 'incidents')}>
+        Incidents
       </button>
       <button class="tab" class:active={activeTab === 'documents'} onclick={() => (activeTab = 'documents')}>
         Docs
-      </button>
-      <button class="tab" class:active={activeTab === 'accidents'} onclick={() => (activeTab = 'accidents')}>
-        Accidents
       </button>
       <button class="tab" class:active={activeTab === 'costs'} onclick={() => (activeTab = 'costs')}>
         Costs
@@ -258,12 +254,10 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
           <HistoryTab vehicleId={vehicle.id} />
         {:else if activeTab === 'parts'}
           <PartsTab vehicleId={vehicle.id} />
-        {:else if activeTab === 'observations'}
-          <ObservationsTab vehicleId={vehicle.id} estimatedMileage={reminderData?.estimated_mileage} />
+        {:else if activeTab === 'incidents'}
+          <IncidentsTab vehicleId={vehicle.id} estimatedMileage={reminderData?.estimated_mileage} />
         {:else if activeTab === 'documents'}
           <DocumentsTab vehicleId={vehicle.id} />
-        {:else if activeTab === 'accidents'}
-          <AccidentsTab vehicleId={vehicle.id} />
         {:else if activeTab === 'costs'}
           <CostsTab vehicleId={vehicle.id} />
         {:else if activeTab === 'research'}

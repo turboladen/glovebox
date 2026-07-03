@@ -2,14 +2,19 @@ use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
-#[sea_orm(table_name = "accidents")]
+#[sea_orm(table_name = "incidents")]
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
     pub vehicle_id: i32,
-    pub occurred_at: String,
+    pub category: String,
+    pub title: String,
+    pub description: Option<String>,
     pub odometer: Option<i32>,
-    pub description: String,
+    pub occurred_at: String,
+    pub obd_codes: Option<String>,
+    pub resolved: bool,
+    pub notes: Option<String>,
     pub fault: Option<String>,
     pub other_party_name: Option<String>,
     pub other_party_phone: Option<String>,
@@ -25,8 +30,10 @@ pub struct Model {
     pub deductible_currency: Option<String>,
     pub insurance_payout_cents: Option<i32>,
     pub insurance_payout_currency: Option<String>,
-    pub resolved: bool,
-    pub notes: Option<String>,
+    /// Self-FK: this incident is a recurrence of an earlier one (same
+    /// vehicle, enforced by the service layer). ON DELETE SET NULL.
+    pub recurrence_of_id: Option<i32>,
+    pub build_id: Option<i32>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -39,8 +46,22 @@ pub enum Relation {
         to = "super::vehicle::Column::Id"
     )]
     Vehicle,
-    #[sea_orm(has_many = "super::accident_correspondence::Entity")]
-    AccidentCorrespondence,
+    #[sea_orm(
+        belongs_to = "super::build::Entity",
+        from = "Column::BuildId",
+        to = "super::build::Column::Id"
+    )]
+    Build,
+    /// Self-referencing recurrence link (queried by column in the service
+    /// layer; the relation exists for completeness).
+    #[sea_orm(
+        belongs_to = "Entity",
+        from = "Column::RecurrenceOfId",
+        to = "Column::Id"
+    )]
+    RecurrenceOf,
+    #[sea_orm(has_many = "super::incident_followup::Entity")]
+    IncidentFollowup,
 }
 
 impl Related<super::vehicle::Entity> for Entity {
@@ -49,18 +70,24 @@ impl Related<super::vehicle::Entity> for Entity {
     }
 }
 
-impl Related<super::accident_correspondence::Entity> for Entity {
+impl Related<super::build::Entity> for Entity {
     fn to() -> RelationDef {
-        Relation::AccidentCorrespondence.def()
+        Relation::Build.def()
+    }
+}
+
+impl Related<super::incident_followup::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::IncidentFollowup.def()
     }
 }
 
 impl Related<super::service_record::Entity> for Entity {
     fn to() -> RelationDef {
-        super::accident_service_link::Relation::ServiceRecord.def()
+        super::incident_service_link::Relation::ServiceRecord.def()
     }
     fn via() -> Option<RelationDef> {
-        Some(super::accident_service_link::Relation::Accident.def().rev())
+        Some(super::incident_service_link::Relation::Incident.def().rev())
     }
 }
 

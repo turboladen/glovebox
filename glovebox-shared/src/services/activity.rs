@@ -1,5 +1,5 @@
 //! Recent-activity feed: one domain operation that merges a vehicle's
-//! service records, observations, and mileage logs into a single
+//! service records, incidents, and mileage logs into a single
 //! reverse-chronological list. Consumed by the MCP surface
 //! (`summarize_recent_activity` tool + `glovebox://vehicles/{id}/activity`
 //! resource); available to the HTTP surface should it ever want the same
@@ -9,7 +9,7 @@ use sea_orm::*;
 use serde::Serialize;
 
 use crate::{
-    entities::{mileage_log, observation, service_record},
+    entities::{incident, mileage_log, service_record},
     error::DomainResult,
 };
 
@@ -17,13 +17,13 @@ use crate::{
 pub const DEFAULT_LIMIT: usize = 20;
 
 /// One entry in the merged feed. `date` is the record's own domain date
-/// (`service_date`, `observed_at`, or `recorded_at`) — ISO-8601
+/// (`service_date`, `occurred_at`, or `recorded_at`) — ISO-8601
 /// `YYYY-MM-DD[ HH:MM:SS]` strings. Granularity is mixed: services are
-/// date-only while observations/mileage carry timestamps, so sorting uses a
+/// date-only while incidents/mileage carry timestamps, so sorting uses a
 /// normalized key (see `sort_key`), not the raw string.
 #[derive(Debug, Serialize)]
 pub struct ActivityItem {
-    /// `service`, `observation`, or `mileage`.
+    /// `service`, `incident`, or `mileage`.
     pub kind: String,
     pub id: i32,
     pub date: String,
@@ -34,7 +34,7 @@ pub struct ActivityItem {
     pub total_cost_cents: Option<i32>,
 }
 
-/// The `limit` most recent services + observations + mileage logs for a
+/// The `limit` most recent services + incidents + mileage logs for a
 /// vehicle, merged and sorted newest-first.
 ///
 /// Mileage logs auto-created by service records (`source = "service"`) are
@@ -61,10 +61,10 @@ pub async fn recent(
         .limit(limit_u64)
         .all(db)
         .await?;
-    let observations = observation::Entity::find()
-        .filter(observation::Column::VehicleId.eq(vehicle_id))
-        .order_by_desc(observation::Column::ObservedAt)
-        .order_by_desc(observation::Column::Id)
+    let incidents = incident::Entity::find()
+        .filter(incident::Column::VehicleId.eq(vehicle_id))
+        .order_by_desc(incident::Column::OccurredAt)
+        .order_by_desc(incident::Column::Id)
         .limit(limit_u64)
         .all(db)
         .await?;
@@ -95,13 +95,13 @@ pub async fn recent(
             total_cost_cents: s.total_cost_cents,
         });
     }
-    for o in observations {
+    for i in incidents {
         items.push(ActivityItem {
-            kind: "observation".into(),
-            id: o.id,
-            date: o.observed_at,
-            summary: o.title,
-            mileage: o.odometer,
+            kind: "incident".into(),
+            id: i.id,
+            date: i.occurred_at,
+            summary: i.title,
+            mileage: i.odometer,
             total_cost_cents: None,
         });
     }
@@ -132,7 +132,7 @@ pub async fn recent(
 
 /// Normalize mixed-granularity dates into one sortable key. Date-only values
 /// (services' `service_date`) sort at end-of-day so a service records as
-/// *newer* than that same day's timestamped observations — matching the
+/// *newer* than that same day's timestamped incidents — matching the
 /// common "noticed it in the morning, fixed it that afternoon" flow. Raw
 /// lexicographic order would instead sort every date-only service before
 /// any timestamped item on its own day.
@@ -150,9 +150,9 @@ mod tests {
     use crate::{
         error::DomainError,
         inputs::{
-            mileage::NewMileageEntry, observation::NewObservation, service_record::NewServiceRecord,
+            incident::NewIncident, mileage::NewMileageEntry, service_record::NewServiceRecord,
         },
-        services::{mileage as mileage_svc, observation as obs_svc, service_record as svc_svc},
+        services::{incident as incident_svc, mileage as mileage_svc, service_record as svc_svc},
         test_support::test_db,
     };
 
@@ -191,16 +191,12 @@ mod tests {
         }
     }
 
-    fn observation(title: &str, observed_at: &str) -> NewObservation {
-        NewObservation {
+    fn incident(title: &str, occurred_at: &str) -> NewIncident {
+        NewIncident {
             category: "note".into(),
             title: title.into(),
-            description: None,
-            odometer: None,
-            observed_at: Some(observed_at.into()),
-            obd_codes: None,
-            notes: None,
-            build_id: None,
+            occurred_at: Some(occurred_at.into()),
+            ..Default::default()
         }
     }
 
@@ -211,7 +207,7 @@ mod tests {
         svc_svc::create(&db, vid, service("2026-01-10", "Oil change", None))
             .await
             .unwrap();
-        obs_svc::create(&db, vid, observation("Squeak", "2026-02-20 08:00:00"))
+        incident_svc::create(&db, vid, incident("Squeak", "2026-02-20 08:00:00"))
             .await
             .unwrap();
         mileage_svc::create(
@@ -230,7 +226,7 @@ mod tests {
         let items = recent(&db, vid, DEFAULT_LIMIT).await.unwrap();
         assert_eq!(
             items.iter().map(|i| i.kind.as_str()).collect::<Vec<_>>(),
-            vec!["mileage", "observation", "service"],
+            vec!["mileage", "incident", "service"],
         );
         assert_eq!(items[2].summary, "Oil change");
         assert_eq!(items[2].total_cost_cents, Some(12_345));
@@ -241,10 +237,10 @@ mod tests {
     async fn same_day_service_sorts_newer_than_timestamped_items() {
         let db = test_db().await;
         let vid = seed_vehicle(&db).await;
-        // Morning observation, then a date-only service the same day: the
+        // Morning incident, then a date-only service the same day: the
         // service must surface as the newer item ("noticed it in the
         // morning, fixed it that afternoon").
-        obs_svc::create(&db, vid, observation("Squeak", "2026-06-01 09:00:00"))
+        incident_svc::create(&db, vid, incident("Squeak", "2026-06-01 09:00:00"))
             .await
             .unwrap();
         svc_svc::create(&db, vid, service("2026-06-01", "Fixed squeak", None))
@@ -254,7 +250,7 @@ mod tests {
         let items = recent(&db, vid, DEFAULT_LIMIT).await.unwrap();
         assert_eq!(
             items.iter().map(|i| i.kind.as_str()).collect::<Vec<_>>(),
-            vec!["service", "observation"],
+            vec!["service", "incident"],
         );
     }
 

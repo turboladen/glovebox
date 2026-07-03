@@ -50,12 +50,10 @@ pub enum Relation {
     ServiceRecord,
     #[sea_orm(has_many = "super::maintenance_schedule_item::Entity")]
     MaintenanceScheduleItem,
-    #[sea_orm(has_many = "super::observation::Entity")]
-    Observation,
+    #[sea_orm(has_many = "super::incident::Entity")]
+    Incident,
     #[sea_orm(has_many = "super::document::Entity")]
     Document,
-    #[sea_orm(has_many = "super::accident::Entity")]
-    Accident,
     #[sea_orm(has_many = "super::part::Entity")]
     Part,
     #[sea_orm(has_many = "super::research_report::Entity")]
@@ -100,21 +98,15 @@ impl Related<super::maintenance_schedule_item::Entity> for Entity {
     }
 }
 
-impl Related<super::observation::Entity> for Entity {
+impl Related<super::incident::Entity> for Entity {
     fn to() -> RelationDef {
-        Relation::Observation.def()
+        Relation::Incident.def()
     }
 }
 
 impl Related<super::document::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Document.def()
-    }
-}
-
-impl Related<super::accident::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::Accident.def()
     }
 }
 

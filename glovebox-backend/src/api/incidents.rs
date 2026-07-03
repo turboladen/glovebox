@@ -6,10 +6,10 @@ use serde::Deserialize;
 
 use crate::AppState;
 use glovebox_shared::{
-    entities::accident_correspondence,
-    inputs::accident::{NewAccident, NewCorrespondence, UpdateAccident as UpdateAccidentInput},
+    entities::incident_followup,
+    inputs::incident::{NewFollowup, NewIncident, UpdateIncident as UpdateIncidentInput},
     services::{
-        accident::{self as svc, AccidentWithDetails},
+        incident::{self as svc, IncidentWithDetails},
         vehicle as vehicle_svc,
     },
 };
@@ -21,10 +21,14 @@ type Result<T> = std::result::Result<T, ApiError>;
 // --- DTOs ---
 
 #[derive(Deserialize)]
-pub struct CreateAccident {
-    pub occurred_at: String,
+pub struct CreateIncident {
+    pub category: String,
+    pub title: String,
+    pub description: Option<String>,
     pub odometer: Option<i32>,
-    pub description: String,
+    pub occurred_at: Option<String>,
+    pub obd_codes: Option<String>,
+    pub notes: Option<String>,
     pub fault: Option<String>,
     pub other_party_name: Option<String>,
     pub other_party_phone: Option<String>,
@@ -34,16 +38,25 @@ pub struct CreateAccident {
     pub insurance_claim_number: Option<String>,
     pub insurance_adjuster: Option<String>,
     pub insurance_adjuster_phone: Option<String>,
-    pub notes: Option<String>,
+    pub recurrence_of_id: Option<i32>,
+    pub build_id: Option<i32>,
     pub service_record_ids: Option<Vec<i32>>,
 }
 
 #[derive(Deserialize)]
-pub struct UpdateAccident {
-    pub occurred_at: Option<String>,
+pub struct UpdateIncident {
+    pub category: Option<String>,
+    pub title: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    pub description: Option<Option<String>>,
     #[serde(default, deserialize_with = "deserialize_optional")]
     pub odometer: Option<Option<i32>>,
-    pub description: Option<String>,
+    pub occurred_at: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    pub obd_codes: Option<Option<String>>,
+    pub resolved: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    pub notes: Option<Option<String>>,
     #[serde(default, deserialize_with = "deserialize_optional")]
     pub fault: Option<Option<String>>,
     #[serde(default, deserialize_with = "deserialize_optional")]
@@ -74,14 +87,15 @@ pub struct UpdateAccident {
     pub insurance_payout_cents: Option<Option<i32>>,
     #[serde(default, deserialize_with = "deserialize_optional")]
     pub insurance_payout_currency: Option<Option<String>>,
-    pub resolved: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_optional")]
-    pub notes: Option<Option<String>>,
+    pub recurrence_of_id: Option<Option<i32>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    pub build_id: Option<Option<i32>>,
     pub service_record_ids: Option<Vec<i32>>,
 }
 
 #[derive(Deserialize)]
-pub struct CreateCorrespondence {
+pub struct CreateFollowup {
     pub occurred_at: String,
     pub contact_method: Option<String>,
     pub contact_with: Option<String>,
@@ -94,7 +108,7 @@ pub struct CreateCorrespondence {
 pub async fn list(
     State(state): State<AppState>,
     Path(vehicle_id): Path<i32>,
-) -> Result<Json<Vec<AccidentWithDetails>>> {
+) -> Result<Json<Vec<IncidentWithDetails>>> {
     vehicle_svc::require(&state.db, vehicle_id).await?;
     Ok(Json(svc::list(&state.db, vehicle_id).await?))
 }
@@ -102,7 +116,7 @@ pub async fn list(
 pub async fn get_one(
     State(state): State<AppState>,
     Path((vehicle_id, id)): Path<(i32, i32)>,
-) -> Result<Json<AccidentWithDetails>> {
+) -> Result<Json<IncidentWithDetails>> {
     vehicle_svc::require(&state.db, vehicle_id).await?;
     Ok(Json(svc::get(&state.db, vehicle_id, id).await?))
 }
@@ -110,16 +124,20 @@ pub async fn get_one(
 pub async fn create(
     State(state): State<AppState>,
     Path(vehicle_id): Path<i32>,
-    Json(input): Json<CreateAccident>,
-) -> Result<Json<AccidentWithDetails>> {
+    Json(input): Json<CreateIncident>,
+) -> Result<Json<IncidentWithDetails>> {
     vehicle_svc::require(&state.db, vehicle_id).await?;
     let created = svc::create(
         &state.db,
         vehicle_id,
-        NewAccident {
-            occurred_at: input.occurred_at,
-            odometer: input.odometer,
+        NewIncident {
+            category: input.category,
+            title: input.title,
             description: input.description,
+            odometer: input.odometer,
+            occurred_at: input.occurred_at,
+            obd_codes: input.obd_codes,
+            notes: input.notes,
             fault: input.fault,
             other_party_name: input.other_party_name,
             other_party_phone: input.other_party_phone,
@@ -129,7 +147,8 @@ pub async fn create(
             insurance_claim_number: input.insurance_claim_number,
             insurance_adjuster: input.insurance_adjuster,
             insurance_adjuster_phone: input.insurance_adjuster_phone,
-            notes: input.notes,
+            recurrence_of_id: input.recurrence_of_id,
+            build_id: input.build_id,
             service_record_ids: input.service_record_ids,
         },
     )
@@ -140,17 +159,22 @@ pub async fn create(
 pub async fn update(
     State(state): State<AppState>,
     Path((vehicle_id, id)): Path<(i32, i32)>,
-    Json(input): Json<UpdateAccident>,
-) -> Result<Json<AccidentWithDetails>> {
+    Json(input): Json<UpdateIncident>,
+) -> Result<Json<IncidentWithDetails>> {
     vehicle_svc::require(&state.db, vehicle_id).await?;
     let updated = svc::update(
         &state.db,
         vehicle_id,
         id,
-        UpdateAccidentInput {
-            occurred_at: input.occurred_at,
-            odometer: input.odometer,
+        UpdateIncidentInput {
+            category: input.category,
+            title: input.title,
             description: input.description,
+            odometer: input.odometer,
+            occurred_at: input.occurred_at,
+            obd_codes: input.obd_codes,
+            resolved: input.resolved,
+            notes: input.notes,
             fault: input.fault,
             other_party_name: input.other_party_name,
             other_party_phone: input.other_party_phone,
@@ -166,8 +190,8 @@ pub async fn update(
             deductible_currency: input.deductible_currency,
             insurance_payout_cents: input.insurance_payout_cents,
             insurance_payout_currency: input.insurance_payout_currency,
-            resolved: input.resolved,
-            notes: input.notes,
+            recurrence_of_id: input.recurrence_of_id,
+            build_id: input.build_id,
             service_record_ids: input.service_record_ids,
         },
     )
@@ -175,29 +199,29 @@ pub async fn update(
     Ok(Json(updated))
 }
 
-// --- Correspondence sub-resource ---
+// --- Followups sub-resource ---
 
-pub async fn list_correspondence(
+pub async fn list_followups(
     State(state): State<AppState>,
-    Path((vehicle_id, accident_id)): Path<(i32, i32)>,
-) -> Result<Json<Vec<accident_correspondence::Model>>> {
+    Path((vehicle_id, incident_id)): Path<(i32, i32)>,
+) -> Result<Json<Vec<incident_followup::Model>>> {
     vehicle_svc::require(&state.db, vehicle_id).await?;
     Ok(Json(
-        svc::list_correspondence(&state.db, vehicle_id, accident_id).await?,
+        svc::list_followups(&state.db, vehicle_id, incident_id).await?,
     ))
 }
 
-pub async fn create_correspondence(
+pub async fn create_followup(
     State(state): State<AppState>,
-    Path((vehicle_id, accident_id)): Path<(i32, i32)>,
-    Json(input): Json<CreateCorrespondence>,
-) -> Result<Json<accident_correspondence::Model>> {
+    Path((vehicle_id, incident_id)): Path<(i32, i32)>,
+    Json(input): Json<CreateFollowup>,
+) -> Result<Json<incident_followup::Model>> {
     vehicle_svc::require(&state.db, vehicle_id).await?;
-    let created = svc::create_correspondence(
+    let created = svc::create_followup(
         &state.db,
         vehicle_id,
-        accident_id,
-        NewCorrespondence {
+        incident_id,
+        NewFollowup {
             occurred_at: input.occurred_at,
             contact_method: input.contact_method,
             contact_with: input.contact_with,

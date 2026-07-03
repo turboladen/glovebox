@@ -104,14 +104,16 @@ export const shops = {
     request<{ deleted: number }>(`/shops/${id}`, { method: 'DELETE' }),
 }
 
-// Observations
-export const observations = {
-  list: (vehicleId: number) => request<Observation[]>(`/vehicles/${vehicleId}/observations`),
-  get: (vehicleId: number, id: number) => request<Observation>(`/vehicles/${vehicleId}/observations/${id}`),
-  create: (vehicleId: number, data: CreateObservation) =>
-    request<Observation>(`/vehicles/${vehicleId}/observations`, { method: 'POST', body: JSON.stringify(data) }),
-  update: (vehicleId: number, id: number, data: Partial<Observation>) =>
-    request<Observation>(`/vehicles/${vehicleId}/observations/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+// Incidents (unified observations + accidents)
+export const incidents = {
+  list: (vehicleId: number) => request<IncidentWithDetails[]>(`/vehicles/${vehicleId}/incidents`),
+  get: (vehicleId: number, id: number) => request<IncidentWithDetails>(`/vehicles/${vehicleId}/incidents/${id}`),
+  create: (vehicleId: number, data: CreateIncident) =>
+    request<IncidentWithDetails>(`/vehicles/${vehicleId}/incidents`, { method: 'POST', body: JSON.stringify(data) }),
+  update: (vehicleId: number, id: number, data: UpdateIncident) =>
+    request<IncidentWithDetails>(`/vehicles/${vehicleId}/incidents/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  addFollowup: (vehicleId: number, incidentId: number, data: CreateFollowup) =>
+    request<IncidentFollowup>(`/vehicles/${vehicleId}/incidents/${incidentId}/followups`, { method: 'POST', body: JSON.stringify(data) }),
 }
 
 // Documents
@@ -133,18 +135,6 @@ export const documents = {
     return res.json()
   },
   delete: (id: number) => request<{ deleted: number }>(`/documents/${id}`, { method: 'DELETE' }),
-}
-
-// Accidents
-export const accidents = {
-  list: (vehicleId: number) => request<AccidentWithDetails[]>(`/vehicles/${vehicleId}/accidents`),
-  get: (vehicleId: number, id: number) => request<AccidentWithDetails>(`/vehicles/${vehicleId}/accidents/${id}`),
-  create: (vehicleId: number, data: CreateAccident) =>
-    request<AccidentWithDetails>(`/vehicles/${vehicleId}/accidents`, { method: 'POST', body: JSON.stringify(data) }),
-  update: (vehicleId: number, id: number, data: UpdateAccident) =>
-    request<AccidentWithDetails>(`/vehicles/${vehicleId}/accidents/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
-  addCorrespondence: (vehicleId: number, accidentId: number, data: CreateCorrespondence) =>
-    request<AccidentCorrespondence>(`/vehicles/${vehicleId}/accidents/${accidentId}/correspondence`, { method: 'POST', body: JSON.stringify(data) }),
 }
 
 // Parts
@@ -195,8 +185,8 @@ import type {
   ServiceRecordWithLinks, CreateServiceRecord, CreateLineItem,
   ScheduleItem, CreateScheduleItem, ResolvedScheduleItem,
   RemindersResponse, VinDecodeResponse,
-  Shop, Observation, CreateObservation, Document,
-  AccidentWithDetails, AccidentCorrespondence, CreateAccident, UpdateAccident, CreateCorrespondence,
+  Shop, Document,
+  IncidentWithDetails, IncidentFollowup, CreateIncident, UpdateIncident, CreateFollowup,
   Part, CreatePart,
   CostSummary, VehicleExport,
   RecallCheckResult, ResearchReport, ReportWithFindings, ResearchFinding,

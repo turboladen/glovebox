@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { documents as docsApi, services as servicesApi, parts as partsApi, accidents as accidentsApi } from '../lib/api'
-  import type { Document, ServiceRecordWithLinks, Part, AccidentWithDetails } from '../lib/types'
+  import { documents as docsApi, services as servicesApi, parts as partsApi, incidents as incidentsApi } from '../lib/api'
+  import type { Document, ServiceRecordWithLinks, Part, IncidentWithDetails } from '../lib/types'
   import { formatDate } from '../lib/dates'
 
   let { vehicleId }: { vehicleId: number } = $props()
@@ -23,7 +23,7 @@
   // Linkable entities
   let serviceRecords: ServiceRecordWithLinks[] = $state([])
   let partsList: Part[] = $state([])
-  let accidentsList: AccidentWithDetails[] = $state([])
+  let incidentsList: IncidentWithDetails[] = $state([])
 
   const docTypes = ['invoice', 'receipt', 'photo', 'title', 'warranty', 'manual', 'other']
 
@@ -31,11 +31,11 @@
 
   async function loadData() {
     try {
-      ;[docs, serviceRecords, partsList, accidentsList] = await Promise.all([
+      ;[docs, serviceRecords, partsList, incidentsList] = await Promise.all([
         docsApi.list({ vehicle_id: vehicleId }),
         servicesApi.list(vehicleId),
         partsApi.list(vehicleId),
-        accidentsApi.list(vehicleId),
+        incidentsApi.list(vehicleId),
       ])
     } catch (e) {
       console.error(e)
@@ -97,9 +97,9 @@
       const part = partsList.find(p => p.id === doc.linked_entity_id)
       return part ? `Part: ${part.name}` : `Part #${doc.linked_entity_id}`
     }
-    if (doc.linked_entity_type === 'accident') {
-      const acc = accidentsList.find(a => a.id === doc.linked_entity_id)
-      return acc ? `Accident: ${acc.occurred_at.split('T')[0].split(' ')[0]}${acc.description ? ' — ' + acc.description.slice(0, 40) : ''}` : `Accident #${doc.linked_entity_id}`
+    if (doc.linked_entity_type === 'incident') {
+      const inc = incidentsList.find(i => i.id === doc.linked_entity_id)
+      return inc ? `Incident: ${inc.occurred_at.split('T')[0].split(' ')[0]} — ${inc.title.slice(0, 40)}` : `Incident #${doc.linked_entity_id}`
     }
     return `${doc.linked_entity_type} #${doc.linked_entity_id}`
   }
@@ -141,7 +141,7 @@
               <option value="">None</option>
               <option value="service">Service Record</option>
               <option value="part">Part</option>
-              <option value="accident">Accident</option>
+              <option value="incident">Incident</option>
             </select>
           </div>
           {#if linkedEntityType === 'service'}
@@ -164,13 +164,13 @@
                 {/each}
               </select>
             </div>
-          {:else if linkedEntityType === 'accident'}
+          {:else if linkedEntityType === 'incident'}
             <div class="field">
-              <label for="doc-link-id">Accident</label>
+              <label for="doc-link-id">Incident</label>
               <select id="doc-link-id" bind:value={linkedEntityId}>
                 <option value={null}>-- Select --</option>
-                {#each accidentsList as acc (acc.id)}
-                  <option value={acc.id}>{acc.occurred_at.split('T')[0].split(' ')[0]} — {acc.description.slice(0, 50)}</option>
+                {#each incidentsList as inc (inc.id)}
+                  <option value={inc.id}>{inc.occurred_at.split('T')[0].split(' ')[0]} — {inc.title.slice(0, 50)}</option>
                 {/each}
               </select>
             </div>

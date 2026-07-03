@@ -24,14 +24,14 @@ use glovebox_shared::{
     error::{DomainError, DomainResult},
     inputs::build::UpdateBuild,
     services::{
-        activity, build, costs, mileage, observation, part, reminders, research, search,
+        activity, build, costs, incident, mileage, part, reminders, research, search,
         search::SearchScope, service_record, vehicle,
     },
 };
 
 use crate::schemas::{
-    BuildParams, EmptyParams, FileResearchFindingInput, FindDocumentsInput, LogMileageInput,
-    LogObservationInput, RecordPartInput, RecordServiceInput, SearchRecordsInput,
+    BuildParams, EmptyParams, FileResearchFindingInput, FindDocumentsInput, LogIncidentInput,
+    LogMileageInput, RecordPartInput, RecordServiceInput, SaveNoteInput, SearchRecordsInput,
     SummarizeActivityInput, UpdateBuildStatusInput, VehicleBrief, VehicleParams,
 };
 
@@ -124,15 +124,15 @@ impl GloveboxMcp {
     }
 
     #[tool(
-        name = "log_observation",
-        description = "Note something about a vehicle that isn't a completed repair: a noise, a leak, a warning light, an OBD code, a to-look-into. Use `record_service` for work that was actually done.",
-        input_schema = rmcp::handler::server::common::schema_for_type::<LogObservationInput>()
+        name = "log_incident",
+        description = "Log something that happened to a vehicle that isn't a completed repair: a noise, a leak, a warning light, an OBD code, damage, a collision. Collisions/crashes with another party go here with category `accident`. If it's the same problem coming back, set `recurrence_of_id` to the earlier incident. Use `record_service` for work that was actually done, and `save_note` for plain facts to remember.",
+        input_schema = rmcp::handler::server::common::schema_for_type::<LogIncidentInput>()
     )]
-    async fn log_observation(
+    async fn log_incident(
         &self,
-        params: LenientParameters<LogObservationInput>,
+        params: LenientParameters<LogIncidentInput>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("log_observation") {
+        let p = match params.into_tool_input("log_incident") {
             Ok(v) => v,
             Err(e) => return Ok(e),
         };
@@ -140,7 +140,27 @@ impl GloveboxMcp {
         if let Err(e) = vehicle::require(&*self.db, vehicle_id).await {
             return domain_error(e);
         }
-        domain_result(observation::create(&*self.db, vehicle_id, input).await)
+        domain_result(incident::create(&*self.db, vehicle_id, input).await)
+    }
+
+    #[tool(
+        name = "save_note",
+        description = "Remember something about this vehicle — a fact, a preference, a memory. Saved as a note incident, searchable later via `search_records`.",
+        input_schema = rmcp::handler::server::common::schema_for_type::<SaveNoteInput>()
+    )]
+    async fn save_note(
+        &self,
+        params: LenientParameters<SaveNoteInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = match params.into_tool_input("save_note") {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        };
+        let (vehicle_id, input) = p.into_domain();
+        if let Err(e) = vehicle::require(&*self.db, vehicle_id).await {
+            return domain_error(e);
+        }
+        domain_result(incident::create(&*self.db, vehicle_id, input).await)
     }
 
     #[tool(
@@ -187,7 +207,7 @@ impl GloveboxMcp {
 
     #[tool(
         name = "summarize_recent_activity",
-        description = "The vehicle's recent history in one call: services, observations, and odometer readings merged newest-first. Call at conversation start to get context before answering questions about the car.",
+        description = "The vehicle's recent history in one call: services, incidents, and odometer readings merged newest-first. Call at conversation start to get context before answering questions about the car.",
         input_schema = rmcp::handler::server::common::schema_for_type::<SummarizeActivityInput>()
     )]
     async fn summarize_recent_activity(
@@ -228,7 +248,7 @@ impl GloveboxMcp {
 
     #[tool(
         name = "search_records",
-        description = "Full-text search across everything: vehicles, service history, observations, accidents, documents, and research findings. Returns ranked hits with snippets. Narrow with `scope` and/or `vehicle_id`; use `find_documents` for the common documents-only case.",
+        description = "Full-text search across everything: vehicles, service history, incidents (and their followups), builds, documents, and research findings. Returns ranked hits with snippets. Narrow with `scope` and/or `vehicle_id`; use `find_documents` for the common documents-only case.",
         input_schema = rmcp::handler::server::common::schema_for_type::<SearchRecordsInput>()
     )]
     async fn search_records(
@@ -313,7 +333,7 @@ impl GloveboxMcp {
 
     #[tool(
         name = "get_build_progress",
-        description = "How a build is going: linked services, parts (installed vs pending), observations, and total spend (integer cents) — all derived live from the linked records.",
+        description = "How a build is going: linked services, parts (installed vs pending), incidents, and total spend (integer cents) — all derived live from the linked records.",
         input_schema = rmcp::handler::server::common::schema_for_type::<BuildParams>()
     )]
     async fn get_build_progress(
@@ -372,12 +392,12 @@ impl ServerHandler for GloveboxMcp {
                  recent history. (2) ANSWER \"what does it need?\" — `check_due_maintenance` \
                  before recommending any work; `check_recalls` for safety recalls. (3) CAPTURE \
                  what happened — `record_service` for completed work, `record_part` for parts \
-                 bought or installed, `log_observation` for symptoms/notes, `log_mileage` \
-                 whenever the user mentions an odometer reading. (4) LOOK THINGS UP — \
-                 `find_documents` for receipts/manuals, `search_records` for anything else, \
-                 `cost_summary` for spend. (5) PROJECTS — `list_builds` / `get_build_progress` / \
-                 `update_build_status` for upgrade or restoration builds. All money is integer \
-                 cents; all dates are YYYY-MM-DD.",
+                 bought or installed, `log_incident` for symptoms/damage/accidents, `save_note` \
+                 for facts worth remembering, `log_mileage` whenever the user mentions an \
+                 odometer reading. (4) LOOK THINGS UP — `find_documents` for receipts/manuals, \
+                 `search_records` for anything else, `cost_summary` for spend. (5) PROJECTS — \
+                 `list_builds` / `get_build_progress` / `update_build_status` for upgrade or \
+                 restoration builds. All money is integer cents; all dates are YYYY-MM-DD.",
             )
     }
 
@@ -411,7 +431,7 @@ impl ServerHandler for GloveboxMcp {
                 format!("{VEHICLES_URI}/{}/activity", v.id),
                 format!("{} — recent activity", v.name),
                 format!(
-                    "Recent services, observations, and odometer readings for {}, newest first.",
+                    "Recent services, incidents, and odometer readings for {}, newest first.",
                     v.name
                 ),
             ));

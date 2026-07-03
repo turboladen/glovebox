@@ -28,8 +28,8 @@ pub enum Relation {
     ServiceRecord,
     #[sea_orm(has_many = "super::part::Entity")]
     Part,
-    #[sea_orm(has_many = "super::observation::Entity")]
-    Observation,
+    #[sea_orm(has_many = "super::incident::Entity")]
+    Incident,
 }
 
 impl Related<super::vehicle::Entity> for Entity {
@@ -50,9 +50,9 @@ impl Related<super::part::Entity> for Entity {
     }
 }
 
-impl Related<super::observation::Entity> for Entity {
+impl Related<super::incident::Entity> for Entity {
     fn to() -> RelationDef {
-        Relation::Observation.def()
+        Relation::Incident.def()
     }
 }
 

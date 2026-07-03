@@ -1,21 +1,21 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { services as servicesApi, observations as obsApi, parts as partsApi, shops as shopsApi } from '../lib/api'
-  import type { ServiceRecordWithLinks, Observation, Part, Shop } from '../lib/types'
+  import { services as servicesApi, incidents as incidentsApi, parts as partsApi, shops as shopsApi } from '../lib/api'
+  import type { ServiceRecordWithLinks, IncidentWithDetails, Part, Shop } from '../lib/types'
   import { formatDate } from '../lib/dates'
 
   let { vehicleId }: { vehicleId: number } = $props()
 
   type TimelineEntry =
     | { type: 'service'; date: string; data: ServiceRecordWithLinks }
-    | { type: 'observation'; date: string; data: Observation }
+    | { type: 'incident'; date: string; data: IncidentWithDetails }
 
   let entries: TimelineEntry[] = $state([])
   let allParts: Part[] = $state([])
-  let allObservations: Observation[] = $state([])
+  let allIncidents: IncidentWithDetails[] = $state([])
   let shopList: Shop[] = $state([])
   let loading = $state(true)
-  let filter = $state<'all' | 'services' | 'observations'>('all')
+  let filter = $state<'all' | 'services' | 'incidents'>('all')
 
   // Expanded/editing state
   let expandedId: string | null = $state(null)
@@ -35,20 +35,20 @@
 
   onMount(async () => {
     try {
-      const [svcList, obsList, partsList, shops] = await Promise.all([
+      const [svcList, incidentList, partsList, shops] = await Promise.all([
         servicesApi.list(vehicleId),
-        obsApi.list(vehicleId),
+        incidentsApi.list(vehicleId),
         partsApi.list(vehicleId),
         shopsApi.list(),
       ])
 
       allParts = partsList
-      allObservations = obsList
+      allIncidents = incidentList
       shopList = shops
 
       const timeline: TimelineEntry[] = [
         ...svcList.map((s): TimelineEntry => ({ type: 'service', date: s.service_date, data: s })),
-        ...obsList.map((o): TimelineEntry => ({ type: 'observation', date: o.observed_at, data: o })),
+        ...incidentList.map((i): TimelineEntry => ({ type: 'incident', date: i.occurred_at, data: i })),
       ]
       timeline.sort((a, b) => b.date.localeCompare(a.date))
       entries = timeline
@@ -65,14 +65,14 @@
     return allParts.filter(p => ids.has(p.id))
   }
 
-  function resolvedObsForService(serviceId: number): Observation[] {
-    return allObservations.filter(o => o.resolved_service_id === serviceId)
+  function incidentsForService(serviceId: number): IncidentWithDetails[] {
+    return allIncidents.filter(i => i.service_record_ids.includes(serviceId))
   }
 
   let filtered = $derived(
     filter === 'all' ? entries :
     filter === 'services' ? entries.filter(e => e.type === 'service') :
-    entries.filter(e => e.type === 'observation')
+    entries.filter(e => e.type === 'incident')
   )
 
   function formatCents(cents: number | null): string {
@@ -176,7 +176,7 @@
   <div class="filter-bar">
     <button class="filter-btn" class:active={filter === 'all'} onclick={() => (filter = 'all')}>All</button>
     <button class="filter-btn" class:active={filter === 'services'} onclick={() => (filter = 'services')}>Services</button>
-    <button class="filter-btn" class:active={filter === 'observations'} onclick={() => (filter = 'observations')}>Observations</button>
+    <button class="filter-btn" class:active={filter === 'incidents'} onclick={() => (filter = 'incidents')}>Incidents</button>
   </div>
 
   <div class="history-list">
@@ -223,11 +223,11 @@
                 {/each}
               </div>
             {/if}
-            {#if resolvedObsForService(record.id).length > 0}
+            {#if incidentsForService(record.id).length > 0}
               <div class="linked-items">
-                <span class="linked-label">Resolved:</span>
-                {#each resolvedObsForService(record.id) as obs (obs.id)}
-                  <span class="linked-chip obs-chip">{obs.title}</span>
+                <span class="linked-label">Incidents:</span>
+                {#each incidentsForService(record.id) as inc (inc.id)}
+                  <span class="linked-chip obs-chip">{inc.title}</span>
                 {/each}
               </div>
             {/if}
@@ -315,11 +315,11 @@
                     {/each}
                   </div>
                 {/if}
-                {#if resolvedObsForService(record.id).length > 0}
+                {#if incidentsForService(record.id).length > 0}
                   <div class="linked-items">
-                    <span class="linked-label">Resolved:</span>
-                    {#each resolvedObsForService(record.id) as obs (obs.id)}
-                      <span class="linked-chip obs-chip">{obs.title}</span>
+                    <span class="linked-label">Incidents:</span>
+                    {#each incidentsForService(record.id) as inc (inc.id)}
+                      <span class="linked-chip obs-chip">{inc.title}</span>
                     {/each}
                   </div>
                 {/if}
@@ -340,24 +340,24 @@
           </div>
         {/if}
       {:else}
-        {@const obs = entry.data}
-        <div class="history-card obs-card" class:resolved={obs.resolved}>
+        {@const inc = entry.data}
+        <div class="history-card obs-card" class:resolved={inc.resolved}>
           <div class="history-header">
-            <span class="type-badge obs-badge">Observation</span>
-            <span class="date">{formatDate(obs.observed_at)}</span>
-            {#if obs.resolved}
+            <span class="type-badge obs-badge">Incident</span>
+            <span class="date">{formatDate(inc.occurred_at)}</span>
+            {#if inc.resolved}
               <span class="resolved-badge">Resolved</span>
             {/if}
           </div>
-          <p class="description">{obs.title}</p>
-          {#if obs.description}
-            <p class="notes">{obs.description}</p>
+          <p class="description">{inc.title}</p>
+          {#if inc.description}
+            <p class="notes">{inc.description}</p>
           {/if}
           <div class="meta">
-            {#if obs.odometer}
-              <span>{formatMileage(obs.odometer)}</span>
+            {#if inc.odometer}
+              <span>{formatMileage(inc.odometer)}</span>
             {/if}
-            <span class="category">{obs.category.replace(/_/g, ' ')}</span>
+            <span class="category">{inc.category.replace(/_/g, ' ')}</span>
           </div>
         </div>
       {/if}
