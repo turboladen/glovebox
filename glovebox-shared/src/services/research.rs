@@ -356,10 +356,14 @@ pub async fn update_finding(
         .await?
         .ok_or_else(|| DomainError::NotFound("Finding not found".to_string()))?;
 
-    // Validate the effective linked-entity pair AFTER applying this update: a
-    // linked id must point at one of THIS vehicle's records (same invariant as
-    // observation.resolved_service_id / part.installed_service_id — no storing
-    // pointers into another vehicle's data), and its type must be a known kind.
+    // When this update SETS link fields, validate the effective post-update
+    // pair: a linked id must point at one of THIS vehicle's records (same
+    // invariant as observation.resolved_service_id / part.installed_service_id
+    // — no storing pointers into another vehicle's data), and its type must be
+    // a known kind. Unrelated updates (e.g. status-only) skip this so a link
+    // whose target was later deleted can't block them.
+    let sets_link = matches!(input.linked_entity_type, Some(Some(_)))
+        || matches!(input.linked_entity_id, Some(Some(_)));
     let effective_type = match &input.linked_entity_type {
         Some(t) => t.clone(),
         None => finding.linked_entity_type.clone(),
@@ -368,7 +372,7 @@ pub async fn update_finding(
         Some(v) => v,
         None => finding.linked_entity_id,
     };
-    if let Some(linked_id) = effective_id {
+    if let (true, Some(linked_id)) = (sets_link, effective_id) {
         match effective_type.as_deref() {
             Some("service") => {
                 service_record::Entity::find_by_id(linked_id)
@@ -761,5 +765,38 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(cleared.linked_entity_id, None);
+
+        // A stale stored link (target deleted after linking) must NOT block
+        // unrelated updates like a status-only change from the UI.
+        update_finding(
+            &db,
+            vid,
+            report.id,
+            finding.id,
+            UpdateFinding {
+                linked_entity_type: Some(Some("service".into())),
+                linked_entity_id: Some(Some(own_svc.id)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        service_record::Entity::delete_by_id(own_svc.id)
+            .exec(&db)
+            .await
+            .unwrap();
+        let dismissed = update_finding(
+            &db,
+            vid,
+            report.id,
+            finding.id,
+            UpdateFinding {
+                status: Some("dismissed".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(dismissed.status, "dismissed");
     }
 }
