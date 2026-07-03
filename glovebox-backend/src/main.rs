@@ -12,7 +12,10 @@ mod api;
 
 use std::{path::Path, sync::Arc};
 
-use axum::{Router, routing::get};
+use axum::{
+    Router,
+    routing::{get, post},
+};
 use clap::Parser;
 use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 use sea_orm_migration::MigratorTrait;
@@ -96,6 +99,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/vehicles/{vehicle_id}/schedule",
             get(api::schedules::resolve),
+        )
+        .route(
+            "/api/vehicles/{vehicle_id}/schedule/{item_id}/dismiss",
+            post(api::schedules::dismiss).delete(api::schedules::undismiss),
         )
         .route(
             "/api/vehicles/{vehicle_id}/reminders",

@@ -111,6 +111,10 @@ Playwright e2e tests. Keep it updated as features are added.
 | 2 | Each reminder shows | Item name, due mileage, due date, miles/days remaining |
 | 3 | Overdue items | Show "Last: [date] @ [mileage]" or "No service recorded" |
 | 4 | Bundle suggestions | Dashed-border cards shown when items are due near each other |
+| 5 | "Record service…" on a due/overdue item | Inline minimal form (date prefilled today, optional odometer/cost); save creates a service linked to the item and the reminder clears |
+| 6 | "Mark done previously" on a due/overdue item | Same form with a user-picked past date; record saved with zero cost and "recorded retroactively" note; reminder clears |
+| 7 | "Dismiss for this vehicle" | Item leaves the reminder groups and renders greyed in a "Dismissed" section with an "overridden" badge |
+| 8 | "Re-enable" on a dismissed item | Item returns to its reminder group |
 
 ## TP-08: History Tab
 
@@ -351,7 +355,7 @@ Tests live in `frontend/e2e/` and mirror this plan:
 frontend/e2e/
   garage.spec.ts        # TP-01
   vehicle-new.spec.ts   # TP-02, TP-03
-  vehicle-detail.spec.ts # TP-04, TP-05, TP-06
+  vehicle-detail.spec.ts # TP-04, TP-05, TP-06, TP-07 (schedule actions)
   schedule.spec.ts      # TP-07
   history.spec.ts       # TP-08
   navigation.spec.ts    # TP-10

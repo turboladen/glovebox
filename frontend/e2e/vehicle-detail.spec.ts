@@ -165,6 +165,83 @@ test.describe('Update Mileage', () => {
   })
 })
 
+// TP-07a: Schedule overdue resolvability (dismiss / record / mark done previously)
+test.describe('Schedule Actions', () => {
+  let vehicleUrl: string
+  let vehicleId: number
+
+  test.beforeAll(async ({ browser }) => {
+    const page = await browser.newPage()
+    await page.goto('/vehicles/new')
+    await page.getByRole('button', { name: 'Skip' }).click()
+    await page.getByLabel('Vehicle Name').fill('Schedule Actions Car')
+    await page.getByRole('button', { name: 'Create Vehicle' }).click()
+    await page.waitForURL(/\/vehicles\/\d+/)
+    vehicleUrl = new URL(page.url()).pathname
+    vehicleId = parseInt(vehicleUrl.split('/').pop()!, 10)
+    // Old purchase date makes every 12-month item overdue from the start
+    await page.request.put(`/api/vehicles/${vehicleId}`, {
+      data: { purchase_date: '2020-01-01' },
+    })
+    for (const name of ['Dismissable item', 'Recordable item', 'Backfillable item']) {
+      await page.request.post('/api/schedules', {
+        data: { vehicle_id: vehicleId, name, interval_months: 12 },
+      })
+    }
+    await page.close()
+  })
+
+  test('dismiss greys the item and reminders drop it; re-enable restores', async ({ page }) => {
+    await page.goto(vehicleUrl)
+    const card = page.locator('.reminder-card.overdue', { hasText: 'Dismissable item' })
+    await expect(card).toBeVisible()
+    await card.getByRole('button', { name: 'Dismiss for this vehicle' }).click()
+
+    // Moves out of the reminder groups into the greyed Dismissed section
+    const dismissed = page.locator('.reminder-card.dismissed', { hasText: 'Dismissable item' })
+    await expect(dismissed).toBeVisible()
+    await expect(dismissed.locator('.overridden-badge')).toBeVisible()
+    await expect(page.locator('.reminder-card.overdue', { hasText: 'Dismissable item' })).toHaveCount(0)
+
+    // Re-enable restores it to the overdue group
+    await dismissed.getByRole('button', { name: 'Re-enable' }).click()
+    await expect(page.locator('.reminder-card.overdue', { hasText: 'Dismissable item' })).toBeVisible()
+    await expect(page.locator('.reminder-card.dismissed', { hasText: 'Dismissable item' })).toHaveCount(0)
+  })
+
+  test('record service from the schedule clears the reminder', async ({ page }) => {
+    await page.goto(vehicleUrl)
+    const card = page.locator('.reminder-card.overdue', { hasText: 'Recordable item' })
+    await expect(card).toBeVisible()
+    await card.getByRole('button', { name: 'Record service…' }).click()
+    // Date is prefilled with today and the record links the schedule item
+    await card.getByRole('button', { name: 'Save service' }).click()
+
+    const okCard = page.locator('.reminder-card.ok', { hasText: 'Recordable item' })
+    await expect(okCard).toBeVisible()
+    await expect(okCard.getByRole('button', { name: /1 completion/ })).toBeVisible()
+  })
+
+  test('mark done previously backfills a past-dated record and clears the reminder', async ({ page }) => {
+    await page.goto(vehicleUrl)
+    const card = page.locator('.reminder-card.overdue', { hasText: 'Backfillable item' })
+    await expect(card).toBeVisible()
+    await card.getByRole('button', { name: 'Mark done previously' }).click()
+
+    // Pick a date 3 months back — within the 12-month interval, so it clears
+    const past = new Date()
+    past.setMonth(past.getMonth() - 3)
+    await card.locator('input[type="date"]').fill(past.toISOString().split('T')[0])
+    await card.getByRole('button', { name: 'Save past service' }).click()
+
+    const okCard = page.locator('.reminder-card.ok', { hasText: 'Backfillable item' })
+    await expect(okCard).toBeVisible()
+    // The retroactive record is real history
+    await page.getByRole('button', { name: 'History', exact: true }).click()
+    await expect(page.getByText('Backfillable item').first()).toBeVisible()
+  })
+})
+
 // TP-06: Log Service
 test.describe('Log Service', () => {
   let vehicleUrl: string
