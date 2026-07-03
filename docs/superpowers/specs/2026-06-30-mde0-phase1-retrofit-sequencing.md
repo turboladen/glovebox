@@ -134,6 +134,18 @@ domain operation (not a separate FTS subsystem the UI/LLM must understand).
 **Done when:** an MCP client can drive the domain without knowing the schema (verbs read like domain
 language; resources are stable addressable URIs).
 
+**Status (2026-07-02): resolved.** New workspace member `glovebox-mcp` (lib) over `glovebox-shared`,
+using rmcp (Streamable HTTP transport), mounted by the backend at `/mcp` — D2 decided as fewd-style
+same-port mount (single deployable binary preserved; always mounted; unauthenticated, matching the
+app's LAN posture — documented in the crate docs with fewd's token middleware named as the reference
+if remote access is ever needed). 14 domain-verb tools (`record_service`, `log_observation`,
+`log_mileage`, `check_due_maintenance`, `summarize_recent_activity`, `find_documents`,
+`search_records`, `cost_summary`, `check_recalls`, `list_vehicles`, `get_vehicle`, `list_builds`,
+`get_build_progress`, `update_build_status`) + 4 read-only resource URI forms
+(`glovebox://vehicles[/{id}[/activity | /builds/{build_id}]]`). The merged recent-activity feed
+landed as a shared domain op (`services::activity::recent`), not MCP-side logic. Integration tests
+drive the real router over the protocol (handshake → tools → resources → error paths).
+
 ---
 
 ## Key decisions & risks

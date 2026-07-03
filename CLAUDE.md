@@ -5,8 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What Is This
 
 Car maintenance tracker: Rust backend (Axum + SeaORM + SQLite) + Svelte 5 frontend SPA.
-The Rust side is a two-crate cargo workspace: `glovebox-shared` (domain library) +
-`glovebox-backend` (thin Axum binary).
+The Rust side is a three-crate cargo workspace: `glovebox-shared` (domain library) +
+`glovebox-backend` (thin Axum binary) + `glovebox-mcp` (thin MCP surface, mounted at `/mcp`).
 
 ## Commands
 
@@ -43,9 +43,16 @@ cd frontend && bun run check  # svelte-check + TypeScript check
   `src/{entities,migration,services,inputs,config.rs,error.rs,test_support.rs}`. All SQL,
   validation, and business logic live here. Never depends on axum.
 - **`glovebox-backend/`** (bin crate) — the thin Axum surface: `src/{api,main.rs}`. Handlers
-  map HTTP DTOs to domain inputs, call shared services, and map errors back.
-- The split exists so a second surface (`glovebox-mcp`) can sit on the same domain library.
-  `scripts/check-layering.sh` (run by CI and `just ci`) enforces the boundary.
+  map HTTP DTOs to domain inputs, call shared services, and map errors back. Mounts the MCP
+  router at `/mcp` (single deployable binary; two surfaces, one library).
+- **`glovebox-mcp/`** (lib crate `glovebox_mcp`) — the LLM-facing MCP surface over the same
+  domain library: semantic domain-verb tools (`record_service`, `check_due_maintenance`, …)
+  and read-only `glovebox://` resources. As thin as the HTTP handlers: every tool body is
+  arg-struct → shared-service call → serialize, with one `DomainError → MCP` mapping helper.
+  May import axum (it exposes `router(db) -> axum::Router`); only `glovebox-shared` is
+  axum-free. Unauthenticated by design (LAN posture) — see the crate docs in `src/lib.rs`
+  before exposing `/mcp` beyond the LAN.
+- `scripts/check-layering.sh` (run by CI and `just ci`) enforces the shared/backend boundary.
 
 ### Backend binary (`glovebox-backend/src/`)
 
@@ -69,7 +76,19 @@ cd frontend && bun run check  # svelte-check + TypeScript check
 
 **Migrations** (`migration/`): 12 migration files, auto-run on startup via `Migrator::up()`.
 
-**Test harness** (`test_support.rs`, `#[cfg(test)]`): `test_db()` — in-memory SQLite with migrations applied, for service-layer unit tests.
+**Test harness** (`test_support.rs`): `test_db()` — in-memory SQLite with migrations applied, for service-layer unit tests. Compiled under `#[cfg(any(test, feature = "test-support"))]`; sibling crates use it in their integration tests via a dev-dependency on `glovebox-shared` with the `test-support` feature (see `glovebox-mcp/Cargo.toml`).
+
+### MCP surface (`glovebox-mcp/src/`)
+
+**Mount** (`lib.rs`): `router(db) -> axum::Router` wraps rmcp's `StreamableHttpService` (+ `LocalSessionManager`, 7-day session keep-alive); the backend nests it at `/mcp`. LAN hostnames must be allowlisted via `GLOVEBOX_MCP_ALLOWED_HOSTS` (rmcp's DNS-rebinding defense 403s unknown `Host` headers).
+
+**Tools** (`handler.rs`): 14 domain verbs, named as things a person would say (`record_service`, not `create_service_record`). Inputs are schemars-derived structs in `schemas.rs` (doc comments become the LLM-visible field descriptions). `LenientParameters<T>` defers deserialize errors so malformed args come back as actionable tool errors, not bare JSON-RPC `-32602`s — pair it with an explicit `input_schema = schema_for_type::<T>()` on every `#[tool]`.
+
+**Resources**: stable URIs (`glovebox://vehicles`, `…/{id}`, `…/{id}/activity`, `…/{id}/builds/{build_id}`). `list_resources` enumerates concrete URIs from the DB; `read_resource` parses them (rmcp resource templates are not used).
+
+**Error mapping**: one helper (`domain_error`) used by every tool — `NotFound`/`Invalid`/`BadRequest` become tool-level error results (message reaches the LLM); `Db`/`Internal` become opaque JSON-RPC internal errors with detail kept in tracing.
+
+**Tests**: `tests/mcp_integration_test.rs` drives the real router over the Streamable HTTP handshake (initialize → session id → tools/resources).
 
 ### Frontend (`frontend/`)
 
