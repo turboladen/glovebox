@@ -230,7 +230,8 @@ pub async fn resolve(
 /// owned by the vehicle itself, by its model template, or by that template's
 /// platform. Anything else — including another vehicle's items — must be
 /// indistinguishable from a nonexistent item (paxy discipline).
-async fn require_in_vehicle_scope(
+/// `pub(crate)`: shared single-id guard (`work_item` links reuse it).
+pub(crate) async fn require_in_vehicle_scope(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     schedule_item_id: i32,
