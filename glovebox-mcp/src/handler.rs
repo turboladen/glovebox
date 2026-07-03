@@ -24,15 +24,15 @@ use glovebox_shared::{
     error::{DomainError, DomainResult},
     inputs::build::UpdateBuild,
     services::{
-        activity, build, costs, mileage, observation, reminders, research, search,
+        activity, build, costs, mileage, observation, part, reminders, research, search,
         search::SearchScope, service_record, vehicle,
     },
 };
 
 use crate::schemas::{
     BuildParams, EmptyParams, FileResearchFindingInput, FindDocumentsInput, LogMileageInput,
-    LogObservationInput, RecordServiceInput, SearchRecordsInput, SummarizeActivityInput,
-    UpdateBuildStatusInput, VehicleBrief, VehicleParams,
+    LogObservationInput, RecordPartInput, RecordServiceInput, SearchRecordsInput,
+    SummarizeActivityInput, UpdateBuildStatusInput, VehicleBrief, VehicleParams,
 };
 
 pub const VEHICLES_URI: &str = "glovebox://vehicles";
@@ -101,6 +101,26 @@ impl GloveboxMcp {
             return domain_error(e);
         }
         domain_result(service_record::create(&*self.db, vehicle_id, input).await)
+    }
+
+    #[tool(
+        name = "record_part",
+        description = "Record a part you bought or installed for this vehicle — purchase info, cost (integer cents), where it goes (location), and optional links to the installing service or a build project. Use record_service for the labor; this is the part itself.",
+        input_schema = rmcp::handler::server::common::schema_for_type::<RecordPartInput>()
+    )]
+    async fn record_part(
+        &self,
+        params: LenientParameters<RecordPartInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = match params.into_tool_input("record_part") {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        };
+        let (vehicle_id, input) = p.into_domain();
+        if let Err(e) = vehicle::require(&*self.db, vehicle_id).await {
+            return domain_error(e);
+        }
+        domain_result(part::create(&*self.db, vehicle_id, input).await)
     }
 
     #[tool(
@@ -351,12 +371,13 @@ impl ServerHandler for GloveboxMcp {
                  `list_vehicles` for ids, then `summarize_recent_activity` for the vehicle's \
                  recent history. (2) ANSWER \"what does it need?\" — `check_due_maintenance` \
                  before recommending any work; `check_recalls` for safety recalls. (3) CAPTURE \
-                 what happened — `record_service` for completed work, `log_observation` for \
-                 symptoms/notes, `log_mileage` whenever the user mentions an odometer reading. \
-                 (4) LOOK THINGS UP — `find_documents` for receipts/manuals, `search_records` for \
-                 anything else, `cost_summary` for spend. (5) PROJECTS — `list_builds` / \
-                 `get_build_progress` / `update_build_status` for upgrade or restoration builds. \
-                 All money is integer cents; all dates are YYYY-MM-DD.",
+                 what happened — `record_service` for completed work, `record_part` for parts \
+                 bought or installed, `log_observation` for symptoms/notes, `log_mileage` \
+                 whenever the user mentions an odometer reading. (4) LOOK THINGS UP — \
+                 `find_documents` for receipts/manuals, `search_records` for anything else, \
+                 `cost_summary` for spend. (5) PROJECTS — `list_builds` / `get_build_progress` / \
+                 `update_build_status` for upgrade or restoration builds. All money is integer \
+                 cents; all dates are YYYY-MM-DD.",
             )
     }
 

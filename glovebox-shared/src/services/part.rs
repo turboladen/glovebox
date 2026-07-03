@@ -1,25 +1,10 @@
 use sea_orm::*;
 
 use crate::{
-    entities::{part, part_slot, service_record},
+    entities::{part, service_record},
     error::{DomainError, DomainResult},
     inputs::part::{NewPart, PartFilter, UpdatePart},
 };
-
-/// Verify a referenced part slot belongs to the vehicle. A cross-vehicle slot
-/// must be indistinguishable from a nonexistent one.
-async fn require_slot_owned(
-    db: &impl ConnectionTrait,
-    vehicle_id: i32,
-    slot_id: i32,
-) -> DomainResult<()> {
-    part_slot::Entity::find_by_id(slot_id)
-        .filter(part_slot::Column::VehicleId.eq(vehicle_id))
-        .one(db)
-        .await?
-        .ok_or_else(|| DomainError::NotFound(format!("Part slot {slot_id} not found")))?;
-    Ok(())
-}
 
 /// Verify a referenced service record belongs to the vehicle. A cross-vehicle
 /// service must be indistinguishable from a nonexistent one.
@@ -43,9 +28,6 @@ pub async fn list(
 ) -> DomainResult<Vec<part::Model>> {
     let mut query = part::Entity::find().filter(part::Column::VehicleId.eq(vehicle_id));
 
-    if let Some(slot_id) = filter.slot_id {
-        query = query.filter(part::Column::SlotId.eq(slot_id));
-    }
     if let Some(status) = filter.status {
         query = query.filter(part::Column::Status.eq(status));
     }
@@ -66,9 +48,6 @@ pub async fn create(
     vehicle_id: i32,
     input: NewPart,
 ) -> DomainResult<part::Model> {
-    if let Some(slot_id) = input.slot_id {
-        require_slot_owned(db, vehicle_id, slot_id).await?;
-    }
     if let Some(service_id) = input.installed_service_id {
         require_service_record_owned(db, vehicle_id, service_id).await?;
     }
@@ -78,7 +57,6 @@ pub async fn create(
 
     let model = part::ActiveModel {
         vehicle_id: Set(vehicle_id),
-        slot_id: Set(input.slot_id),
         name: Set(input.name),
         manufacturer: Set(input.manufacturer),
         part_number: Set(input.part_number),
@@ -96,6 +74,7 @@ pub async fn create(
         installed_service_id: Set(input.installed_service_id),
         notes: Set(input.notes),
         build_id: Set(input.build_id),
+        location: Set(input.location),
         ..Default::default()
     };
     Ok(model.insert(db).await?)
@@ -109,9 +88,6 @@ pub async fn update(
 ) -> DomainResult<part::Model> {
     let existing = get(db, vehicle_id, id).await?;
 
-    if let Some(Some(slot_id)) = input.slot_id {
-        require_slot_owned(db, vehicle_id, slot_id).await?;
-    }
     if let Some(Some(service_id)) = input.installed_service_id {
         require_service_record_owned(db, vehicle_id, service_id).await?;
     }
@@ -121,9 +97,6 @@ pub async fn update(
 
     let mut active: part::ActiveModel = existing.into();
 
-    if let Some(v) = input.slot_id {
-        active.slot_id = Set(v);
-    }
     if let Some(v) = input.name {
         active.name = Set(v);
     }
@@ -181,6 +154,9 @@ pub async fn update(
     if let Some(v) = input.build_id {
         active.build_id = Set(v);
     }
+    if let Some(v) = input.location {
+        active.location = Set(v);
+    }
 
     active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
     Ok(active.update(db).await?)
@@ -209,42 +185,6 @@ mod tests {
         .id
     }
 
-    #[tokio::test]
-    async fn create_defaults_status_and_get_round_trips() {
-        let db = test_db().await;
-        let vid = seed_vehicle(&db).await;
-        let created = create(
-            &db,
-            vid,
-            NewPart {
-                slot_id: None,
-                name: "Oil filter".into(),
-                manufacturer: None,
-                part_number: None,
-                oe_part_number_replaced: None,
-                seller: None,
-                purchase_date: None,
-                cost_cents: Some(1_599),
-                cost_currency: None,
-                invoice_url: None,
-                manufacturer_url: None,
-                retailer_url: None,
-                status: None,
-                installed_date: None,
-                installed_odometer: None,
-                installed_service_id: None,
-                notes: None,
-                build_id: None,
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(created.status, "purchased");
-        let fetched = get(&db, vid, created.id).await.unwrap();
-        assert_eq!(fetched.name, "Oil filter");
-        assert_eq!(fetched.cost_cents, Some(1_599));
-    }
-
     async fn seed_service(db: &impl ConnectionTrait, vehicle_id: i32) -> i32 {
         use crate::entities::service_record;
         service_record::ActiveModel {
@@ -258,17 +198,92 @@ mod tests {
         .id
     }
 
-    async fn seed_slot(db: &impl ConnectionTrait, vehicle_id: i32, name: &str) -> i32 {
-        use crate::entities::part_slot;
-        part_slot::ActiveModel {
-            vehicle_id: Set(vehicle_id),
-            name: Set(name.into()),
-            ..Default::default()
+    fn minimal_part(name: &str, installed_service_id: Option<i32>) -> NewPart {
+        NewPart {
+            name: name.into(),
+            manufacturer: None,
+            part_number: None,
+            oe_part_number_replaced: None,
+            seller: None,
+            purchase_date: None,
+            cost_cents: None,
+            cost_currency: None,
+            invoice_url: None,
+            manufacturer_url: None,
+            retailer_url: None,
+            status: None,
+            installed_date: None,
+            installed_odometer: None,
+            installed_service_id,
+            notes: None,
+            build_id: None,
+            location: None,
         }
-        .insert(db)
+    }
+
+    #[tokio::test]
+    async fn create_defaults_status_and_get_round_trips() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let created = create(
+            &db,
+            vid,
+            NewPart {
+                cost_cents: Some(1_599),
+                ..minimal_part("Oil filter", None)
+            },
+        )
         .await
-        .unwrap()
-        .id
+        .unwrap();
+        assert_eq!(created.status, "purchased");
+        let fetched = get(&db, vid, created.id).await.unwrap();
+        assert_eq!(fetched.name, "Oil filter");
+        assert_eq!(fetched.cost_cents, Some(1_599));
+    }
+
+    #[tokio::test]
+    async fn location_round_trips_and_clears() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let created = create(
+            &db,
+            vid,
+            NewPart {
+                location: Some("Front brakes".into()),
+                ..minimal_part("Brake pads", None)
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(created.location, Some("Front brakes".into()));
+
+        // Omitted location survives an unrelated update.
+        let updated = update(
+            &db,
+            vid,
+            created.id,
+            UpdatePart {
+                status: Some("installed".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.location, Some("Front brakes".into()));
+
+        // Explicit null clears it (double-option convention).
+        let cleared = update(
+            &db,
+            vid,
+            created.id,
+            UpdatePart {
+                location: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(cleared.location, None);
     }
 
     #[tokio::test]
@@ -276,32 +291,9 @@ mod tests {
         let db = test_db().await;
         let vid = seed_vehicle(&db).await;
         let svc_id = seed_service(&db, vid).await;
-        let p = create(
-            &db,
-            vid,
-            NewPart {
-                slot_id: None,
-                name: "Brake pads".into(),
-                manufacturer: None,
-                part_number: None,
-                oe_part_number_replaced: None,
-                seller: None,
-                purchase_date: None,
-                cost_cents: None,
-                cost_currency: None,
-                invoice_url: None,
-                manufacturer_url: None,
-                retailer_url: None,
-                status: None,
-                installed_date: None,
-                installed_odometer: None,
-                installed_service_id: Some(svc_id),
-                notes: None,
-                build_id: None,
-            },
-        )
-        .await
-        .unwrap();
+        let p = create(&db, vid, minimal_part("Brake pads", Some(svc_id)))
+            .await
+            .unwrap();
         assert_eq!(p.installed_service_id, Some(svc_id));
 
         // Update an unrelated field; the installed_service_id link must survive.
@@ -334,46 +326,16 @@ mod tests {
         assert_eq!(cleared.installed_service_id, None);
     }
 
-    fn minimal_part(slot_id: Option<i32>, installed_service_id: Option<i32>) -> NewPart {
-        NewPart {
-            slot_id,
-            name: "Part".into(),
-            manufacturer: None,
-            part_number: None,
-            oe_part_number_replaced: None,
-            seller: None,
-            purchase_date: None,
-            cost_cents: None,
-            cost_currency: None,
-            invoice_url: None,
-            manufacturer_url: None,
-            retailer_url: None,
-            status: None,
-            installed_date: None,
-            installed_odometer: None,
-            installed_service_id,
-            notes: None,
-            build_id: None,
-        }
-    }
-
     #[tokio::test]
-    async fn create_rejects_other_vehicles_slot_and_service() {
+    async fn create_rejects_other_vehicles_service() {
         let db = test_db().await;
         let owner = seed_vehicle(&db).await;
         let other = seed_vehicle(&db).await;
-        let foreign_slot = seed_slot(&db, other, "foreign slot").await;
         let foreign_svc = seed_service(&db, other).await;
 
-        // Referencing another vehicle's slot or service must 404 and create nothing.
+        // Referencing another vehicle's service must 404 and create nothing.
         assert!(matches!(
-            create(&db, owner, minimal_part(Some(foreign_slot), None))
-                .await
-                .unwrap_err(),
-            DomainError::NotFound(_)
-        ));
-        assert!(matches!(
-            create(&db, owner, minimal_part(None, Some(foreign_svc)))
+            create(&db, owner, minimal_part("Part", Some(foreign_svc)))
                 .await
                 .unwrap_err(),
             DomainError::NotFound(_)
@@ -387,28 +349,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_rejects_other_vehicles_slot_and_service() {
+    async fn update_rejects_other_vehicles_service() {
         let db = test_db().await;
         let owner = seed_vehicle(&db).await;
         let other = seed_vehicle(&db).await;
-        let foreign_slot = seed_slot(&db, other, "foreign slot").await;
         let foreign_svc = seed_service(&db, other).await;
-        let p = create(&db, owner, minimal_part(None, None)).await.unwrap();
-
-        assert!(matches!(
-            update(
-                &db,
-                owner,
-                p.id,
-                UpdatePart {
-                    slot_id: Some(Some(foreign_slot)),
-                    ..Default::default()
-                },
-            )
+        let p = create(&db, owner, minimal_part("Part", None))
             .await
-            .unwrap_err(),
-            DomainError::NotFound(_)
-        ));
+            .unwrap();
+
         assert!(matches!(
             update(
                 &db,
@@ -423,40 +372,21 @@ mod tests {
             .unwrap_err(),
             DomainError::NotFound(_)
         ));
-        // The part is untouched by the rejected updates.
+        // The part is untouched by the rejected update.
         let fetched = get(&db, owner, p.id).await.unwrap();
-        assert_eq!(fetched.slot_id, None);
         assert_eq!(fetched.installed_service_id, None);
     }
 
     #[tokio::test]
-    async fn list_filters_by_slot_and_status() {
+    async fn list_filters_by_status() {
         let db = test_db().await;
         let vid = seed_vehicle(&db).await;
-        let slot1 = seed_slot(&db, vid, "slot1").await;
-        let slot2 = seed_slot(&db, vid, "slot2").await;
         create(
             &db,
             vid,
             NewPart {
-                slot_id: Some(slot1),
-                name: "A".into(),
-                manufacturer: None,
-                part_number: None,
-                oe_part_number_replaced: None,
-                seller: None,
-                purchase_date: None,
-                cost_cents: None,
-                cost_currency: None,
-                invoice_url: None,
-                manufacturer_url: None,
-                retailer_url: None,
                 status: Some("installed".into()),
-                installed_date: None,
-                installed_odometer: None,
-                installed_service_id: None,
-                notes: None,
-                build_id: None,
+                ..minimal_part("A", None)
             },
         )
         .await
@@ -465,24 +395,8 @@ mod tests {
             &db,
             vid,
             NewPart {
-                slot_id: Some(slot2),
-                name: "B".into(),
-                manufacturer: None,
-                part_number: None,
-                oe_part_number_replaced: None,
-                seller: None,
-                purchase_date: None,
-                cost_cents: None,
-                cost_currency: None,
-                invoice_url: None,
-                manufacturer_url: None,
-                retailer_url: None,
                 status: Some("purchased".into()),
-                installed_date: None,
-                installed_odometer: None,
-                installed_service_id: None,
-                notes: None,
-                build_id: None,
+                ..minimal_part("B", None)
             },
         )
         .await
@@ -497,21 +411,6 @@ mod tests {
                 &db,
                 vid,
                 PartFilter {
-                    slot_id: Some(slot1),
-                    status: None
-                }
-            )
-            .await
-            .unwrap()
-            .len(),
-            1
-        );
-        assert_eq!(
-            list(
-                &db,
-                vid,
-                PartFilter {
-                    slot_id: None,
                     status: Some("purchased".into())
                 }
             )

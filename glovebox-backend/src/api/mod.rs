@@ -8,7 +8,6 @@ pub mod health;
 pub mod mileage;
 pub mod model_templates;
 pub mod observations;
-pub mod part_slots;
 pub mod parts;
 pub mod platforms;
 pub mod reminders;

@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
-    pub slot_id: Option<i32>,
     pub vehicle_id: i32,
     pub name: String,
     pub manufacturer: Option<String>,
@@ -29,16 +28,11 @@ pub struct Model {
     pub manufacturer_url: Option<String>,
     pub retailer_url: Option<String>,
     pub build_id: Option<i32>,
+    pub location: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
-    #[sea_orm(
-        belongs_to = "super::part_slot::Entity",
-        from = "Column::SlotId",
-        to = "super::part_slot::Column::Id"
-    )]
-    PartSlot,
     #[sea_orm(
         belongs_to = "super::vehicle::Entity",
         from = "Column::VehicleId",
@@ -62,12 +56,6 @@ pub enum Relation {
 impl Related<super::build::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Build.def()
-    }
-}
-
-impl Related<super::part_slot::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::PartSlot.def()
     }
 }
 

@@ -218,6 +218,7 @@ async fn tools_list_advertises_the_full_verb_set() {
         "list_vehicles",
         "get_vehicle",
         "record_service",
+        "record_part",
         "log_observation",
         "log_mileage",
         "check_due_maintenance",
@@ -244,7 +245,7 @@ async fn tools_list_advertises_the_full_verb_set() {
     let tools = parsed["result"]["tools"]
         .as_array()
         .unwrap_or_else(|| panic!("tools/list result must carry a tools array; got: {body}"));
-    assert_eq!(tools.len(), 15, "expected exactly 15 tools; got: {body}");
+    assert_eq!(tools.len(), 16, "expected exactly 16 tools; got: {body}");
     for tool in tools {
         let name = tool["name"].as_str().expect("tool name");
         if name == "list_vehicles" {
@@ -401,6 +402,86 @@ async fn log_observation_and_mileage_write_through() {
     )
     .await;
     assert!(body.contains("Squeak from front left") && body.contains("48250"));
+}
+
+#[tokio::test]
+async fn record_part_round_trips_and_rejects_bad_links() {
+    let (app, db) = setup().await;
+    let session = handshake(&app).await;
+    let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
+    let other = vehicle::create(&db, new_vehicle("Other")).await.unwrap();
+    let foreign_build = build_svc::create(
+        &db,
+        other.id,
+        NewBuild {
+            name: "Not mine".into(),
+            description: None,
+            target_date: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    // Parts have no MCP list surface; the tool result payload is the created
+    // part record itself.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "record_part",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "name": "Sachs SRE clutch kit",
+                "cost_cents": 89_900,
+                "location": "Front brakes",
+                "seller": "FCP Euro"
+            }),
+        ),
+    )
+    .await;
+    assert_success(&body);
+    assert!(
+        body.contains("Sachs SRE clutch kit")
+            && body.contains("Front brakes")
+            && (body.contains("\\\"id\\\"") || body.contains("\"id\"")),
+        "created part payload must carry name, location, and id; got: {body}"
+    );
+    assert!(
+        body.contains("purchased"),
+        "status must default to purchased; got: {body}"
+    );
+
+    // Nonexistent vehicle -> clean tool error.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "record_part",
+            serde_json::json!({ "vehicle_id": 999, "name": "Oil filter" }),
+        ),
+    )
+    .await;
+    assert_tool_error(&body);
+
+    // Cross-vehicle build must be indistinguishable from a missing one.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "record_part",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "name": "Downpipe",
+                "build_id": foreign_build.id
+            }),
+        ),
+    )
+    .await;
+    assert_tool_error(&body);
+    assert!(
+        body.contains("not found"),
+        "cross-vehicle build must read as missing; got: {body}"
+    );
 }
 
 #[tokio::test]

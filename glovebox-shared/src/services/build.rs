@@ -288,7 +288,6 @@ mod tests {
 
     fn minimal_part(name: &str, cost_cents: Option<i32>, status: Option<String>) -> NewPart {
         NewPart {
-            slot_id: None,
             name: name.into(),
             manufacturer: None,
             part_number: None,
@@ -306,6 +305,7 @@ mod tests {
             installed_service_id: None,
             notes: None,
             build_id: None,
+            location: None,
         }
     }
 

@@ -10,6 +10,7 @@ use glovebox_shared::{
     inputs::{
         mileage::NewMileageEntry,
         observation::NewObservation,
+        part::NewPart,
         service_record::{NewLineItem, NewServiceRecord},
     },
     services::research::NewFiledFinding,
@@ -144,6 +145,69 @@ impl LogObservationInput {
                 obd_codes: self.obd_codes,
                 notes: None,
                 build_id: self.build_id,
+            },
+        )
+    }
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct RecordPartInput {
+    /// Vehicle id, from `list_vehicles`.
+    pub vehicle_id: i32,
+    /// Part name, e.g. "Sachs SRE clutch kit".
+    pub name: String,
+    /// Manufacturer/brand, e.g. "Sachs".
+    pub manufacturer: Option<String>,
+    /// Manufacturer part number.
+    pub part_number: Option<String>,
+    /// Where it was bought, e.g. "FCP Euro".
+    pub seller: Option<String>,
+    /// Purchase date, `YYYY-MM-DD`.
+    pub purchase_date: Option<String>,
+    /// What it cost, integer cents (e.g. $123.45 -> 12345).
+    pub cost_cents: Option<i32>,
+    /// Lifecycle status: `purchased`, `installed`, or `replaced`.
+    /// Defaults to `purchased`.
+    pub status: Option<String>,
+    /// Where it goes on the car (free text), e.g. "Front brakes".
+    pub location: Option<String>,
+    /// Date it was installed, `YYYY-MM-DD`.
+    pub installed_date: Option<String>,
+    /// Odometer reading at install time.
+    pub installed_odometer: Option<i32>,
+    /// Link to the service record that installed it.
+    pub installed_service_id: Option<i32>,
+    /// Product/listing URL for the part.
+    pub retailer_url: Option<String>,
+    /// Free-form notes.
+    pub notes: Option<String>,
+    /// Link this part to a build (from `list_builds`).
+    pub build_id: Option<i32>,
+}
+
+impl RecordPartInput {
+    pub fn into_domain(self) -> (i32, NewPart) {
+        (
+            self.vehicle_id,
+            NewPart {
+                name: self.name,
+                manufacturer: self.manufacturer,
+                part_number: self.part_number,
+                oe_part_number_replaced: None,
+                seller: self.seller,
+                purchase_date: self.purchase_date,
+                cost_cents: self.cost_cents,
+                cost_currency: None,
+                invoice_url: None,
+                manufacturer_url: None,
+                retailer_url: self.retailer_url,
+                status: self.status,
+                installed_date: self.installed_date,
+                installed_odometer: self.installed_odometer,
+                installed_service_id: self.installed_service_id,
+                notes: self.notes,
+                build_id: self.build_id,
+                location: self.location,
             },
         )
     }

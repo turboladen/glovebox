@@ -8,7 +8,6 @@ pub mod mileage;
 pub mod model_template;
 pub mod observation;
 pub mod part;
-pub mod part_slot;
 pub mod platform;
 pub mod research;
 pub mod schedule;
