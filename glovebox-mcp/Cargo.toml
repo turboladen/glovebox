@@ -1,0 +1,30 @@
+[package]
+name = "glovebox-mcp"
+edition.workspace = true
+version.workspace = true
+
+[lib]
+name = "glovebox_mcp"
+path = "src/lib.rs"
+
+[dependencies]
+glovebox-shared = { path = "../glovebox-shared" }
+# Surface crate: MAY import axum (it exposes an axum::Router for the backend
+# to mount). Only glovebox-shared is axum-free.
+axum = "0.8"
+rmcp = { version = "1.5", features = [
+    "server",
+    "macros",
+    "transport-streamable-http-server",
+    "schemars",
+] }
+schemars = "1"
+sea-orm.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+glovebox-shared = { path = "../glovebox-shared", features = ["test-support"] }
+tokio.workspace = true
+tower = "0.5"
