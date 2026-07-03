@@ -1,21 +1,102 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { services as servicesApi } from '../lib/api'
-  import type { RemindersResponse, ReminderStatus, ServiceRecordWithLinks } from '../lib/types'
+  import { services as servicesApi, schedules as schedulesApi } from '../lib/api'
+  import type { RemindersResponse, ReminderStatus, ScheduleItem, ServiceRecordWithLinks } from '../lib/types'
   import { formatDate } from '../lib/dates'
 
-  let { reminderData, vehicleId }: { reminderData: RemindersResponse | null; vehicleId: number } = $props()
+  let { reminderData, vehicleId, onScheduleChanged }: {
+    reminderData: RemindersResponse | null
+    vehicleId: number
+    onScheduleChanged?: () => Promise<void> | void
+  } = $props()
 
   let allServices: ServiceRecordWithLinks[] = $state([])
+  let dismissedItems: ScheduleItem[] = $state([])
   let expandedItemId: number | null = $state(null)
+  let actionError = $state('')
 
-  onMount(async () => {
+  // Inline minimal-record form (Record service… / Mark done previously)
+  let recordTarget: { id: number; name: string; retro: boolean } | null = $state(null)
+  let recordDate = $state('')
+  let recordOdometer = $state('')
+  let recordCost = $state('')
+  let recordSaving = $state(false)
+
+  async function loadOwnData() {
     try {
-      allServices = await servicesApi.list(vehicleId)
+      const [services, vehicleItems] = await Promise.all([
+        servicesApi.list(vehicleId),
+        schedulesApi.list({ vehicle_id: vehicleId }),
+      ])
+      allServices = services
+      // Vehicle-level enabled=false overrides — dismissed items (in-place or
+      // shadows of inherited items).
+      dismissedItems = vehicleItems.filter((i) => !i.enabled)
     } catch (e) {
       console.error(e)
     }
-  })
+  }
+
+  onMount(loadOwnData)
+
+  async function refresh() {
+    await loadOwnData()
+    await onScheduleChanged?.()
+  }
+
+  function openRecordForm(reminder: ReminderStatus, retro: boolean) {
+    actionError = ''
+    recordTarget = { id: reminder.schedule_item.id, name: reminder.schedule_item.name, retro }
+    recordDate = retro ? '' : new Date().toISOString().split('T')[0]
+    recordOdometer = ''
+    recordCost = ''
+  }
+
+  async function submitRecord() {
+    if (!recordTarget) return
+    recordSaving = true
+    actionError = ''
+    try {
+      await servicesApi.create(vehicleId, {
+        service_date: recordDate,
+        description: recordTarget.name,
+        mileage: recordOdometer ? parseInt(recordOdometer, 10) : undefined,
+        total_cost_cents: recordTarget.retro
+          ? 0
+          : recordCost
+            ? Math.round(parseFloat(recordCost) * 100)
+            : undefined,
+        notes: recordTarget.retro ? 'recorded retroactively' : undefined,
+        schedule_item_ids: [recordTarget.id],
+      })
+      recordTarget = null
+      await refresh()
+    } catch (e: any) {
+      actionError = e.message
+    } finally {
+      recordSaving = false
+    }
+  }
+
+  async function dismissItem(reminder: ReminderStatus) {
+    actionError = ''
+    try {
+      await schedulesApi.dismiss(vehicleId, reminder.schedule_item.id)
+      await refresh()
+    } catch (e: any) {
+      actionError = e.message
+    }
+  }
+
+  async function reenableItem(item: ScheduleItem) {
+    actionError = ''
+    try {
+      await schedulesApi.undismiss(vehicleId, item.id)
+      await refresh()
+    } catch (e: any) {
+      actionError = e.message
+    }
+  }
 
   function groupByStatus(reminders: ReminderStatus[]) {
     return {
@@ -42,10 +123,51 @@
 
 </script>
 
+{#snippet reminderActions(reminder: ReminderStatus)}
+  <div class="reminder-actions">
+    <button class="action-link" onclick={() => openRecordForm(reminder, false)}>Record service…</button>
+    <button class="action-link" onclick={() => openRecordForm(reminder, true)}>Mark done previously</button>
+    <button class="action-link dismiss" onclick={() => dismissItem(reminder)}>Dismiss for this vehicle</button>
+  </div>
+  {#if recordTarget?.id === reminder.schedule_item.id}
+    <form class="record-form" onsubmit={(e) => { e.preventDefault(); submitRecord() }}>
+      <div class="record-form-fields">
+        <label>
+          Date
+          <input type="date" bind:value={recordDate} required max={recordTarget.retro ? new Date().toISOString().split('T')[0] : undefined} />
+        </label>
+        <label>
+          Odometer
+          <input type="number" min="0" bind:value={recordOdometer} placeholder="optional" />
+        </label>
+        {#if !recordTarget.retro}
+          <label>
+            Cost ($)
+            <input type="number" step="0.01" min="0" bind:value={recordCost} placeholder="optional" />
+          </label>
+        {/if}
+      </div>
+      {#if recordTarget.retro}
+        <p class="record-form-hint">Recorded retroactively — pick the date it was actually done.</p>
+      {/if}
+      <div class="record-form-actions">
+        <button type="button" class="action-link" onclick={() => (recordTarget = null)}>Cancel</button>
+        <button type="submit" class="btn btn-primary btn-small" disabled={recordSaving || !recordDate}>
+          {recordSaving ? 'Saving…' : recordTarget.retro ? 'Save past service' : 'Save service'}
+        </button>
+      </div>
+    </form>
+  {/if}
+{/snippet}
+
 {#if !reminderData}
   <p>No reminder data available.</p>
 {:else}
   {@const groups = groupByStatus(reminderData.reminders)}
+
+  {#if actionError}
+    <p class="action-error">{actionError}</p>
+  {/if}
 
   {#if groups.overdue.length > 0}
     <section class="reminder-group">
@@ -98,6 +220,7 @@
               {/each}
             </div>
           {/if}
+          {@render reminderActions(reminder)}
         </div>
       {/each}
     </section>
@@ -145,6 +268,7 @@
               {/each}
             </div>
           {/if}
+          {@render reminderActions(reminder)}
         </div>
       {/each}
     </section>
@@ -195,6 +319,26 @@
               {/each}
             </div>
           {/if}
+        </div>
+      {/each}
+    </section>
+  {/if}
+
+  {#if dismissedItems.length > 0}
+    <section class="reminder-group">
+      <h3 class="group-label dismissed-label">Dismissed</h3>
+      {#each dismissedItems as item (item.id)}
+        <div class="reminder-card dismissed">
+          <div class="reminder-header">
+            <strong>{item.name}</strong>
+            <span class="overridden-badge">overridden</span>
+          </div>
+          {#if item.notes}
+            <div class="reminder-details">{item.notes}</div>
+          {/if}
+          <div class="reminder-actions">
+            <button class="action-link" onclick={() => reenableItem(item)}>Re-enable</button>
+          </div>
         </div>
       {/each}
     </section>
@@ -305,5 +449,96 @@
 
   .completion-row .shop {
     font-style: italic;
+  }
+
+  .dismissed-label {
+    color: var(--text-muted);
+  }
+
+  .reminder-card.dismissed {
+    border-left-color: var(--border);
+    opacity: 0.6;
+  }
+
+  .overridden-badge {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 1px var(--sp-2);
+  }
+
+  .reminder-actions {
+    display: flex;
+    gap: var(--sp-3);
+    margin-top: var(--sp-2);
+  }
+
+  .action-link {
+    padding: 0;
+    border: none;
+    background: none;
+    font-size: 0.8rem;
+    color: var(--primary);
+    cursor: pointer;
+    font-weight: 500;
+  }
+
+  .action-link:hover {
+    text-decoration: underline;
+  }
+
+  .action-link.dismiss {
+    color: var(--text-muted);
+  }
+
+  .action-error {
+    color: var(--danger);
+    font-size: 0.85rem;
+  }
+
+  .record-form {
+    margin-top: var(--sp-3);
+    padding: var(--sp-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+  }
+
+  .record-form-fields {
+    display: flex;
+    gap: var(--sp-3);
+    flex-wrap: wrap;
+  }
+
+  .record-form-fields label {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-1);
+    font-size: 0.8rem;
+    color: var(--text-muted);
+  }
+
+  .record-form-hint {
+    margin: var(--sp-2) 0 0;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    font-style: italic;
+  }
+
+  .record-form-actions {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: var(--sp-3);
+    margin-top: var(--sp-3);
+  }
+
+  .btn-small {
+    font-size: 0.8rem;
+    padding: var(--sp-1) var(--sp-3);
   }
 </style>

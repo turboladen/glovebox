@@ -18,6 +18,7 @@ mod m20260301_000015_drop_ai_tables;
 mod m20260301_000016_drop_part_slots;
 mod m20260301_000017_add_service_payer;
 mod m20260301_000018_unify_incidents;
+mod m20260301_000019_mileage_service_fk;
 
 pub struct Migrator;
 
@@ -43,6 +44,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260301_000016_drop_part_slots::Migration),
             Box::new(m20260301_000017_add_service_payer::Migration),
             Box::new(m20260301_000018_unify_incidents::Migration),
+            Box::new(m20260301_000019_mileage_service_fk::Migration),
         ]
     }
 }

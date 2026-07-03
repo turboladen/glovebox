@@ -155,6 +155,36 @@ async fn delete(
     Ok(Json(serde_json::json!({"deleted": id})))
 }
 
+#[derive(Deserialize, Default)]
+pub struct DismissScheduleItem {
+    pub reason: Option<String>,
+}
+
+/// Dismiss a schedule item for one vehicle (vehicle-level `enabled = false`
+/// override). Thin: ownership/inheritance mechanics live in
+/// `schedule::dismiss_for_vehicle`. The JSON body (`{"reason": …}`) is
+/// optional.
+pub async fn dismiss(
+    State(state): State<AppState>,
+    Path((vehicle_id, item_id)): Path<(i32, i32)>,
+    body: Option<Json<DismissScheduleItem>>,
+) -> Result<Json<maintenance_schedule_item::Model>> {
+    let reason = body.and_then(|Json(b)| b.reason);
+    Ok(Json(
+        svc::dismiss_for_vehicle(&state.db, vehicle_id, item_id, reason).await?,
+    ))
+}
+
+/// Reverse a dismissal: re-enable the vehicle-owned override row.
+pub async fn undismiss(
+    State(state): State<AppState>,
+    Path((vehicle_id, item_id)): Path<(i32, i32)>,
+) -> Result<Json<maintenance_schedule_item::Model>> {
+    Ok(Json(
+        svc::undismiss_for_vehicle(&state.db, vehicle_id, item_id).await?,
+    ))
+}
+
 /// Resolve the effective maintenance schedule for a vehicle.
 /// Implements the 3-level inheritance: Platform → Model Template → Vehicle.
 pub async fn resolve(

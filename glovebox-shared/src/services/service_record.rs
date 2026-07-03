@@ -124,6 +124,64 @@ async fn insert_line_items(
     Ok(())
 }
 
+/// Insert the mileage log a service record auto-creates for its odometer
+/// reading (`source = "service"`, linked via `service_record_id`).
+async fn insert_auto_mileage_log(
+    txn: &impl ConnectionTrait,
+    vehicle_id: i32,
+    record: &service_record::Model,
+    miles: i32,
+) -> DomainResult<()> {
+    let mileage_entry = mileage_log::ActiveModel {
+        vehicle_id: Set(vehicle_id),
+        mileage: Set(miles),
+        recorded_at: Set(record.service_date.clone()),
+        source: Set(Some("service".to_string())),
+        notes: Set(None),
+        service_record_id: Set(Some(record.id)),
+        ..Default::default()
+    };
+    mileage_entry.insert(txn).await?;
+    Ok(())
+}
+
+/// Reconcile the auto-created mileage log with the record's current state
+/// (mirrors what `create` produces): mileage present → the linked log carries
+/// that mileage at the service date (created if missing); mileage cleared →
+/// the linked log is removed.
+async fn sync_auto_mileage_log(
+    txn: &impl ConnectionTrait,
+    vehicle_id: i32,
+    record: &service_record::Model,
+) -> DomainResult<()> {
+    let existing_log = mileage_log::Entity::find()
+        .filter(mileage_log::Column::ServiceRecordId.eq(record.id))
+        .one(txn)
+        .await?;
+
+    match (record.mileage, existing_log) {
+        (Some(miles), Some(log)) => {
+            if log.mileage != miles || log.recorded_at != record.service_date {
+                let mut active_log: mileage_log::ActiveModel = log.into();
+                active_log.mileage = Set(miles);
+                active_log.recorded_at = Set(record.service_date.clone());
+                active_log.update(txn).await?;
+            }
+        }
+        (Some(miles), None) => {
+            insert_auto_mileage_log(txn, vehicle_id, record, miles).await?;
+        }
+        (None, Some(_)) => {
+            mileage_log::Entity::delete_many()
+                .filter(mileage_log::Column::ServiceRecordId.eq(record.id))
+                .exec(txn)
+                .await?;
+        }
+        (None, None) => {}
+    }
+    Ok(())
+}
+
 pub async fn list(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -284,17 +342,11 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     let line_items_input = input.line_items.unwrap_or_default();
     insert_line_items(&txn, record.id, line_items_input).await?;
 
-    // Also create a mileage log entry if mileage was provided
+    // Also create a mileage log entry if mileage was provided. The FK is the
+    // real linkage (activity dedupe + update/delete maintenance key on it);
+    // `source` stays as a display label.
     if let Some(miles) = record.mileage {
-        let mileage_entry = mileage_log::ActiveModel {
-            vehicle_id: Set(vehicle_id),
-            mileage: Set(miles),
-            recorded_at: Set(record.service_date.clone()),
-            source: Set(Some("service".to_string())),
-            notes: Set(None),
-            ..Default::default()
-        };
-        mileage_entry.insert(&txn).await?;
+        insert_auto_mileage_log(&txn, vehicle_id, &record, miles).await?;
     }
 
     // Load back the inserted line items to return
@@ -389,6 +441,9 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
 
     let record = active.update(&txn).await?;
+
+    // Keep the auto-created mileage log in step with the record.
+    sync_auto_mileage_log(&txn, vehicle_id, &record).await?;
 
     let schedule_item_ids = if let Some(item_ids) = input.schedule_item_ids {
         require_schedule_items_in_scope(&txn, vehicle_id, &item_ids).await?;
@@ -508,6 +563,13 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         active_part.installed_odometer = Set(None);
         active_part.update(&txn).await?;
     }
+
+    // Remove the auto-created mileage log(s) — an orphaned log would keep
+    // feeding reminders' mileage estimate while staying hidden from the feed.
+    mileage_log::Entity::delete_many()
+        .filter(mileage_log::Column::ServiceRecordId.eq(existing.id))
+        .exec(&txn)
+        .await?;
 
     // Remove schedule links and line items
     service_schedule_link::Entity::delete_many()
@@ -778,6 +840,155 @@ mod tests {
             .await
             .unwrap();
         assert!(links.is_empty());
+    }
+
+    #[tokio::test]
+    async fn create_links_auto_mileage_log_via_fk() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+
+        let created = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                mileage: Some(50_000),
+                ..minimal_record(None)
+            },
+        )
+        .await
+        .unwrap();
+
+        let logs = mileage_log::Entity::find()
+            .filter(mileage_log::Column::VehicleId.eq(vid))
+            .all(&db)
+            .await
+            .unwrap();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].service_record_id, Some(created.record.id));
+        assert_eq!(logs[0].source.as_deref(), Some("service"));
+    }
+
+    #[tokio::test]
+    async fn delete_removes_auto_created_mileage_log() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+
+        let created = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                mileage: Some(48_000),
+                ..minimal_record(None)
+            },
+        )
+        .await
+        .unwrap();
+
+        // A manual log must survive the service delete.
+        let manual = mileage_log::ActiveModel {
+            vehicle_id: Set(vid),
+            mileage: Set(47_000),
+            recorded_at: Set("2024-02-01 09:00:00".into()),
+            source: Set(Some("manual".into())),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        delete(&db, vid, created.record.id).await.unwrap();
+
+        let logs = mileage_log::Entity::find()
+            .filter(mileage_log::Column::VehicleId.eq(vid))
+            .all(&db)
+            .await
+            .unwrap();
+        assert_eq!(
+            logs.iter().map(|l| l.id).collect::<Vec<_>>(),
+            vec![manual.id],
+            "only the manual log survives; the auto-log is gone from the DB"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_syncs_auto_mileage_log() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+
+        let created = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                mileage: Some(50_000),
+                ..minimal_record(None)
+            },
+        )
+        .await
+        .unwrap();
+
+        // Changing the record's mileage updates the linked auto-log in place.
+        update(
+            &db,
+            vid,
+            created.record.id,
+            UpdateServiceRecord {
+                mileage: Some(Some(51_000)),
+                service_date: Some("2024-04-01".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let logs = mileage_log::Entity::find()
+            .filter(mileage_log::Column::ServiceRecordId.eq(created.record.id))
+            .all(&db)
+            .await
+            .unwrap();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].mileage, 51_000);
+        assert_eq!(logs[0].recorded_at, "2024-04-01");
+
+        // Clearing the mileage removes the auto-log.
+        update(
+            &db,
+            vid,
+            created.record.id,
+            UpdateServiceRecord {
+                mileage: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(
+            mileage_log::Entity::find()
+                .filter(mileage_log::Column::ServiceRecordId.eq(created.record.id))
+                .all(&db)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        // Setting mileage again (no log left) creates a fresh linked auto-log.
+        update(
+            &db,
+            vid,
+            created.record.id,
+            UpdateServiceRecord {
+                mileage: Some(Some(52_000)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let logs = mileage_log::Entity::find()
+            .filter(mileage_log::Column::ServiceRecordId.eq(created.record.id))
+            .all(&db)
+            .await
+            .unwrap();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].mileage, 52_000);
+        assert_eq!(logs[0].source.as_deref(), Some("service"));
     }
 
     #[tokio::test]

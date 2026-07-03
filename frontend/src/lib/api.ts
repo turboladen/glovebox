@@ -75,6 +75,13 @@ export const schedules = {
     return request<ScheduleItem[]>(`/schedules${query ? '?' + query : ''}`)
   },
   resolve: (vehicleId: number) => request<ResolvedScheduleItem[]>(`/vehicles/${vehicleId}/schedule`),
+  dismiss: (vehicleId: number, itemId: number, reason?: string) =>
+    request<ScheduleItem>(`/vehicles/${vehicleId}/schedule/${itemId}/dismiss`, {
+      method: 'POST',
+      body: JSON.stringify({ reason: reason ?? null }),
+    }),
+  undismiss: (vehicleId: number, itemId: number) =>
+    request<ScheduleItem>(`/vehicles/${vehicleId}/schedule/${itemId}/dismiss`, { method: 'DELETE' }),
   create: (data: CreateScheduleItem) => request<ScheduleItem>('/schedules', { method: 'POST', body: JSON.stringify(data) }),
   update: (id: number, data: Partial<ScheduleItem>) => request<ScheduleItem>(`/schedules/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   delete: (id: number) => request<{ deleted: number }>(`/schedules/${id}`, { method: 'DELETE' }),

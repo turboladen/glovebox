@@ -56,6 +56,10 @@
 
   async function onServiceAdded() {
     showServiceForm = false
+    await refreshReminders()
+  }
+
+  async function refreshReminders() {
     if (vehicle) {
       reminderData = await remindersApi.get(vehicle.id)
     }
@@ -249,7 +253,7 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
     {#key activeTab}
       <div class="tab-content tab-content-enter">
         {#if activeTab === 'schedule'}
-          <ScheduleTab {reminderData} vehicleId={vehicle.id} />
+          <ScheduleTab {reminderData} vehicleId={vehicle.id} onScheduleChanged={refreshReminders} />
         {:else if activeTab === 'history'}
           <HistoryTab vehicleId={vehicle.id} />
         {:else if activeTab === 'parts'}

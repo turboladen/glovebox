@@ -37,15 +37,13 @@ pub struct ActivityItem {
 /// The `limit` most recent services + incidents + mileage logs for a
 /// vehicle, merged and sorted newest-first.
 ///
-/// Mileage logs auto-created by service records (`source = "service"`) are
-/// excluded: the service item already carries that odometer reading, and
-/// showing both would double-report every service.
-///
-/// Known limits of that exclusion (`mileage_log` has no `service_record_id` FK,
-/// so `source` is the only linkage): a log left behind by a since-deleted
-/// service stays hidden here even though reminders still count it, and an
-/// HTTP client that labels a manual log `source: "service"` hides it too.
-/// The durable fix is a real FK — tracked as a data-model follow-up.
+/// Mileage logs auto-created by service records are excluded: the service
+/// item already carries that odometer reading, and showing both would
+/// double-report every service. Exclusion keys on the real linkage
+/// (`service_record_id`, maintained by the service-record create/update/
+/// delete paths), not the free-text `source` label — so a manual log a
+/// client happens to label `source: "service"` stays visible, and deleted
+/// services take their auto-log with them instead of leaving a hidden ghost.
 pub async fn recent(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -70,11 +68,7 @@ pub async fn recent(
         .await?;
     let mileage_logs = mileage_log::Entity::find()
         .filter(mileage_log::Column::VehicleId.eq(vehicle_id))
-        .filter(
-            Condition::any()
-                .add(mileage_log::Column::Source.ne("service"))
-                .add(mileage_log::Column::Source.is_null()),
-        )
+        .filter(mileage_log::Column::ServiceRecordId.is_null())
         .order_by_desc(mileage_log::Column::RecordedAt)
         .order_by_desc(mileage_log::Column::Id)
         .limit(limit_u64)
@@ -268,6 +262,49 @@ mod tests {
         assert_eq!(items.len(), 1, "expected only the service item: {items:?}");
         assert_eq!(items[0].kind, "service");
         assert_eq!(items[0].mileage, Some(48_000));
+    }
+
+    #[tokio::test]
+    async fn manual_log_labeled_service_is_still_visible() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        // An HTTP client may label a manual log `source: "service"`. Exclusion
+        // keys on the real FK now, so this log must still appear in the feed.
+        mileage_svc::create(
+            &db,
+            vid,
+            NewMileageEntry {
+                mileage: 60_000,
+                recorded_at: Some("2026-04-01 10:00:00".into()),
+                source: Some("service".into()),
+                notes: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let items = recent(&db, vid, DEFAULT_LIMIT).await.unwrap();
+        assert_eq!(
+            items.len(),
+            1,
+            "manual 'service' log must be visible: {items:?}"
+        );
+        assert_eq!(items[0].kind, "mileage");
+        assert_eq!(items[0].mileage, Some(60_000));
+    }
+
+    #[tokio::test]
+    async fn deleting_a_service_removes_its_auto_log_from_the_feed() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let created = svc_svc::create(&db, vid, service("2026-01-10", "Brakes", Some(48_000)))
+            .await
+            .unwrap();
+
+        svc_svc::delete(&db, vid, created.record.id).await.unwrap();
+
+        // No orphaned auto-log lingers: the feed is empty, not hiding a ghost.
+        assert!(recent(&db, vid, DEFAULT_LIMIT).await.unwrap().is_empty());
     }
 
     #[tokio::test]
