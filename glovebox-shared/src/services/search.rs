@@ -7,8 +7,6 @@
 //! correspondence → accident, finding → report), and line-item hits fold into
 //! their parent service record so callers think in domain records, not rows.
 
-use std::collections::HashSet;
-
 use sea_orm::*;
 
 use crate::error::{DomainError, DomainResult};
@@ -55,7 +53,9 @@ pub struct SearchHit {
     pub vehicle_id: Option<i32>,
     pub title: String,
     pub snippet: String,
-    /// bm25 relevance — lower (more negative) is a better match.
+    /// bm25 relevance — lower (more negative) is a better match. Scores are
+    /// per-FTS-table statistics, so ranks are only strictly comparable within a
+    /// `kind`; cross-kind ordering in `all`-scope results is heuristic.
     pub rank: f64,
 }
 
@@ -220,8 +220,17 @@ pub async fn search(
         ));
     }
 
+    // Dedupe by (kind, id) IN SQL, before the LIMIT: a service matching in its
+    // own text and in several line items is one domain record, and duplicate raw
+    // rows must not starve other matching records out of the capped result set.
+    // SQLite's bare-columns-with-MIN semantics make title/snippet/vehicle_id come
+    // from the best-ranked row of each group; kind/id tiebreakers keep equal-rank
+    // ordering deterministic. The CTE must be MATERIALIZED: if SQLite flattens
+    // the arms into the aggregate query, bm25() lands outside its FTS cursor and
+    // fails with "unable to use function bm25 in the requested context".
     let sql = format!(
-        "{} ORDER BY rank ASC LIMIT {LIMIT}",
+        "WITH raw AS MATERIALIZED ({}) SELECT kind, id, vehicle_id, title, snippet, MIN(rank) AS \
+         rank FROM raw GROUP BY kind, id ORDER BY rank ASC, kind ASC, id ASC LIMIT {LIMIT}",
         subs.join(" UNION ALL ")
     );
     let values: Vec<Value> = match vehicle_id {
@@ -236,20 +245,11 @@ pub async fn search(
         ))
         .await?;
 
-    // Deduplicate by (kind, id): a service matching in both its own text and a
-    // line item (or in several line items) is still one domain record. Rows are
-    // rank-ordered, so the first occurrence is the best-ranked one.
-    let mut seen: HashSet<(String, i32)> = HashSet::new();
     let mut hits = Vec::new();
     for row in rows {
-        let kind: String = row.try_get("", "kind")?;
-        let id: i32 = row.try_get("", "id")?;
-        if !seen.insert((kind.clone(), id)) {
-            continue;
-        }
         hits.push(SearchHit {
-            kind,
-            id,
+            kind: row.try_get("", "kind")?,
+            id: row.try_get("", "id")?,
             vehicle_id: row.try_get("", "vehicle_id")?,
             title: row.try_get("", "title")?,
             snippet: row.try_get("", "snippet")?,
@@ -461,6 +461,34 @@ mod tests {
             .filter(|h| h.kind == "service" && h.id == sid)
             .collect();
         assert_eq!(service_hits.len(), 1, "folded hits must dedupe: {hits:?}");
+    }
+
+    #[tokio::test]
+    async fn duplicate_raw_rows_cannot_starve_other_records_out_of_the_limit() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db, "Golf R").await;
+        // Service A: more matching line items than the whole result cap.
+        let sid_a = seed_service(&db, vid, "brake overhaul").await;
+        for i in 0..55 {
+            entities::service_record_line_item::ActiveModel {
+                service_record_id: Set(sid_a),
+                description: Set(format!("brake part {i}")),
+                ..Default::default()
+            }
+            .insert(&db)
+            .await
+            .unwrap();
+        }
+        // Service B: a single weak match — must still appear (dedupe happens
+        // before the LIMIT, so A's 56 raw rows are one hit, not the whole cap).
+        let sid_b = seed_service(&db, vid, "also touched the brake line").await;
+
+        let hits = search(&db, "brake", SearchScope::Services, None)
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 2, "expected exactly two folded hits: {hits:?}");
+        assert!(hits.iter().any(|h| h.id == sid_a));
+        assert!(hits.iter().any(|h| h.id == sid_b));
     }
 
     #[tokio::test]

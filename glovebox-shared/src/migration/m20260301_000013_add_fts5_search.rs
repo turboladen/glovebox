@@ -103,30 +103,34 @@ impl MigrationTrait for Migration {
                 .collect::<Vec<_>>()
                 .join(", ");
 
+            // IF NOT EXISTS throughout: sea-orm-migration does not wrap up() in a
+            // transaction, so a crash mid-migration must not wedge the re-run
+            // (matches the .if_not_exists() convention of the earlier migrations).
             db.execute_unprepared(&format!(
-                "CREATE VIRTUAL TABLE {fts} USING fts5({cols}, content='{content}', \
+                "CREATE VIRTUAL TABLE IF NOT EXISTS {fts} USING fts5({cols}, content='{content}', \
                  content_rowid='id')"
             ))
             .await?;
 
             db.execute_unprepared(&format!(
-                "CREATE TRIGGER {content}_fts_ai AFTER INSERT ON {content} BEGIN INSERT INTO \
-                 {fts}(rowid, {cols}) VALUES (new.id, {new_vals}); END"
+                "CREATE TRIGGER IF NOT EXISTS {content}_fts_ai AFTER INSERT ON {content} BEGIN \
+                 INSERT INTO {fts}(rowid, {cols}) VALUES (new.id, {new_vals}); END"
             ))
             .await?;
 
             // External-content FTS5 deletes take the OLD column values alongside
             // the special 'delete' command.
             db.execute_unprepared(&format!(
-                "CREATE TRIGGER {content}_fts_ad AFTER DELETE ON {content} BEGIN INSERT INTO \
-                 {fts}({fts}, rowid, {cols}) VALUES ('delete', old.id, {old_vals}); END"
+                "CREATE TRIGGER IF NOT EXISTS {content}_fts_ad AFTER DELETE ON {content} BEGIN \
+                 INSERT INTO {fts}({fts}, rowid, {cols}) VALUES ('delete', old.id, {old_vals}); \
+                 END"
             ))
             .await?;
 
             db.execute_unprepared(&format!(
-                "CREATE TRIGGER {content}_fts_au AFTER UPDATE ON {content} BEGIN INSERT INTO \
-                 {fts}({fts}, rowid, {cols}) VALUES ('delete', old.id, {old_vals}); INSERT INTO \
-                 {fts}(rowid, {cols}) VALUES (new.id, {new_vals}); END"
+                "CREATE TRIGGER IF NOT EXISTS {content}_fts_au AFTER UPDATE ON {content} BEGIN \
+                 INSERT INTO {fts}({fts}, rowid, {cols}) VALUES ('delete', old.id, {old_vals}); \
+                 INSERT INTO {fts}(rowid, {cols}) VALUES (new.id, {new_vals}); END"
             ))
             .await?;
 
