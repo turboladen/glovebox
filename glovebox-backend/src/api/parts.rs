@@ -17,7 +17,6 @@ type Result<T> = std::result::Result<T, ApiError>;
 
 #[derive(Deserialize)]
 pub struct CreatePart {
-    pub slot_id: Option<i32>,
     pub name: String,
     pub manufacturer: Option<String>,
     pub part_number: Option<String>,
@@ -35,12 +34,11 @@ pub struct CreatePart {
     pub installed_service_id: Option<i32>,
     pub notes: Option<String>,
     pub build_id: Option<i32>,
+    pub location: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub struct UpdatePart {
-    #[serde(default, deserialize_with = "deserialize_optional")]
-    pub slot_id: Option<Option<i32>>,
     pub name: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional")]
     pub manufacturer: Option<Option<String>>,
@@ -77,11 +75,12 @@ pub struct UpdatePart {
     pub notes: Option<Option<String>>,
     #[serde(default, deserialize_with = "deserialize_optional")]
     pub build_id: Option<Option<i32>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    pub location: Option<Option<String>>,
 }
 
 #[derive(Deserialize)]
 pub struct ListFilter {
-    pub slot_id: Option<i32>,
     pub status: Option<String>,
 }
 
@@ -95,7 +94,6 @@ pub async fn list(
         &state.db,
         vehicle_id,
         PartFilter {
-            slot_id: filter.slot_id,
             status: filter.status,
         },
     )
@@ -120,7 +118,6 @@ pub async fn create(
         &state.db,
         vehicle_id,
         NewPart {
-            slot_id: input.slot_id,
             name: input.name,
             manufacturer: input.manufacturer,
             part_number: input.part_number,
@@ -138,6 +135,7 @@ pub async fn create(
             installed_service_id: input.installed_service_id,
             notes: input.notes,
             build_id: input.build_id,
+            location: input.location,
         },
     )
     .await?;
@@ -154,7 +152,6 @@ pub async fn update(
         vehicle_id,
         id,
         UpdatePartInput {
-            slot_id: input.slot_id,
             name: input.name,
             manufacturer: input.manufacturer,
             part_number: input.part_number,
@@ -174,6 +171,7 @@ pub async fn update(
             replaced_odometer: input.replaced_odometer,
             notes: input.notes,
             build_id: input.build_id,
+            location: input.location,
         },
     )
     .await?;

@@ -123,17 +123,7 @@ async fn main() -> anyhow::Result<()> {
             "/api/vehicles/{vehicle_id}/accidents/{accident_id}/correspondence",
             get(api::accidents::list_correspondence).post(api::accidents::create_correspondence),
         )
-        // Part slots and parts (per vehicle)
-        .route(
-            "/api/vehicles/{vehicle_id}/part-slots",
-            get(api::part_slots::list).post(api::part_slots::create),
-        )
-        .route(
-            "/api/vehicles/{vehicle_id}/part-slots/{id}",
-            get(api::part_slots::get_one)
-                .put(api::part_slots::update)
-                .delete(api::part_slots::delete),
-        )
+        // Parts (per vehicle)
         .route(
             "/api/vehicles/{vehicle_id}/parts",
             get(api::parts::list).post(api::parts::create),

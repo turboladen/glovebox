@@ -1,5 +1,4 @@
 pub struct NewPart {
-    pub slot_id: Option<i32>,
     pub name: String,
     pub manufacturer: Option<String>,
     pub part_number: Option<String>,
@@ -17,11 +16,11 @@ pub struct NewPart {
     pub installed_service_id: Option<i32>,
     pub notes: Option<String>,
     pub build_id: Option<i32>,
+    pub location: Option<String>,
 }
 
 #[derive(Default)]
 pub struct UpdatePart {
-    pub slot_id: Option<Option<i32>>,
     pub name: Option<String>,
     pub manufacturer: Option<Option<String>>,
     pub part_number: Option<Option<String>>,
@@ -41,11 +40,11 @@ pub struct UpdatePart {
     pub replaced_odometer: Option<Option<i32>>,
     pub notes: Option<Option<String>>,
     pub build_id: Option<Option<i32>>,
+    pub location: Option<Option<String>>,
 }
 
 /// Filter for listing parts within a vehicle.
 #[derive(Default)]
 pub struct PartFilter {
-    pub slot_id: Option<i32>,
     pub status: Option<String>,
 }
