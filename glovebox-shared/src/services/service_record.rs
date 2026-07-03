@@ -308,13 +308,15 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         .await?
         .ok_or_else(|| DomainError::NotFound(format!("Service record {id} not found")))?;
 
-    // A linked build must belong to the same vehicle; a cross-vehicle build
-    // must be indistinguishable from a nonexistent one.
-    if let Some(Some(build_id)) = input.build_id {
-        crate::services::build::require_owned(db, vehicle_id, build_id).await?;
-    }
-
     let txn = db.begin().await?;
+
+    // A linked build must belong to the same vehicle; a cross-vehicle build
+    // must be indistinguishable from a nonexistent one. Checked inside the txn
+    // (like the schedule-items guard) so a concurrent build::delete can't slip
+    // between guard and write.
+    if let Some(Some(build_id)) = input.build_id {
+        crate::services::build::require_owned(&txn, vehicle_id, build_id).await?;
+    }
 
     let mut active: service_record::ActiveModel = existing.into();
 

@@ -107,6 +107,7 @@ pub async fn update(
     input: UpdateBuild,
 ) -> DomainResult<build::Model> {
     let existing = get(db, vehicle_id, id).await?;
+    let prior_status = existing.status.clone();
     let mut active: build::ActiveModel = existing.into();
 
     if let Some(v) = input.name {
@@ -120,12 +121,15 @@ pub async fn update(
     }
     if let Some(status) = input.status {
         validate_status(&status)?;
-        // Lifecycle stamp: entering "completed" records when; leaving it clears.
-        if status == "completed" {
+        // Lifecycle stamp only on actual transitions: entering "completed"
+        // records when; leaving it clears. A completed→completed update (e.g. a
+        // full-object PUT that renames the build) must not move the historical
+        // completion date.
+        if status == "completed" && prior_status != "completed" {
             active.completed_at = Set(Some(
                 chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
             ));
-        } else {
+        } else if status != "completed" && prior_status == "completed" {
             active.completed_at = Set(None);
         }
         active.status = Set(status);
@@ -207,18 +211,27 @@ pub async fn progress(
         .filter_map(|s| s.total_cost_cents)
         .map(i64::from)
         .sum();
+    let services_parts_cost: i64 = services
+        .iter()
+        .filter_map(|s| s.parts_cost_cents)
+        .map(i64::from)
+        .sum();
     let parts_cost: i64 = parts
         .iter()
         .filter_map(|p| p.cost_cents)
         .map(i64::from)
         .sum();
+    // Mirror services::costs' dedupe: a service invoice's total typically
+    // already includes its parts, so only linked-part spend beyond the linked
+    // invoices' parts component counts as extra (never negative).
+    let extra_parts_cost = (parts_cost - services_parts_cost).max(0);
 
     Ok(BuildProgress {
         services_count: services.len(),
         parts_total: parts.len(),
         parts_installed: parts.iter().filter(|p| p.status == "installed").count(),
         observations_count: observations.len(),
-        total_cost_cents: services_cost + parts_cost,
+        total_cost_cents: services_cost + extra_parts_cost,
         linked: LinkedRecords {
             service_record_ids: services.iter().map(|s| s.id).collect(),
             part_ids: parts.iter().map(|p| p.id).collect(),
@@ -440,6 +453,26 @@ mod tests {
         .unwrap();
         assert_eq!(renamed.name, "Renamed");
         assert!(renamed.completed_at.is_some());
+
+        // A completed→completed update (full-object PUT resending the current
+        // status) must NOT move the historical completion date. Backdate the
+        // stamp so a same-second re-stamp can't hide the regression.
+        let mut backdate: build::ActiveModel = renamed.into();
+        backdate.completed_at = Set(Some("2026-01-01 00:00:00".into()));
+        backdate.update(&db).await.unwrap();
+        let resent = update(
+            &db,
+            vid,
+            b.id,
+            UpdateBuild {
+                name: Some("Renamed again".into()),
+                status: Some("completed".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(resent.completed_at.as_deref(), Some("2026-01-01 00:00:00"));
     }
 
     #[tokio::test]
@@ -798,7 +831,8 @@ mod tests {
         assert_eq!(view.parts_total, 3);
         assert_eq!(view.parts_installed, 2);
         assert_eq!(view.observations_count, 1);
-        // 10_000 + 2_500 service cents + 5_000 + 1_500 part cents
+        // 10_000 + 2_500 service cents; the linked invoices carry no
+        // parts_cost_cents, so the full 5_000 + 1_500 part spend is extra.
         assert_eq!(view.total_cost_cents, 19_000);
         assert_eq!(
             view.linked.service_record_ids,
@@ -806,6 +840,41 @@ mod tests {
         );
         assert_eq!(view.linked.part_ids, vec![p1.id, p2.id, p3.id]);
         assert_eq!(view.linked.observation_ids, vec![o1.id]);
+    }
+
+    #[tokio::test]
+    async fn progress_does_not_double_count_parts_included_in_service_invoices() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let b = create(&db, vid, new_build("Turbo build")).await.unwrap();
+
+        // $800 invoice that already includes a $500 parts component…
+        svc_svc::create(
+            &db,
+            vid,
+            NewServiceRecord {
+                parts_cost_cents: Some(50_000),
+                ..minimal_service(Some(80_000), Some(b.id))
+            },
+        )
+        .await
+        .unwrap();
+        // …and the $500 turbo also tracked as a linked part row.
+        part_svc::create(
+            &db,
+            vid,
+            NewPart {
+                build_id: Some(b.id),
+                ..minimal_part("Turbo", Some(50_000), Some("installed".into()))
+            },
+        )
+        .await
+        .unwrap();
+
+        // Mirrors services::costs: the part is already inside the invoice
+        // total, so the build costs $800 — not $1,300.
+        let view = progress(&db, vid, b.id).await.unwrap();
+        assert_eq!(view.total_cost_cents, 80_000);
     }
 
     #[tokio::test]
