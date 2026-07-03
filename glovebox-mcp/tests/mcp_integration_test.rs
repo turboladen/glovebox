@@ -189,6 +189,19 @@ fn assert_tool_error(body: &str) {
     );
 }
 
+/// Parse the JSON-RPC payload out of a raw response body, which rmcp may
+/// deliver either as plain JSON or SSE-framed. SSE streams can carry empty
+/// priming `data:` lines before the payload, so take the first `data:` line
+/// that actually holds a JSON object.
+fn extract_json(body: &str) -> serde_json::Value {
+    let raw = body
+        .lines()
+        .filter_map(|l| l.strip_prefix("data: "))
+        .find(|payload| payload.trim_start().starts_with('{'))
+        .unwrap_or(body);
+    serde_json::from_str(raw).unwrap_or_else(|e| panic!("unparseable rpc body ({e}): {body}"))
+}
+
 // ─── Tools ──────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -222,10 +235,55 @@ async fn tools_list_advertises_the_full_verb_set() {
             "tools/list must advertise {tool}; got: {body}"
         );
     }
-    // The schema override must produce real input schemas, not empty ones.
-    assert!(
-        body.contains("vehicle_id"),
-        "tool input schemas must expose vehicle_id; got: {body}"
+    // Every argument-taking tool must advertise a real, non-empty input
+    // schema — forgetting the `input_schema =` override on a #[tool]
+    // silently advertises an empty one (see handler.rs docs), and a single
+    // substring check would never catch that regression.
+    let parsed = extract_json(&body);
+    let tools = parsed["result"]["tools"]
+        .as_array()
+        .unwrap_or_else(|| panic!("tools/list result must carry a tools array; got: {body}"));
+    assert_eq!(tools.len(), 14, "expected exactly 14 tools; got: {body}");
+    for tool in tools {
+        let name = tool["name"].as_str().expect("tool name");
+        if name == "list_vehicles" {
+            continue; // deliberately takes no arguments
+        }
+        let props = tool["inputSchema"]["properties"].as_object();
+        assert!(
+            props.is_some_and(|p| !p.is_empty()),
+            "tool {name} must advertise a non-empty input schema; got: {tool}"
+        );
+    }
+}
+
+// ─── Transport security ─────────────────────────────────────────
+
+#[tokio::test]
+async fn rejects_unknown_host_header() {
+    let (app, _db) = setup().await;
+    // DNS-rebinding defense: a Host outside the allowlist must be refused
+    // before any JSON-RPC processing happens.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/")
+                .header("host", "evil.example")
+                .header("content-type", "application/json")
+                .header("accept", "application/json, text/event-stream")
+                .body(Body::from(
+                    r#"{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .expect("request");
+    assert_eq!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "unknown Host must be rejected by the allowlist"
     );
 }
 

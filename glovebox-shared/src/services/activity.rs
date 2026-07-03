@@ -18,7 +18,9 @@ pub const DEFAULT_LIMIT: usize = 20;
 
 /// One entry in the merged feed. `date` is the record's own domain date
 /// (`service_date`, `observed_at`, or `recorded_at`) — ISO-8601
-/// `YYYY-MM-DD[ HH:MM:SS]` strings, so lexicographic order is chronological.
+/// `YYYY-MM-DD[ HH:MM:SS]` strings. Granularity is mixed: services are
+/// date-only while observations/mileage carry timestamps, so sorting uses a
+/// normalized key (see `sort_key`), not the raw string.
 #[derive(Debug, Serialize)]
 pub struct ActivityItem {
     /// `service`, `observation`, or `mileage`.
@@ -38,6 +40,12 @@ pub struct ActivityItem {
 /// Mileage logs auto-created by service records (`source = "service"`) are
 /// excluded: the service item already carries that odometer reading, and
 /// showing both would double-report every service.
+///
+/// Known limits of that exclusion (`mileage_log` has no `service_record_id` FK,
+/// so `source` is the only linkage): a log left behind by a since-deleted
+/// service stays hidden here even though reminders still count it, and an
+/// HTTP client that labels a manual log `source: "service"` hides it too.
+/// The durable fix is a real FK — tracked as a data-model follow-up.
 pub async fn recent(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -113,13 +121,27 @@ pub async fn recent(
 
     // Newest first; kind/id tiebreakers keep equal-date ordering deterministic.
     items.sort_by(|a, b| {
-        b.date
-            .cmp(&a.date)
+        sort_key(&b.date)
+            .cmp(&sort_key(&a.date))
             .then_with(|| a.kind.cmp(&b.kind))
             .then_with(|| b.id.cmp(&a.id))
     });
     items.truncate(limit);
     Ok(items)
+}
+
+/// Normalize mixed-granularity dates into one sortable key. Date-only values
+/// (services' `service_date`) sort at end-of-day so a service records as
+/// *newer* than that same day's timestamped observations — matching the
+/// common "noticed it in the morning, fixed it that afternoon" flow. Raw
+/// lexicographic order would instead sort every date-only service before
+/// any timestamped item on its own day.
+fn sort_key(date: &str) -> std::borrow::Cow<'_, str> {
+    if date.len() == 10 {
+        std::borrow::Cow::Owned(format!("{date} 23:59:59"))
+    } else {
+        std::borrow::Cow::Borrowed(date)
+    }
 }
 
 #[cfg(test)]
@@ -211,6 +233,27 @@ mod tests {
         assert_eq!(items[2].summary, "Oil change");
         assert_eq!(items[2].total_cost_cents, Some(12_345));
         assert_eq!(items[0].mileage, Some(50_000));
+    }
+
+    #[tokio::test]
+    async fn same_day_service_sorts_newer_than_timestamped_items() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        // Morning observation, then a date-only service the same day: the
+        // service must surface as the newer item ("noticed it in the
+        // morning, fixed it that afternoon").
+        obs_svc::create(&db, vid, observation("Squeak", "2026-06-01 09:00:00"))
+            .await
+            .unwrap();
+        svc_svc::create(&db, vid, service("2026-06-01", "Fixed squeak", None))
+            .await
+            .unwrap();
+
+        let items = recent(&db, vid, DEFAULT_LIMIT).await.unwrap();
+        assert_eq!(
+            items.iter().map(|i| i.kind.as_str()).collect::<Vec<_>>(),
+            vec!["service", "observation"],
+        );
     }
 
     #[tokio::test]
