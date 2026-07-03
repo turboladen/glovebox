@@ -187,6 +187,17 @@ async fn main() -> anyhow::Result<()> {
                 .put(api::parts::update)
                 .delete(api::parts::delete),
         )
+        // Builds (per vehicle, one-shot upgrade/restoration targets)
+        .route(
+            "/api/vehicles/{vehicle_id}/builds",
+            get(api::builds::list).post(api::builds::create),
+        )
+        .route(
+            "/api/vehicles/{vehicle_id}/builds/{id}",
+            get(api::builds::get_one)
+                .put(api::builds::update)
+                .delete(api::builds::delete),
+        )
         // Research & recalls
         .route(
             "/api/vehicles/{vehicle_id}/recalls",

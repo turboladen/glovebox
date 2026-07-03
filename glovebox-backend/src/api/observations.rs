@@ -24,6 +24,7 @@ pub struct CreateObservation {
     pub observed_at: Option<String>,
     pub obd_codes: Option<String>,
     pub notes: Option<String>,
+    pub build_id: Option<i32>,
 }
 
 #[derive(Deserialize)]
@@ -42,6 +43,8 @@ pub struct UpdateObservation {
     pub resolved_service_id: Option<Option<i32>>,
     #[serde(default, deserialize_with = "deserialize_optional")]
     pub notes: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    pub build_id: Option<Option<i32>>,
 }
 
 pub async fn list(
@@ -76,6 +79,7 @@ pub async fn create(
             observed_at: input.observed_at,
             obd_codes: input.obd_codes,
             notes: input.notes,
+            build_id: input.build_id,
         },
     )
     .await?;
@@ -101,6 +105,7 @@ pub async fn update(
             resolved: input.resolved,
             resolved_service_id: input.resolved_service_id,
             notes: input.notes,
+            build_id: input.build_id,
         },
     )
     .await?;

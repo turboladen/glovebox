@@ -1,0 +1,820 @@
+use sea_orm::*;
+use serde::Serialize;
+
+use crate::{
+    entities::{build, observation, part, service_record},
+    error::{DomainError, DomainResult},
+    inputs::build::{NewBuild, UpdateBuild},
+};
+
+/// Lifecycle whitelist for `builds.status`.
+const VALID_STATUSES: [&str; 5] = ["planned", "active", "on_hold", "completed", "abandoned"];
+
+fn validate_status(status: &str) -> DomainResult<()> {
+    if VALID_STATUSES.contains(&status) {
+        return Ok(());
+    }
+    Err(DomainError::BadRequest(format!(
+        "Invalid status '{}'. Must be one of: {}",
+        status,
+        VALID_STATUSES.join(", ")
+    )))
+}
+
+/// Verify a referenced build belongs to the vehicle. A cross-vehicle build
+/// must be indistinguishable from a nonexistent one.
+///
+/// Shared guard for sub-resource services (`service_record`, `part`,
+/// `observation`) that accept a `build_id` link.
+pub async fn require_owned(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    build_id: i32,
+) -> DomainResult<()> {
+    build::Entity::find_by_id(build_id)
+        .filter(build::Column::VehicleId.eq(vehicle_id))
+        .one(db)
+        .await?
+        .ok_or_else(|| DomainError::NotFound(format!("Build {build_id} not found")))?;
+    Ok(())
+}
+
+/// Derived progress view: the build plus rollups computed at query time from
+/// the typed records linked via their `build_id` FKs. Nothing here is stored.
+#[derive(Debug, Serialize)]
+pub struct BuildProgress {
+    #[serde(flatten)]
+    pub build: build::Model,
+    pub services_count: usize,
+    pub parts_total: usize,
+    pub parts_installed: usize,
+    pub observations_count: usize,
+    /// Sum of linked service records' `total_cost_cents` plus linked parts'
+    /// `cost_cents`. Integer cents only (no float math).
+    pub total_cost_cents: i64,
+    pub linked: LinkedRecords,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LinkedRecords {
+    pub service_record_ids: Vec<i32>,
+    pub part_ids: Vec<i32>,
+    pub observation_ids: Vec<i32>,
+}
+
+pub async fn list(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult<Vec<build::Model>> {
+    crate::services::vehicle::require(db, vehicle_id).await?;
+    Ok(build::Entity::find()
+        .filter(build::Column::VehicleId.eq(vehicle_id))
+        .order_by_desc(build::Column::CreatedAt)
+        .order_by_desc(build::Column::Id)
+        .all(db)
+        .await?)
+}
+
+pub async fn get(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    id: i32,
+) -> DomainResult<build::Model> {
+    build::Entity::find_by_id(id)
+        .filter(build::Column::VehicleId.eq(vehicle_id))
+        .one(db)
+        .await?
+        .ok_or_else(|| DomainError::NotFound(format!("Build {id} not found")))
+}
+
+pub async fn create(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    input: NewBuild,
+) -> DomainResult<build::Model> {
+    crate::services::vehicle::require(db, vehicle_id).await?;
+    let model = build::ActiveModel {
+        vehicle_id: Set(vehicle_id),
+        name: Set(input.name),
+        description: Set(input.description),
+        target_date: Set(input.target_date),
+        ..Default::default()
+    };
+    Ok(model.insert(db).await?)
+}
+
+pub async fn update(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    id: i32,
+    input: UpdateBuild,
+) -> DomainResult<build::Model> {
+    let existing = get(db, vehicle_id, id).await?;
+    let mut active: build::ActiveModel = existing.into();
+
+    if let Some(v) = input.name {
+        active.name = Set(v);
+    }
+    if let Some(v) = input.description {
+        active.description = Set(v);
+    }
+    if let Some(v) = input.target_date {
+        active.target_date = Set(v);
+    }
+    if let Some(status) = input.status {
+        validate_status(&status)?;
+        // Lifecycle stamp: entering "completed" records when; leaving it clears.
+        if status == "completed" {
+            active.completed_at = Set(Some(
+                chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            ));
+        } else {
+            active.completed_at = Set(None);
+        }
+        active.status = Set(status);
+    }
+
+    active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
+    Ok(active.update(db).await?)
+}
+
+/// Delete a build, nulling out `build_id` on any linked records first so a
+/// deleted build cannot leave dangling links. Transactional.
+pub async fn delete<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    id: i32,
+) -> DomainResult<()> {
+    let existing = get(db, vehicle_id, id).await?;
+
+    let txn = db.begin().await?;
+
+    service_record::Entity::update_many()
+        .set(service_record::ActiveModel {
+            build_id: Set(None),
+            ..Default::default()
+        })
+        .filter(service_record::Column::BuildId.eq(existing.id))
+        .exec(&txn)
+        .await?;
+    part::Entity::update_many()
+        .set(part::ActiveModel {
+            build_id: Set(None),
+            ..Default::default()
+        })
+        .filter(part::Column::BuildId.eq(existing.id))
+        .exec(&txn)
+        .await?;
+    observation::Entity::update_many()
+        .set(observation::ActiveModel {
+            build_id: Set(None),
+            ..Default::default()
+        })
+        .filter(observation::Column::BuildId.eq(existing.id))
+        .exec(&txn)
+        .await?;
+
+    existing.delete(&txn).await?;
+
+    txn.commit().await?;
+    Ok(())
+}
+
+/// Compute the derived progress view for a build: one batch query per linked
+/// record type (no per-record queries).
+pub async fn progress(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    id: i32,
+) -> DomainResult<BuildProgress> {
+    let build = get(db, vehicle_id, id).await?;
+
+    let services = service_record::Entity::find()
+        .filter(service_record::Column::BuildId.eq(build.id))
+        .order_by_asc(service_record::Column::Id)
+        .all(db)
+        .await?;
+    let parts = part::Entity::find()
+        .filter(part::Column::BuildId.eq(build.id))
+        .order_by_asc(part::Column::Id)
+        .all(db)
+        .await?;
+    let observations = observation::Entity::find()
+        .filter(observation::Column::BuildId.eq(build.id))
+        .order_by_asc(observation::Column::Id)
+        .all(db)
+        .await?;
+
+    let services_cost: i64 = services
+        .iter()
+        .filter_map(|s| s.total_cost_cents)
+        .map(i64::from)
+        .sum();
+    let parts_cost: i64 = parts
+        .iter()
+        .filter_map(|p| p.cost_cents)
+        .map(i64::from)
+        .sum();
+
+    Ok(BuildProgress {
+        services_count: services.len(),
+        parts_total: parts.len(),
+        parts_installed: parts.iter().filter(|p| p.status == "installed").count(),
+        observations_count: observations.len(),
+        total_cost_cents: services_cost + parts_cost,
+        linked: LinkedRecords {
+            service_record_ids: services.iter().map(|s| s.id).collect(),
+            part_ids: parts.iter().map(|p| p.id).collect(),
+            observation_ids: observations.iter().map(|o| o.id).collect(),
+        },
+        build,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        inputs::{
+            observation::UpdateObservation,
+            part::{NewPart, UpdatePart},
+            service_record::{NewServiceRecord, UpdateServiceRecord},
+        },
+        services::{observation as observation_svc, part as part_svc, service_record as svc_svc},
+        test_support::test_db,
+    };
+
+    async fn seed_vehicle(db: &impl ConnectionTrait) -> i32 {
+        use crate::entities::vehicle;
+        vehicle::ActiveModel {
+            name: Set("Car".into()),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+        .id
+    }
+
+    fn new_build(name: &str) -> NewBuild {
+        NewBuild {
+            name: name.into(),
+            description: None,
+            target_date: None,
+        }
+    }
+
+    fn minimal_part(name: &str, cost_cents: Option<i32>, status: Option<String>) -> NewPart {
+        NewPart {
+            slot_id: None,
+            name: name.into(),
+            manufacturer: None,
+            part_number: None,
+            oe_part_number_replaced: None,
+            seller: None,
+            purchase_date: None,
+            cost_cents,
+            cost_currency: None,
+            invoice_url: None,
+            manufacturer_url: None,
+            retailer_url: None,
+            status,
+            installed_date: None,
+            installed_odometer: None,
+            installed_service_id: None,
+            notes: None,
+            build_id: None,
+        }
+    }
+
+    fn minimal_service(total_cost_cents: Option<i32>, build_id: Option<i32>) -> NewServiceRecord {
+        NewServiceRecord {
+            service_date: "2026-01-01".into(),
+            mileage: None,
+            description: None,
+            parts_cost_cents: None,
+            parts_cost_currency: None,
+            labor_cost_cents: None,
+            labor_cost_currency: None,
+            total_cost_cents,
+            total_cost_currency: None,
+            shop_name: None,
+            shop_id: None,
+            notes: None,
+            build_id,
+            schedule_item_ids: None,
+            part_ids: None,
+            line_items: None,
+        }
+    }
+
+    fn minimal_observation(build_id: Option<i32>) -> crate::inputs::observation::NewObservation {
+        crate::inputs::observation::NewObservation {
+            category: "note".into(),
+            title: "Obs".into(),
+            description: None,
+            odometer: None,
+            observed_at: None,
+            obd_codes: None,
+            notes: None,
+            build_id,
+        }
+    }
+
+    #[tokio::test]
+    async fn create_then_get_and_list_round_trip() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let created = create(
+            &db,
+            vid,
+            NewBuild {
+                name: "Turbo upgrade".into(),
+                description: Some("IS38 swap".into()),
+                target_date: Some("2026-12-01".into()),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(created.status, "planned");
+        assert_eq!(created.completed_at, None);
+
+        let fetched = get(&db, vid, created.id).await.unwrap();
+        assert_eq!(fetched.name, "Turbo upgrade");
+        assert_eq!(fetched.description.as_deref(), Some("IS38 swap"));
+        assert_eq!(fetched.target_date.as_deref(), Some("2026-12-01"));
+
+        let listed = list(&db, vid).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, created.id);
+    }
+
+    #[tokio::test]
+    async fn create_and_list_require_vehicle() {
+        let db = test_db().await;
+        assert!(matches!(
+            create(&db, 999, new_build("B")).await.unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+        assert!(matches!(
+            list(&db, 999).await.unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn update_rejects_invalid_status() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let b = create(&db, vid, new_build("B")).await.unwrap();
+        let err = update(
+            &db,
+            vid,
+            b.id,
+            UpdateBuild {
+                status: Some("bogus".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::BadRequest(_)));
+        // The rejected update left the build untouched.
+        assert_eq!(get(&db, vid, b.id).await.unwrap().status, "planned");
+    }
+
+    #[tokio::test]
+    async fn completed_status_stamps_and_clears_completed_at() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let b = create(&db, vid, new_build("B")).await.unwrap();
+
+        let completed = update(
+            &db,
+            vid,
+            b.id,
+            UpdateBuild {
+                status: Some("completed".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(completed.status, "completed");
+        assert!(completed.completed_at.is_some());
+
+        // Moving back out of completed clears the stamp.
+        let reopened = update(
+            &db,
+            vid,
+            b.id,
+            UpdateBuild {
+                status: Some("active".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(reopened.status, "active");
+        assert_eq!(reopened.completed_at, None);
+
+        // A status-less update leaves completed_at alone.
+        update(
+            &db,
+            vid,
+            b.id,
+            UpdateBuild {
+                status: Some("completed".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let renamed = update(
+            &db,
+            vid,
+            b.id,
+            UpdateBuild {
+                name: Some("Renamed".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(renamed.name, "Renamed");
+        assert!(renamed.completed_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn wrong_vehicle_is_indistinguishable_from_missing() {
+        let db = test_db().await;
+        let owner = seed_vehicle(&db).await;
+        let other = seed_vehicle(&db).await;
+        let b = create(&db, owner, new_build("B")).await.unwrap();
+
+        assert!(matches!(
+            get(&db, other, b.id).await.unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+        assert!(matches!(
+            update(
+                &db,
+                other,
+                b.id,
+                UpdateBuild {
+                    name: Some("X".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+        assert!(matches!(
+            delete(&db, other, b.id).await.unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+        assert!(matches!(
+            progress(&db, other, b.id).await.unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+        // The build survived every wrong-vehicle attempt unchanged.
+        assert_eq!(get(&db, owner, b.id).await.unwrap().name, "B");
+    }
+
+    #[tokio::test]
+    async fn linking_same_vehicle_build_works_and_some_none_clears() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let b = create(&db, vid, new_build("B")).await.unwrap();
+
+        // service record
+        let svc = svc_svc::create(&db, vid, minimal_service(None, None))
+            .await
+            .unwrap();
+        let linked = svc_svc::update(
+            &db,
+            vid,
+            svc.record.id,
+            UpdateServiceRecord {
+                build_id: Some(Some(b.id)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(linked.record.build_id, Some(b.id));
+        let cleared = svc_svc::update(
+            &db,
+            vid,
+            svc.record.id,
+            UpdateServiceRecord {
+                build_id: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(cleared.record.build_id, None);
+
+        // part
+        let p = part_svc::create(&db, vid, minimal_part("P", None, None))
+            .await
+            .unwrap();
+        let linked = part_svc::update(
+            &db,
+            vid,
+            p.id,
+            UpdatePart {
+                build_id: Some(Some(b.id)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(linked.build_id, Some(b.id));
+        let cleared = part_svc::update(
+            &db,
+            vid,
+            p.id,
+            UpdatePart {
+                build_id: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(cleared.build_id, None);
+
+        // observation
+        let o = observation_svc::create(&db, vid, minimal_observation(None))
+            .await
+            .unwrap();
+        let linked = observation_svc::update(
+            &db,
+            vid,
+            o.id,
+            UpdateObservation {
+                build_id: Some(Some(b.id)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(linked.build_id, Some(b.id));
+        let cleared = observation_svc::update(
+            &db,
+            vid,
+            o.id,
+            UpdateObservation {
+                build_id: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(cleared.build_id, None);
+    }
+
+    #[tokio::test]
+    async fn linking_other_vehicles_build_is_not_found_and_nothing_mutated() {
+        let db = test_db().await;
+        let owner = seed_vehicle(&db).await;
+        let other = seed_vehicle(&db).await;
+        let foreign_build = create(&db, other, new_build("Foreign")).await.unwrap();
+
+        // Creates referencing a foreign build must 404 and create nothing.
+        assert!(matches!(
+            svc_svc::create(&db, owner, minimal_service(None, Some(foreign_build.id)))
+                .await
+                .unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+        assert!(matches!(
+            part_svc::create(
+                &db,
+                owner,
+                NewPart {
+                    build_id: Some(foreign_build.id),
+                    ..minimal_part("P", None, None)
+                },
+            )
+            .await
+            .unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+        assert!(matches!(
+            observation_svc::create(&db, owner, minimal_observation(Some(foreign_build.id)))
+                .await
+                .unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+        assert!(svc_svc::list(&db, owner).await.unwrap().is_empty());
+        assert!(
+            part_svc::list(&db, owner, crate::inputs::part::PartFilter::default())
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(observation_svc::list(&db, owner).await.unwrap().is_empty());
+
+        // Updates referencing a foreign build must 404 and mutate nothing.
+        let svc = svc_svc::create(&db, owner, minimal_service(None, None))
+            .await
+            .unwrap();
+        let p = part_svc::create(&db, owner, minimal_part("P", None, None))
+            .await
+            .unwrap();
+        let o = observation_svc::create(&db, owner, minimal_observation(None))
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            svc_svc::update(
+                &db,
+                owner,
+                svc.record.id,
+                UpdateServiceRecord {
+                    build_id: Some(Some(foreign_build.id)),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+        assert!(matches!(
+            part_svc::update(
+                &db,
+                owner,
+                p.id,
+                UpdatePart {
+                    build_id: Some(Some(foreign_build.id)),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+        assert!(matches!(
+            observation_svc::update(
+                &db,
+                owner,
+                o.id,
+                UpdateObservation {
+                    build_id: Some(Some(foreign_build.id)),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+        assert_eq!(
+            svc_svc::get(&db, owner, svc.record.id)
+                .await
+                .unwrap()
+                .record
+                .build_id,
+            None
+        );
+        assert_eq!(
+            part_svc::get(&db, owner, p.id).await.unwrap().build_id,
+            None
+        );
+        assert_eq!(
+            observation_svc::get(&db, owner, o.id)
+                .await
+                .unwrap()
+                .build_id,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_nulls_out_linked_records() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let b = create(&db, vid, new_build("B")).await.unwrap();
+
+        let svc = svc_svc::create(&db, vid, minimal_service(None, Some(b.id)))
+            .await
+            .unwrap();
+        let p = part_svc::create(
+            &db,
+            vid,
+            NewPart {
+                build_id: Some(b.id),
+                ..minimal_part("P", None, None)
+            },
+        )
+        .await
+        .unwrap();
+        let o = observation_svc::create(&db, vid, minimal_observation(Some(b.id)))
+            .await
+            .unwrap();
+        assert_eq!(svc.record.build_id, Some(b.id));
+        assert_eq!(p.build_id, Some(b.id));
+        assert_eq!(o.build_id, Some(b.id));
+
+        delete(&db, vid, b.id).await.unwrap();
+
+        assert!(matches!(
+            get(&db, vid, b.id).await.unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+        // Previously-linked records survive with their link nulled.
+        assert_eq!(
+            svc_svc::get(&db, vid, svc.record.id)
+                .await
+                .unwrap()
+                .record
+                .build_id,
+            None
+        );
+        assert_eq!(part_svc::get(&db, vid, p.id).await.unwrap().build_id, None);
+        assert_eq!(
+            observation_svc::get(&db, vid, o.id).await.unwrap().build_id,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn progress_rolls_up_linked_records() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let b = create(&db, vid, new_build("B")).await.unwrap();
+
+        // 2 services with costs, 3 parts (2 installed), 1 observation.
+        let s1 = svc_svc::create(&db, vid, minimal_service(Some(10_000), Some(b.id)))
+            .await
+            .unwrap();
+        let s2 = svc_svc::create(&db, vid, minimal_service(Some(2_500), Some(b.id)))
+            .await
+            .unwrap();
+        let p1 = part_svc::create(
+            &db,
+            vid,
+            NewPart {
+                build_id: Some(b.id),
+                ..minimal_part("P1", Some(5_000), Some("installed".into()))
+            },
+        )
+        .await
+        .unwrap();
+        let p2 = part_svc::create(
+            &db,
+            vid,
+            NewPart {
+                build_id: Some(b.id),
+                ..minimal_part("P2", Some(1_500), Some("installed".into()))
+            },
+        )
+        .await
+        .unwrap();
+        let p3 = part_svc::create(
+            &db,
+            vid,
+            NewPart {
+                build_id: Some(b.id),
+                ..minimal_part("P3", None, None)
+            },
+        )
+        .await
+        .unwrap();
+        let o1 = observation_svc::create(&db, vid, minimal_observation(Some(b.id)))
+            .await
+            .unwrap();
+
+        // Unlinked noise must not leak into the rollup.
+        svc_svc::create(&db, vid, minimal_service(Some(99_999), None))
+            .await
+            .unwrap();
+        part_svc::create(&db, vid, minimal_part("Noise", Some(99_999), None))
+            .await
+            .unwrap();
+
+        let view = progress(&db, vid, b.id).await.unwrap();
+        assert_eq!(view.build.id, b.id);
+        assert_eq!(view.services_count, 2);
+        assert_eq!(view.parts_total, 3);
+        assert_eq!(view.parts_installed, 2);
+        assert_eq!(view.observations_count, 1);
+        // 10_000 + 2_500 service cents + 5_000 + 1_500 part cents
+        assert_eq!(view.total_cost_cents, 19_000);
+        assert_eq!(
+            view.linked.service_record_ids,
+            vec![s1.record.id, s2.record.id]
+        );
+        assert_eq!(view.linked.part_ids, vec![p1.id, p2.id, p3.id]);
+        assert_eq!(view.linked.observation_ids, vec![o1.id]);
+    }
+
+    #[tokio::test]
+    async fn progress_missing_build_is_not_found() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        assert!(matches!(
+            progress(&db, vid, 999).await.unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+    }
+}

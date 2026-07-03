@@ -51,6 +51,7 @@ pub struct CreateServiceRecord {
     pub shop_name: Option<String>,
     pub shop_id: Option<i32>,
     pub notes: Option<String>,
+    pub build_id: Option<i32>,
     pub schedule_item_ids: Option<Vec<i32>>,
     pub part_ids: Option<Vec<i32>>,
     pub line_items: Option<Vec<CreateLineItem>>,
@@ -81,6 +82,8 @@ pub struct UpdateServiceRecord {
     pub shop_id: Option<Option<i32>>,
     #[serde(default, deserialize_with = "deserialize_optional")]
     pub notes: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    pub build_id: Option<Option<i32>>,
     pub schedule_item_ids: Option<Vec<i32>>,
     pub part_ids: Option<Vec<i32>>,
     pub line_items: Option<Vec<CreateLineItem>>,
@@ -124,6 +127,7 @@ pub async fn create(
             shop_name: input.shop_name,
             shop_id: input.shop_id,
             notes: input.notes,
+            build_id: input.build_id,
             schedule_item_ids: input.schedule_item_ids,
             part_ids: input.part_ids,
             line_items: input
@@ -158,6 +162,7 @@ pub async fn update(
             shop_name: input.shop_name,
             shop_id: input.shop_id,
             notes: input.notes,
+            build_id: input.build_id,
             schedule_item_ids: input.schedule_item_ids,
             part_ids: input.part_ids,
             line_items: input

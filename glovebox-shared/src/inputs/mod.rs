@@ -3,6 +3,7 @@
 
 pub mod accident;
 pub mod ai_provider;
+pub mod build;
 pub mod document;
 pub mod mileage;
 pub mod model_template;

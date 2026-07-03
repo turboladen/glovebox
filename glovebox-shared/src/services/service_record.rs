@@ -209,6 +209,9 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
 ) -> DomainResult<ServiceRecordWithLinks> {
     let schedule_item_ids = input.schedule_item_ids.unwrap_or_default();
     require_schedule_items_in_scope(db, vehicle_id, &schedule_item_ids).await?;
+    if let Some(build_id) = input.build_id {
+        crate::services::build::require_owned(db, vehicle_id, build_id).await?;
+    }
 
     let txn = db.begin().await?;
 
@@ -226,6 +229,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
         shop_name: Set(input.shop_name),
         shop_id: Set(input.shop_id),
         notes: Set(input.notes),
+        build_id: Set(input.build_id),
         ..Default::default()
     };
     let record = record.insert(&txn).await?;
@@ -304,6 +308,12 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         .await?
         .ok_or_else(|| DomainError::NotFound(format!("Service record {id} not found")))?;
 
+    // A linked build must belong to the same vehicle; a cross-vehicle build
+    // must be indistinguishable from a nonexistent one.
+    if let Some(Some(build_id)) = input.build_id {
+        crate::services::build::require_owned(db, vehicle_id, build_id).await?;
+    }
+
     let txn = db.begin().await?;
 
     let mut active: service_record::ActiveModel = existing.into();
@@ -343,6 +353,9 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     }
     if let Some(v) = input.notes {
         active.notes = Set(v);
+    }
+    if let Some(v) = input.build_id {
+        active.build_id = Set(v);
     }
 
     active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
@@ -553,6 +566,7 @@ mod tests {
                 shop_name: None,
                 shop_id: None,
                 notes: None,
+                build_id: None,
                 schedule_item_ids: Some(vec![sched_id]),
                 part_ids: Some(vec![part_id]),
                 line_items: Some(vec![NewLineItem {
@@ -622,6 +636,7 @@ mod tests {
                 shop_name: None,
                 shop_id: None,
                 notes: None,
+                build_id: None,
                 schedule_item_ids: None,
                 part_ids: Some(vec![part_a]),
                 line_items: Some(vec![NewLineItem {
@@ -699,6 +714,7 @@ mod tests {
                 shop_name: None,
                 shop_id: None,
                 notes: None,
+                build_id: None,
                 schedule_item_ids: Some(vec![sched_id]),
                 part_ids: Some(vec![part_id]),
                 line_items: None,
@@ -754,6 +770,7 @@ mod tests {
             shop_name: None,
             shop_id: None,
             notes: None,
+            build_id: None,
             schedule_item_ids,
             part_ids: None,
             line_items: None,

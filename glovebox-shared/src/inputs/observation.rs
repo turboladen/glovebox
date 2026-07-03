@@ -6,6 +6,7 @@ pub struct NewObservation {
     pub observed_at: Option<String>,
     pub obd_codes: Option<String>,
     pub notes: Option<String>,
+    pub build_id: Option<i32>,
 }
 
 #[derive(Default)]
@@ -19,4 +20,5 @@ pub struct UpdateObservation {
     pub resolved: Option<bool>,
     pub resolved_service_id: Option<Option<i32>>,
     pub notes: Option<Option<String>>,
+    pub build_id: Option<Option<i32>>,
 }
