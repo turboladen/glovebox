@@ -35,6 +35,7 @@ pub struct CreateScheduleItem {
     pub notes: Option<String>,
     pub is_factory_recommended: Option<bool>,
     pub labor_categories: Option<String>,
+    pub est_cost_cents: Option<i32>,
 }
 
 #[derive(Deserialize)]
@@ -59,6 +60,8 @@ pub struct UpdateScheduleItem {
     pub is_factory_recommended: Option<Option<bool>>,
     #[serde(default, deserialize_with = "deserialize_optional")]
     pub labor_categories: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    pub est_cost_cents: Option<Option<i32>>,
 }
 
 #[derive(Deserialize)]
@@ -115,6 +118,7 @@ async fn create(
             notes: input.notes,
             is_factory_recommended: input.is_factory_recommended,
             labor_categories: input.labor_categories,
+            est_cost_cents: input.est_cost_cents,
         },
     )
     .await?;
@@ -141,6 +145,7 @@ async fn update(
             notes: input.notes,
             is_factory_recommended: input.is_factory_recommended,
             labor_categories: input.labor_categories,
+            est_cost_cents: input.est_cost_cents,
         },
     )
     .await?;

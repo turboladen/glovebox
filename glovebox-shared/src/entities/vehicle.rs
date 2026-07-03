@@ -32,6 +32,9 @@ pub struct Model {
     pub created_at: String,
     pub updated_at: String,
     pub archived_at: Option<String>,
+    // Added by migration 20 (ALTER TABLE appends to end)
+    pub warranty_expires_on: Option<String>,
+    pub warranty_expires_miles: Option<i32>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -60,6 +63,10 @@ pub enum Relation {
     ResearchReport,
     #[sea_orm(has_many = "super::build::Entity")]
     Build,
+    #[sea_orm(has_many = "super::work_item::Entity")]
+    WorkItem,
+    #[sea_orm(has_many = "super::visit::Entity")]
+    Visit,
 }
 
 impl Related<super::build::Entity> for Entity {
@@ -119,6 +126,18 @@ impl Related<super::part::Entity> for Entity {
 impl Related<super::research_report::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::ResearchReport.def()
+    }
+}
+
+impl Related<super::work_item::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::WorkItem.def()
+    }
+}
+
+impl Related<super::visit::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Visit.def()
     }
 }
 

@@ -311,6 +311,20 @@ Reports are created by recall checks (`recalls_only`) and by findings filed over
 
 ---
 
+## TP-28: Planning (work items, visits, budget) — MCP/HTTP-only until unit F
+
+No UI in this unit; the Plan tab lands with unit F's redesign, so there are no
+Playwright specs yet. Coverage lives in `glovebox-shared` unit tests
+(`services/{work_item,visit,budget}.rs` — including the `visit::complete`
+rollback-on-failure test) and `glovebox-mcp/tests/mcp_integration_test.rs`
+(the recall→plan→schedule→complete loop over the protocol, wrong-vehicle
+probes on every planning tool). HTTP surface so far: `GET
+/api/vehicles/:id/budget` (12-month forecast, integer cents); reminders
+(`GET …/reminders`) now include the `warranty` status block. When unit F adds
+the Plan tab, replace this note with real TP rows + specs.
+
+---
+
 ## Shared-Service Unit Tests (glovebox-shared)
 
 Domain logic lives in `glovebox-shared/src/services/` and is unit-tested there, below the

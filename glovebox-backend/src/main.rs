@@ -108,6 +108,11 @@ async fn main() -> anyhow::Result<()> {
             "/api/vehicles/{vehicle_id}/reminders",
             get(api::reminders::get_reminders),
         )
+        // 12-month budget forecast (unit G; thin — the Costs UI lands with unit F)
+        .route(
+            "/api/vehicles/{vehicle_id}/budget",
+            get(api::budget::get_budget),
+        )
         // Incidents (per vehicle; unified observations + accidents)
         .route(
             "/api/vehicles/{vehicle_id}/incidents",

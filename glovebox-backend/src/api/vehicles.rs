@@ -37,6 +37,8 @@ pub struct CreateVehicle {
     pub purchase_mileage: Option<i32>,
     pub photo_path: Option<String>,
     pub notes: Option<String>,
+    pub warranty_expires_on: Option<String>,
+    pub warranty_expires_miles: Option<i32>,
 }
 
 #[derive(Deserialize)]
@@ -86,6 +88,10 @@ pub struct UpdateVehicle {
     pub photo_path: Option<Option<String>>,
     #[serde(default, deserialize_with = "deserialize_optional")]
     pub notes: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    pub warranty_expires_on: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    pub warranty_expires_miles: Option<Option<i32>>,
 }
 
 async fn list(State(state): State<AppState>) -> Result<Json<Vec<vehicle::Model>>> {
@@ -125,6 +131,8 @@ async fn create(
             purchase_mileage: input.purchase_mileage,
             photo_path: input.photo_path,
             notes: input.notes,
+            warranty_expires_on: input.warranty_expires_on,
+            warranty_expires_miles: input.warranty_expires_miles,
         },
     )
     .await?;
@@ -163,6 +171,8 @@ async fn update(
             sold_mileage: input.sold_mileage,
             photo_path: input.photo_path,
             notes: input.notes,
+            warranty_expires_on: input.warranty_expires_on,
+            warranty_expires_miles: input.warranty_expires_miles,
         },
     )
     .await?;

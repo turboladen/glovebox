@@ -4,17 +4,15 @@ use axum::{
 };
 
 use crate::AppState;
-use glovebox_shared::services::reminders::{self, RemindersResponse};
+use glovebox_shared::services::budget::{self, BudgetForecast};
 
 use super::error::ApiError;
 
 type Result<T> = std::result::Result<T, ApiError>;
 
-pub async fn get_reminders(
+pub async fn get_budget(
     State(state): State<AppState>,
     Path(vehicle_id): Path<i32>,
-) -> Result<Json<RemindersResponse>> {
-    Ok(Json(
-        reminders::calculate_reminders(&state.db, vehicle_id).await?,
-    ))
+) -> Result<Json<BudgetForecast>> {
+    Ok(Json(budget::forecast(&state.db, vehicle_id).await?))
 }

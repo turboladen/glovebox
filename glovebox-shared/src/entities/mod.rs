@@ -16,3 +16,5 @@ pub mod service_schedule_link;
 pub mod shop;
 pub mod vehicle;
 pub mod vehicle_attribute;
+pub mod visit;
+pub mod work_item;

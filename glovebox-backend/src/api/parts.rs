@@ -35,6 +35,8 @@ pub struct CreatePart {
     pub notes: Option<String>,
     pub build_id: Option<i32>,
     pub location: Option<String>,
+    pub warranty_expires_on: Option<String>,
+    pub warranty_expires_miles: Option<i32>,
 }
 
 #[derive(Deserialize)]
@@ -77,6 +79,10 @@ pub struct UpdatePart {
     pub build_id: Option<Option<i32>>,
     #[serde(default, deserialize_with = "deserialize_optional")]
     pub location: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    pub warranty_expires_on: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    pub warranty_expires_miles: Option<Option<i32>>,
 }
 
 #[derive(Deserialize)]
@@ -136,6 +142,8 @@ pub async fn create(
             notes: input.notes,
             build_id: input.build_id,
             location: input.location,
+            warranty_expires_on: input.warranty_expires_on,
+            warranty_expires_miles: input.warranty_expires_miles,
         },
     )
     .await?;
@@ -172,6 +180,8 @@ pub async fn update(
             notes: input.notes,
             build_id: input.build_id,
             location: input.location,
+            warranty_expires_on: input.warranty_expires_on,
+            warranty_expires_miles: input.warranty_expires_miles,
         },
     )
     .await?;

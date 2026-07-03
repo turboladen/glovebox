@@ -327,6 +327,8 @@ mod tests {
             notes: None,
             build_id: None,
             location: None,
+            warranty_expires_on: None,
+            warranty_expires_miles: None,
         }
     }
 

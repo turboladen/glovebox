@@ -12,6 +12,8 @@ use glovebox_shared::{
         mileage::NewMileageEntry,
         part::NewPart,
         service_record::{NewLineItem, NewServiceRecord},
+        visit::{CompleteVisit, NewVisit},
+        work_item::NewWorkItem,
     },
     services::research::NewFiledFinding,
 };
@@ -229,6 +231,10 @@ pub struct RecordPartInput {
     pub notes: Option<String>,
     /// Link this part to a build (from `list_builds`).
     pub build_id: Option<i32>,
+    /// Part warranty expiry date, `YYYY-MM-DD` (if the part carries one).
+    pub warranty_expires_on: Option<String>,
+    /// Part warranty expiry odometer reading (whole miles).
+    pub warranty_expires_miles: Option<i32>,
 }
 
 impl RecordPartInput {
@@ -254,6 +260,135 @@ impl RecordPartInput {
                 notes: self.notes,
                 build_id: self.build_id,
                 location: self.location,
+                warranty_expires_on: self.warranty_expires_on,
+                warranty_expires_miles: self.warranty_expires_miles,
+            },
+        )
+    }
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct PlanWorkInput {
+    /// Vehicle id, from `list_vehicles`.
+    pub vehicle_id: i32,
+    /// What the work is, e.g. "Replace fuel pump (recall)".
+    pub title: String,
+    /// Estimated cost, integer cents (feeds the budget forecast).
+    pub est_cost_cents: Option<i32>,
+    /// Free-form notes.
+    pub notes: Option<String>,
+    /// The overdue/due schedule item this satisfies (from
+    /// `check_due_maintenance`) — completing the work then clears the
+    /// reminder.
+    pub schedule_item_id: Option<i32>,
+    /// The research finding (e.g. a recall from `check_recalls`) this
+    /// addresses — completing the work then closes the finding.
+    pub research_finding_id: Option<i32>,
+    /// The incident this fixes (from `log_incident`) — completing the work
+    /// links the incident to the service record.
+    pub incident_id: Option<i32>,
+    /// Link this work to a build (from `list_builds`).
+    pub build_id: Option<i32>,
+}
+
+impl PlanWorkInput {
+    pub fn into_domain(self) -> (i32, NewWorkItem) {
+        (
+            self.vehicle_id,
+            NewWorkItem {
+                title: self.title,
+                notes: self.notes,
+                schedule_item_id: self.schedule_item_id,
+                research_finding_id: self.research_finding_id,
+                incident_id: self.incident_id,
+                build_id: self.build_id,
+                est_cost_cents: self.est_cost_cents,
+                visit_id: None,
+            },
+        )
+    }
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct ListPlannedWorkInput {
+    /// Vehicle id, from `list_vehicles`.
+    pub vehicle_id: i32,
+    /// Also include finished work: done/dropped items and
+    /// completed/canceled visits. Default false (open work only).
+    pub include_done: Option<bool>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct ScheduleVisitInput {
+    /// Vehicle id, from `list_vehicles`.
+    pub vehicle_id: i32,
+    /// When the visit is planned for, `YYYY-MM-DD`.
+    pub planned_date: Option<String>,
+    /// Shop doing the work (free text). Omit for DIY.
+    pub shop_name: Option<String>,
+    /// Work item ids (from `plan_work` / `list_planned_work`) to group into
+    /// this visit — they flip to `scheduled`.
+    pub work_item_ids: Option<Vec<i32>>,
+    /// Free-form notes.
+    pub notes: Option<String>,
+}
+
+impl ScheduleVisitInput {
+    pub fn into_domain(self) -> (i32, NewVisit) {
+        (
+            self.vehicle_id,
+            NewVisit {
+                planned_date: self.planned_date,
+                shop_name: self.shop_name,
+                shop_id: None,
+                notes: self.notes,
+                work_item_ids: self.work_item_ids,
+            },
+        )
+    }
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct CompleteVisitInput {
+    /// Vehicle id, from `list_vehicles`.
+    pub vehicle_id: i32,
+    /// Visit id, from `schedule_visit` / `list_planned_work`.
+    pub visit_id: i32,
+    /// Date the work was done, `YYYY-MM-DD`.
+    pub service_date: String,
+    /// Odometer reading at service time. Also logs a mileage entry.
+    pub mileage: Option<i32>,
+    /// What was done. Defaults to the attached work items' titles.
+    pub description: Option<String>,
+    /// Total invoice amount in integer cents (e.g. $123.45 -> 12345).
+    pub total_cost_cents: Option<i32>,
+    /// Parts portion of the invoice, integer cents.
+    pub parts_cost_cents: Option<i32>,
+    /// Labor portion of the invoice, integer cents.
+    pub labor_cost_cents: Option<i32>,
+    /// Who paid: `self` (default), `insurance`, or `third_party`.
+    pub paid_by: Option<String>,
+    /// Who exactly paid / claim number, e.g. "Progressive claim #12345".
+    pub payer_note: Option<String>,
+    /// Free-form notes.
+    pub notes: Option<String>,
+}
+
+impl CompleteVisitInput {
+    pub fn into_domain(self) -> (i32, i32, CompleteVisit) {
+        (
+            self.vehicle_id,
+            self.visit_id,
+            CompleteVisit {
+                service_date: self.service_date,
+                mileage: self.mileage,
+                description: self.description,
+                total_cost_cents: self.total_cost_cents,
+                parts_cost_cents: self.parts_cost_cents,
+                labor_cost_cents: self.labor_cost_cents,
+                paid_by: self.paid_by,
+                payer_note: self.payer_note,
+                notes: self.notes,
             },
         )
     }

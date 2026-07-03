@@ -13,3 +13,5 @@ pub mod schedule;
 pub mod service_record;
 pub mod shop;
 pub mod vehicle;
+pub mod visit;
+pub mod work_item;
