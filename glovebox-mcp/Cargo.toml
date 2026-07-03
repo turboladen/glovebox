@@ -12,7 +12,7 @@ glovebox-shared = { path = "../glovebox-shared" }
 # Surface crate: MAY import axum (it exposes an axum::Router for the backend
 # to mount). Only glovebox-shared is axum-free.
 axum = "0.8"
-rmcp = { version = "1.5", features = [
+rmcp = { version = "1.8", features = [
     "server",
     "macros",
     "transport-streamable-http-server",
