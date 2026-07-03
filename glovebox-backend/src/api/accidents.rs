@@ -179,20 +179,23 @@ pub async fn update(
 
 pub async fn list_correspondence(
     State(state): State<AppState>,
-    Path((_vehicle_id, accident_id)): Path<(i32, i32)>,
+    Path((vehicle_id, accident_id)): Path<(i32, i32)>,
 ) -> Result<Json<Vec<accident_correspondence::Model>>> {
+    vehicle_svc::require(&state.db, vehicle_id).await?;
     Ok(Json(
-        svc::list_correspondence(&state.db, accident_id).await?,
+        svc::list_correspondence(&state.db, vehicle_id, accident_id).await?,
     ))
 }
 
 pub async fn create_correspondence(
     State(state): State<AppState>,
-    Path((_vehicle_id, accident_id)): Path<(i32, i32)>,
+    Path((vehicle_id, accident_id)): Path<(i32, i32)>,
     Json(input): Json<CreateCorrespondence>,
 ) -> Result<Json<accident_correspondence::Model>> {
+    vehicle_svc::require(&state.db, vehicle_id).await?;
     let created = svc::create_correspondence(
         &state.db,
+        vehicle_id,
         accident_id,
         NewCorrespondence {
             occurred_at: input.occurred_at,
