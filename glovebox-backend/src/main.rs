@@ -81,6 +81,42 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/health", get(api::health::health_check))
         // Full-text search (one domain operation over vehicles/events/documents)
         .route("/api/search", get(api::search::search))
+        // Garage-wide dashboard + merged activity feeds (unit F)
+        .route("/api/dashboard", get(api::dashboard::get_dashboard))
+        .route(
+            "/api/dashboard/activity",
+            get(api::dashboard::garage_activity),
+        )
+        .route(
+            "/api/vehicles/{vehicle_id}/activity",
+            get(api::dashboard::vehicle_activity),
+        )
+        // Planning: work items + visits (unit F HTTP surface over unit G's
+        // primitives)
+        .route(
+            "/api/vehicles/{vehicle_id}/work-items",
+            get(api::plan::list_work_items).post(api::plan::create_work_item),
+        )
+        .route(
+            "/api/vehicles/{vehicle_id}/work-items/{id}",
+            axum::routing::put(api::plan::update_work_item).delete(api::plan::delete_work_item),
+        )
+        .route(
+            "/api/vehicles/{vehicle_id}/visits",
+            get(api::plan::list_visits).post(api::plan::create_visit),
+        )
+        .route(
+            "/api/vehicles/{vehicle_id}/visits/{id}",
+            axum::routing::put(api::plan::update_visit).delete(api::plan::delete_visit),
+        )
+        .route(
+            "/api/vehicles/{vehicle_id}/visits/{id}/complete",
+            post(api::plan::complete_visit),
+        )
+        .route(
+            "/api/vehicles/{vehicle_id}/visits/{id}/cancel",
+            post(api::plan::cancel_visit),
+        )
         // Vehicle sub-resources (flat routes for correct path param extraction)
         .route(
             "/api/vehicles/{vehicle_id}/mileage",

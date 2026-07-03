@@ -324,8 +324,12 @@ pub struct ScheduleVisitInput {
     pub vehicle_id: i32,
     /// When the visit is planned for, `YYYY-MM-DD`.
     pub planned_date: Option<String>,
-    /// Shop doing the work (free text). Omit for DIY.
+    /// Shop doing the work (free text) — the primary way to name the shop.
+    /// Omit for DIY.
     pub shop_name: Option<String>,
+    /// Id of a saved shop from the shops list, when the user refers to one
+    /// they already track. `shop_name` free text works fine on its own.
+    pub shop_id: Option<i32>,
     /// Work item ids (from `plan_work` / `list_planned_work`) to group into
     /// this visit — they flip to `scheduled`.
     pub work_item_ids: Option<Vec<i32>>,
@@ -340,12 +344,20 @@ impl ScheduleVisitInput {
             NewVisit {
                 planned_date: self.planned_date,
                 shop_name: self.shop_name,
-                shop_id: None,
+                shop_id: self.shop_id,
                 notes: self.notes,
                 work_item_ids: self.work_item_ids,
             },
         )
     }
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct CancelVisitInput {
+    /// Vehicle id, from `list_vehicles`.
+    pub vehicle_id: i32,
+    /// Visit id, from `schedule_visit` / `list_planned_work`.
+    pub visit_id: i32,
 }
 
 #[derive(Deserialize, JsonSchema)]

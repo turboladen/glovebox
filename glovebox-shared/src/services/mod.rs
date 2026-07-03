@@ -2,6 +2,7 @@ pub mod activity;
 pub mod budget;
 pub mod build;
 pub mod costs;
+pub mod dashboard;
 pub mod document;
 pub mod export;
 pub mod incident;

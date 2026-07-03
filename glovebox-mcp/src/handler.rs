@@ -32,7 +32,7 @@ use glovebox_shared::{
 };
 
 use crate::schemas::{
-    BuildParams, CompleteVisitInput, DismissScheduleItemInput, EmptyParams,
+    BuildParams, CancelVisitInput, CompleteVisitInput, DismissScheduleItemInput, EmptyParams,
     FileResearchFindingInput, FindDocumentsInput, ListPlannedWorkInput, LogIncidentInput,
     LogMileageInput, PlanWorkInput, RecordPartInput, RecordServiceInput, SaveNoteInput,
     ScheduleVisitInput, SearchRecordsInput, SummarizeActivityInput, UpdateBuildStatusInput,
@@ -457,7 +457,7 @@ impl GloveboxMcp {
 
     #[tool(
         name = "schedule_visit",
-        description = "Group planned work into a shop visit (or DIY session) with a date and estimated cost. Attached work items (from plan_work) flip to scheduled and their est_cost_cents roll up. When the visit happens, close it out with complete_visit.",
+        description = "Group planned work into a shop visit (or DIY session) with a date and estimated cost. Attached work items (from plan_work) flip to scheduled and their est_cost_cents roll up. Name the shop with shop_name (free text; shop_id also accepts a saved shop from the shops list). When the visit happens, close it out with complete_visit; if it won't happen, cancel_visit returns the items to the to-do list.",
         input_schema = rmcp::handler::server::common::schema_for_type::<ScheduleVisitInput>()
     )]
     async fn schedule_visit(
@@ -488,6 +488,22 @@ impl GloveboxMcp {
         let (vehicle_id, visit_id, input) = p.into_domain();
         domain_result(visit::complete(&*self.db, vehicle_id, visit_id, input).await)
     }
+
+    #[tool(
+        name = "cancel_visit",
+        description = "Cancel a visit that won't happen; its work items return to the to-do list. Completed visits are history and can't be canceled — nothing that already happened is undone.",
+        input_schema = rmcp::handler::server::common::schema_for_type::<CancelVisitInput>()
+    )]
+    async fn cancel_visit(
+        &self,
+        params: LenientParameters<CancelVisitInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = match params.into_tool_input("cancel_visit") {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        };
+        domain_result(visit::cancel(&*self.db, p.vehicle_id, p.visit_id).await)
+    }
 }
 
 #[tool_handler]
@@ -513,14 +529,16 @@ impl ServerHandler for GloveboxMcp {
                  `plan_work` it with the source linked; group items into a shop visit or DIY \
                  session with `schedule_visit`; review with `list_planned_work`; when the work \
                  happens, `complete_visit` records the service, clears the reminders, and closes \
-                 the linked recalls/incidents in one step. (4) CAPTURE what happened outside a \
-                 visit — `record_service` for completed work, `record_part` for parts bought or \
-                 installed, `log_incident` for symptoms/damage/accidents, `save_note` for facts \
-                 worth remembering, `log_mileage` whenever the user mentions an odometer reading. \
-                 (5) LOOK THINGS UP — `find_documents` for receipts/manuals, `search_records` for \
-                 anything else, `cost_summary` for spend. (6) PROJECTS — `list_builds` / \
-                 `get_build_progress` / `update_build_status` for upgrade or restoration builds. \
-                 All money is integer cents; all dates are YYYY-MM-DD.",
+                 the linked recalls/incidents in one step; a visit that won't happen is \
+                 `cancel_visit`-ed and its items return to the to-do list. (4) CAPTURE what \
+                 happened outside a visit — `record_service` for completed work, `record_part` \
+                 for parts bought or installed, `log_incident` for symptoms/damage/accidents, \
+                 `save_note` for facts worth remembering, `log_mileage` whenever the user \
+                 mentions an odometer reading. (5) LOOK THINGS UP — `find_documents` for \
+                 receipts/manuals, `search_records` for anything else, `cost_summary` for spend. \
+                 (6) PROJECTS — `list_builds` / `get_build_progress` / `update_build_status` for \
+                 upgrade or restoration builds. All money is integer cents; all dates are \
+                 YYYY-MM-DD.",
             )
     }
 

@@ -352,14 +352,43 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     Ok(with_items(v, items))
 }
 
+/// Cancel a visit that won't happen: status `canceled`, attached items back
+/// to the backlog. Thin wrapper over [`update`] so the open-visit guard and
+/// the cancel-detaches semantics stay in one place.
+pub async fn cancel<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    id: i32,
+) -> DomainResult<VisitWithItems> {
+    update(
+        db,
+        vehicle_id,
+        id,
+        UpdateVisit {
+            status: Some("canceled".to_string()),
+            ..Default::default()
+        },
+    )
+    .await
+}
+
 /// Delete a visit: detach its items first (they return to the backlog as
-/// `planned`), then remove the visit — one transaction.
+/// `planned`), then remove the visit — one transaction. Only OPEN visits
+/// delete: a completed visit's item attachments are service history (its
+/// `service_record_id` link would be orphaned), and a canceled visit is
+/// immutable history like `update` treats it.
 pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
     id: i32,
 ) -> DomainResult<()> {
     let existing = require_visit(db, vehicle_id, id).await?;
+    if !is_open(&existing.status) {
+        return Err(DomainError::BadRequest(format!(
+            "Visit {id} is already {} and cannot be deleted",
+            existing.status
+        )));
+    }
 
     let txn = db.begin().await?;
     let items = load_items(&txn, existing.id).await?;
@@ -801,6 +830,86 @@ mod tests {
         let survivor = work_item_svc::get(&db, vid, a.id).await.unwrap();
         assert_eq!(survivor.visit_id, None);
         assert_eq!(survivor.status, "planned");
+    }
+
+    /// Unit-F carry-in: closed visits are immutable history for `delete`
+    /// too — deleting a completed visit would orphan its
+    /// `service_record_id` link, and a canceled one is frozen like
+    /// `update` treats it. Same message shape as the update guard.
+    #[tokio::test]
+    async fn delete_rejected_once_closed() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+
+        let completed = create(&db, vid, new_visit(None)).await.unwrap();
+        complete(&db, vid, completed.visit.id, actuals())
+            .await
+            .unwrap();
+        let err = delete(&db, vid, completed.visit.id).await.unwrap_err();
+        match err {
+            DomainError::BadRequest(msg) => {
+                assert!(msg.contains("already completed"), "{msg}");
+            }
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
+        // Still there, still linked.
+        let kept = get(&db, vid, completed.visit.id).await.unwrap();
+        assert_eq!(kept.visit.status, "completed");
+        assert!(kept.visit.service_record_id.is_some());
+
+        let canceled = create(&db, vid, new_visit(None)).await.unwrap();
+        cancel(&db, vid, canceled.visit.id).await.unwrap();
+        let err = delete(&db, vid, canceled.visit.id).await.unwrap_err();
+        match err {
+            DomainError::BadRequest(msg) => {
+                assert!(msg.contains("already canceled"), "{msg}");
+            }
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
+        assert_eq!(
+            get(&db, vid, canceled.visit.id).await.unwrap().visit.status,
+            "canceled"
+        );
+    }
+
+    /// The `cancel` convenience is `update`-to-canceled: items detach back
+    /// to the backlog, and the open-visit guards apply (no canceling a
+    /// completed visit, no double cancel).
+    #[tokio::test]
+    async fn cancel_verb_detaches_and_guards() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let a = work_item_svc::create(&db, vid, work("A")).await.unwrap();
+        let v = create(&db, vid, new_visit(Some(vec![a.id]))).await.unwrap();
+
+        let canceled = cancel(&db, vid, v.visit.id).await.unwrap();
+        assert_eq!(canceled.visit.status, "canceled");
+        assert!(canceled.items.is_empty());
+        let freed = work_item_svc::get(&db, vid, a.id).await.unwrap();
+        assert_eq!(freed.visit_id, None);
+        assert_eq!(freed.status, "planned");
+
+        // Double cancel is rejected with the closed-visit message shape.
+        assert!(matches!(
+            cancel(&db, vid, v.visit.id).await.unwrap_err(),
+            DomainError::BadRequest(_)
+        ));
+
+        // Completed visits can't be canceled either.
+        let done = create(&db, vid, new_visit(None)).await.unwrap();
+        complete(&db, vid, done.visit.id, actuals()).await.unwrap();
+        assert!(matches!(
+            cancel(&db, vid, done.visit.id).await.unwrap_err(),
+            DomainError::BadRequest(_)
+        ));
+
+        // Wrong vehicle reads as missing.
+        let other = seed_vehicle(&db).await;
+        let v2 = create(&db, vid, new_visit(None)).await.unwrap();
+        assert!(matches!(
+            cancel(&db, other, v2.visit.id).await.unwrap_err(),
+            DomainError::NotFound(_)
+        ));
     }
 
     // --- list filtering ---------------------------------------------------------

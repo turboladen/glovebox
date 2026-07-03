@@ -33,9 +33,10 @@ pub struct BudgetForecast {
     pub horizon_months: u32,
     /// Σ projected schedule-item occurrences within the horizon. A
     /// schedule item that appears (via a work item's `schedule_item_id`)
-    /// in an OPEN visit skips its FIRST projected occurrence — that spend
-    /// is already counted in `planned_visits_cents` — but later cycles
-    /// still project.
+    /// in an OPEN visit — or on the unattached BACKLOG — skips its FIRST
+    /// projected occurrence: that spend is already counted in
+    /// `planned_visits_cents` / `planned_work_cents` ("already planned").
+    /// Later cycles still project.
     pub projected_maintenance_cents: i64,
     /// Σ open (planned/scheduled) visits' `est_total_cents`.
     pub planned_visits_cents: i64,
@@ -75,6 +76,7 @@ pub async fn forecast(db: &DatabaseConnection, vehicle_id: i32) -> DomainResult<
 /// `check_due_maintenance`) that already have a [`RemindersResponse`] and
 /// must not compute it twice.
 #[allow(clippy::cast_possible_truncation)] // day counts, not money
+#[allow(clippy::too_many_lines)] // one linear pass over the buckets
 pub async fn forecast_from(
     db: &DatabaseConnection,
     vehicle_id: i32,
@@ -99,10 +101,23 @@ pub async fn forecast_from(
     // and their participating items' schedule links suppress the first
     // projected occurrence below (it's the same spend, already planned).
     let open_visits = visit::list(db, vehicle_id, false).await?;
-    let planned_in_visit: HashSet<i32> = open_visits
+
+    // The unattached backlog: participating items not scheduled into any
+    // visit yet. Their estimates are the third bucket, and their schedule
+    // links suppress first occurrences exactly like open visits' do —
+    // "already planned" applies to the to-do list too.
+    let backlog: Vec<work_item::Model> = work_item::Entity::find()
+        .filter(work_item::Column::VehicleId.eq(vehicle_id))
+        .filter(work_item::Column::VisitId.is_null())
+        .filter(work_item::Column::Status.is_in(["planned", "scheduled"]))
+        .all(db)
+        .await?;
+
+    let planned_schedule_items: HashSet<i32> = open_visits
         .iter()
         .flat_map(|v| v.items.iter())
         .filter(|i| work_item_svc::participates(&i.status))
+        .chain(backlog.iter())
         .filter_map(|i| i.schedule_item_id)
         .collect();
 
@@ -148,9 +163,10 @@ pub async fn forecast_from(
         .min();
 
         let mut day = first.max(0);
-        // Already planned in an open visit: the first occurrence is counted
-        // in `planned_visits_cents`; only later cycles project here.
-        if planned_in_visit.contains(&item.id) {
+        // Already planned (open visit or backlog): the first occurrence is
+        // counted in `planned_visits_cents` / `planned_work_cents`; only
+        // later cycles project here.
+        if planned_schedule_items.contains(&item.id) {
             let Some(cycle) = cycle_days else { continue };
             day += cycle;
             if day >= HORIZON_DAYS {
@@ -177,14 +193,7 @@ pub async fn forecast_from(
 
     let planned_visits_cents: i64 = open_visits.iter().map(|v| v.est_total_cents).sum();
 
-    // The unattached backlog: participating items with an estimate that
-    // aren't scheduled into any visit yet.
-    let planned_work_cents: i64 = work_item::Entity::find()
-        .filter(work_item::Column::VehicleId.eq(vehicle_id))
-        .filter(work_item::Column::VisitId.is_null())
-        .filter(work_item::Column::Status.is_in(["planned", "scheduled"]))
-        .all(db)
-        .await?
+    let planned_work_cents: i64 = backlog
         .iter()
         .filter_map(|i| i.est_cost_cents)
         .map(i64::from)
@@ -523,6 +532,84 @@ mod tests {
         assert_eq!(f.planned_work_cents, 0);
         // No double count: the planned occurrences appear only as the
         // visit's estimate.
+        assert_eq!(f.total_cents, 7 * 2_000 + 7_700);
+    }
+
+    /// Unit-F carry-in (unit G reviewer): a schedule-linked work item on
+    /// the unattached BACKLOG also skips that schedule item's FIRST
+    /// projected occurrence — same "already planned" rationale as open
+    /// visits. Before this, the spend double-counted (`planned_work` +
+    /// `projected_maintenance`). Later cycles still project; an item whose
+    /// only in-horizon occurrence is the planned one projects nothing.
+    #[tokio::test]
+    async fn schedule_linked_backlog_item_skips_first_occurrence() {
+        let db = test_db().await;
+        let vid = vehicle::ActiveModel {
+            name: Set("Car".into()),
+            purchase_date: Set(Some(days_ago(730))),
+            purchase_mileage: Set(Some(0)),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap()
+        .id;
+        // Rate pinned at exactly 100 mi/day (as in the pinned scenario).
+        for (age, miles) in [(100, 10_000), (0, 20_000)] {
+            mileage_log::ActiveModel {
+                vehicle_id: Set(vid),
+                mileage: Set(miles),
+                recorded_at: Set(days_ago(age)),
+                ..Default::default()
+            }
+            .insert(&db)
+            .await
+            .unwrap();
+        }
+
+        // Overdue, cycle 50 days → 8 occurrences when unplanned.
+        let oil = seed_item(&db, vid, "Oil change", Some(5_000), None, Some(2_000)).await;
+        // Overdue, cycle 12 months → exactly 1 occurrence when unplanned.
+        let belt = seed_item(&db, vid, "Timing belt check", None, Some(12), Some(5_000)).await;
+
+        let baseline = forecast(&db, vid).await.unwrap();
+        let count =
+            |f: &BudgetForecast, label: &str| f.lines.iter().filter(|l| l.label == label).count();
+        assert_eq!(count(&baseline, "Oil change"), 8);
+        assert_eq!(count(&baseline, "Timing belt check"), 1);
+        assert_eq!(baseline.total_cents, 8 * 2_000 + 5_000);
+
+        // Plan both onto the to-do list — NO visit.
+        for (title, sched, est) in [("Oil", oil, 2_200), ("Belt", belt, 5_500)] {
+            work_item_svc::create(
+                &db,
+                vid,
+                NewWorkItem {
+                    title: title.into(),
+                    notes: None,
+                    schedule_item_id: Some(sched),
+                    research_finding_id: None,
+                    incident_id: None,
+                    build_id: None,
+                    est_cost_cents: Some(est),
+                    visit_id: None,
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        let f = forecast(&db, vid).await.unwrap();
+        // Oil: first occurrence suppressed, later cycles (days 50..350)
+        // still project. Belt: its only in-horizon occurrence is the
+        // planned one → nothing projects.
+        assert_eq!(count(&f, "Oil change"), 7, "lines: {:?}", f.lines);
+        assert_eq!(count(&f, "Timing belt check"), 0, "lines: {:?}", f.lines);
+        assert_eq!(f.projected_maintenance_cents, 7 * 2_000);
+        assert_eq!(f.planned_visits_cents, 0);
+        assert_eq!(f.planned_work_cents, 2_200 + 5_500);
+        // No double count: the planned occurrences appear only as the
+        // backlog estimates.
         assert_eq!(f.total_cents, 7 * 2_000 + 7_700);
     }
 
