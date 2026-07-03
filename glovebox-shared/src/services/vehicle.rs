@@ -45,6 +45,8 @@ pub async fn create(db: &impl ConnectionTrait, input: NewVehicle) -> DomainResul
         purchase_mileage: Set(input.purchase_mileage),
         photo_path: Set(input.photo_path),
         notes: Set(input.notes),
+        warranty_expires_on: Set(input.warranty_expires_on),
+        warranty_expires_miles: Set(input.warranty_expires_miles),
         ..Default::default()
     };
     Ok(model.insert(db).await?)
@@ -128,6 +130,12 @@ pub async fn update(
     if let Some(v) = input.notes {
         active.notes = Set(v);
     }
+    if let Some(v) = input.warranty_expires_on {
+        active.warranty_expires_on = Set(v);
+    }
+    if let Some(v) = input.warranty_expires_miles {
+        active.warranty_expires_miles = Set(v);
+    }
     active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
 
     Ok(active.update(db).await?)
@@ -205,6 +213,8 @@ mod tests {
                 purchase_mileage: None,
                 photo_path: None,
                 notes: None,
+                warranty_expires_on: None,
+                warranty_expires_miles: None,
             },
         )
         .await

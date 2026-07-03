@@ -18,6 +18,9 @@ pub struct NewVehicle {
     pub purchase_mileage: Option<i32>,
     pub photo_path: Option<String>,
     pub notes: Option<String>,
+    /// Warranty expiry (decision ⑩): date (`YYYY-MM-DD`) and/or mileage.
+    pub warranty_expires_on: Option<String>,
+    pub warranty_expires_miles: Option<i32>,
 }
 
 #[derive(Default)]
@@ -45,4 +48,6 @@ pub struct UpdateVehicle {
     pub sold_mileage: Option<Option<i32>>,
     pub photo_path: Option<Option<String>>,
     pub notes: Option<Option<String>>,
+    pub warranty_expires_on: Option<Option<String>>,
+    pub warranty_expires_miles: Option<Option<i32>>,
 }

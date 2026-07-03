@@ -3,9 +3,12 @@ use sea_orm::*;
 use serde::Serialize;
 use std::collections::HashMap;
 
-use crate::entities::{
-    maintenance_schedule_item, mileage_log, model_template, service_record, service_schedule_link,
-    vehicle,
+use crate::{
+    entities::{
+        maintenance_schedule_item, mileage_log, model_template, service_record,
+        service_schedule_link, vehicle,
+    },
+    error::{DomainError, DomainResult},
 };
 
 #[derive(Debug, Serialize, Clone)]
@@ -47,6 +50,19 @@ pub struct BundleItem {
     pub due_in_miles: Option<i32>,
 }
 
+/// Warranty posture derived from the vehicle's nullable expiry fields
+/// (decision ⑩). `possibly_covered` is true when EITHER bound still holds —
+/// today ≤ `expires_on` OR estimated mileage ≤ `expires_miles` (either is
+/// sufficient on its own; real warranties are usually whichever-comes-first,
+/// but "possibly covered" deliberately errs toward telling the user to
+/// check).
+#[derive(Debug, Serialize, Clone)]
+pub struct WarrantyStatus {
+    pub expires_on: Option<String>,
+    pub expires_miles: Option<i32>,
+    pub possibly_covered: bool,
+}
+
 #[derive(Debug, Serialize)]
 pub struct RemindersResponse {
     pub vehicle_id: i32,
@@ -54,8 +70,32 @@ pub struct RemindersResponse {
     pub mileage_is_estimate: bool,
     pub mileage_as_of: String,
     pub avg_daily_miles: f64,
+    /// `None` when the vehicle has no warranty fields set.
+    pub warranty: Option<WarrantyStatus>,
     pub reminders: Vec<ReminderStatus>,
     pub bundle_suggestions: Vec<BundleSuggestion>,
+}
+
+/// Derive the warranty flag from the vehicle record and the estimated
+/// current mileage. `None` when neither expiry field is set.
+fn warranty_status(v: &vehicle::Model, estimated_mileage: i32) -> Option<WarrantyStatus> {
+    if v.warranty_expires_on.is_none() && v.warranty_expires_miles.is_none() {
+        return None;
+    }
+    let today = chrono::Utc::now().date_naive();
+    let date_covers = v
+        .warranty_expires_on
+        .as_deref()
+        .and_then(parse_date)
+        .is_some_and(|expires| today <= expires);
+    let miles_cover = v
+        .warranty_expires_miles
+        .is_some_and(|expires| estimated_mileage <= expires);
+    Some(WarrantyStatus {
+        expires_on: v.warranty_expires_on.clone(),
+        expires_miles: v.warranty_expires_miles,
+        possibly_covered: date_covers || miles_cover,
+    })
 }
 
 /// Estimate current mileage from `mileage_log` entries.
@@ -65,7 +105,7 @@ pub async fn estimate_mileage(
     db: &DatabaseConnection,
     vehicle_id: i32,
     v: &vehicle::Model,
-) -> Result<(i32, String, f64, bool), DbErr> {
+) -> DomainResult<(i32, String, f64, bool)> {
     let entries = mileage_log::Entity::find()
         .filter(mileage_log::Column::VehicleId.eq(vehicle_id))
         .order_by_desc(mileage_log::Column::RecordedAt)
@@ -123,11 +163,11 @@ pub async fn estimate_mileage(
 pub async fn calculate_reminders(
     db: &DatabaseConnection,
     vehicle_id: i32,
-) -> Result<RemindersResponse, DbErr> {
+) -> DomainResult<RemindersResponse> {
     let v = vehicle::Entity::find_by_id(vehicle_id)
         .one(db)
         .await?
-        .ok_or_else(|| DbErr::RecordNotFound(format!("Vehicle {vehicle_id}")))?;
+        .ok_or_else(|| DomainError::NotFound(format!("Vehicle {vehicle_id} not found")))?;
 
     let (estimated_mileage, mileage_as_of, avg_daily_miles, mileage_is_estimate) =
         estimate_mileage(db, vehicle_id, &v).await?;
@@ -276,6 +316,7 @@ pub async fn calculate_reminders(
         mileage_is_estimate,
         mileage_as_of,
         avg_daily_miles,
+        warranty: warranty_status(&v, estimated_mileage),
         reminders,
         bundle_suggestions,
     })
@@ -285,7 +326,7 @@ pub async fn calculate_reminders(
 async fn resolve_schedule(
     db: &DatabaseConnection,
     v: &vehicle::Model,
-) -> Result<Vec<maintenance_schedule_item::Model>, DbErr> {
+) -> DomainResult<Vec<maintenance_schedule_item::Model>> {
     let mut schedule: HashMap<String, maintenance_schedule_item::Model> = HashMap::new();
 
     if let Some(mt_id) = v.model_template_id {
@@ -407,5 +448,113 @@ fn days_in_month(year: i32, month: u32) -> u32 {
         }
         // 30-day months + unreachable fallback for invalid month values
         _ => 30,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::test_db;
+
+    async fn seed_vehicle(
+        db: &impl ConnectionTrait,
+        warranty_expires_on: Option<&str>,
+        warranty_expires_miles: Option<i32>,
+    ) -> i32 {
+        vehicle::ActiveModel {
+            name: Set("Car".into()),
+            warranty_expires_on: Set(warranty_expires_on.map(str::to_string)),
+            warranty_expires_miles: Set(warranty_expires_miles),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+        .id
+    }
+
+    #[tokio::test]
+    async fn missing_vehicle_is_domain_not_found() {
+        let db = test_db().await;
+        assert!(matches!(
+            calculate_reminders(&db, 999).await.unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn warranty_flag_is_absent_without_fields_and_reflects_date_bound() {
+        let db = test_db().await;
+
+        // No warranty fields → no flag.
+        let plain = seed_vehicle(&db, None, None).await;
+        assert!(
+            calculate_reminders(&db, plain)
+                .await
+                .unwrap()
+                .warranty
+                .is_none()
+        );
+
+        // Date bound still in the future → possibly covered.
+        let covered = seed_vehicle(&db, Some("2099-01-01"), None).await;
+        let w = calculate_reminders(&db, covered)
+            .await
+            .unwrap()
+            .warranty
+            .unwrap();
+        assert!(w.possibly_covered);
+        assert_eq!(w.expires_on.as_deref(), Some("2099-01-01"));
+
+        // Date bound in the past, no mileage bound → not covered.
+        let expired = seed_vehicle(&db, Some("2020-01-01"), None).await;
+        let w = calculate_reminders(&db, expired)
+            .await
+            .unwrap()
+            .warranty
+            .unwrap();
+        assert!(!w.possibly_covered);
+    }
+
+    #[tokio::test]
+    async fn warranty_mileage_bound_covers_until_estimate_passes_it() {
+        let db = test_db().await;
+        // Expired date but a live mileage bound: EITHER bound suffices.
+        let vid = seed_vehicle(&db, Some("2020-01-01"), Some(60_000)).await;
+        let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        mileage_log::ActiveModel {
+            vehicle_id: Set(vid),
+            mileage: Set(50_000),
+            recorded_at: Set(now),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        let resp = calculate_reminders(&db, vid).await.unwrap();
+        assert_eq!(resp.estimated_mileage, 50_000);
+        assert!(resp.warranty.unwrap().possibly_covered);
+
+        // Same bounds but the odometer is already past → not covered.
+        let past = seed_vehicle(&db, Some("2020-01-01"), Some(40_000)).await;
+        let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        mileage_log::ActiveModel {
+            vehicle_id: Set(past),
+            mileage: Set(50_000),
+            recorded_at: Set(now),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        assert!(
+            !calculate_reminders(&db, past)
+                .await
+                .unwrap()
+                .warranty
+                .unwrap()
+                .possibly_covered
+        );
     }
 }

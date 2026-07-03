@@ -197,13 +197,7 @@ impl GloveboxMcp {
             Ok(v) => v,
             Err(e) => return Ok(e),
         };
-        if let Err(e) = vehicle::require(&*self.db, p.vehicle_id).await {
-            return domain_error(e);
-        }
-        match reminders::calculate_reminders(&self.db, p.vehicle_id).await {
-            Ok(v) => tool_json_result(&v),
-            Err(e) => Err(db_error(&e)),
-        }
+        domain_result(reminders::calculate_reminders(&self.db, p.vehicle_id).await)
     }
 
     #[tool(
