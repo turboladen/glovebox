@@ -72,6 +72,18 @@ pub async fn list(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult<Ve
         .await?)
 }
 
+/// All builds across all vehicles, one query. Resource-enumeration helper
+/// for surfaces that list addressable per-build URIs (the MCP server's
+/// `resources/list`); not a UI listing.
+pub async fn list_all(db: &impl ConnectionTrait) -> DomainResult<Vec<build::Model>> {
+    Ok(build::Entity::find()
+        .order_by_asc(build::Column::VehicleId)
+        .order_by_desc(build::Column::CreatedAt)
+        .order_by_desc(build::Column::Id)
+        .all(db)
+        .await?)
+}
+
 pub async fn get(
     db: &impl ConnectionTrait,
     vehicle_id: i32,

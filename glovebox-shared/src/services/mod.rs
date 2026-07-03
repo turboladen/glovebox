@@ -1,4 +1,5 @@
 pub mod accident;
+pub mod activity;
 pub mod ai;
 pub mod ai_ops;
 pub mod build;

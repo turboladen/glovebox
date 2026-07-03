@@ -7,6 +7,11 @@ version.workspace = true
 name = "glovebox_shared"
 path = "src/lib.rs"
 
+[features]
+# Exposes `test_support` (in-memory migrated DB) to sibling crates' tests.
+# Enable only as a dev-dependency feature; never from a normal dependency.
+test-support = []
+
 [dependencies]
 sea-orm.workspace = true
 sea-orm-migration.workspace = true

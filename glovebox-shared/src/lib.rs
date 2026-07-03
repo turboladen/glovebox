@@ -23,5 +23,5 @@ pub mod inputs;
 pub mod migration;
 pub mod services;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
