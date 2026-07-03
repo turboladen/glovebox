@@ -254,20 +254,23 @@ impl MigrationTrait for Migration {
         // `offset = MAX(observations.id)` — inlined as a subselect so the
         // mapping is computed by SQLite itself, not in Rust.
 
-        // 1. Observations copy, ids preserved.
+        // 1. Observations copy, ids preserved. OR IGNORE throughout the DML:
+        // SQLite migrations run WITHOUT a transaction (sea-orm-migration only
+        // wraps Postgres), so a crash between statements must leave the re-run
+        // able to continue — the deterministic ids make re-inserts no-ops.
         db.execute_unprepared(
-            "INSERT INTO incidents (id, vehicle_id, category, title, description, odometer, \
-             occurred_at, obd_codes, resolved, notes, build_id, created_at, updated_at) SELECT \
-             id, vehicle_id, category, title, description, odometer, observed_at, obd_codes, \
-             resolved, notes, build_id, created_at, updated_at FROM observations",
+            "INSERT OR IGNORE INTO incidents (id, vehicle_id, category, title, description, \
+             odometer, occurred_at, obd_codes, resolved, notes, build_id, created_at, updated_at) \
+             SELECT id, vehicle_id, category, title, description, odometer, observed_at, \
+             obd_codes, resolved, notes, build_id, created_at, updated_at FROM observations",
         )
         .await?;
 
         // 2+3. Accidents copy at `id + offset`, category 'accident', title =
         // first 100 chars of the NOT NULL description.
         db.execute_unprepared(
-            "INSERT INTO incidents (id, vehicle_id, category, title, description, odometer, \
-             occurred_at, resolved, notes, fault, other_party_name, other_party_phone, \
+            "INSERT OR IGNORE INTO incidents (id, vehicle_id, category, title, description, \
+             odometer, occurred_at, resolved, notes, fault, other_party_name, other_party_phone, \
              other_party_email, other_party_insurance, other_party_policy_number, \
              insurance_claim_number, insurance_adjuster, insurance_adjuster_phone, \
              total_repair_cost_cents, total_repair_cost_currency, deductible_cents, \
@@ -284,12 +287,17 @@ impl MigrationTrait for Migration {
         .await?;
 
         // 4. Correspondence -> followups (followup ids NOT preserved — fresh
-        // autoincrement is fine, nothing references followup ids).
+        // autoincrement is fine, nothing references followup ids). Ids being
+        // fresh, OR IGNORE can't dedupe a crash-rerun — the NOT EXISTS gate
+        // does (incident_id + occurred_at + summary identifies a source row).
         db.execute_unprepared(
             "INSERT INTO incident_followups (incident_id, occurred_at, contact_method, \
              contact_with, summary, notes, created_at) SELECT accident_id + (SELECT \
              COALESCE(MAX(id), 0) FROM observations), occurred_at, contact_method, contact_with, \
-             summary, notes, created_at FROM accident_correspondence",
+             summary, notes, created_at FROM accident_correspondence ac WHERE NOT EXISTS (SELECT \
+             1 FROM incident_followups f WHERE f.incident_id = ac.accident_id + (SELECT \
+             COALESCE(MAX(id), 0) FROM observations) AND f.occurred_at = ac.occurred_at AND \
+             f.summary = ac.summary)",
         )
         .await?;
 
@@ -297,9 +305,21 @@ impl MigrationTrait for Migration {
         // `resolved_service_id` single-links convert to M2M rows. OR IGNORE on
         // the second insert in case a duplicate pair ever exists.
         db.execute_unprepared(
-            "INSERT INTO incident_service_links (incident_id, service_record_id) SELECT \
+            "INSERT OR IGNORE INTO incident_service_links (incident_id, service_record_id) SELECT \
              accident_id + (SELECT COALESCE(MAX(id), 0) FROM observations), service_record_id \
              FROM accident_service_links",
+        )
+        .await?;
+
+        // 5b. Documents that linked to accidents by free-text type carry the
+        // PRE-offset id; remap them into incident-id space NOW — the offset is
+        // unrecoverable once `observations` drops, and a stale ('accident', 3)
+        // row would silently point at whatever migrated observation owns id 3.
+        // Idempotent: after the first run nothing matches 'accident'.
+        db.execute_unprepared(
+            "UPDATE documents SET linked_entity_type = 'incident', linked_entity_id = \
+             linked_entity_id + (SELECT COALESCE(MAX(id), 0) FROM observations) WHERE \
+             linked_entity_type = 'accident'",
         )
         .await?;
         db.execute_unprepared(

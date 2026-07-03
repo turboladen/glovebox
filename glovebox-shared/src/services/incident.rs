@@ -271,11 +271,39 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         input.recurrence_of_id.flatten(),
     )
     .await?;
-    // An incident cannot be a recurrence of itself.
-    if input.recurrence_of_id.flatten() == Some(id) {
-        return Err(DomainError::BadRequest(
-            "An incident cannot be a recurrence of itself".into(),
-        ));
+    // An incident cannot be a recurrence of itself — directly or through a
+    // chain. Walk the proposed target's ancestors; if `id` appears, linking
+    // would close a cycle and the first feature that traverses recurrence
+    // chains would loop forever. Chains are short (bounded walk, one query
+    // per hop), and the walk happens before the txn so nothing mutates on
+    // rejection.
+    if let Some(target) = input.recurrence_of_id.flatten() {
+        if target == id {
+            return Err(DomainError::BadRequest(
+                "An incident cannot be a recurrence of itself".into(),
+            ));
+        }
+        let mut cursor = Some(target);
+        let mut hops = 0;
+        while let Some(current) = cursor {
+            if current == id {
+                return Err(DomainError::BadRequest(
+                    "Recurrence link would create a cycle".into(),
+                ));
+            }
+            hops += 1;
+            if hops > 100 {
+                // Defensive bound: no legitimate chain is this long, and a
+                // pre-existing cycle must not hang the guard itself.
+                return Err(DomainError::BadRequest(
+                    "Recurrence chain is too deep to link against".into(),
+                ));
+            }
+            cursor = incident::Entity::find_by_id(current)
+                .one(db)
+                .await?
+                .and_then(|i| i.recurrence_of_id);
+        }
     }
 
     let txn = db.begin().await?;
@@ -839,6 +867,24 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(second.incident.recurrence_of_id, Some(first.incident.id));
+
+        // Closing the loop (first -> second while second -> first) must be
+        // rejected: a 2-cycle would hang any future chain traversal.
+        let err = update(
+            &db,
+            vid,
+            first.incident.id,
+            UpdateIncident {
+                recurrence_of_id: Some(Some(second.incident.id)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::BadRequest(_)));
+        // The rejected link mutated nothing.
+        let unchanged = get(&db, vid, first.incident.id).await.unwrap();
+        assert_eq!(unchanged.incident.recurrence_of_id, None);
 
         // Clearing via double-option works too.
         let cleared = update(
