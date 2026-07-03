@@ -134,7 +134,11 @@
       const data: any = {
         name: partName.trim(),
         manufacturer: partManufacturer || undefined,
-        location: partLocation || undefined,
+        // On edit, a blanked location must SEND null (explicit clear) — the
+        // `|| undefined` idiom omits the key, which the backend's double-option
+        // convention reads as "not sent" and the stale value persists. Users
+        // will want to clear slot-name backfills right after migration 000016.
+        location: editingPart ? partLocation.trim() || null : partLocation || undefined,
         part_number: partPartNumber || undefined,
         oe_part_number_replaced: partOeReplaced || undefined,
         seller: partSeller || undefined,
