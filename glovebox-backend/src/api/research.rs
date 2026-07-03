@@ -38,28 +38,6 @@ pub async fn get_report(
     Ok(Json(svc::get_report(&state.db, vehicle_id, id).await?))
 }
 
-#[derive(Deserialize)]
-pub struct GenerateReportRequest {
-    pub report_type: Option<String>,
-    pub provider_id: Option<i32>,
-}
-
-pub async fn generate_report(
-    State(state): State<AppState>,
-    Path(vehicle_id): Path<i32>,
-    Json(body): Json<GenerateReportRequest>,
-) -> Result<Json<ReportWithFindings>, ApiError> {
-    let report = svc::generate(
-        &state.db,
-        &state.ai,
-        vehicle_id,
-        body.report_type,
-        body.provider_id,
-    )
-    .await?;
-    Ok(Json(report))
-}
-
 // --- List findings by status (cross-report) ---
 
 #[derive(Deserialize)]
