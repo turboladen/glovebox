@@ -532,3 +532,208 @@ export interface ResearchFinding {
 export interface ReportWithFindings extends ResearchReport {
   findings: ResearchFinding[]
 }
+
+// --- Planning (work items + visits, unit G/F) ---
+
+export interface WorkItem {
+  id: number
+  vehicle_id: number
+  title: string
+  notes: string | null
+  schedule_item_id: number | null
+  research_finding_id: number | null
+  incident_id: number | null
+  build_id: number | null
+  est_cost_cents: number | null
+  status: string // planned | scheduled | done | dropped
+  visit_id: number | null
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateWorkItem {
+  title: string
+  notes?: string | null
+  schedule_item_id?: number | null
+  research_finding_id?: number | null
+  incident_id?: number | null
+  build_id?: number | null
+  est_cost_cents?: number | null
+  visit_id?: number | null
+}
+
+// Update DTO: send null to clear, omit to leave unchanged (double-option).
+export interface UpdateWorkItem {
+  title?: string
+  notes?: string | null
+  schedule_item_id?: number | null
+  research_finding_id?: number | null
+  incident_id?: number | null
+  build_id?: number | null
+  est_cost_cents?: number | null
+  status?: string
+  visit_id?: number | null
+}
+
+// The backend flattens the visit into the top level and adds items + rollup.
+export interface VisitWithItems {
+  id: number
+  vehicle_id: number
+  planned_date: string | null
+  shop_name: string | null
+  shop_id: number | null
+  notes: string | null
+  status: string // planned | scheduled | completed | canceled
+  service_record_id: number | null
+  created_at: string
+  updated_at: string
+  items: WorkItem[]
+  est_total_cents: number
+}
+
+export interface CreateVisit {
+  planned_date?: string | null
+  shop_name?: string | null
+  shop_id?: number | null
+  notes?: string | null
+  work_item_ids?: number[]
+}
+
+export interface UpdateVisit {
+  planned_date?: string | null
+  shop_name?: string | null
+  shop_id?: number | null
+  notes?: string | null
+  status?: string
+  // Replace-all attach semantics.
+  work_item_ids?: number[]
+}
+
+export interface CompleteVisitPayload {
+  service_date: string
+  mileage?: number | null
+  description?: string | null
+  total_cost_cents?: number | null
+  parts_cost_cents?: number | null
+  labor_cost_cents?: number | null
+  paid_by?: string | null
+  payer_note?: string | null
+  notes?: string | null
+}
+
+export interface CompletedVisit {
+  visit: Omit<VisitWithItems, 'items' | 'est_total_cents'>
+  service_record: ServiceRecordWithLinks
+  items: WorkItem[]
+}
+
+// --- Builds ---
+
+export interface Build {
+  id: number
+  vehicle_id: number
+  name: string
+  description: string | null
+  status: string // planned | active | on_hold | completed | abandoned
+  target_date: string | null
+  completed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+// The backend flattens the build into the top level and adds rollups.
+export interface BuildProgress extends Build {
+  services_count: number
+  parts_total: number
+  parts_installed: number
+  incidents_count: number
+  total_cost_cents: number
+  out_of_pocket_cents: number
+  linked: {
+    service_record_ids: number[]
+    part_ids: number[]
+    incident_ids: number[]
+  }
+}
+
+// --- Budget forecast ---
+
+export interface ForecastLine {
+  label: string
+  when: string
+  est_cents: number
+}
+
+export interface BudgetForecast {
+  horizon_months: number
+  projected_maintenance_cents: number
+  planned_visits_cents: number
+  planned_work_cents: number
+  total_cents: number
+  lines: ForecastLine[]
+}
+
+// --- Activity feed ---
+
+export interface ActivityItem {
+  kind: 'service' | 'incident' | 'mileage'
+  id: number
+  vehicle_id: number
+  vehicle_name: string
+  date: string
+  summary: string
+  mileage: number | null
+  total_cost_cents: number | null
+}
+
+// --- Garage dashboard ---
+
+export interface VehicleSummary {
+  vehicle: Vehicle
+  estimated_mileage: number | null
+  overdue_count: number
+  due_soon_count: number
+  open_recall_count: number
+  unresolved_incident_count: number
+  unscheduled_work_count: number
+  forecast_total_cents: number
+  active_build: { id: number; name: string } | null
+}
+
+export interface AttentionItem {
+  vehicle_id: number
+  vehicle_name: string
+  kind: 'overdue' | 'due_soon' | 'recall' | 'incident'
+  label: string
+  entity_id: number
+  deep_link_hint: string
+}
+
+// Flattened VisitWithItems + the owning vehicle.
+export interface UpcomingVisit extends VisitWithItems {
+  vehicle_name: string
+}
+
+// Flattened BuildProgress + the owning vehicle.
+export interface BuildSnapshot extends BuildProgress {
+  vehicle_name: string
+}
+
+export interface GarageDashboard {
+  vehicles: VehicleSummary[]
+  attention: AttentionItem[]
+  upcoming_visits: UpcomingVisit[]
+  budget_total_cents: number
+  active_builds: BuildSnapshot[]
+}
+
+// --- Search ---
+
+export interface SearchHit {
+  kind: 'vehicle' | 'service' | 'incident' | 'incident_followup' | 'build' | 'document' | 'research_finding'
+  id: number
+  vehicle_id: number | null
+  title: string
+  snippet: string
+  rank: number
+}

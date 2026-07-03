@@ -72,18 +72,19 @@ pub struct AttentionItem {
 }
 
 /// An open visit with its owning vehicle named for garage-wide display.
+/// The flattened visit already carries `vehicle_id`; only the name is added
+/// (duplicating the id under flatten would emit the JSON key twice).
 #[derive(Debug, Serialize)]
 pub struct UpcomingVisit {
-    pub vehicle_id: i32,
     pub vehicle_name: String,
     #[serde(flatten)]
     pub visit: VisitWithItems,
 }
 
-/// An active build's live progress with its owning vehicle named.
+/// An active build's live progress with its owning vehicle named. Like
+/// [`UpcomingVisit`], `vehicle_id` comes from the flattened progress record.
 #[derive(Debug, Serialize)]
 pub struct BuildSnapshot {
-    pub vehicle_id: i32,
     pub vehicle_name: String,
     #[serde(flatten)]
     pub progress: BuildProgress,
@@ -202,7 +203,6 @@ pub async fn garage(db: &DatabaseConnection) -> DomainResult<GarageDashboard> {
 
         for open in visit::list(db, v.id, false).await? {
             upcoming_visits.push(UpcomingVisit {
-                vehicle_id: v.id,
                 vehicle_name: v.name.clone(),
                 visit: open,
             });
@@ -218,7 +218,6 @@ pub async fn garage(db: &DatabaseConnection) -> DomainResult<GarageDashboard> {
                     });
                 }
                 active_builds.push(BuildSnapshot {
-                    vehicle_id: v.id,
                     vehicle_name: v.name.clone(),
                     progress: build::progress(db, v.id, b.id).await?,
                 });
