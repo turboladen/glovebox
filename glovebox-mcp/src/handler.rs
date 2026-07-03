@@ -24,15 +24,16 @@ use glovebox_shared::{
     error::{DomainError, DomainResult},
     inputs::build::UpdateBuild,
     services::{
-        activity, build, costs, incident, mileage, part, reminders, research, search,
+        activity, build, costs, incident, mileage, part, reminders, research, schedule, search,
         search::SearchScope, service_record, vehicle,
     },
 };
 
 use crate::schemas::{
-    BuildParams, EmptyParams, FileResearchFindingInput, FindDocumentsInput, LogIncidentInput,
-    LogMileageInput, RecordPartInput, RecordServiceInput, SaveNoteInput, SearchRecordsInput,
-    SummarizeActivityInput, UpdateBuildStatusInput, VehicleBrief, VehicleParams,
+    BuildParams, DismissScheduleItemInput, EmptyParams, FileResearchFindingInput,
+    FindDocumentsInput, LogIncidentInput, LogMileageInput, RecordPartInput, RecordServiceInput,
+    SaveNoteInput, SearchRecordsInput, SummarizeActivityInput, UpdateBuildStatusInput,
+    VehicleBrief, VehicleParams,
 };
 
 pub const VEHICLES_URI: &str = "glovebox://vehicles";
@@ -85,7 +86,7 @@ impl GloveboxMcp {
 
     #[tool(
         name = "record_service",
-        description = "Record maintenance or repair work that was done: what, when, at what mileage, and what it cost (integer cents). Providing `mileage` also logs an odometer reading. Use `line_items` for itemized invoices and `build_id` to link the work to a build project.",
+        description = "Record maintenance or repair work that was done: what, when, at what mileage, and what it cost (integer cents). Providing `mileage` also logs an odometer reading. Use `line_items` for itemized invoices and `build_id` to link the work to a build project. If the work satisfies due/overdue schedule items from `check_due_maintenance`, pass their ids in `schedule_item_ids` so the reminders clear.",
         input_schema = rmcp::handler::server::common::schema_for_type::<RecordServiceInput>()
     )]
     async fn record_service(
@@ -185,7 +186,7 @@ impl GloveboxMcp {
 
     #[tool(
         name = "check_due_maintenance",
-        description = "Answer \"what does this car need?\" — the vehicle's maintenance schedule evaluated against its estimated current mileage: each item's status (ok/due_soon/overdue), when it's due, and bundle suggestions for combining work. Call before recommending any maintenance.",
+        description = "Answer \"what does this car need?\" — the vehicle's maintenance schedule evaluated against its estimated current mileage: each item's status (ok/due_soon/overdue), when it's due, and bundle suggestions for combining work. Call before recommending any maintenance. When recorded work satisfies an item, link it via `record_service`'s `schedule_item_ids` so the reminder clears; for an item that doesn't apply to this vehicle, use `dismiss_schedule_item`.",
         input_schema = rmcp::handler::server::common::schema_for_type::<VehicleParams>()
     )]
     async fn check_due_maintenance(
@@ -203,6 +204,25 @@ impl GloveboxMcp {
             Ok(v) => tool_json_result(&v),
             Err(e) => Err(db_error(&e)),
         }
+    }
+
+    #[tool(
+        name = "dismiss_schedule_item",
+        description = "Waive a maintenance schedule item for this vehicle — it stops appearing in the schedule and in `check_due_maintenance`. Use for items that genuinely don't apply (e.g. a dealer-only service the owner skips deliberately). For work that was actually done before tracking started, prefer `record_service` with a minimal past-dated entry linked via `schedule_item_ids` instead, so history stays honest.",
+        input_schema = rmcp::handler::server::common::schema_for_type::<DismissScheduleItemInput>()
+    )]
+    async fn dismiss_schedule_item(
+        &self,
+        params: LenientParameters<DismissScheduleItemInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = match params.into_tool_input("dismiss_schedule_item") {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        };
+        domain_result(
+            schedule::dismiss_for_vehicle(&*self.db, p.vehicle_id, p.schedule_item_id, p.reason)
+                .await,
+        )
     }
 
     #[tool(
@@ -390,14 +410,17 @@ impl ServerHandler for GloveboxMcp {
                 "glovebox MCP: car maintenance tracking. Canonical workflow: (1) ORIENT — \
                  `list_vehicles` for ids, then `summarize_recent_activity` for the vehicle's \
                  recent history. (2) ANSWER \"what does it need?\" — `check_due_maintenance` \
-                 before recommending any work; `check_recalls` for safety recalls. (3) CAPTURE \
-                 what happened — `record_service` for completed work, `record_part` for parts \
-                 bought or installed, `log_incident` for symptoms/damage/accidents, `save_note` \
-                 for facts worth remembering, `log_mileage` whenever the user mentions an \
-                 odometer reading. (4) LOOK THINGS UP — `find_documents` for receipts/manuals, \
-                 `search_records` for anything else, `cost_summary` for spend. (5) PROJECTS — \
-                 `list_builds` / `get_build_progress` / `update_build_status` for upgrade or \
-                 restoration builds. All money is integer cents; all dates are YYYY-MM-DD.",
+                 before recommending any work; `check_recalls` for safety recalls. Resolve \
+                 due/overdue items by linking completed work (`record_service` with \
+                 `schedule_item_ids`) or waiving ones that don't apply (`dismiss_schedule_item`). \
+                 (3) CAPTURE what happened — `record_service` for completed work, `record_part` \
+                 for parts bought or installed, `log_incident` for symptoms/damage/accidents, \
+                 `save_note` for facts worth remembering, `log_mileage` whenever the user \
+                 mentions an odometer reading. (4) LOOK THINGS UP — `find_documents` for \
+                 receipts/manuals, `search_records` for anything else, `cost_summary` for spend. \
+                 (5) PROJECTS — `list_builds` / `get_build_progress` / `update_build_status` for \
+                 upgrade or restoration builds. All money is integer cents; all dates are \
+                 YYYY-MM-DD.",
             )
     }
 

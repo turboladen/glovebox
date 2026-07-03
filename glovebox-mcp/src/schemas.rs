@@ -65,6 +65,9 @@ pub struct RecordServiceInput {
     pub line_items: Option<Vec<LineItemInput>>,
     /// Link this service to a build (from `list_builds`).
     pub build_id: Option<i32>,
+    /// Ids of schedule items (from `check_due_maintenance`) this work
+    /// satisfies — linking clears the reminder and restarts its interval.
+    pub schedule_item_ids: Option<Vec<i32>>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -112,7 +115,7 @@ impl RecordServiceInput {
                 build_id: self.build_id,
                 paid_by: self.paid_by,
                 payer_note: self.payer_note,
-                schedule_item_ids: None,
+                schedule_item_ids: self.schedule_item_ids,
                 part_ids: None,
                 line_items,
             },
@@ -280,6 +283,16 @@ impl LogMileageInput {
             },
         )
     }
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct DismissScheduleItemInput {
+    /// Vehicle id, from `list_vehicles`.
+    pub vehicle_id: i32,
+    /// Schedule item id, from `check_due_maintenance`.
+    pub schedule_item_id: i32,
+    /// Why it's being waived, e.g. "independent shop handles this".
+    pub reason: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]

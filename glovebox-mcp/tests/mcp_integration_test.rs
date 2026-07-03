@@ -14,8 +14,11 @@ use axum::{
     http::{Request, StatusCode},
 };
 use glovebox_shared::{
-    inputs::{build::NewBuild, service_record::NewServiceRecord, vehicle::NewVehicle},
-    services::{build as build_svc, service_record as svc_svc, vehicle},
+    inputs::{
+        build::NewBuild, schedule::NewScheduleItem, service_record::NewServiceRecord,
+        vehicle::NewVehicle,
+    },
+    services::{build as build_svc, schedule as schedule_svc, service_record as svc_svc, vehicle},
     test_support::test_db,
 };
 use sea_orm::DatabaseConnection;
@@ -225,6 +228,7 @@ async fn tools_list_advertises_the_full_verb_set() {
         "save_note",
         "log_mileage",
         "check_due_maintenance",
+        "dismiss_schedule_item",
         "summarize_recent_activity",
         "find_documents",
         "search_records",
@@ -248,7 +252,7 @@ async fn tools_list_advertises_the_full_verb_set() {
     let tools = parsed["result"]["tools"]
         .as_array()
         .unwrap_or_else(|| panic!("tools/list result must carry a tools array; got: {body}"));
-    assert_eq!(tools.len(), 17, "expected exactly 17 tools; got: {body}");
+    assert_eq!(tools.len(), 18, "expected exactly 18 tools; got: {body}");
     for tool in tools {
         let name = tool["name"].as_str().expect("tool name");
         if name == "list_vehicles" {
@@ -361,6 +365,214 @@ async fn record_service_then_summarize_recent_activity_round_trip() {
         body.contains("Oil change + filter") && body.contains("48000"),
         "activity feed must include the recorded service; got: {body}"
     );
+}
+
+/// Parse the JSON payload a successful tool call returns in its first
+/// content block.
+fn tool_payload(body: &str) -> serde_json::Value {
+    let parsed = extract_json(body);
+    let text = parsed["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("tool result must carry a text content block; got: {body}"));
+    serde_json::from_str(text).unwrap_or_else(|e| panic!("tool payload must be JSON ({e}): {text}"))
+}
+
+fn schedule_item_every_12_months(vehicle_id: i32, name: &str) -> NewScheduleItem {
+    NewScheduleItem {
+        platform_id: None,
+        model_template_id: None,
+        vehicle_id: Some(vehicle_id),
+        overrides_item_id: None,
+        name: name.into(),
+        description: None,
+        interval_miles: None,
+        interval_months: Some(12),
+        warning_miles: None,
+        warning_days: None,
+        enabled: None,
+        source: None,
+        notes: None,
+        is_factory_recommended: None,
+        labor_categories: None,
+    }
+}
+
+/// Status of one named reminder out of a `check_due_maintenance` call.
+async fn reminder_status(app: &Router, session: &str, vehicle_id: i32, name: &str) -> String {
+    let body = post_rpc(
+        app,
+        session,
+        call_tool(
+            "check_due_maintenance",
+            serde_json::json!({ "vehicle_id": vehicle_id }),
+        ),
+    )
+    .await;
+    assert_success(&body);
+    let payload = tool_payload(&body);
+    let reminders = payload["reminders"].as_array().expect("reminders array");
+    reminders
+        .iter()
+        .find(|r| r["schedule_item"]["name"] == name)
+        .unwrap_or_else(|| panic!("no reminder named {name}; got: {payload}"))["status"]
+        .as_str()
+        .expect("status string")
+        .to_string()
+}
+
+#[tokio::test]
+async fn record_service_schedule_item_ids_clears_the_overdue_reminder() {
+    let (app, db) = setup().await;
+    let session = handshake(&app).await;
+    let v = vehicle::create(
+        &db,
+        NewVehicle {
+            purchase_date: Some("2020-01-01".into()),
+            ..new_vehicle("Daily")
+        },
+    )
+    .await
+    .unwrap();
+    let item = schedule_svc::create(
+        &db,
+        schedule_item_every_12_months(v.id, "Brake fluid flush"),
+    )
+    .await
+    .unwrap();
+
+    // Never serviced since a 2020 purchase → the 12-month item is overdue.
+    assert_eq!(
+        reminder_status(&app, &session, v.id, "Brake fluid flush").await,
+        "overdue"
+    );
+
+    // Recording the work WITHOUT the link does not clear the reminder;
+    // linking via schedule_item_ids does.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "record_service",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "service_date": "2026-06-20",
+                "description": "Brake fluid flush",
+                "schedule_item_ids": [item.id]
+            }),
+        ),
+    )
+    .await;
+    assert_success(&body);
+    assert_eq!(
+        reminder_status(&app, &session, v.id, "Brake fluid flush").await,
+        "ok"
+    );
+
+    // Wrong-vehicle probe: linking another vehicle's schedule item is a clean
+    // not-found tool error, and nothing is recorded.
+    let other = vehicle::create(&db, new_vehicle("Other")).await.unwrap();
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "record_service",
+            serde_json::json!({
+                "vehicle_id": other.id,
+                "service_date": "2026-06-20",
+                "schedule_item_ids": [item.id]
+            }),
+        ),
+    )
+    .await;
+    assert_tool_error(&body);
+    assert!(body.contains("not found"), "got: {body}");
+    assert!(
+        svc_svc::list(&db, other.id).await.unwrap().is_empty(),
+        "rejected link must not create a record"
+    );
+}
+
+#[tokio::test]
+async fn dismiss_schedule_item_hides_it_and_rejects_wrong_vehicle() {
+    let (app, db) = setup().await;
+    let session = handshake(&app).await;
+    let v = vehicle::create(
+        &db,
+        NewVehicle {
+            purchase_date: Some("2020-01-01".into()),
+            ..new_vehicle("Daily")
+        },
+    )
+    .await
+    .unwrap();
+    let item = schedule_svc::create(
+        &db,
+        schedule_item_every_12_months(v.id, "Dealer inspection"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(schedule_svc::resolve(&db, v.id).await.unwrap().len(), 1);
+
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "dismiss_schedule_item",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "schedule_item_id": item.id,
+                "reason": "independent shop handles this"
+            }),
+        ),
+    )
+    .await;
+    assert_success(&body);
+    let payload = tool_payload(&body);
+    assert_eq!(payload["enabled"], false);
+    assert!(
+        payload["notes"]
+            .as_str()
+            .unwrap()
+            .contains("independent shop handles this")
+    );
+
+    // Gone from the resolved schedule and from the reminders.
+    assert!(schedule_svc::resolve(&db, v.id).await.unwrap().is_empty());
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "check_due_maintenance",
+            serde_json::json!({ "vehicle_id": v.id }),
+        ),
+    )
+    .await;
+    assert_success(&body);
+    let payload = tool_payload(&body);
+    assert_eq!(
+        payload["reminders"].as_array().map(Vec::len),
+        Some(0),
+        "dismissed item must not appear in reminders: {payload}"
+    );
+
+    // Wrong-vehicle and nonexistent probes are the same clean tool error.
+    let other = vehicle::create(&db, new_vehicle("Other")).await.unwrap();
+    for schedule_item_id in [item.id, 9999] {
+        let body = post_rpc(
+            &app,
+            &session,
+            call_tool(
+                "dismiss_schedule_item",
+                serde_json::json!({
+                    "vehicle_id": other.id,
+                    "schedule_item_id": schedule_item_id
+                }),
+            ),
+        )
+        .await;
+        assert_tool_error(&body);
+        assert!(body.contains("not found"), "got: {body}");
+    }
 }
 
 #[tokio::test]
