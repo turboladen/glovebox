@@ -385,28 +385,8 @@ export interface CreateCorrespondence {
   notes?: string | null
 }
 
-export interface PartSlot {
-  id: number
-  vehicle_id: number
-  name: string
-  category: string | null
-  oe_spec: string | null
-  oe_part_number: string | null
-  notes: string | null
-  created_at: string
-}
-
-export interface CreatePartSlot {
-  name: string
-  category?: string | null
-  oe_spec?: string | null
-  oe_part_number?: string | null
-  notes?: string | null
-}
-
 export interface Part {
   id: number
-  slot_id: number | null
   vehicle_id: number
   name: string
   manufacturer: string | null
@@ -428,10 +408,11 @@ export interface Part {
   updated_at: string
   manufacturer_url: string | null
   retailer_url: string | null
+  build_id: number | null
+  location: string | null
 }
 
 export interface CreatePart {
-  slot_id?: number | null
   name: string
   manufacturer?: string | null
   part_number?: string | null
@@ -448,6 +429,7 @@ export interface CreatePart {
   installed_odometer?: number | null
   installed_service_id?: number | null
   notes?: string | null
+  location?: string | null
 }
 
 export interface MonthlyCost {
