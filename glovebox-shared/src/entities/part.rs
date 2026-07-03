@@ -29,6 +29,9 @@ pub struct Model {
     pub retailer_url: Option<String>,
     pub build_id: Option<i32>,
     pub location: Option<String>,
+    // Added by migration 20 (ALTER TABLE appends to end)
+    pub warranty_expires_on: Option<String>,
+    pub warranty_expires_miles: Option<i32>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

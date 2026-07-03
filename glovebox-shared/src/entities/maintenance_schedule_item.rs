@@ -24,6 +24,8 @@ pub struct Model {
     pub source: Option<String>,
     pub notes: Option<String>,
     pub is_factory_recommended: Option<bool>,
+    // Added by migration 20 (ALTER TABLE appends to end)
+    pub est_cost_cents: Option<i32>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
