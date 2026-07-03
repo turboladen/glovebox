@@ -20,6 +20,9 @@ pub struct NewServiceRecord {
     pub shop_id: Option<i32>,
     pub notes: Option<String>,
     pub build_id: Option<i32>,
+    /// Who paid: `self` (default), `insurance`, or `third_party`.
+    pub paid_by: Option<String>,
+    pub payer_note: Option<String>,
     pub schedule_item_ids: Option<Vec<i32>>,
     pub part_ids: Option<Vec<i32>>,
     pub line_items: Option<Vec<NewLineItem>>,
@@ -40,6 +43,9 @@ pub struct UpdateServiceRecord {
     pub shop_id: Option<Option<i32>>,
     pub notes: Option<Option<String>>,
     pub build_id: Option<Option<i32>>,
+    /// Plain option: the column is non-nullable, so there is no "clear" case.
+    pub paid_by: Option<String>,
+    pub payer_note: Option<Option<String>>,
     pub schedule_item_ids: Option<Vec<i32>>,
     pub part_ids: Option<Vec<i32>>,
     pub line_items: Option<Vec<NewLineItem>>,

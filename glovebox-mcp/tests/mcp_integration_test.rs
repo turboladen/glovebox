@@ -65,6 +65,8 @@ fn minimal_service(date: &str, description: &str, build_id: Option<i32>) -> NewS
         shop_id: None,
         notes: None,
         build_id,
+        paid_by: None,
+        payer_note: None,
         schedule_item_ids: None,
         part_ids: None,
         line_items: None,

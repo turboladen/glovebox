@@ -183,6 +183,8 @@ mod tests {
             shop_id: None,
             notes: None,
             build_id: None,
+            paid_by: None,
+            payer_note: None,
             schedule_item_ids: None,
             part_ids: None,
             line_items: None,

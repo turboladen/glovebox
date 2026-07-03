@@ -104,6 +104,8 @@ impl RecordServiceInput {
                 shop_id: None,
                 notes: self.notes,
                 build_id: self.build_id,
+                paid_by: None,
+                payer_note: None,
                 schedule_item_ids: None,
                 part_ids: None,
                 line_items,

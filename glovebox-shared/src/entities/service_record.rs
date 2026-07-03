@@ -22,6 +22,8 @@ pub struct Model {
     pub updated_at: String,
     pub shop_id: Option<i32>,
     pub build_id: Option<i32>,
+    pub paid_by: String,
+    pub payer_note: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

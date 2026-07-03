@@ -128,6 +128,8 @@ pub async fn create(
             shop_id: input.shop_id,
             notes: input.notes,
             build_id: input.build_id,
+            paid_by: None,
+            payer_note: None,
             schedule_item_ids: input.schedule_item_ids,
             part_ids: input.part_ids,
             line_items: input
@@ -163,6 +165,8 @@ pub async fn update(
             shop_id: input.shop_id,
             notes: input.notes,
             build_id: input.build_id,
+            paid_by: None,
+            payer_note: None,
             schedule_item_ids: input.schedule_item_ids,
             part_ids: input.part_ids,
             line_items: input
