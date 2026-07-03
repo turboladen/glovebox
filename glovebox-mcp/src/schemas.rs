@@ -207,7 +207,8 @@ pub struct SearchRecordsInput {
 pub struct FileResearchFindingInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
-    /// Finding kind, e.g. "maintenance", "recall", "upgrade", "issue", "note".
+    /// Finding kind: `forum_report`, `suggested_maintenance`, `upgrade_idea`,
+    /// or `recall` (other values render under their own heading).
     pub category: String,
     /// Short title, e.g. "DSG service interval is 40k, not 60k".
     pub title: String,
@@ -215,7 +216,7 @@ pub struct FileResearchFindingInput {
     pub description: Option<String>,
     /// Where this was found (URL).
     pub source_url: Option<String>,
-    /// "info", "low", "medium", "high", or "critical".
+    /// "critical", "recommended", "optional", or "informational".
     pub severity: Option<String>,
 }
 

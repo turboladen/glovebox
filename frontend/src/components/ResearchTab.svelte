@@ -23,12 +23,21 @@
   const severityLevels = ['critical', 'recommended', 'optional', 'informational'] as const
   let activeSeverities: Set<string> = $state(new Set(severityLevels))
 
+  // Severity is free-form at the API/MCP boundary; anything outside our four
+  // buckets renders as "informational" so no finding can silently disappear
+  // from every filter combination.
+  function normalizeSeverity(severity: string | null | undefined): string {
+    return severity && (severityLevels as readonly string[]).includes(severity)
+      ? severity
+      : 'informational'
+  }
+
   // Derived: findings grouped by category with active filters applied
   const categoryOrder = ['recall', 'suggested_maintenance', 'forum_report', 'upgrade_idea']
 
   let filteredGroupedFindings = $derived.by(() => {
     if (!expandedReport) return []
-    const filtered = expandedReport.findings.filter(f => activeSeverities.has(f.severity ?? 'informational'))
+    const filtered = expandedReport.findings.filter(f => activeSeverities.has(normalizeSeverity(f.severity)))
     const groups: { category: string; findings: ResearchFinding[] }[] = []
     const byCategory = new Map<string, ResearchFinding[]>()
     for (const f of filtered) {

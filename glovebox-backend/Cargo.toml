@@ -23,6 +23,5 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror.workspace = true
 anyhow.workspace = true
 clap.workspace = true
-base64.workspace = true
 reqwest.workspace = true
 sqlx.workspace = true

@@ -330,13 +330,24 @@ pub async fn file_finding(
         .await?
         .ok_or_else(|| DomainError::NotFound("Vehicle not found".to_string()))?;
 
+    // order_by_asc(Id): should concurrent first-filings ever race-create two
+    // anchors (no unique index on vehicle+type), every later call still picks
+    // the same one deterministically.
     let report = match research_report::Entity::find()
         .filter(research_report::Column::VehicleId.eq(vehicle_id))
         .filter(research_report::Column::ReportType.eq("external_research"))
+        .order_by_asc(research_report::Column::Id)
         .one(db)
         .await?
     {
-        Some(r) => r,
+        Some(r) => {
+            // Touch generated_at so the anchor sorts by its NEWEST filing in
+            // list_reports (order_by_desc(GeneratedAt)) instead of sinking
+            // below old recall reports with a stale first-filing date.
+            let mut active: research_report::ActiveModel = r.into();
+            active.generated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
+            active.update(db).await?
+        }
         None => {
             research_report::ActiveModel {
                 vehicle_id: Set(vehicle_id),
@@ -417,6 +428,24 @@ mod tests {
             Some("external_research")
         );
         assert_eq!(report.findings.len(), 2);
+        // Another vehicle gets its OWN anchor — never vehicle A's (the
+        // paxy-class regression this pins: dropping the VehicleId filter).
+        let other = seed_vehicle(&db).await;
+        let f3 = file_finding(
+            &db,
+            other,
+            NewFiledFinding {
+                category: "forum_report".into(),
+                title: "Other car's finding".into(),
+                description: None,
+                source_url: None,
+                severity: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_ne!(f3.report_id, f1.report_id);
+
         // Missing vehicle is indistinguishable from nonexistent.
         assert!(matches!(
             file_finding(
