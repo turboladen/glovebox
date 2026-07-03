@@ -15,6 +15,7 @@ pub mod platforms;
 pub mod reminders;
 pub mod research;
 pub mod schedules;
+pub mod search;
 pub mod serde_helpers;
 pub mod services;
 pub mod shops;

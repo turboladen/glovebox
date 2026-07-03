@@ -85,6 +85,8 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/api/health", get(api::health::health_check))
+        // Full-text search (one domain operation over vehicles/events/documents)
+        .route("/api/search", get(api::search::search))
         // AI endpoints
         .route("/api/ai/status", get(api::ai::status))
         .route(
