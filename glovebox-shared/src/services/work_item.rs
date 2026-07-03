@@ -16,6 +16,13 @@ use crate::{
 /// Lifecycle whitelist for `work_items.status`.
 const VALID_STATUSES: [&str; 4] = ["planned", "scheduled", "done", "dropped"];
 
+/// An item **participates** in planning only while `planned`/`scheduled`.
+/// Done/dropped items are history: they never attach to a visit, never
+/// close out with one, and never count in the budget forecast.
+pub(crate) fn participates(status: &str) -> bool {
+    matches!(status, "planned" | "scheduled")
+}
+
 fn validate_status(status: &str) -> DomainResult<()> {
     if VALID_STATUSES.contains(&status) {
         return Ok(());
@@ -77,7 +84,9 @@ pub(crate) async fn require_visit_owned(
 
 /// Guard every present source link on a work item (the 5 paxy kinds):
 /// schedule item (vehicle scope chain), research finding (via its report),
-/// incident, build, and visit — each vehicle-scoped.
+/// incident, build, and visit — each vehicle-scoped. A visit link must
+/// additionally be OPEN (planned/scheduled): completed/canceled visits
+/// never accept items.
 async fn require_links_owned(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -100,7 +109,13 @@ async fn require_links_owned(
         crate::services::build::require_owned(db, vehicle_id, id).await?;
     }
     if let Some(id) = visit_id {
-        require_visit_owned(db, vehicle_id, id).await?;
+        let v = require_visit_owned(db, vehicle_id, id).await?;
+        if !crate::services::visit::is_open(&v.status) {
+            return Err(DomainError::BadRequest(format!(
+                "Visit {id} is {} and cannot accept work items",
+                v.status
+            )));
+        }
     }
     Ok(())
 }
@@ -205,6 +220,33 @@ pub async fn update(
     )
     .await?;
 
+    // Visit-move guards: an item on a COMPLETED visit never moves
+    // (provenance — canceled-visit items may), and only a participating
+    // (planned/scheduled) item can be attached somewhere.
+    let current_status = existing.status.clone();
+    let current_visit = existing.visit_id;
+    let visit_changes = input.visit_id.as_ref().is_some_and(|v| *v != current_visit);
+    if visit_changes {
+        if let Some(cur) = current_visit {
+            let on_completed = visit::Entity::find_by_id(cur)
+                .filter(visit::Column::Status.eq("completed"))
+                .one(db)
+                .await?
+                .is_some();
+            if on_completed {
+                return Err(DomainError::BadRequest(format!(
+                    "Work item {id} is attached to completed visit {cur} and cannot be moved"
+                )));
+            }
+        }
+        if input.visit_id.as_ref().is_some_and(Option::is_some) && !participates(&current_status) {
+            return Err(DomainError::BadRequest(format!(
+                "Work item {id} is {current_status} and cannot be attached to a visit"
+            )));
+        }
+    }
+    let status_provided = input.status.is_some();
+
     let mut active: work_item::ActiveModel = existing.into();
 
     if let Some(v) = input.title {
@@ -233,6 +275,19 @@ pub async fn update(
     }
     if let Some(v) = input.visit_id {
         active.visit_id = Set(v);
+        // Visit transitions drive status, matching create-with-visit and
+        // the visit attach/detach flows: attach → `scheduled`; detach →
+        // back to `planned` when it was `scheduled` (unless the same
+        // update sets a status explicitly).
+        if visit_changes {
+            match v {
+                Some(_) => active.status = Set("scheduled".to_string()),
+                None if !status_provided && current_status == "scheduled" => {
+                    active.status = Set("planned".to_string());
+                }
+                None => {}
+            }
+        }
     }
 
     active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
@@ -660,6 +715,248 @@ mod tests {
             "done/dropped hidden by default"
         );
         assert_eq!(list(&db, vid, true).await.unwrap().len(), 3);
+    }
+
+    async fn seed_visit_with_status(
+        db: &impl ConnectionTrait,
+        vehicle_id: i32,
+        status: &str,
+    ) -> i32 {
+        visit::ActiveModel {
+            vehicle_id: Set(vehicle_id),
+            status: Set(status.into()),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+        .id
+    }
+
+    /// Fix 3: the target visit must be OPEN — a completed or canceled
+    /// visit never accepts items, on create (the MCP `plan_work` path)
+    /// or on update.
+    #[tokio::test]
+    async fn attach_rejects_closed_visit_target() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let completed = seed_visit_with_status(&db, vid, "completed").await;
+        let canceled = seed_visit_with_status(&db, vid, "canceled").await;
+
+        for closed in [completed, canceled] {
+            let err = create(
+                &db,
+                vid,
+                NewWorkItem {
+                    visit_id: Some(closed),
+                    ..item("late arrival")
+                },
+            )
+            .await
+            .unwrap_err();
+            match err {
+                DomainError::BadRequest(msg) => {
+                    assert!(msg.contains("cannot accept work items"), "{msg}");
+                }
+                other => panic!("expected BadRequest, got {other:?}"),
+            }
+        }
+        assert!(list(&db, vid, true).await.unwrap().is_empty());
+
+        // The update path hits the same guard.
+        let existing = create(&db, vid, item("backlog")).await.unwrap();
+        assert!(matches!(
+            update(
+                &db,
+                vid,
+                existing.id,
+                UpdateWorkItem {
+                    visit_id: Some(Some(completed)),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err(),
+            DomainError::BadRequest(_)
+        ));
+        let untouched = get(&db, vid, existing.id).await.unwrap();
+        assert_eq!(untouched.visit_id, None);
+        assert_eq!(untouched.status, "planned");
+    }
+
+    /// Fix 3 (provenance): an item on a COMPLETED visit never moves —
+    /// neither detached nor reattached elsewhere. Canceled-visit items may.
+    #[tokio::test]
+    async fn update_never_moves_items_off_a_completed_visit() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let done_visit = seed_visit_with_status(&db, vid, "completed").await;
+        let open_visit = seed_visit(&db, vid).await;
+
+        // Seed the history state directly (normally produced by
+        // visit::complete): a done item attached to the completed visit.
+        let created = create(&db, vid, item("history")).await.unwrap();
+        let mut am: work_item::ActiveModel = created.clone().into();
+        am.visit_id = Set(Some(done_visit));
+        am.status = Set("done".into());
+        am.update(&db).await.unwrap();
+
+        for target in [None, Some(open_visit)] {
+            let err = update(
+                &db,
+                vid,
+                created.id,
+                UpdateWorkItem {
+                    visit_id: Some(target),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err();
+            match err {
+                DomainError::BadRequest(msg) => {
+                    assert!(msg.contains("completed visit"), "{msg}");
+                }
+                other => panic!("expected BadRequest, got {other:?}"),
+            }
+        }
+        let kept = get(&db, vid, created.id).await.unwrap();
+        assert_eq!(kept.visit_id, Some(done_visit));
+
+        // Canceled-visit items are free to move (legacy rows: cancel now
+        // detaches, but pre-existing attachments must not be trapped).
+        let canceled_visit = seed_visit_with_status(&db, vid, "canceled").await;
+        let stray = create(&db, vid, item("stray")).await.unwrap();
+        let mut am: work_item::ActiveModel = stray.clone().into();
+        am.visit_id = Set(Some(canceled_visit));
+        am.status = Set("scheduled".into());
+        am.update(&db).await.unwrap();
+
+        let freed = update(
+            &db,
+            vid,
+            stray.id,
+            UpdateWorkItem {
+                visit_id: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(freed.visit_id, None);
+        assert_eq!(freed.status, "planned");
+    }
+
+    /// Fix 3: a done/dropped item cannot be attached via update.
+    #[tokio::test]
+    async fn update_rejects_attaching_non_participating_item() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let open_visit = seed_visit(&db, vid).await;
+        let created = create(&db, vid, item("finished")).await.unwrap();
+        update(
+            &db,
+            vid,
+            created.id,
+            UpdateWorkItem {
+                status: Some("done".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let err = update(
+            &db,
+            vid,
+            created.id,
+            UpdateWorkItem {
+                visit_id: Some(Some(open_visit)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        match err {
+            DomainError::BadRequest(msg) => {
+                assert!(
+                    msg.contains("done") && msg.contains("cannot be attached"),
+                    "{msg}"
+                );
+            }
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
+        assert_eq!(get(&db, vid, created.id).await.unwrap().visit_id, None);
+    }
+
+    /// Fix 4: `visit_id` transitions drive status — attach → `scheduled`,
+    /// detach → `planned` (when it was `scheduled`), matching
+    /// create-with-visit and the visit attach flow.
+    #[tokio::test]
+    async fn update_visit_id_drives_status() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let visit_id = seed_visit(&db, vid).await;
+        let created = create(&db, vid, item("Alignment")).await.unwrap();
+        assert_eq!(created.status, "planned");
+
+        // Attach: Some(Some(v)) → scheduled.
+        let attached = update(
+            &db,
+            vid,
+            created.id,
+            UpdateWorkItem {
+                visit_id: Some(Some(visit_id)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(attached.visit_id, Some(visit_id));
+        assert_eq!(attached.status, "scheduled");
+
+        // Detach: Some(None) → back to planned.
+        let detached = update(
+            &db,
+            vid,
+            created.id,
+            UpdateWorkItem {
+                visit_id: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(detached.visit_id, None);
+        assert_eq!(detached.status, "planned");
+
+        // Detach with an explicit status in the same update: the explicit
+        // status wins over the scheduled→planned default.
+        update(
+            &db,
+            vid,
+            created.id,
+            UpdateWorkItem {
+                visit_id: Some(Some(visit_id)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let dropped = update(
+            &db,
+            vid,
+            created.id,
+            UpdateWorkItem {
+                visit_id: Some(None),
+                status: Some("dropped".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(dropped.visit_id, None);
+        assert_eq!(dropped.status, "dropped");
     }
 
     #[tokio::test]

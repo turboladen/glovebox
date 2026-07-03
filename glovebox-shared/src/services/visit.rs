@@ -10,8 +10,10 @@
 //! which internally calls `begin()` again. `SeaORM`'s `DatabaseTransaction`
 //! implements `TransactionTrait`, and a nested `begin()` on `SQLite` issues a
 //! SAVEPOINT — so the record creation nests inside the outer unit and an
-//! outer rollback undoes it. `create` is reused rather than inlined; the
-//! rollback-on-failure test below proves the behavior empirically.
+//! outer rollback undoes it. `create` is reused rather than inlined. The
+//! rollback test below empirically proves outer-drop rollback and
+//! savepoint-commit visibility; the savepoint-internal-error path is
+//! unexercised, because `create`'s guards all run before its savepoint opens.
 
 use std::collections::BTreeSet;
 
@@ -33,6 +35,12 @@ use crate::{
 /// Lifecycle whitelist for `visits.status`. `completed` is only reachable
 /// through [`complete`]; `update` accepts the other three.
 const VALID_STATUSES: [&str; 4] = ["planned", "scheduled", "completed", "canceled"];
+
+/// A visit is **open** — accepts attaches, edits, and completion — only
+/// while `planned` or `scheduled`. Completed/canceled visits are history.
+pub(crate) fn is_open(status: &str) -> bool {
+    matches!(status, "planned" | "scheduled")
+}
 
 fn now_stamp() -> String {
     chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
@@ -81,8 +89,11 @@ async fn load_items(
 }
 
 /// Attach work items to a visit: each must belong to the vehicle
-/// (cross-vehicle indistinguishable from nonexistent); sets `visit_id` and
-/// flips status to `scheduled`.
+/// (cross-vehicle indistinguishable from nonexistent), must be
+/// participating (`planned`/`scheduled` — done/dropped items are history),
+/// and must not currently sit on a COMPLETED visit (provenance: completed
+/// visits' items never move; canceled-visit items may). Sets `visit_id`
+/// and flips status to `scheduled`.
 async fn attach_items(
     txn: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -103,7 +114,47 @@ async fn attach_items(
             "Work item {missing} not found"
         )));
     }
+
+    // Provenance guard: batch-load the items' current visits (excluding
+    // this one) and reject any move out of a completed visit.
+    let source_ids: Vec<i32> = owned
+        .iter()
+        .filter_map(|i| i.visit_id)
+        .filter(|v| *v != visit_id)
+        .collect();
+    let completed_sources: BTreeSet<i32> = if source_ids.is_empty() {
+        BTreeSet::new()
+    } else {
+        visit::Entity::find()
+            .filter(visit::Column::Id.is_in(source_ids))
+            .filter(visit::Column::Status.eq("completed"))
+            .all(txn)
+            .await?
+            .into_iter()
+            .map(|v| v.id)
+            .collect()
+    };
+
     for item in owned {
+        if item.visit_id == Some(visit_id) && !work_item_svc::participates(&item.status) {
+            // Already-attached history (done/dropped) re-listed in a
+            // replace-all update: leave it untouched.
+            continue;
+        }
+        if let Some(src) = item.visit_id
+            && completed_sources.contains(&src)
+        {
+            return Err(DomainError::BadRequest(format!(
+                "Work item {} is attached to completed visit {src} and cannot be moved",
+                item.id
+            )));
+        }
+        if !work_item_svc::participates(&item.status) {
+            return Err(DomainError::BadRequest(format!(
+                "Work item {} is {} and cannot be attached to a visit",
+                item.id, item.status
+            )));
+        }
         let mut active: work_item::ActiveModel = item.into();
         active.visit_id = Set(Some(visit_id));
         active.status = Set("scheduled".to_string());
@@ -229,6 +280,15 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
 ) -> DomainResult<VisitWithItems> {
     let existing = require_visit(db, vehicle_id, id).await?;
 
+    // Completed/canceled visits are immutable history — no reopen, no
+    // re-titling, no attach churn (mirrors `complete`'s own guard).
+    if !is_open(&existing.status) {
+        return Err(DomainError::BadRequest(format!(
+            "Visit {id} is already {} and cannot be updated",
+            existing.status
+        )));
+    }
+
     if let Some(status) = &input.status {
         if status == "completed" {
             return Err(DomainError::BadRequest(
@@ -277,6 +337,14 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         detach_items(&txn, to_detach).await?;
         attach_items(&txn, vehicle_id, v.id, &new_ids).await?;
     }
+
+    // Canceling detaches exactly like `delete`: the items go back to the
+    // backlog (visit_id NULL, scheduled → planned) instead of hanging off
+    // a visit that will never happen.
+    if v.status == "canceled" {
+        let items = load_items(&txn, v.id).await?;
+        detach_items(&txn, items).await?;
+    }
     let items = load_items(&txn, v.id).await?;
 
     txn.commit().await?;
@@ -304,16 +372,21 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
 
 /// Close out a visit — the recall→plan→visit→service-record loop-closer.
 /// ONE atomic unit:
-/// 1. the visit must exist (vehicle-scoped) and not already be
-///    completed/canceled;
-/// 2. all attached items are marked `done`;
+/// 1. the visit must exist (vehicle-scoped) and be open (not already
+///    completed/canceled) — checked inside the transaction, so a
+///    concurrent close can't slip between check and use;
+/// 2. participating attached items (`planned`/`scheduled`) are marked
+///    `done` — dropped/done items stay attached with their status as
+///    history and contribute nothing below;
 /// 3. the service record is created via [`service_record::create`]
-///    (description defaults to the joined item titles; the items' non-null
-///    `schedule_item_id`s become schedule links, clearing reminders;
-///    payer-aware) — nested as a savepoint, see the module docs;
-/// 4. incident-sourced items link the record via `incident_service_links`;
-/// 5. research-finding-sourced items mark their finding `completed`
-///    (closing the recall in the Research view);
+///    (description defaults to the participating items' joined titles;
+///    their non-null `schedule_item_id`s become schedule links, clearing
+///    reminders; payer-aware) — nested as a savepoint, see the module docs;
+/// 4. participating incident-sourced items link the record via
+///    `incident_service_links`;
+/// 5. participating research-finding-sourced items mark their finding
+///    `completed` (closing the recall in the Research view) and back-link
+///    it to the new record (`linked_entity_type: "service"`);
 /// 6. the visit gets `service_record_id` + status `completed`.
 ///
 /// Any failure (e.g. an invalid `paid_by`) rolls the whole unit back —
@@ -324,20 +397,25 @@ pub async fn complete<C: ConnectionTrait + TransactionTrait>(
     visit_id: i32,
     input: CompleteVisit,
 ) -> DomainResult<CompletedVisit> {
-    let existing = require_visit(db, vehicle_id, visit_id).await?;
-    if existing.status == "completed" || existing.status == "canceled" {
+    let txn = db.begin().await?;
+
+    let existing = require_visit(&txn, vehicle_id, visit_id).await?;
+    if !is_open(&existing.status) {
         return Err(DomainError::BadRequest(format!(
             "Visit {visit_id} is already {} and cannot be completed",
             existing.status
         )));
     }
 
-    let txn = db.begin().await?;
+    // Only participating items close out; dropped/done ones are history.
+    let items: Vec<work_item::Model> = load_items(&txn, existing.id)
+        .await?
+        .into_iter()
+        .filter(|i| work_item_svc::participates(&i.status))
+        .collect();
 
-    let items = load_items(&txn, existing.id).await?;
-
-    // Mark every attached item done (inside the txn, before the record is
-    // built, so a later failure provably rolls this back).
+    // Mark every participating item done (inside the txn, before the
+    // record is built, so a later failure provably rolls this back).
     for item in &items {
         let mut active: work_item::ActiveModel = item.clone().into();
         active.status = Set("done".to_string());
@@ -401,7 +479,8 @@ pub async fn complete<C: ConnectionTrait + TransactionTrait>(
     }
 
     // Research-finding-sourced items: the finding goes `completed`, which
-    // closes the recall in the Research view.
+    // closes the recall in the Research view, and back-links the service
+    // record that resolved it.
     let finding_ids: BTreeSet<i32> = items.iter().filter_map(|i| i.research_finding_id).collect();
     for finding_id in finding_ids {
         let finding = research_finding::Entity::find_by_id(finding_id)
@@ -412,6 +491,8 @@ pub async fn complete<C: ConnectionTrait + TransactionTrait>(
             })?;
         let mut active: research_finding::ActiveModel = finding.into();
         active.status = Set("completed".to_string());
+        active.linked_entity_type = Set(Some("service".to_string()));
+        active.linked_entity_id = Set(Some(record.record.id));
         active.updated_at = Set(now_stamp());
         active.update(&txn).await?;
     }
@@ -439,7 +520,7 @@ mod tests {
     use super::*;
     use crate::{
         entities::{mileage_log, research_report, service_record as service_record_entity},
-        inputs::work_item::NewWorkItem,
+        inputs::work_item::{NewWorkItem, UpdateWorkItem},
         services::reminders,
         test_support::test_db,
     };
@@ -829,13 +910,15 @@ mod tests {
         let after = reminders::calculate_reminders(&db, vid).await.unwrap();
         assert_eq!(after.reminders[0].status, "ok");
 
-        // The recall finding is completed.
+        // The recall finding is completed and back-links the record.
         let f = research_finding::Entity::find_by_id(finding)
             .one(&db)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(f.status, "completed");
+        assert_eq!(f.linked_entity_type.as_deref(), Some("service"));
+        assert_eq!(f.linked_entity_id, Some(done.service_record.record.id));
 
         // The incident is linked to the record.
         let links = incident_service_link::Entity::find()
@@ -907,6 +990,280 @@ mod tests {
             complete(&db, vid, c.visit.id, actuals()).await.unwrap_err(),
             DomainError::BadRequest(_)
         ));
+    }
+
+    /// Fix 1: only participating (planned/scheduled) items close out with
+    /// the visit. A dropped item keeps its status, stays attached as
+    /// history, and contributes nothing — no done-marking, no description
+    /// join, no schedule link, no incident link, no finding completion.
+    #[tokio::test]
+    async fn complete_skips_dropped_items() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let sched = seed_overdue_schedule_item(&db, vid).await;
+        let finding = seed_finding(&db, vid).await;
+        let inc = seed_incident(&db, vid).await;
+
+        let active = work_item_svc::create(&db, vid, work("Wipers"))
+            .await
+            .unwrap();
+        let dropped = work_item_svc::create(
+            &db,
+            vid,
+            NewWorkItem {
+                schedule_item_id: Some(sched),
+                research_finding_id: Some(finding),
+                incident_id: Some(inc),
+                ..work("Brake fluid flush")
+            },
+        )
+        .await
+        .unwrap();
+        let v = create(&db, vid, new_visit(Some(vec![active.id, dropped.id])))
+            .await
+            .unwrap();
+        // Drop one item while attached (status edits stay legal).
+        work_item_svc::update(
+            &db,
+            vid,
+            dropped.id,
+            UpdateWorkItem {
+                status: Some("dropped".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let done = complete(&db, vid, v.visit.id, actuals()).await.unwrap();
+
+        // Only the participating item closed out.
+        assert_eq!(
+            done.service_record.record.description.as_deref(),
+            Some("Wipers")
+        );
+        assert!(
+            done.service_record.schedule_item_ids.is_empty(),
+            "dropped item's schedule item must NOT be cleared"
+        );
+        assert_eq!(
+            work_item_svc::get(&db, vid, active.id)
+                .await
+                .unwrap()
+                .status,
+            "done"
+        );
+
+        // The dropped item is untouched: status kept, still attached.
+        let d = work_item_svc::get(&db, vid, dropped.id).await.unwrap();
+        assert_eq!(d.status, "dropped");
+        assert_eq!(d.visit_id, Some(v.visit.id));
+
+        // Its finding is NOT completed, its incident NOT linked, its
+        // reminder still overdue.
+        let f = research_finding::Entity::find_by_id(finding)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(f.status, "new");
+        assert_eq!(f.linked_entity_id, None);
+        assert!(
+            incident_service_link::Entity::find()
+                .all(&db)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let rems = reminders::calculate_reminders(&db, vid).await.unwrap();
+        assert_eq!(rems.reminders[0].status, "overdue");
+    }
+
+    /// Fix 2: a completed/canceled visit is immutable — no reopen, so no
+    /// reopen→double-complete path.
+    #[tokio::test]
+    async fn update_rejected_once_closed() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let v = create(&db, vid, new_visit(None)).await.unwrap();
+        complete(&db, vid, v.visit.id, actuals()).await.unwrap();
+
+        // Reopen attempt: rejected with the completed-guard message shape.
+        let err = update(
+            &db,
+            vid,
+            v.visit.id,
+            UpdateVisit {
+                status: Some("planned".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        match err {
+            DomainError::BadRequest(msg) => {
+                assert!(msg.contains("already completed"), "{msg}");
+            }
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
+
+        // A second complete is still rejected; exactly ONE record exists.
+        assert!(matches!(
+            complete(&db, vid, v.visit.id, actuals()).await.unwrap_err(),
+            DomainError::BadRequest(_)
+        ));
+        assert_eq!(
+            service_record_entity::Entity::find()
+                .all(&db)
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "service_record_count stays 1"
+        );
+
+        // Canceled visits are equally frozen (even innocuous edits).
+        let c = create(&db, vid, new_visit(None)).await.unwrap();
+        update(
+            &db,
+            vid,
+            c.visit.id,
+            UpdateVisit {
+                status: Some("canceled".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let err = update(
+            &db,
+            vid,
+            c.visit.id,
+            UpdateVisit {
+                notes: Some(Some("late edit".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        match err {
+            DomainError::BadRequest(msg) => {
+                assert!(msg.contains("already canceled"), "{msg}");
+            }
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
+    }
+
+    /// Fix 3: a done/dropped item never attaches — via visit::create or
+    /// visit::update replace-all.
+    #[tokio::test]
+    async fn attach_rejects_non_participating_items() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let done_item = work_item_svc::create(&db, vid, work("finished"))
+            .await
+            .unwrap();
+        work_item_svc::update(
+            &db,
+            vid,
+            done_item.id,
+            UpdateWorkItem {
+                status: Some("done".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        // visit::create path.
+        let err = create(&db, vid, new_visit(Some(vec![done_item.id])))
+            .await
+            .unwrap_err();
+        match err {
+            DomainError::BadRequest(msg) => {
+                assert!(
+                    msg.contains("done") && msg.contains("cannot be attached"),
+                    "{msg}"
+                );
+            }
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
+        assert!(
+            list(&db, vid, true).await.unwrap().is_empty(),
+            "rolled back"
+        );
+
+        // visit::update replace-all path.
+        let v = create(&db, vid, new_visit(None)).await.unwrap();
+        assert!(matches!(
+            update(
+                &db,
+                vid,
+                v.visit.id,
+                UpdateVisit {
+                    work_item_ids: Some(vec![done_item.id]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err(),
+            DomainError::BadRequest(_)
+        ));
+        let untouched = work_item_svc::get(&db, vid, done_item.id).await.unwrap();
+        assert_eq!(untouched.status, "done");
+        assert_eq!(untouched.visit_id, None);
+    }
+
+    /// Fix 3 (provenance): an item sitting on a COMPLETED visit never
+    /// moves to another visit — its attachment is the service history.
+    #[tokio::test]
+    async fn attach_rejects_items_from_completed_visit() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let item = work_item_svc::create(&db, vid, work("history"))
+            .await
+            .unwrap();
+        let v1 = create(&db, vid, new_visit(Some(vec![item.id])))
+            .await
+            .unwrap();
+        complete(&db, vid, v1.visit.id, actuals()).await.unwrap();
+
+        let err = create(&db, vid, new_visit(Some(vec![item.id])))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, DomainError::BadRequest(_)));
+        let kept = work_item_svc::get(&db, vid, item.id).await.unwrap();
+        assert_eq!(kept.visit_id, Some(v1.visit.id), "provenance intact");
+        assert_eq!(kept.status, "done");
+    }
+
+    /// Fix 5: canceling via update detaches exactly like delete — items
+    /// return to the backlog (visit_id NULL, scheduled → planned).
+    #[tokio::test]
+    async fn cancel_detaches_items() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let a = work_item_svc::create(&db, vid, work("A")).await.unwrap();
+        let v = create(&db, vid, new_visit(Some(vec![a.id]))).await.unwrap();
+
+        let canceled = update(
+            &db,
+            vid,
+            v.visit.id,
+            UpdateVisit {
+                status: Some("canceled".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(canceled.visit.status, "canceled");
+        assert!(canceled.items.is_empty());
+        assert_eq!(canceled.est_total_cents, 0);
+
+        let freed = work_item_svc::get(&db, vid, a.id).await.unwrap();
+        assert_eq!(freed.visit_id, None);
+        assert_eq!(freed.status, "planned");
     }
 
     /// The rollback-on-failure guarantee (and the nested-savepoint decision's

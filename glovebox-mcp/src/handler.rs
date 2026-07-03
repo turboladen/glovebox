@@ -212,7 +212,8 @@ impl GloveboxMcp {
             Ok(v) => v,
             Err(e) => return domain_error(e),
         };
-        let budget = match budget::forecast(&self.db, p.vehicle_id).await {
+        // Reminders are computed ONCE and feed both halves of the payload.
+        let budget = match budget::forecast_from(&self.db, p.vehicle_id, &reminders).await {
             Ok(v) => v,
             Err(e) => return domain_error(e),
         };

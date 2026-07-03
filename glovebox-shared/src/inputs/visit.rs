@@ -8,6 +8,8 @@ pub struct NewVisit {
     pub work_item_ids: Option<Vec<i32>>,
 }
 
+/// Updates apply only while the visit is open (`planned`/`scheduled`);
+/// completed and canceled visits are immutable history.
 #[derive(Default)]
 pub struct UpdateVisit {
     pub planned_date: Option<Option<String>>,
@@ -15,7 +17,8 @@ pub struct UpdateVisit {
     pub shop_id: Option<Option<i32>>,
     pub notes: Option<Option<String>>,
     /// One of `planned | scheduled | canceled` — `completed` is only
-    /// reachable through `services::visit::complete`.
+    /// reachable through `services::visit::complete`. Canceling detaches
+    /// the attached items back to the backlog (like delete does).
     pub status: Option<String>,
     /// Replace-all attach semantics: items newly listed are attached
     /// (`visit_id` set, status `scheduled`), items no longer listed are

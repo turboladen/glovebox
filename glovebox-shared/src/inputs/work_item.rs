@@ -24,5 +24,9 @@ pub struct UpdateWorkItem {
     pub est_cost_cents: Option<Option<i32>>,
     /// One of `planned | scheduled | done | dropped`.
     pub status: Option<String>,
+    /// Moving drives status: `Some(Some(v))` attaches (target must be an
+    /// open visit; the item must be planned/scheduled) and sets
+    /// `scheduled`; `Some(None)` detaches and a `scheduled` item goes back
+    /// to `planned`. Items on a completed visit never move.
     pub visit_id: Option<Option<i32>>,
 }
