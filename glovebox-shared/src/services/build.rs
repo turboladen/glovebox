@@ -52,6 +52,10 @@ pub struct BuildProgress {
     /// Sum of linked service records' `total_cost_cents` plus linked parts'
     /// `cost_cents`. Integer cents only (no float math).
     pub total_cost_cents: i64,
+    /// `total_cost_cents` restricted to what was actually paid: covered
+    /// services (`paid_by != "self"`) and their invoices' parts components
+    /// are excluded; parts themselves have no payer and stay out-of-pocket.
+    pub out_of_pocket_cents: i64,
     pub linked: LinkedRecords,
 }
 
@@ -238,12 +242,29 @@ pub async fn progress(
     // invoices' parts component counts as extra (never negative).
     let extra_parts_cost = (parts_cost - services_parts_cost).max(0);
 
+    // Out-of-pocket: same formula with covered services (and their invoices'
+    // parts components) excluded from the service side.
+    let self_services_cost: i64 = services
+        .iter()
+        .filter(|s| s.paid_by == "self")
+        .filter_map(|s| s.total_cost_cents)
+        .map(i64::from)
+        .sum();
+    let self_services_parts_cost: i64 = services
+        .iter()
+        .filter(|s| s.paid_by == "self")
+        .filter_map(|s| s.parts_cost_cents)
+        .map(i64::from)
+        .sum();
+    let out_of_pocket_extra_parts = (parts_cost - self_services_parts_cost).max(0);
+
     Ok(BuildProgress {
         services_count: services.len(),
         parts_total: parts.len(),
         parts_installed: parts.iter().filter(|p| p.status == "installed").count(),
         observations_count: observations.len(),
         total_cost_cents: services_cost + extra_parts_cost,
+        out_of_pocket_cents: self_services_cost + out_of_pocket_extra_parts,
         linked: LinkedRecords {
             service_record_ids: services.iter().map(|s| s.id).collect(),
             part_ids: parts.iter().map(|p| p.id).collect(),
@@ -889,6 +910,52 @@ mod tests {
         // total, so the build costs $800 — not $1,300.
         let view = progress(&db, vid, b.id).await.unwrap();
         assert_eq!(view.total_cost_cents, 80_000);
+    }
+
+    #[tokio::test]
+    async fn progress_excludes_covered_services_from_out_of_pocket() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let b = create(&db, vid, new_build("Crash repair + upgrades"))
+            .await
+            .unwrap();
+
+        // $100 self-paid service.
+        svc_svc::create(&db, vid, minimal_service(Some(10_000), Some(b.id)))
+            .await
+            .unwrap();
+        // $150 insurance-paid service whose invoice includes a $50 parts component.
+        svc_svc::create(
+            &db,
+            vid,
+            NewServiceRecord {
+                paid_by: Some("insurance".into()),
+                parts_cost_cents: Some(5_000),
+                ..minimal_service(Some(15_000), Some(b.id))
+            },
+        )
+        .await
+        .unwrap();
+        // A $50 linked part row (parts have no payer: counts as out-of-pocket;
+        // the covered invoice's parts component is excluded from the dedupe).
+        part_svc::create(
+            &db,
+            vid,
+            NewPart {
+                build_id: Some(b.id),
+                ..minimal_part("Fender", Some(5_000), Some("installed".into()))
+            },
+        )
+        .await
+        .unwrap();
+
+        let view = progress(&db, vid, b.id).await.unwrap();
+        // total_cost_cents keeps the existing formula for continuity:
+        // 25_000 services + (5_000 parts - 5_000 invoice parts).max(0) = 25_000.
+        assert_eq!(view.total_cost_cents, 25_000);
+        // Out of pocket: self services (10_000) + parts beyond self invoices'
+        // parts component (5_000 - 0) = 15_000. The covered $150 is excluded.
+        assert_eq!(view.out_of_pocket_cents, 15_000);
     }
 
     #[tokio::test]
