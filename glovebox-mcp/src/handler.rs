@@ -30,9 +30,9 @@ use glovebox_shared::{
 };
 
 use crate::schemas::{
-    BuildParams, EmptyParams, FindDocumentsInput, LogMileageInput, LogObservationInput,
-    RecordServiceInput, SearchRecordsInput, SummarizeActivityInput, UpdateBuildStatusInput,
-    VehicleBrief, VehicleParams,
+    BuildParams, EmptyParams, FileResearchFindingInput, FindDocumentsInput, LogMileageInput,
+    LogObservationInput, RecordServiceInput, SearchRecordsInput, SummarizeActivityInput,
+    UpdateBuildStatusInput, VehicleBrief, VehicleParams,
 };
 
 pub const VEHICLES_URI: &str = "glovebox://vehicles";
@@ -256,6 +256,23 @@ impl GloveboxMcp {
             Err(e) => return Ok(e),
         };
         domain_result(research::check_recalls(&*self.db, p.vehicle_id).await)
+    }
+
+    #[tool(
+        name = "file_research_finding",
+        description = "Save research you've done about this vehicle (forum consensus, TSBs, known issues, upgrade notes) as a persistent finding. Use after answering research questions so the knowledge isn't lost when the conversation ends. Findings appear in the app's Research view.",
+        input_schema = rmcp::handler::server::common::schema_for_type::<FileResearchFindingInput>()
+    )]
+    async fn file_research_finding(
+        &self,
+        params: LenientParameters<FileResearchFindingInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = match params.into_tool_input("file_research_finding") {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        };
+        let (vehicle_id, input) = p.into_domain();
+        domain_result(research::file_finding(&*self.db, vehicle_id, input).await)
     }
 
     #[tool(

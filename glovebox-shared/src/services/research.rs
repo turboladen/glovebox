@@ -24,6 +24,18 @@ struct NewFinding {
     severity: Option<String>,
 }
 
+/// Input for [`file_finding`] — a finding researched outside the app
+/// (e.g. by an MCP client) to persist under the vehicle's
+/// `external_research` anchor report.
+#[derive(Debug)]
+pub struct NewFiledFinding {
+    pub category: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub source_url: Option<String>,
+    pub severity: Option<String>,
+}
+
 // --- Recall check ---
 
 pub async fn check_recalls<C: ConnectionTrait + TransactionTrait>(
@@ -305,6 +317,52 @@ pub async fn update_finding(
     Ok(active.update(db).await?)
 }
 
+/// Persist an externally-researched finding (e.g. filed by an MCP client)
+/// under this vehicle's `external_research` anchor report — created on first
+/// use, reused thereafter (mirrors how recalls anchor to `recalls_only`).
+pub async fn file_finding(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    input: NewFiledFinding,
+) -> DomainResult<research_finding::Model> {
+    vehicle::Entity::find_by_id(vehicle_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| DomainError::NotFound("Vehicle not found".to_string()))?;
+
+    let report = match research_report::Entity::find()
+        .filter(research_report::Column::VehicleId.eq(vehicle_id))
+        .filter(research_report::Column::ReportType.eq("external_research"))
+        .one(db)
+        .await?
+    {
+        Some(r) => r,
+        None => {
+            research_report::ActiveModel {
+                vehicle_id: Set(vehicle_id),
+                report_type: Set(Some("external_research".to_string())),
+                summary: Set(Some("Findings filed via MCP".to_string())),
+                ..Default::default()
+            }
+            .insert(db)
+            .await?
+        }
+    };
+
+    Ok(research_finding::ActiveModel {
+        report_id: Set(report.id),
+        category: Set(input.category),
+        title: Set(input.title),
+        description: Set(input.description),
+        source_url: Set(input.source_url),
+        severity: Set(input.severity),
+        status: Set("new".to_string()),
+        ..Default::default()
+    }
+    .insert(db)
+    .await?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,6 +377,63 @@ mod tests {
         .await
         .unwrap()
         .id
+    }
+
+    #[tokio::test]
+    async fn file_finding_creates_and_reuses_external_research_report() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let f1 = file_finding(
+            &db,
+            vid,
+            NewFiledFinding {
+                category: "maintenance".into(),
+                title: "DSG service interval is 40k, not 60k".into(),
+                description: Some("Per community consensus for this gearbox".into()),
+                source_url: Some("https://example.com/thread".into()),
+                severity: Some("info".into()),
+            },
+        )
+        .await
+        .unwrap();
+        let f2 = file_finding(
+            &db,
+            vid,
+            NewFiledFinding {
+                category: "recall".into(),
+                title: "Second finding".into(),
+                description: None,
+                source_url: None,
+                severity: None,
+            },
+        )
+        .await
+        .unwrap();
+        // Same anchor report, created once, type external_research.
+        assert_eq!(f1.report_id, f2.report_id);
+        let report = get_report(&db, vid, f1.report_id).await.unwrap();
+        assert_eq!(
+            report.report.report_type.as_deref(),
+            Some("external_research")
+        );
+        assert_eq!(report.findings.len(), 2);
+        // Missing vehicle is indistinguishable from nonexistent.
+        assert!(matches!(
+            file_finding(
+                &db,
+                999,
+                NewFiledFinding {
+                    category: "note".into(),
+                    title: "x".into(),
+                    description: None,
+                    source_url: None,
+                    severity: None,
+                }
+            )
+            .await
+            .unwrap_err(),
+            DomainError::NotFound(_)
+        ));
     }
 
     #[tokio::test]

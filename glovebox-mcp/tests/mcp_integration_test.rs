@@ -226,6 +226,7 @@ async fn tools_list_advertises_the_full_verb_set() {
         "search_records",
         "cost_summary",
         "check_recalls",
+        "file_research_finding",
         "list_builds",
         "get_build_progress",
         "update_build_status",
@@ -243,7 +244,7 @@ async fn tools_list_advertises_the_full_verb_set() {
     let tools = parsed["result"]["tools"]
         .as_array()
         .unwrap_or_else(|| panic!("tools/list result must carry a tools array; got: {body}"));
-    assert_eq!(tools.len(), 14, "expected exactly 14 tools; got: {body}");
+    assert_eq!(tools.len(), 15, "expected exactly 15 tools; got: {body}");
     for tool in tools {
         let name = tool["name"].as_str().expect("tool name");
         if name == "list_vehicles" {
@@ -588,6 +589,42 @@ async fn build_progress_and_status_update_round_trip() {
     .await;
     assert_tool_error(&body);
     assert!(body.contains("Invalid status"));
+}
+
+#[tokio::test]
+async fn file_research_finding_persists_and_is_readable() {
+    let (app, db) = setup().await;
+    let session = handshake(&app).await;
+    let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
+
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "file_research_finding",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "category": "maintenance",
+                "title": "DSG interval 40k",
+                "source_url": "https://example.com/t"
+            }),
+        ),
+    )
+    .await;
+    assert_success(&body);
+    assert!(body.contains("DSG interval 40k"));
+
+    // Wrong vehicle -> clean tool error
+    let err = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "file_research_finding",
+            serde_json::json!({"vehicle_id": 999, "category": "x", "title": "y"}),
+        ),
+    )
+    .await;
+    assert_tool_error(&err);
 }
 
 #[tokio::test]
