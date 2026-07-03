@@ -610,6 +610,93 @@ async fn cost_summary_reports_integer_cents() {
 }
 
 #[tokio::test]
+async fn record_service_payer_flows_into_cost_summary_split() {
+    let (app, db) = setup().await;
+    let session = handshake(&app).await;
+    let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
+
+    // A $100 self-paid service (payer omitted -> defaults to self)…
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "record_service",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "service_date": "2026-06-01",
+                "description": "Brakes",
+                "total_cost_cents": 10_000
+            }),
+        ),
+    )
+    .await;
+    assert_success(&body);
+
+    // …and a $150 insurance-paid repair.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "record_service",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "service_date": "2026-06-15",
+                "description": "Collision repair",
+                "total_cost_cents": 15_000,
+                "paid_by": "insurance",
+                "payer_note": "Progressive claim #12345"
+            }),
+        ),
+    )
+    .await;
+    assert_success(&body);
+    assert!(
+        body.contains("insurance") && body.contains("Progressive claim #12345"),
+        "record_service must echo the payer fields; got: {body}"
+    );
+
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool("cost_summary", serde_json::json!({ "vehicle_id": v.id })),
+    )
+    .await;
+    assert_success(&body);
+    for expected in [
+        "\"out_of_pocket_cents\": 10000",
+        "\"covered_cents\": 15000",
+        "\"total_cost_cents\": 25000",
+    ] {
+        let escaped = expected.replace('"', "\\\"");
+        assert!(
+            body.contains(expected) || body.contains(&escaped),
+            "cost summary must carry the payer split ({expected}); got: {body}"
+        );
+    }
+
+    // An unknown payer is a tool-level error, not a protocol failure.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "record_service",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "service_date": "2026-06-20",
+                "description": "Bogus payer",
+                "paid_by": "my neighbor"
+            }),
+        ),
+    )
+    .await;
+    assert_tool_error(&body);
+    assert!(
+        body.contains("third_party"),
+        "the error must list the valid payers; got: {body}"
+    );
+}
+
+#[tokio::test]
 async fn build_progress_and_status_update_round_trip() {
     let (app, db) = setup().await;
     let session = handshake(&app).await;

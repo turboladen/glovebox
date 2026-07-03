@@ -45,6 +45,17 @@
         <span class="card-value">{fmt(data.total_cost_cents)}</span>
       </div>
       <div class="summary-card">
+        <span class="card-label">Out of Pocket</span>
+        <span class="card-value">{fmt(data.out_of_pocket_cents)}</span>
+      </div>
+      {#if data.covered_cents > 0}
+        <div class="summary-card">
+          <span class="card-label">Covered by Others</span>
+          <span class="card-value">{fmt(data.covered_cents)}</span>
+          <span class="card-sub">insurance / third party</span>
+        </div>
+      {/if}
+      <div class="summary-card">
         <span class="card-label">Services</span>
         <span class="card-value">{fmt(data.total_service_cost_cents)}</span>
         <span class="card-sub">{data.service_count} service{data.service_count !== 1 ? 's' : ''}</span>
@@ -74,6 +85,8 @@
             <th>Month</th>
             <th>Services</th>
             <th>Parts</th>
+            <th>Out of Pocket</th>
+            <th>Covered</th>
             <th>Total</th>
           </tr>
         </thead>
@@ -83,6 +96,8 @@
               <td>{formatMonth(mc.month)}</td>
               <td>{fmt(mc.service_cost_cents)}</td>
               <td>{fmt(mc.parts_cost_cents)}</td>
+              <td>{fmt(mc.out_of_pocket_cents)}</td>
+              <td>{mc.covered_cents > 0 ? fmt(mc.covered_cents) : '—'}</td>
               <td class="total">{fmt(mc.total_cents)}</td>
             </tr>
           {/each}

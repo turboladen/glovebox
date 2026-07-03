@@ -52,6 +52,8 @@ pub struct CreateServiceRecord {
     pub shop_id: Option<i32>,
     pub notes: Option<String>,
     pub build_id: Option<i32>,
+    pub paid_by: Option<String>,
+    pub payer_note: Option<String>,
     pub schedule_item_ids: Option<Vec<i32>>,
     pub part_ids: Option<Vec<i32>>,
     pub line_items: Option<Vec<CreateLineItem>>,
@@ -84,6 +86,10 @@ pub struct UpdateServiceRecord {
     pub notes: Option<Option<String>>,
     #[serde(default, deserialize_with = "deserialize_optional")]
     pub build_id: Option<Option<i32>>,
+    // Plain option: the column is non-nullable, so there is no "clear" case.
+    pub paid_by: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    pub payer_note: Option<Option<String>>,
     pub schedule_item_ids: Option<Vec<i32>>,
     pub part_ids: Option<Vec<i32>>,
     pub line_items: Option<Vec<CreateLineItem>>,
@@ -128,8 +134,8 @@ pub async fn create(
             shop_id: input.shop_id,
             notes: input.notes,
             build_id: input.build_id,
-            paid_by: None,
-            payer_note: None,
+            paid_by: input.paid_by,
+            payer_note: input.payer_note,
             schedule_item_ids: input.schedule_item_ids,
             part_ids: input.part_ids,
             line_items: input
@@ -165,8 +171,8 @@ pub async fn update(
             shop_id: input.shop_id,
             notes: input.notes,
             build_id: input.build_id,
-            paid_by: None,
-            payer_note: None,
+            paid_by: input.paid_by,
+            payer_note: input.payer_note,
             schedule_item_ids: input.schedule_item_ids,
             part_ids: input.part_ids,
             line_items: input

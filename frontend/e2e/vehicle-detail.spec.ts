@@ -202,4 +202,24 @@ test.describe('Log Service', () => {
     await expect(page.getByText('Oil Change')).toBeVisible()
     await expect(page.getByText('$49.99')).toBeVisible()
   })
+
+  test('insurance-paid service shows costs split', async ({ page }) => {
+    await page.goto(vehicleUrl)
+    await page.getByRole('button', { name: 'Log Service' }).click()
+    await page.getByLabel('Description').fill('Collision repair')
+    await page.getByLabel('Total Cost ($)').fill('150.00')
+    // Payer note field only appears once a non-self payer is chosen
+    await expect(page.getByLabel('Payer Note')).not.toBeVisible()
+    await page.getByLabel('Paid By').selectOption('insurance')
+    await page.getByLabel('Payer Note').fill('Progressive claim #12345')
+    await page.getByRole('button', { name: 'Save Service' }).click()
+    await expect(page.getByLabel('Description')).not.toBeVisible()
+
+    // Costs tab splits out-of-pocket vs covered
+    await page.getByRole('button', { name: 'Costs' }).click()
+    const covered = page.locator('.summary-card', { hasText: 'Covered by Others' })
+    await expect(covered).toBeVisible()
+    await expect(covered).toContainText('$150.00')
+    await expect(page.locator('.summary-card', { hasText: 'Out of Pocket' })).toBeVisible()
+  })
 })
