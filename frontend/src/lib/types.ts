@@ -182,6 +182,8 @@ export interface ScheduleItem {
   source: string | null
   notes: string | null
   is_factory_recommended: boolean | null
+  // Estimated cost per occurrence (integer cents) — feeds the budget forecast.
+  est_cost_cents: number | null
 }
 
 export interface CreateScheduleItem {
@@ -200,6 +202,7 @@ export interface CreateScheduleItem {
   notes?: string | null
   is_factory_recommended?: boolean | null
   labor_categories?: string | null
+  est_cost_cents?: number | null
 }
 
 export interface ResolvedScheduleItem {

@@ -4,7 +4,7 @@
   import type { Vehicle, RemindersResponse } from '../lib/types'
   import { formatDate } from '../lib/dates'
   import Dashboard from './Dashboard.svelte'
-  import ScheduleTab from './ScheduleTab.svelte'
+  import PlanTab from './PlanTab.svelte'
   import TimelineTab from './TimelineTab.svelte'
   import MileageEntry from './MileageEntry.svelte'
   import ServiceForm from './ServiceForm.svelte'
@@ -249,8 +249,8 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
       <button class="tab" class:active={activeTab === 'timeline'} onclick={() => openTab('timeline')}>
         Timeline
       </button>
-      <button class="tab" class:active={activeTab === 'schedule'} onclick={() => openTab('schedule')}>
-        Schedule
+      <button class="tab" class:active={activeTab === 'plan'} onclick={() => openTab('plan')}>
+        Plan
       </button>
       <button class="tab" class:active={activeTab === 'parts'} onclick={() => openTab('parts')}>
         Parts
@@ -272,8 +272,8 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
           <Dashboard vehicleId={vehicle.id} />
         {:else if activeTab === 'timeline'}
           <TimelineTab vehicleId={vehicle.id} estimatedMileage={reminderData?.estimated_mileage} onChanged={refreshReminders} />
-        {:else if activeTab === 'schedule'}
-          <ScheduleTab {reminderData} vehicleId={vehicle.id} onScheduleChanged={refreshReminders} />
+        {:else if activeTab === 'plan'}
+          <PlanTab vehicleId={vehicle.id} {reminderData} sub={routeParams.sub ?? 'due'} onScheduleChanged={refreshReminders} />
         {:else if activeTab === 'parts'}
           <PartsTab vehicleId={vehicle.id} />
         {:else if activeTab === 'documents'}
