@@ -80,29 +80,6 @@
       {/if}
     </div>
 
-    {#if forecast && forecast.total_cents > 0}
-      <h4>Next {forecast.horizon_months} Months (forecast)</h4>
-      <div class="summary-grid" data-testid="forecast-buckets">
-        <div class="summary-card">
-          <span class="card-label">Projected Maintenance</span>
-          <span class="card-value">{fmt(forecast.projected_maintenance_cents)}</span>
-          <span class="card-sub">from the schedule</span>
-        </div>
-        <div class="summary-card">
-          <span class="card-label">Planned Visits</span>
-          <span class="card-value">{fmt(forecast.planned_visits_cents)}</span>
-        </div>
-        <div class="summary-card">
-          <span class="card-label">To-do Backlog</span>
-          <span class="card-value">{fmt(forecast.planned_work_cents)}</span>
-        </div>
-        <div class="summary-card">
-          <span class="card-label">Forecast Total</span>
-          <span class="card-value">{fmt(forecast.total_cents)}</span>
-        </div>
-      </div>
-    {/if}
-
     {#if data.monthly_costs.length > 0}
       <h4>Monthly Breakdown</h4>
       <table class="cost-table">
@@ -130,6 +107,31 @@
         </tbody>
       </table>
     {/if}
+  {/if}
+
+  <!-- The 12-month forecast renders independently of spend history: a
+       fresh car with a schedule has a forecast before its first invoice. -->
+  {#if !loading && forecast && forecast.total_cents > 0}
+    <h4>Next {forecast.horizon_months} Months (forecast)</h4>
+    <div class="summary-grid" data-testid="forecast-buckets">
+      <div class="summary-card">
+        <span class="card-label">Projected Maintenance</span>
+        <span class="card-value">{fmt(forecast.projected_maintenance_cents)}</span>
+        <span class="card-sub">from the schedule</span>
+      </div>
+      <div class="summary-card">
+        <span class="card-label">Planned Visits</span>
+        <span class="card-value">{fmt(forecast.planned_visits_cents)}</span>
+      </div>
+      <div class="summary-card">
+        <span class="card-label">To-do Backlog</span>
+        <span class="card-value">{fmt(forecast.planned_work_cents)}</span>
+      </div>
+      <div class="summary-card">
+        <span class="card-label">Forecast Total</span>
+        <span class="card-value">{fmt(forecast.total_cents)}</span>
+      </div>
+    </div>
   {/if}
 </div>
 

@@ -26,7 +26,7 @@ cargo test -p glovebox-shared test_name  # Single Rust test
 just test-e2e             # Playwright e2e (needs `just dev` running)
 just test-e2e-ci          # Self-contained e2e: boots backend+vite on a throwaway DB, runs Playwright, tears down
 just test-e2e-ui          # Playwright e2e with visible browser
-cd frontend && bunx playwright test e2e/garage.spec.ts  # Single e2e test file
+cd frontend && bunx playwright test e2e/dashboard.spec.ts  # Single e2e test file
 
 # Lint / Check
 just ci                   # Everything CI runs except e2e (nightly fmt-check, layering, backend, frontend)
@@ -68,7 +68,7 @@ cd frontend && bun run check  # svelte-check + TypeScript check
 
 **Inputs** (`inputs/`): Plain domain input structs (`New*`/`Update*`) consumed by service functions. No HTTP serde.
 
-**Services** (`services/`): One module per domain (`vehicle`, `service_record`, `platform`, ...) of free functions taking `db: &impl ConnectionTrait` first, returning `DomainResult<T>`; plus `reminders`, `budget`, `vin_decode`, `nhtsa`. Planning (`work_item`, `visit`) is MCP/HTTP-only until unit F's Plan tab; `visit::complete` is the transactional loop-closer (service record + reminder clears + recall/incident resolution in one unit — nested SeaORM `begin()` on a transaction is a SQLite SAVEPOINT, which it relies on). (The in-app AI layer was retired in 2hea unit A — Claude connects over `/mcp` instead.)
+**Services** (`services/`): One module per domain (`vehicle`, `service_record`, `platform`, ...) of free functions taking `db: &impl ConnectionTrait` first, returning `DomainResult<T>`; plus `reminders`, `budget`, `vin_decode`, `nhtsa`, `activity` (merged per-vehicle + garage-wide feeds), and `dashboard` (the garage-wide aggregation behind `GET /api/dashboard` — composes `calculate_reminders`/`forecast_from`/list fns per vehicle; the per-vehicle loop is deliberate, few cars). Planning (`work_item`, `visit`) backs the Plan tab and the MCP verbs; `visit::complete` is the transactional loop-closer (service record + reminder clears + recall/incident resolution in one unit — nested SeaORM `begin()` on a transaction is a SQLite SAVEPOINT, which it relies on); `visit::cancel`/`delete` are guarded to open visits. (The in-app AI layer was retired in 2hea unit A — Claude connects over `/mcp` instead.)
 
 **Errors** (`error.rs`): `DomainError::{NotFound, Invalid{field,message}, BadRequest, Db, Internal}` with `DomainResult<T>` alias.
 
@@ -80,7 +80,7 @@ cd frontend && bun run check  # svelte-check + TypeScript check
 
 **Mount** (`lib.rs`): `router(db) -> axum::Router` wraps rmcp's `StreamableHttpService` (+ `LocalSessionManager`, 7-day session keep-alive); the backend nests it at `/mcp`. LAN hostnames must be allowlisted via `GLOVEBOX_MCP_ALLOWED_HOSTS` (rmcp's DNS-rebinding defense 403s unknown `Host` headers).
 
-**Tools** (`handler.rs`): 22 domain verbs, named as things a person would say (`record_service`, not `create_service_record`). Inputs are schemars-derived structs in `schemas.rs` (doc comments become the LLM-visible field descriptions). `LenientParameters<T>` defers deserialize errors so malformed args come back as actionable tool errors, not bare JSON-RPC `-32602`s — pair it with an explicit `input_schema = schema_for_type::<T>()` on every `#[tool]`.
+**Tools** (`handler.rs`): 23 domain verbs, named as things a person would say (`record_service`, not `create_service_record`). Inputs are schemars-derived structs in `schemas.rs` (doc comments become the LLM-visible field descriptions). `LenientParameters<T>` defers deserialize errors so malformed args come back as actionable tool errors, not bare JSON-RPC `-32602`s — pair it with an explicit `input_schema = schema_for_type::<T>()` on every `#[tool]`.
 
 **Resources**: stable URIs (`glovebox://vehicles`, `…/{id}`, `…/{id}/activity`, `…/{id}/builds/{build_id}`). `list_resources` enumerates concrete URIs from the DB; `read_resource` parses them (rmcp resource templates are not used).
 
@@ -90,7 +90,21 @@ cd frontend && bun run check  # svelte-check + TypeScript check
 
 ### Frontend (`frontend/`)
 
-Svelte 5 SPA using `@keenmate/svelte-spa-router`. Routes: Garage (list), Shops, VehicleNew, VehicleDetail. VehicleDetail uses tab-based navigation (Schedule, History, Parts, Incidents, Documents, Costs, Research).
+Svelte 5 SPA using `@keenmate/svelte-spa-router`. Shell (2hea decision ⑥): `App.svelte` renders a
+header (logo · global search over `GET /api/search` · sidebar toggle) above a collapsible
+`Sidebar` (per-car status hints from the shared `/api/dashboard` store in `lib/stores.ts`;
+collapsed state in localStorage) + main area. Routes: `/` → `Dashboard` (garage-wide landing;
+welcome state when empty), `/shops`, `/vehicles/new`, `/vehicles/:id[/:tab[/:sub]]` →
+`VehicleDetail`.
+
+`VehicleDetail` tabs are **URL-driven** and intent-shaped: **Overview** (the same `Dashboard`
+component scoped via its `vehicleId` prop) · **Timeline** (`TimelineTab` — merged
+services/incidents/mileage stream with kind filters; subsumed the old History/Incidents tabs;
+incident detail/form live in `IncidentDetail`/`IncidentForm`) · **Plan** (`PlanTab` — sub-nav
+Due (`ScheduleTab`) / To-do / Visits / Schedule ⚙ (`ScheduleConfig`)) · **Builds** (`BuildsTab`)
+· **Records** (`RecordsTab` — sub-nav re-homing `PartsTab`/`DocumentsTab`/`ResearchTab`) ·
+**Costs** (`CostsTab` + the 12-month forecast buckets). Deep links (dashboard rows, search
+hits, source badges) always target a tab/sub URL.
 
 Vite dev server proxies `/api` and `/files` to the backend at `:3003`. In production, the backend serves `frontend/dist/` as SPA fallback.
 

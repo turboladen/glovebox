@@ -3,6 +3,7 @@
   import { vehicles as vehiclesApi, reminders as remindersApi, mileage as mileageApi, vehicleExport, research } from '../lib/api'
   import type { Vehicle, RemindersResponse } from '../lib/types'
   import { formatDate } from '../lib/dates'
+  import { refreshDashboard } from '../lib/stores'
   import Dashboard from './Dashboard.svelte'
   import PlanTab from './PlanTab.svelte'
   import TimelineTab from './TimelineTab.svelte'
@@ -83,6 +84,7 @@
   function onVehicleUpdated(updated: Vehicle) {
     vehicle = updated
     showEditForm = false
+    refreshDashboard().catch(() => {})
   }
 
   function formatMileage(n: number): string {
@@ -145,6 +147,7 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
     if (!vehicle) return
     try {
       vehicle = await vehiclesApi.archive(vehicle.id)
+      refreshDashboard().catch(() => {})
     } catch (e: any) {
       error = e.message
     }
@@ -154,6 +157,7 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
     if (!vehicle) return
     try {
       vehicle = await vehiclesApi.unarchive(vehicle.id)
+      refreshDashboard().catch(() => {})
     } catch (e: any) {
       error = e.message
     }
@@ -164,6 +168,7 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
     if (!confirm(`Are you sure? This will permanently delete all of "${vehicle.name}"'s data.`)) return
     try {
       await vehiclesApi.delete(vehicle.id)
+      refreshDashboard().catch(() => {})
       push('/')
     } catch (e: any) {
       error = e.message
