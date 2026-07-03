@@ -56,7 +56,7 @@ cd frontend && bun run check  # svelte-check + TypeScript check
 
 ### Backend binary (`glovebox-backend/src/`)
 
-**AppState** (`main.rs`): Axum shared state holds `DatabaseConnection`, `Arc<AppConfig>`, and `Arc<AiProviderRegistry>`. All handlers extract `State(state)`.
+**AppState** (`main.rs`): Axum shared state holds `DatabaseConnection` and `Arc<AppConfig>`. All handlers extract `State(state)`.
 
 **Routing split**: Top-level CRUD resources (`vehicles`, `platforms`, `model_templates`, `schedules`, `shops`) use `.nest()` with their own `Router`. Vehicle sub-resources (`mileage`, `services`, `observations`, `accidents`, `parts`, `documents`, `research`, etc.) use flat `.route()` calls directly in `main.rs` so `Path((vehicle_id, id))` tuple extraction works correctly.
 
@@ -64,17 +64,15 @@ cd frontend && bun run check  # svelte-check + TypeScript check
 
 ### Domain library (`glovebox-shared/src/`)
 
-**Entities** (`entities/`): Hand-written `DeriveEntityModel` structs (not generated). Parent entities declare `has_many` relations; junction tables have `via()` impls. 22 entity files.
+**Entities** (`entities/`): Hand-written `DeriveEntityModel` structs (not generated). Parent entities declare `has_many` relations; junction tables have `via()` impls. 20 entity files.
 
 **Inputs** (`inputs/`): Plain domain input structs (`New*`/`Update*`) consumed by service functions. No HTTP serde.
 
-**Services** (`services/`): One module per domain (`vehicle`, `service_record`, `platform`, ...) of free functions taking `db: &impl ConnectionTrait` first, returning `DomainResult<T>`; plus the pre-existing `ai/` (pluggable provider trait), `reminders`, `vin_decode`, `nhtsa`.
+**Services** (`services/`): One module per domain (`vehicle`, `service_record`, `platform`, ...) of free functions taking `db: &impl ConnectionTrait` first, returning `DomainResult<T>`; plus `reminders`, `vin_decode`, `nhtsa`. (The in-app AI layer was retired in 2hea unit A — Claude connects over `/mcp` instead.)
 
 **Errors** (`error.rs`): `DomainError::{NotFound, Invalid{field,message}, BadRequest, Db, Internal}` with `DomainResult<T>` alias.
 
-**AI layer** (`services/ai/`): `AiProvider` trait with implementations for Claude API, OpenAI-compatible (Ollama/LM Studio), mock (testing), and noop. Provider is selected at startup from `ai_providers` table. Context builder in `context.rs` assembles vehicle data into system prompts.
-
-**Migrations** (`migration/`): 12 migration files, auto-run on startup via `Migrator::up()`.
+**Migrations** (`migration/`): 15 migration files, auto-run on startup via `Migrator::up()`.
 
 **Test harness** (`test_support.rs`): `test_db()` — in-memory SQLite with migrations applied, for service-layer unit tests. Compiled under `#[cfg(any(test, feature = "test-support"))]`; sibling crates use it in their integration tests via a dev-dependency on `glovebox-shared` with the `test-support` feature (see `glovebox-mcp/Cargo.toml`).
 
@@ -82,7 +80,7 @@ cd frontend && bun run check  # svelte-check + TypeScript check
 
 **Mount** (`lib.rs`): `router(db) -> axum::Router` wraps rmcp's `StreamableHttpService` (+ `LocalSessionManager`, 7-day session keep-alive); the backend nests it at `/mcp`. LAN hostnames must be allowlisted via `GLOVEBOX_MCP_ALLOWED_HOSTS` (rmcp's DNS-rebinding defense 403s unknown `Host` headers).
 
-**Tools** (`handler.rs`): 14 domain verbs, named as things a person would say (`record_service`, not `create_service_record`). Inputs are schemars-derived structs in `schemas.rs` (doc comments become the LLM-visible field descriptions). `LenientParameters<T>` defers deserialize errors so malformed args come back as actionable tool errors, not bare JSON-RPC `-32602`s — pair it with an explicit `input_schema = schema_for_type::<T>()` on every `#[tool]`.
+**Tools** (`handler.rs`): 15 domain verbs, named as things a person would say (`record_service`, not `create_service_record`). Inputs are schemars-derived structs in `schemas.rs` (doc comments become the LLM-visible field descriptions). `LenientParameters<T>` defers deserialize errors so malformed args come back as actionable tool errors, not bare JSON-RPC `-32602`s — pair it with an explicit `input_schema = schema_for_type::<T>()` on every `#[tool]`.
 
 **Resources**: stable URIs (`glovebox://vehicles`, `…/{id}`, `…/{id}/activity`, `…/{id}/builds/{build_id}`). `list_resources` enumerates concrete URIs from the DB; `read_resource` parses them (rmcp resource templates are not used).
 
@@ -92,7 +90,7 @@ cd frontend && bun run check  # svelte-check + TypeScript check
 
 ### Frontend (`frontend/`)
 
-Svelte 5 SPA using `@keenmate/svelte-spa-router`. Three routes: Garage (list), VehicleNew, VehicleDetail. VehicleDetail uses tab-based navigation (History, Schedule, Parts, Costs, Documents, Observations, Chat, Research, Suggestions).
+Svelte 5 SPA using `@keenmate/svelte-spa-router`. Routes: Garage (list), Shops, VehicleNew, VehicleDetail. VehicleDetail uses tab-based navigation (Schedule, History, Parts, Observations, Documents, Accidents, Costs, Research).
 
 Vite dev server proxies `/api` and `/files` to the backend at `:3003`. In production, the backend serves `frontend/dist/` as SPA fallback.
 
@@ -102,7 +100,7 @@ Vite dev server proxies `/api` and `/files` to the backend at `:3003`. In produc
 
 - Domain inputs + validation + SQL live in `glovebox-shared::{inputs,services}`. Backend handlers ONLY map HTTP DTO ↔ domain input and rely on `DomainError → ApiError` conversion — no SeaORM queries, `ActiveModel`s, or business logic in `glovebox-backend/src/api/`
 - `glovebox-shared` never imports axum (domain stays HTTP-agnostic)
-- Service fns take `db: &impl ConnectionTrait` as the first param (+ `&AppConfig` / `&AiProviderRegistry` as explicit params where needed) — never `AppState`
+- Service fns take `db: &impl ConnectionTrait` as the first param (+ `&AppConfig` as an explicit param where needed) — never `AppState`
 - **Error model**: services return `DomainResult<T>`; `DomainError::{NotFound, Invalid{field,message}, BadRequest, Db, Internal}`. `Invalid` renders as `"{field}: {message}"` (400); `BadRequest` renders its message verbatim (400); `Db`/`Internal` become 500
 - **updated_at stamping lives in shared service update fns**, not handlers: every update fn sets `active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string())` — SeaORM `ActiveModel::update()` does NOT auto-set it
 - New domain logic gets service-level unit tests in `glovebox-shared` (via `test_support::test_db()`) plus e2e coverage

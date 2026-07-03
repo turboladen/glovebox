@@ -3,7 +3,6 @@
   import { services as servicesApi } from '../lib/api'
   import type { RemindersResponse, ReminderStatus, ServiceRecordWithLinks } from '../lib/types'
   import { formatDate } from '../lib/dates'
-  import SuggestionsCard from './SuggestionsCard.svelte'
 
   let { reminderData, vehicleId }: { reminderData: RemindersResponse | null; vehicleId: number } = $props()
 
@@ -42,8 +41,6 @@
   }
 
 </script>
-
-<SuggestionsCard {vehicleId} />
 
 {#if !reminderData}
   <p>No reminder data available.</p>

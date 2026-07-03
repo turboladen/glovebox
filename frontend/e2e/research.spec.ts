@@ -18,9 +18,8 @@ test.describe('Research', () => {
   test('research tab shows empty state', async ({ page }) => {
     await page.goto(vehicleUrl)
     await page.getByRole('button', { name: 'Research' }).click()
-    await expect(page.getByText('No research reports yet.')).toBeVisible()
+    await expect(page.getByText(/No research reports yet/)).toBeVisible()
     await expect(page.getByRole('button', { name: 'Check Recalls' })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Run Full Check' })).toBeVisible()
   })
 
   test('recall check requires make/model/year', async ({ page }) => {
@@ -29,22 +28,6 @@ test.describe('Research', () => {
     await page.getByRole('button', { name: 'Check Recalls' }).click()
     // Vehicle was created without make/model/year, so should show error
     await expect(page.getByText(/required for recall lookup/i)).toBeVisible()
-  })
-
-  test('generate research report', async ({ page }) => {
-    await page.goto(vehicleUrl)
-    await page.getByRole('button', { name: 'Research' }).click()
-    await page.getByRole('button', { name: 'Run Full Check' }).click()
-    await expect(page.getByRole('button', { name: 'Generating...' })).toBeVisible()
-    // Wait for report to load (may fail NHTSA check due to missing vehicle info, but report still created)
-    await expect(page.getByText(/Found \d+ items|No findings/).first()).toBeVisible({ timeout: 15000 })
-  })
-
-  test('report appears in reports list', async ({ page }) => {
-    await page.goto(vehicleUrl)
-    await page.getByRole('button', { name: 'Research' }).click()
-    // Wait for reports to load
-    await expect(page.locator('.report-type', { hasText: 'Full Check' })).toBeVisible({ timeout: 5000 })
   })
 })
 

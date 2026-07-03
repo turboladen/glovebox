@@ -21,15 +21,12 @@ use tower_http::{
     services::{ServeDir, ServeFile},
 };
 
-use glovebox_shared::{
-    config::AppConfig, migration::Migrator, services::ai::registry::AiProviderRegistry,
-};
+use glovebox_shared::{config::AppConfig, migration::Migrator};
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: DatabaseConnection,
     pub config: Arc<AppConfig>,
-    pub ai: Arc<AiProviderRegistry>,
 }
 
 #[tokio::main]
@@ -66,15 +63,9 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("Database ready at {}", &config.db_path);
 
-    let ai = Arc::new(AiProviderRegistry::new(db.clone()));
-
-    let has_provider = ai.any_configured().await.unwrap_or(false);
-    tracing::info!("AI providers configured: {has_provider}");
-
     let state = AppState {
         db,
         config: Arc::new(config),
-        ai,
     };
 
     let listen_addr = state.config.listen.clone();
@@ -87,40 +78,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/health", get(api::health::health_check))
         // Full-text search (one domain operation over vehicles/events/documents)
         .route("/api/search", get(api::search::search))
-        // AI endpoints
-        .route("/api/ai/status", get(api::ai::status))
-        .route(
-            "/api/ai/parse-invoice",
-            axum::routing::post(api::ai::parse_invoice),
-        )
-        .route("/api/ai/chat", axum::routing::post(api::ai::chat))
-        .route("/api/ai/models", axum::routing::post(api::ai::fetch_models))
-        .route("/api/ai/chat/history", get(api::ai::chat_history))
-        .route(
-            "/api/ai/providers",
-            get(api::ai::list_providers).post(api::ai::create_provider),
-        )
-        .route(
-            "/api/ai/providers/{id}",
-            axum::routing::put(api::ai::update_provider).delete(api::ai::delete_provider),
-        )
-        .route(
-            "/api/vehicles/{vehicle_id}/suggestions",
-            get(api::ai::get_suggestions),
-        )
-        // Conversations (per vehicle)
-        .route(
-            "/api/vehicles/{vehicle_id}/conversations",
-            get(api::conversations::list).post(api::conversations::create),
-        )
-        .route(
-            "/api/vehicles/{vehicle_id}/conversations/{id}",
-            axum::routing::put(api::conversations::rename).delete(api::conversations::delete),
-        )
-        .route(
-            "/api/vehicles/{vehicle_id}/conversations/{id}/messages",
-            get(api::conversations::messages).post(api::conversations::add_message),
-        )
         // Vehicle sub-resources (flat routes for correct path param extraction)
         .route(
             "/api/vehicles/{vehicle_id}/mileage",
@@ -205,7 +162,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .route(
             "/api/vehicles/{vehicle_id}/research",
-            get(api::research::list_reports).post(api::research::generate_report),
+            get(api::research::list_reports),
         )
         .route(
             "/api/vehicles/{vehicle_id}/research/findings",

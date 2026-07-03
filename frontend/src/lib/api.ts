@@ -192,11 +192,6 @@ export const research = {
   checkRecalls: (vehicleId: number) => request<RecallCheckResult>(`/vehicles/${vehicleId}/recalls`),
   listReports: (vehicleId: number) => request<ResearchReport[]>(`/vehicles/${vehicleId}/research`),
   getReport: (vehicleId: number, id: number) => request<ReportWithFindings>(`/vehicles/${vehicleId}/research/${id}`),
-  generateReport: (vehicleId: number, reportType?: string, providerId?: number) =>
-    request<ReportWithFindings>(`/vehicles/${vehicleId}/research`, {
-      method: 'POST',
-      body: JSON.stringify({ report_type: reportType || 'full_check', provider_id: providerId }),
-    }),
   updateFinding: (vehicleId: number, reportId: number, findingId: number, data: { status?: string; linked_entity_type?: string | null; linked_entity_id?: number | null }) =>
     request<ResearchFinding>(`/vehicles/${vehicleId}/research/${reportId}/findings/${findingId}`, {
       method: 'PUT',
@@ -204,53 +199,6 @@ export const research = {
     }),
   listFindings: (vehicleId: number, status?: string) =>
     request<ResearchFinding[]>(`/vehicles/${vehicleId}/research/findings${status ? `?status=${status}` : ''}`),
-}
-
-// Conversations
-export const conversations = {
-  list: (vehicleId: number) => request<Conversation[]>(`/vehicles/${vehicleId}/conversations`),
-  create: (vehicleId: number, title?: string) =>
-    request<Conversation>(`/vehicles/${vehicleId}/conversations`, { method: 'POST', body: JSON.stringify({ title }) }),
-  rename: (vehicleId: number, id: number, title: string) =>
-    request<Conversation>(`/vehicles/${vehicleId}/conversations/${id}`, { method: 'PUT', body: JSON.stringify({ title }) }),
-  delete: (vehicleId: number, id: number) =>
-    request<{ deleted: number }>(`/vehicles/${vehicleId}/conversations/${id}`, { method: 'DELETE' }),
-  messages: (vehicleId: number, id: number) =>
-    request<ChatMessage[]>(`/vehicles/${vehicleId}/conversations/${id}/messages`),
-  addMessage: (vehicleId: number, id: number, role: string, content: string) =>
-    request<ChatMessage>(`/vehicles/${vehicleId}/conversations/${id}/messages`, {
-      method: 'POST', body: JSON.stringify({ role, content }),
-    }),
-}
-
-// AI
-export const ai = {
-  status: () => request<AiStatus>('/ai/status'),
-  chat: (vehicleId: number, conversationId: number, message: string, providerId?: number, documentId?: number) =>
-    request<ChatResponse>('/ai/chat', { method: 'POST', body: JSON.stringify({ vehicle_id: vehicleId, conversation_id: conversationId, message, provider_id: providerId, document_id: documentId }) }),
-  chatHistory: (vehicleId: number) => request<ChatMessage[]>(`/ai/chat/history?vehicle_id=${vehicleId}`),
-  parseInvoice: (documentId: number, providerId?: number) =>
-    request<ParsedInvoice>('/ai/parse-invoice', { method: 'POST', body: JSON.stringify({ document_id: documentId, provider_id: providerId }) }),
-  suggestions: (vehicleId: number, providerId?: number) => {
-    const qs = providerId ? `?provider_id=${providerId}` : ''
-    return request<AiSuggestion[]>(`/vehicles/${vehicleId}/suggestions${qs}`)
-  },
-  fetchModels: (provider: string, apiKey: string, apiBase?: string) =>
-    request<ModelInfo[]>('/ai/models', {
-      method: 'POST',
-      body: JSON.stringify({ provider, api_key: apiKey, api_base: apiBase }),
-    }),
-}
-
-// AI Providers
-export const aiProviders = {
-  list: () => request<AiProvider[]>('/ai/providers'),
-  create: (data: CreateAiProvider) =>
-    request<AiProvider>('/ai/providers', { method: 'POST', body: JSON.stringify(data) }),
-  update: (id: number, data: UpdateAiProvider) =>
-    request<AiProvider>(`/ai/providers/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
-  delete: (id: number) =>
-    request<{ deleted: number }>(`/ai/providers/${id}`, { method: 'DELETE' }),
 }
 
 // Re-export types for convenience
@@ -264,7 +212,5 @@ import type {
   AccidentWithDetails, AccidentCorrespondence, CreateAccident, UpdateAccident, CreateCorrespondence,
   PartSlot, CreatePartSlot, Part, CreatePart,
   CostSummary, VehicleExport,
-  AiStatus, AiProvider, CreateAiProvider, UpdateAiProvider, ProviderSummary,
-  Conversation, ChatMessage, ChatResponse, ParsedInvoice, AiSuggestion, ModelInfo,
   RecallCheckResult, ResearchReport, ReportWithFindings, ResearchFinding,
 } from './types'

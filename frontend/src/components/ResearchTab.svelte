@@ -2,7 +2,6 @@
   import { research as researchApi, services as servicesApi, parts as partsApi } from '../lib/api'
   import type { RecallCheckResult, ResearchReport, ReportWithFindings, ResearchFinding, ServiceRecordWithLinks, Part } from '../lib/types'
   import { formatDate } from '../lib/dates'
-  import AiProviderSelect from './AiProviderSelect.svelte'
 
   let { vehicleId }: { vehicleId: number } = $props()
 
@@ -14,12 +13,6 @@
   let reportsLoading = $state(true)
   let expandedReport: ReportWithFindings | null = $state(null)
 
-  let generating = $state(false)
-  let generateError = $state('')
-  let generateStep = $state('')
-
-  let selectedProviderId: number | undefined = $state(undefined)
-
   // Link picker state
   let linkPickerFinding: ResearchFinding | null = $state(null)
   let linkableServices: ServiceRecordWithLinks[] = $state([])
@@ -30,12 +23,21 @@
   const severityLevels = ['critical', 'recommended', 'optional', 'informational'] as const
   let activeSeverities: Set<string> = $state(new Set(severityLevels))
 
+  // Severity is free-form at the API/MCP boundary; anything outside our four
+  // buckets renders as "informational" so no finding can silently disappear
+  // from every filter combination.
+  function normalizeSeverity(severity: string | null | undefined): string {
+    return severity && (severityLevels as readonly string[]).includes(severity)
+      ? severity
+      : 'informational'
+  }
+
   // Derived: findings grouped by category with active filters applied
   const categoryOrder = ['recall', 'suggested_maintenance', 'forum_report', 'upgrade_idea']
 
   let filteredGroupedFindings = $derived.by(() => {
     if (!expandedReport) return []
-    const filtered = expandedReport.findings.filter(f => activeSeverities.has(f.severity ?? 'informational'))
+    const filtered = expandedReport.findings.filter(f => activeSeverities.has(normalizeSeverity(f.severity)))
     const groups: { category: string; findings: ResearchFinding[] }[] = []
     const byCategory = new Map<string, ResearchFinding[]>()
     for (const f of filtered) {
@@ -93,40 +95,6 @@
       recallError = e.message
     } finally {
       recallLoading = false
-    }
-  }
-
-  const progressSteps = [
-    'Fetching vehicle data...',
-    'Checking NHTSA recalls...',
-    'Compiling maintenance history...',
-    'Generating AI analysis...',
-  ]
-
-  async function generateReport() {
-    generating = true
-    generateError = ''
-    generateStep = progressSteps[0]
-
-    // Advance through progress steps on a timer
-    let stepIndex = 0
-    const stepInterval = setInterval(() => {
-      stepIndex++
-      if (stepIndex < progressSteps.length) {
-        generateStep = progressSteps[stepIndex]
-      }
-    }, 3000)
-
-    try {
-      const report = await researchApi.generateReport(vehicleId, 'full_check', selectedProviderId)
-      expandedReport = report
-      reports = [report, ...reports]
-    } catch (e: any) {
-      generateError = e.message
-    } finally {
-      clearInterval(stepInterval)
-      generating = false
-      generateStep = ''
     }
   }
 
@@ -222,6 +190,7 @@
       case 'full_check': return 'Full Check'
       case 'recalls_only': return 'Recalls Only'
       case 'community_wisdom': return 'Community Wisdom'
+      case 'external_research': return 'External Research'
       default: return t ?? 'Full Check'
     }
   }
@@ -269,26 +238,9 @@
     <div class="section-header">
       <div>
         <h3>Research Reports</h3>
-        <p class="section-desc">AI-generated analysis of common issues, maintenance tips, recalls, and popular upgrades for your vehicle.</p>
-      </div>
-      <div class="generate-controls">
-        <AiProviderSelect bind:selectedProviderId />
-        <button class="btn btn-primary" onclick={generateReport} disabled={generating}>
-          {generating ? 'Generating...' : 'Run Full Check'}
-        </button>
+        <p class="section-desc">Recall checks and research findings — filed here from recall checks and research done via connected assistants (MCP).</p>
       </div>
     </div>
-
-    {#if generating}
-      <div class="progress-indicator">
-        <span class="spinner"></span>
-        <span class="progress-step">{generateStep}</span>
-      </div>
-    {/if}
-
-    {#if generateError}
-      <p class="error">{generateError}</p>
-    {/if}
 
     {#if expandedReport}
       <div class="expanded-report">
@@ -365,7 +317,7 @@
     {#if reportsLoading}
       <p class="loading">Loading reports...</p>
     {:else if reports.length === 0 && !expandedReport}
-      <p class="no-data">No research reports yet. Click "Run Full Check" to generate one.</p>
+      <p class="no-data">No research reports yet. Run a recall check, or file findings via a connected assistant.</p>
     {:else}
       <div class="reports-list">
         {#each reports as report}
@@ -452,38 +404,6 @@
     font-size: 0.8rem;
     color: var(--text-muted);
     margin: var(--sp-1) 0 0;
-  }
-
-  .progress-indicator {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-2);
-    padding: var(--sp-3);
-    background: var(--info-bg);
-    border: 1px solid var(--info);
-    border-radius: var(--radius-md);
-    margin-bottom: var(--sp-3);
-    font-size: 0.85rem;
-    color: var(--info);
-  }
-
-  .spinner {
-    display: inline-block;
-    width: 14px;
-    height: 14px;
-    border: 2px solid currentColor;
-    border-top-color: transparent;
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-    flex-shrink: 0;
-  }
-
-  @keyframes spin {
-    to { transform: rotate(360deg); }
-  }
-
-  .progress-step {
-    font-weight: 500;
   }
 
   .severity-filters {
@@ -722,13 +642,6 @@
   .loading {
     color: var(--text-muted);
     font-size: 0.9rem;
-  }
-
-  .generate-controls {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-2);
-    flex-shrink: 0;
   }
 
   .linked-label {

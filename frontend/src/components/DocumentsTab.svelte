@@ -1,12 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { documents as docsApi, ai, services as servicesApi, parts as partsApi, accidents as accidentsApi } from '../lib/api'
-  import type { Document, ParsedInvoice, ServiceRecordWithLinks, Part, AccidentWithDetails } from '../lib/types'
+  import { documents as docsApi, services as servicesApi, parts as partsApi, accidents as accidentsApi } from '../lib/api'
+  import type { Document, ServiceRecordWithLinks, Part, AccidentWithDetails } from '../lib/types'
   import { formatDate } from '../lib/dates'
-  import AiProviderSelect from './AiProviderSelect.svelte'
 
-  let { vehicleId, onAnalyzeWithAI }: { vehicleId: number; onAnalyzeWithAI?: (docId: number, docTitle: string) => void } = $props()
-  let selectedProviderId: number | undefined = $state(undefined)
+  let { vehicleId }: { vehicleId: number } = $props()
 
   let docs: Document[] = $state([])
   let loading = $state(true)
@@ -26,9 +24,6 @@
   let serviceRecords: ServiceRecordWithLinks[] = $state([])
   let partsList: Part[] = $state([])
   let accidentsList: AccidentWithDetails[] = $state([])
-  let parsing = $state<number | null>(null)
-  let parsedInvoice: ParsedInvoice | null = $state(null)
-  let parseError = $state('')
 
   const docTypes = ['invoice', 'receipt', 'photo', 'title', 'warranty', 'manual', 'other']
 
@@ -92,25 +87,6 @@
     return !!mime && mime.startsWith('image/')
   }
 
-  function isPdf(mime: string | null): boolean {
-    return !!mime && mime.includes('pdf')
-  }
-
-  async function parseInvoice(docId: number) {
-    parsing = docId
-    parseError = ''
-    parsedInvoice = null
-    try {
-      parsedInvoice = await ai.parseInvoice(docId, selectedProviderId)
-      // Refresh docs to pick up the persisted extracted_text
-      docs = await docsApi.list({ vehicle_id: vehicleId })
-    } catch (e: any) {
-      parseError = e.message
-    } finally {
-      parsing = null
-    }
-  }
-
   function linkedEntityLabel(doc: Document): string {
     if (!doc.linked_entity_type || !doc.linked_entity_id) return ''
     if (doc.linked_entity_type === 'service') {
@@ -126,45 +102,6 @@
       return acc ? `Accident: ${acc.occurred_at.split('T')[0].split(' ')[0]}${acc.description ? ' — ' + acc.description.slice(0, 40) : ''}` : `Accident #${doc.linked_entity_id}`
     }
     return `${doc.linked_entity_type} #${doc.linked_entity_id}`
-  }
-
-  let creatingService = $state(false)
-  let serviceCreated = $state(false)
-
-  async function createServiceFromInvoice() {
-    if (!parsedInvoice) return
-    creatingService = true
-    try {
-      await servicesApi.create(vehicleId, {
-        service_date: parsedInvoice.service_date || new Date().toISOString().split('T')[0],
-        mileage: parsedInvoice.mileage ?? undefined,
-        description: parsedInvoice.description ?? undefined,
-        parts_cost_cents: parsedInvoice.parts_cost_cents ?? undefined,
-        labor_cost_cents: parsedInvoice.labor_cost_cents ?? undefined,
-        total_cost_cents: parsedInvoice.total_cost_cents ?? undefined,
-        shop_name: parsedInvoice.shop_name ?? undefined,
-        notes: parsedInvoice.notes ?? undefined,
-        line_items: parsedInvoice.line_items.length > 0
-          ? parsedInvoice.line_items.map(li => ({
-              description: li.description,
-              category: li.category ?? undefined,
-              quantity: li.quantity ?? undefined,
-              unit_cost_cents: li.unit_cost_cents ?? undefined,
-              cost_cents: li.cost_cents ?? undefined,
-            }))
-          : undefined,
-      })
-      serviceCreated = true
-    } catch (e: any) {
-      parseError = e.message
-    } finally {
-      creatingService = false
-    }
-  }
-
-  function formatCents(cents: number | null): string {
-    if (cents == null) return ''
-    return `$${(cents / 100).toFixed(2)}`
   }
 </script>
 
@@ -260,12 +197,6 @@
   {:else if docs.length === 0}
     <p class="empty">No documents yet.</p>
   {:else}
-    {#if docs.some(d => isPdf(d.mime_type))}
-      <div class="ai-provider-row">
-        <span class="ai-provider-label">AI Provider:</span>
-        <AiProviderSelect bind:selectedProviderId />
-      </div>
-    {/if}
     <div class="docs-list">
       {#each docs as doc (doc.id)}
         <div class="doc-card">
@@ -299,79 +230,10 @@
           </div>
           <div class="doc-actions">
             <a href="/files/{doc.file_path}" target="_blank" class="btn btn-secondary">View</a>
-            {#if isPdf(doc.mime_type)}
-              <button class="btn btn-secondary" onclick={() => parseInvoice(doc.id)} disabled={parsing === doc.id}>
-                {parsing === doc.id ? 'Parsing...' : 'Parse with AI'}
-              </button>
-            {/if}
-            {#if onAnalyzeWithAI}
-              <button class="btn btn-secondary" onclick={() => onAnalyzeWithAI(doc.id, doc.title)}>
-                Analyze in Chat
-              </button>
-            {/if}
             <button class="btn btn-secondary" onclick={() => deleteDoc(doc.id)}>Delete</button>
           </div>
         </div>
       {/each}
-    </div>
-  {/if}
-
-  {#if parseError}
-    <div class="parse-error">
-      <p>Failed to parse invoice: {parseError}</p>
-      <button class="btn btn-secondary" onclick={() => (parseError = '')}>Dismiss</button>
-    </div>
-  {/if}
-
-  {#if parsedInvoice}
-    <div class="parsed-result">
-      <h4>Parsed Invoice Data</h4>
-      <div class="parsed-fields">
-        {#if parsedInvoice.service_date}
-          <div class="parsed-field"><strong>Date:</strong> {formatDate(parsedInvoice.service_date)}</div>
-        {/if}
-        {#if parsedInvoice.shop_name}
-          <div class="parsed-field"><strong>Shop:</strong> {parsedInvoice.shop_name}</div>
-        {/if}
-        {#if parsedInvoice.mileage}
-          <div class="parsed-field"><strong>Mileage:</strong> {parsedInvoice.mileage.toLocaleString()}</div>
-        {/if}
-        {#if parsedInvoice.description}
-          <div class="parsed-field"><strong>Description:</strong> {parsedInvoice.description}</div>
-        {/if}
-        {#if parsedInvoice.line_items.length > 0}
-          <div class="parsed-field">
-            <strong>Line Items:</strong>
-            <ul>
-              {#each parsedInvoice.line_items as item}
-                <li>
-                  {#if item.category}<span class="line-item-cat-tag">{item.category}</span>{/if}
-                  {item.description}
-                  {#if item.quantity != null} (x{item.quantity}){/if}
-                  {#if item.unit_cost_cents != null} @ {formatCents(item.unit_cost_cents)} ea{/if}
-                  {#if item.cost_cents != null} — {formatCents(item.cost_cents)}{/if}
-                </li>
-              {/each}
-            </ul>
-          </div>
-        {/if}
-        {#if parsedInvoice.total_cost_cents}
-          <div class="parsed-field"><strong>Total:</strong> {formatCents(parsedInvoice.total_cost_cents)}</div>
-        {/if}
-        {#if parsedInvoice.notes}
-          <div class="parsed-field"><strong>Notes:</strong> {parsedInvoice.notes}</div>
-        {/if}
-      </div>
-      <div class="parsed-actions">
-        {#if serviceCreated}
-          <span class="service-created-notice">Service record created! View it in the History tab.</span>
-        {:else}
-          <button class="btn btn-primary" onclick={createServiceFromInvoice} disabled={creatingService}>
-            {creatingService ? 'Creating...' : 'Create Service Record'}
-          </button>
-        {/if}
-        <button class="btn btn-secondary" onclick={() => { parsedInvoice = null; serviceCreated = false }}>Dismiss</button>
-      </div>
     </div>
   {/if}
 </div>
@@ -383,19 +245,6 @@
   .docs-header h3 { margin: 0; }
 
   .error { color: var(--danger); font-size: 0.85rem; }
-
-  .ai-provider-row {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-2);
-    margin-bottom: var(--sp-3);
-    font-size: 0.8rem;
-    color: var(--text-muted);
-  }
-
-  .ai-provider-label {
-    font-weight: 500;
-  }
 
   .docs-list { display: flex; flex-direction: column; gap: var(--sp-2); }
 
@@ -442,32 +291,4 @@
   .doc-actions { display: flex; gap: var(--sp-2); flex-shrink: 0; }
 
   .empty { color: var(--text-muted); text-align: center; padding: var(--sp-8) 0; }
-
-  .parse-error {
-    margin-top: var(--sp-4); padding: var(--sp-3) var(--sp-4); border: 1px solid var(--danger-border);
-    border-radius: var(--radius-md); background: var(--danger-bg); display: flex; align-items: center; gap: var(--sp-4);
-  }
-  .parse-error p { margin: 0; color: var(--danger); font-size: 0.9rem; flex: 1; }
-
-  .parsed-result {
-    margin-top: var(--sp-4); padding: var(--sp-4); border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md); background: var(--bg-raised);
-  }
-  .parsed-result h4 { margin: 0 0 var(--sp-3); }
-  .parsed-fields { display: flex; flex-direction: column; gap: var(--sp-2); font-size: 0.9rem; }
-  .parsed-field ul { margin: var(--sp-1) 0 0; padding-left: var(--sp-5); }
-  .parsed-field li { font-size: 0.85rem; }
-  .line-item-cat-tag {
-    font-size: 0.65rem;
-    font-weight: 500;
-    text-transform: uppercase;
-    color: var(--text-muted);
-    background: var(--surface);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-sm);
-    padding: 0 3px;
-    margin-right: 4px;
-  }
-  .parsed-actions { margin-top: var(--sp-3); display: flex; gap: var(--sp-2); justify-content: flex-end; align-items: center; }
-  .service-created-notice { font-size: 0.85rem; color: var(--success); font-weight: 500; }
 </style>

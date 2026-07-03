@@ -19,7 +19,6 @@ clap = { version = "4", features = ["derive", "env"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 rusty-money = { version = "0.4", features = ["iso"] }
 async-trait = "0.1"
-base64 = "0.22"
 sqlx = { version = "0.8", features = ["sqlite"], default-features = false }
 tracing = "0.1"
 
