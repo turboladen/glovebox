@@ -55,6 +55,12 @@ pub struct RecordServiceInput {
     pub shop_name: Option<String>,
     /// Free-form notes.
     pub notes: Option<String>,
+    /// Who paid: `self` (default), `insurance`, or `third_party` (e.g. the
+    /// other driver). Anything not paid by the owner counts as covered, not
+    /// out-of-pocket, in cost summaries.
+    pub paid_by: Option<String>,
+    /// Who exactly paid / claim number, e.g. "Progressive claim #12345".
+    pub payer_note: Option<String>,
     /// Itemized invoice lines.
     pub line_items: Option<Vec<LineItemInput>>,
     /// Link this service to a build (from `list_builds`).
@@ -104,6 +110,8 @@ impl RecordServiceInput {
                 shop_id: None,
                 notes: self.notes,
                 build_id: self.build_id,
+                paid_by: self.paid_by,
+                payer_note: self.payer_note,
                 schedule_item_ids: None,
                 part_ids: None,
                 line_items,

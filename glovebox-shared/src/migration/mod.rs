@@ -16,6 +16,7 @@ mod m20260301_000013_add_fts5_search;
 mod m20260301_000014_add_builds;
 mod m20260301_000015_drop_ai_tables;
 mod m20260301_000016_drop_part_slots;
+mod m20260301_000017_add_service_payer;
 
 pub struct Migrator;
 
@@ -39,6 +40,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260301_000014_add_builds::Migration),
             Box::new(m20260301_000015_drop_ai_tables::Migration),
             Box::new(m20260301_000016_drop_part_slots::Migration),
+            Box::new(m20260301_000017_add_service_payer::Migration),
         ]
     }
 }

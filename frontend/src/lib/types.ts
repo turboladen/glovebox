@@ -108,6 +108,8 @@ export interface ServiceRecord {
   shop_name: string | null
   shop_id: number | null
   notes: string | null
+  paid_by: string
+  payer_note: string | null
   created_at: string
   updated_at: string
 }
@@ -151,6 +153,8 @@ export interface CreateServiceRecord {
   shop_name?: string | null
   shop_id?: number | null
   notes?: string | null
+  paid_by?: string
+  payer_note?: string | null
   schedule_item_ids?: number[]
   part_ids?: number[]
   line_items?: CreateLineItem[]
@@ -436,6 +440,8 @@ export interface MonthlyCost {
   month: string
   service_cost_cents: number
   parts_cost_cents: number
+  out_of_pocket_cents: number
+  covered_cents: number
   total_cents: number
 }
 
@@ -445,6 +451,8 @@ export interface CostSummary {
   total_parts_cost_cents: number
   total_labor_cost_cents: number
   total_cost_cents: number
+  out_of_pocket_cents: number
+  covered_cents: number
   service_count: number
   part_count: number
   cost_per_mile_cents: number | null

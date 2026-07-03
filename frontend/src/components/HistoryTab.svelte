@@ -27,6 +27,8 @@
   let editShopName = $state('')
   let editShopId: number | null = $state(null)
   let editNotes = $state('')
+  let editPaidBy = $state('self')
+  let editPayerNote = $state('')
   let saving = $state(false)
   let deleting = $state(false)
   let confirmDelete = $state(false)
@@ -107,6 +109,8 @@
     editShopName = record.shop_name ?? ''
     editShopId = record.shop_id ?? null
     editNotes = record.notes ?? ''
+    editPaidBy = record.paid_by
+    editPayerNote = record.payer_note ?? ''
   }
 
   function cancelEdit() {
@@ -131,6 +135,9 @@
         shop_name: editShopName || null,
         shop_id: matchedShop?.id ?? editShopId ?? null,
         notes: editNotes || null,
+        paid_by: editPaidBy,
+        // Explicit null clears a previously set note (double-option update).
+        payer_note: editPaidBy !== 'self' && editPayerNote ? editPayerNote : null,
       })
       // Update in entries
       entries = entries.map(e =>
@@ -256,6 +263,22 @@
                     <input id="edit-shop-{record.id}" type="text" bind:value={editShopName} />
                   </div>
                 </div>
+                <div class="form-row">
+                  <div class="field">
+                    <label for="edit-paid-by-{record.id}">Paid By</label>
+                    <select id="edit-paid-by-{record.id}" bind:value={editPaidBy}>
+                      <option value="self">Me</option>
+                      <option value="insurance">Insurance</option>
+                      <option value="third_party">Third party</option>
+                    </select>
+                  </div>
+                  {#if editPaidBy !== 'self'}
+                    <div class="field">
+                      <label for="edit-payer-note-{record.id}">Payer Note</label>
+                      <input id="edit-payer-note-{record.id}" type="text" bind:value={editPayerNote} placeholder="e.g., Progressive claim #12345" />
+                    </div>
+                  {/if}
+                </div>
                 <div class="field">
                   <label for="edit-notes-{record.id}">Notes</label>
                   <textarea id="edit-notes-{record.id}" bind:value={editNotes} rows="2"></textarea>
@@ -274,6 +297,12 @@
                 {/if}
                 {#if record.labor_cost_cents != null}
                   <span><strong>Labor cost:</strong> {formatCents(record.labor_cost_cents)}</span>
+                {/if}
+                {#if record.paid_by !== 'self'}
+                  <span>
+                    <strong>Paid by:</strong>
+                    {record.paid_by === 'insurance' ? 'Insurance' : 'Third party'}{record.payer_note ? ` — ${record.payer_note}` : ''}
+                  </span>
                 {/if}
                 {#if record.notes}
                   <p class="notes">{record.notes}</p>
@@ -491,7 +520,7 @@
     text-transform: uppercase; letter-spacing: 0.03em;
   }
 
-  .field input, .field textarea {
+  .field input, .field select, .field textarea {
     padding: var(--sp-2);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);

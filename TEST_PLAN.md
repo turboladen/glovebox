@@ -101,6 +101,7 @@ Playwright e2e tests. Keep it updated as features are added.
 | 4 | Switch to History tab | New service record visible with date, description, cost ($49.99), mileage |
 | 5 | Schedule items checkboxes | If vehicle has schedule, checkboxes shown; selecting items links service to schedule |
 | 6 | Click "Cancel" | Form closes without saving |
+| 7 | "Paid By" select (default Me) | Choosing Insurance/Third party reveals a "Payer Note" input; record shows "Paid by: …" when expanded in History |
 
 ## TP-07: Schedule Tab (Reminders)
 
@@ -227,9 +228,10 @@ Playwright e2e tests. Keep it updated as features are added.
 |---|------|----------|
 | 1 | Click "Costs" tab on vehicle detail | Cost of Ownership heading visible |
 | 2 | No service records or parts | "No cost data yet." message |
-| 3 | With services and parts | Summary cards: Total Spent, Services, Parts, Labor |
+| 3 | With services and parts | Summary cards: Total Spent, Out of Pocket, Services, Parts, Labor |
 | 4 | Cost per mile | Shown when vehicle has purchase_mileage and service mileage |
-| 5 | Monthly breakdown table | Rows with month, service cost, parts cost, total |
+| 5 | Monthly breakdown table | Rows with month, service cost, parts cost, out of pocket, covered, total |
+| 6 | Service paid by insurance/third party | "Covered by Others" card appears; covered amount excluded from Out of Pocket (totals and monthly rows) |
 
 ## TP-20: Export Service History
 

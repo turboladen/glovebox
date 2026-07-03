@@ -10,6 +10,20 @@ use crate::{
     inputs::service_record::{NewLineItem, NewServiceRecord, UpdateServiceRecord},
 };
 
+/// Payer whitelist for `service_records.paid_by`.
+const VALID_PAYERS: [&str; 3] = ["self", "insurance", "third_party"];
+
+fn validate_payer(paid_by: &str) -> DomainResult<()> {
+    if VALID_PAYERS.contains(&paid_by) {
+        return Ok(());
+    }
+    Err(DomainError::BadRequest(format!(
+        "Invalid paid_by '{}'. Must be one of: {}",
+        paid_by,
+        VALID_PAYERS.join(", ")
+    )))
+}
+
 /// Verify each schedule item is within the vehicle's schedule scope: owned by
 /// the vehicle itself, by its model template, or by that template's platform.
 /// Anything else must be indistinguishable from a nonexistent item.
@@ -207,6 +221,9 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     vehicle_id: i32,
     input: NewServiceRecord,
 ) -> DomainResult<ServiceRecordWithLinks> {
+    if let Some(paid_by) = &input.paid_by {
+        validate_payer(paid_by)?;
+    }
     let schedule_item_ids = input.schedule_item_ids.unwrap_or_default();
     require_schedule_items_in_scope(db, vehicle_id, &schedule_item_ids).await?;
     if let Some(build_id) = input.build_id {
@@ -230,6 +247,8 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
         shop_id: Set(input.shop_id),
         notes: Set(input.notes),
         build_id: Set(input.build_id),
+        paid_by: Set(input.paid_by.unwrap_or_else(|| "self".into())),
+        payer_note: Set(input.payer_note),
         ..Default::default()
     };
     let record = record.insert(&txn).await?;
@@ -358,6 +377,13 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     }
     if let Some(v) = input.build_id {
         active.build_id = Set(v);
+    }
+    if let Some(v) = input.paid_by {
+        validate_payer(&v)?;
+        active.paid_by = Set(v);
+    }
+    if let Some(v) = input.payer_note {
+        active.payer_note = Set(v);
     }
 
     active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
@@ -569,6 +595,8 @@ mod tests {
                 shop_id: None,
                 notes: None,
                 build_id: None,
+                paid_by: None,
+                payer_note: None,
                 schedule_item_ids: Some(vec![sched_id]),
                 part_ids: Some(vec![part_id]),
                 line_items: Some(vec![NewLineItem {
@@ -639,6 +667,8 @@ mod tests {
                 shop_id: None,
                 notes: None,
                 build_id: None,
+                paid_by: None,
+                payer_note: None,
                 schedule_item_ids: None,
                 part_ids: Some(vec![part_a]),
                 line_items: Some(vec![NewLineItem {
@@ -717,6 +747,8 @@ mod tests {
                 shop_id: None,
                 notes: None,
                 build_id: None,
+                paid_by: None,
+                payer_note: None,
                 schedule_item_ids: Some(vec![sched_id]),
                 part_ids: Some(vec![part_id]),
                 line_items: None,
@@ -773,10 +805,151 @@ mod tests {
             shop_id: None,
             notes: None,
             build_id: None,
+            paid_by: None,
+            payer_note: None,
             schedule_item_ids,
             part_ids: None,
             line_items: None,
         }
+    }
+
+    #[tokio::test]
+    async fn create_round_trips_payer_and_defaults_to_self() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+
+        // Explicit payer round-trips, note included.
+        let insured = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                paid_by: Some("insurance".into()),
+                payer_note: Some("Progressive claim #12345".into()),
+                ..minimal_record(None)
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(insured.record.paid_by, "insurance");
+        assert_eq!(
+            insured.record.payer_note.as_deref(),
+            Some("Progressive claim #12345")
+        );
+        let fetched = get(&db, vid, insured.record.id).await.unwrap();
+        assert_eq!(fetched.record.paid_by, "insurance");
+        assert_eq!(
+            fetched.record.payer_note.as_deref(),
+            Some("Progressive claim #12345")
+        );
+
+        // Omitted payer defaults to self.
+        let plain = create(&db, vid, minimal_record(None)).await.unwrap();
+        assert_eq!(plain.record.paid_by, "self");
+        assert_eq!(plain.record.payer_note, None);
+    }
+
+    #[tokio::test]
+    async fn create_rejects_unknown_payer() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+
+        let err = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                paid_by: Some("my neighbor".into()),
+                ..minimal_record(None)
+            },
+        )
+        .await
+        .unwrap_err();
+        match err {
+            DomainError::BadRequest(msg) => {
+                // The message lists the valid values (build-status whitelist shape).
+                assert!(
+                    msg.contains("self"),
+                    "message should list valid values: {msg}"
+                );
+                assert!(msg.contains("insurance"), "{msg}");
+                assert!(msg.contains("third_party"), "{msg}");
+            }
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
+        assert!(list(&db, vid).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn update_changes_payer_and_sets_then_clears_note() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let created = create(&db, vid, minimal_record(None)).await.unwrap();
+        assert_eq!(created.record.paid_by, "self");
+
+        // Change payer + set the note.
+        let updated = update(
+            &db,
+            vid,
+            created.record.id,
+            UpdateServiceRecord {
+                paid_by: Some("third_party".into()),
+                payer_note: Some(Some("Neighbor's insurance, side-swipe".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.record.paid_by, "third_party");
+        assert_eq!(
+            updated.record.payer_note.as_deref(),
+            Some("Neighbor's insurance, side-swipe")
+        );
+
+        // An update not mentioning payer fields leaves them alone.
+        let untouched = update(
+            &db,
+            vid,
+            created.record.id,
+            UpdateServiceRecord {
+                notes: Some(Some("unrelated".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(untouched.record.paid_by, "third_party");
+        assert!(untouched.record.payer_note.is_some());
+
+        // Explicit null clears the note (double-option).
+        let cleared = update(
+            &db,
+            vid,
+            created.record.id,
+            UpdateServiceRecord {
+                payer_note: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(cleared.record.payer_note, None);
+
+        // Invalid payer on update is rejected and mutates nothing.
+        assert!(matches!(
+            update(
+                &db,
+                vid,
+                created.record.id,
+                UpdateServiceRecord {
+                    paid_by: Some("bogus".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err(),
+            DomainError::BadRequest(_)
+        ));
+        let survived = get(&db, vid, created.record.id).await.unwrap();
+        assert_eq!(survived.record.paid_by, "third_party");
     }
 
     #[tokio::test]

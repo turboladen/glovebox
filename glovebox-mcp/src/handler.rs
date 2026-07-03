@@ -248,7 +248,7 @@ impl GloveboxMcp {
 
     #[tool(
         name = "cost_summary",
-        description = "What the vehicle has cost: service/parts/labor totals, cost per mile, and a monthly breakdown. All amounts are integer cents.",
+        description = "What the vehicle has cost: service/parts/labor totals, an out-of-pocket vs covered-by-others split (insurance/third-party-paid services), cost per mile, and a monthly breakdown. All amounts are integer cents.",
         input_schema = rmcp::handler::server::common::schema_for_type::<VehicleParams>()
     )]
     async fn cost_summary(

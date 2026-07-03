@@ -24,6 +24,8 @@
       : shopList
   )
   let notes = $state('')
+  let paidBy = $state('self')
+  let payerNote = $state('')
   let isDiy = $state(false)
   let selectedScheduleIds: number[] = $state([])
   let scheduleItems: ResolvedScheduleItem[] = $state([])
@@ -125,6 +127,8 @@
         shop_name: shopName || undefined,
         shop_id: selectedShopId ?? undefined,
         notes: notes || undefined,
+        paid_by: paidBy,
+        payer_note: paidBy !== 'self' && payerNote ? payerNote : undefined,
         schedule_item_ids: selectedScheduleIds.length > 0 ? selectedScheduleIds : undefined,
         part_ids: selectedPartIds.length > 0 ? selectedPartIds : undefined,
       })
@@ -200,6 +204,23 @@
           </ul>
         {/if}
       </div>
+    </div>
+
+    <div class="form-row">
+      <div class="field">
+        <label for="svc-paid-by">Paid By</label>
+        <select id="svc-paid-by" bind:value={paidBy}>
+          <option value="self">Me</option>
+          <option value="insurance">Insurance</option>
+          <option value="third_party">Third party</option>
+        </select>
+      </div>
+      {#if paidBy !== 'self'}
+        <div class="field">
+          <label for="svc-payer-note">Payer Note</label>
+          <input id="svc-payer-note" type="text" bind:value={payerNote} placeholder="e.g., Progressive claim #12345" />
+        </div>
+      {/if}
     </div>
 
     <div class="field">
