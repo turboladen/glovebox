@@ -2,6 +2,7 @@ pub mod accident;
 pub mod accident_correspondence;
 pub mod accident_service_link;
 pub mod ai_provider_config;
+pub mod build;
 pub mod chat_message;
 pub mod conversation;
 pub mod document;

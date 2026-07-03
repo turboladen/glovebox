@@ -28,6 +28,7 @@ pub struct Model {
     pub updated_at: String,
     pub manufacturer_url: Option<String>,
     pub retailer_url: Option<String>,
+    pub build_id: Option<i32>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -50,6 +51,18 @@ pub enum Relation {
         to = "super::service_record::Column::Id"
     )]
     ServiceRecord,
+    #[sea_orm(
+        belongs_to = "super::build::Entity",
+        from = "Column::BuildId",
+        to = "super::build::Column::Id"
+    )]
+    Build,
+}
+
+impl Related<super::build::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Build.def()
+    }
 }
 
 impl Related<super::part_slot::Entity> for Entity {

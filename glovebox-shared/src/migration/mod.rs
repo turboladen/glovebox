@@ -13,6 +13,7 @@ mod m20260301_000010_add_conversations;
 mod m20260301_000011_create_service_record_line_items;
 mod m20260301_000012_add_vehicle_archived_at;
 mod m20260301_000013_add_fts5_search;
+mod m20260301_000014_add_builds;
 
 pub struct Migrator;
 
@@ -33,6 +34,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260301_000011_create_service_record_line_items::Migration),
             Box::new(m20260301_000012_add_vehicle_archived_at::Migration),
             Box::new(m20260301_000013_add_fts5_search::Migration),
+            Box::new(m20260301_000014_add_builds::Migration),
         ]
     }
 }
