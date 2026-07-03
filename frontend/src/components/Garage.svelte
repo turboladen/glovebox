@@ -141,11 +141,11 @@
             </svg>
           </div>
           <h3>Complete History</h3>
-          <p>Documents, observations, accidents, and parts &mdash; all in one place.</p>
+          <p>Documents, incidents, and parts &mdash; all in one place.</p>
           <div class="feature-tags">
             <span class="tag">Documents</span>
             <span class="tag">Parts</span>
-            <span class="tag">Observations</span>
+            <span class="tag">Incidents</span>
           </div>
         </div>
       </div>

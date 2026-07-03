@@ -255,32 +255,6 @@ export interface Shop {
   updated_at: string
 }
 
-export interface Observation {
-  id: number
-  vehicle_id: number
-  category: string
-  title: string
-  description: string | null
-  odometer: number | null
-  observed_at: string
-  obd_codes: string | null
-  resolved: boolean
-  resolved_service_id: number | null
-  notes: string | null
-  created_at: string
-  updated_at: string
-}
-
-export interface CreateObservation {
-  category: string
-  title: string
-  description?: string
-  odometer?: number
-  observed_at?: string
-  obd_codes?: string
-  notes?: string
-}
-
 export interface Document {
   id: number
   vehicle_id: number | null
@@ -297,12 +271,17 @@ export interface Document {
   created_at: string
 }
 
-export interface Accident {
+export interface Incident {
   id: number
   vehicle_id: number
-  occurred_at: string
+  category: string
+  title: string
+  description: string | null
   odometer: number | null
-  description: string
+  occurred_at: string
+  obd_codes: string | null
+  resolved: boolean
+  notes: string | null
   fault: string | null
   other_party_name: string | null
   other_party_phone: string | null
@@ -318,15 +297,15 @@ export interface Accident {
   deductible_currency: string | null
   insurance_payout_cents: number | null
   insurance_payout_currency: string | null
-  resolved: boolean
-  notes: string | null
+  recurrence_of_id: number | null
+  build_id: number | null
   created_at: string
   updated_at: string
 }
 
-export interface AccidentCorrespondence {
+export interface IncidentFollowup {
   id: number
-  accident_id: number
+  incident_id: number
   occurred_at: string
   contact_method: string | null
   contact_with: string | null
@@ -335,32 +314,44 @@ export interface AccidentCorrespondence {
   created_at: string
 }
 
-export interface AccidentWithDetails extends Accident {
-  correspondence: AccidentCorrespondence[]
+// The backend flattens the incident into the top level and adds the two
+// detail arrays.
+export interface IncidentWithDetails extends Incident {
+  followups: IncidentFollowup[]
   service_record_ids: number[]
 }
 
-export interface CreateAccident {
-  occurred_at: string
-  odometer?: number | null
-  description: string
-  fault?: string | null
-  other_party_name?: string | null
-  other_party_phone?: string | null
-  other_party_email?: string | null
-  other_party_insurance?: string | null
-  other_party_policy_number?: string | null
-  insurance_claim_number?: string | null
-  insurance_adjuster?: string | null
-  insurance_adjuster_phone?: string | null
-  notes?: string | null
+export interface CreateIncident {
+  category: string
+  title: string
+  description?: string
+  odometer?: number
+  occurred_at?: string
+  obd_codes?: string
+  notes?: string
+  fault?: string
+  other_party_name?: string
+  other_party_phone?: string
+  other_party_email?: string
+  other_party_insurance?: string
+  other_party_policy_number?: string
+  insurance_claim_number?: string
+  insurance_adjuster?: string
+  insurance_adjuster_phone?: string
+  recurrence_of_id?: number
+  build_id?: number
   service_record_ids?: number[]
 }
 
-export interface UpdateAccident {
-  occurred_at?: string
+export interface UpdateIncident {
+  category?: string
+  title?: string
+  description?: string | null
   odometer?: number | null
-  description?: string
+  occurred_at?: string
+  obd_codes?: string | null
+  resolved?: boolean
+  notes?: string | null
   fault?: string | null
   other_party_name?: string | null
   other_party_phone?: string | null
@@ -376,17 +367,17 @@ export interface UpdateAccident {
   deductible_currency?: string | null
   insurance_payout_cents?: number | null
   insurance_payout_currency?: string | null
-  resolved?: boolean
-  notes?: string | null
+  recurrence_of_id?: number | null
+  build_id?: number | null
   service_record_ids?: number[]
 }
 
-export interface CreateCorrespondence {
+export interface CreateFollowup {
   occurred_at: string
-  contact_method?: string | null
-  contact_with?: string | null
+  contact_method?: string
+  contact_with?: string
   summary: string
-  notes?: string | null
+  notes?: string
 }
 
 export interface Part {

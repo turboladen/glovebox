@@ -165,17 +165,20 @@ Playwright e2e tests. Keep it updated as features are added.
 | 4 | `PUT /api/shops/:id` | Updates shop fields |
 | 5 | Service record with shop_id | Links service to a shop entity |
 
-## TP-14: Observations
+## TP-14: Incidents (interim tab)
 
 | # | Step | Expected |
 |---|------|----------|
-| 1 | Click "Obs." tab on vehicle detail | Observations tab visible with "Add Observation" button |
-| 2 | No observations | "No observations yet." message |
-| 3 | Add observation (fill title, category) | Form submits, observation appears in list |
-| 4 | Observation shows category badge and date | Category in uppercase, date formatted |
+| 1 | Click "Incidents" tab on vehicle detail | Incidents tab visible with "+ Add Incident" button |
+| 2 | No incidents | "No incidents yet." message |
+| 3 | Add incident (fill title, category) | Form submits, incident appears in list |
+| 4 | Incident shows category badge and date | Category in uppercase, date formatted |
 | 5 | OBD code category shows code input | Extra field for JSON array of codes |
-| 6 | "Mark Resolved" button | Toggles resolved state, card becomes dimmed |
-| 7 | Observations appear in History tab | Interleaved with services, tagged "Observation" |
+| 6 | Category `accident` reveals accident fieldset | Other-party + insurance claim fields shown; values render on the expanded card |
+| 7 | "Mark Resolved" button on expanded card | Toggles resolved state, card becomes dimmed; "Reopen" reverts |
+| 8 | Add followup to an expanded incident | Followup entry appears with date, method, and summary |
+| 9 | Incidents appear in History tab | Interleaved with services, tagged "Incident" |
+| 10 | Category filter chips | Filter the list to one category |
 
 ## TP-15: Documents & Upload
 
@@ -189,26 +192,27 @@ Playwright e2e tests. Keep it updated as features are added.
 | 6 | "Delete" button | Removes document from list and deletes file from disk |
 | 7 | Document with doc_type | Type badge shown (invoice, receipt, photo, etc.) |
 
-## TP-16: Accidents
+## TP-16: Incidents API
 
 | # | Step | Expected |
 |---|------|----------|
-| 1 | `POST /api/vehicles/:id/accidents` | Creates accident with description and fault |
-| 2 | `GET /api/vehicles/:id/accidents` | Returns list with correspondence and service_record_ids |
-| 3 | Add correspondence to accident | Correspondence entry created with contact method and summary |
-| 4 | Update accident with cost/resolution | Fields updated, resolved flag toggled |
-| 5 | Link service records to accident | service_record_ids populated in response |
+| 1 | `POST /api/vehicles/:id/incidents` | Creates incident; category outside the whitelist is a 400 naming valid categories |
+| 2 | `GET /api/vehicles/:id/incidents` | Returns list with followups and service_record_ids, occurred_at descending |
+| 3 | `POST /api/vehicles/:id/incidents/:id/followups` | Followup created with contact method and summary; wrong-vehicle incident 404s |
+| 4 | Update incident with cost/resolution | Fields updated, resolved flag toggled |
+| 5 | Link service records to incident | service_record_ids populated; cross-vehicle service 404s and mutates nothing |
+| 6 | `recurrence_of_id` | Same-vehicle incident links; cross-vehicle/nonexistent 404s |
 
 ## TP-17: Interleaved Timeline
 
 | # | Step | Expected |
 |---|------|----------|
-| 1 | History tab with both services and observations | Both types shown, sorted by date descending |
+| 1 | History tab with both services and incidents | Both types shown, sorted by date descending |
 | 2 | Service entries | Tagged "Service" (green badge), show cost and mileage |
-| 3 | Observation entries | Tagged "Observation" (yellow badge), show resolved status |
+| 3 | Incident entries | Tagged "Incident" (yellow badge), show resolved status |
 | 4 | Filter: "All" | Shows both types |
 | 5 | Filter: "Services" | Shows only service records |
-| 6 | Filter: "Observations" | Shows only observations |
+| 6 | Filter: "Incidents" | Shows only incidents |
 
 ## TP-18: Parts Tab
 
@@ -349,7 +353,7 @@ frontend/e2e/
   schedule.spec.ts      # TP-07
   history.spec.ts       # TP-08
   navigation.spec.ts    # TP-10
-  observations.spec.ts  # TP-14
+  incidents.spec.ts     # TP-14
   documents.spec.ts     # TP-15
   parts.spec.ts         # TP-18, TP-19, TP-21
   research.spec.ts      # TP-26, TP-27

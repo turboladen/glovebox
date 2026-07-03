@@ -58,13 +58,13 @@ cd frontend && bun run check  # svelte-check + TypeScript check
 
 **AppState** (`main.rs`): Axum shared state holds `DatabaseConnection` and `Arc<AppConfig>`. All handlers extract `State(state)`.
 
-**Routing split**: Top-level CRUD resources (`vehicles`, `platforms`, `model_templates`, `schedules`, `shops`) use `.nest()` with their own `Router`. Vehicle sub-resources (`mileage`, `services`, `observations`, `accidents`, `parts`, `documents`, `research`, etc.) use flat `.route()` calls directly in `main.rs` so `Path((vehicle_id, id))` tuple extraction works correctly.
+**Routing split**: Top-level CRUD resources (`vehicles`, `platforms`, `model_templates`, `schedules`, `shops`) use `.nest()` with their own `Router`. Vehicle sub-resources (`mileage`, `services`, `incidents`, `parts`, `documents`, `research`, etc.) use flat `.route()` calls directly in `main.rs` so `Path((vehicle_id, id))` tuple extraction works correctly.
 
 **API handlers** (`api/`): Each module defines `Create*`/`Update*` DTOs (HTTP serde only), uses `Result<T> = std::result::Result<T, ApiError>`, and returns `Json<>`. Handlers are thin: map DTO → `glovebox_shared::inputs::*`, call `glovebox_shared::services::*`, return the result. Errors go through `DomainError → ApiError` (`api/error.rs`) → `IntoResponse`.
 
 ### Domain library (`glovebox-shared/src/`)
 
-**Entities** (`entities/`): Hand-written `DeriveEntityModel` structs (not generated). Parent entities declare `has_many` relations; junction tables have `via()` impls. 19 entity files.
+**Entities** (`entities/`): Hand-written `DeriveEntityModel` structs (not generated). Parent entities declare `has_many` relations; junction tables have `via()` impls. 18 entity files.
 
 **Inputs** (`inputs/`): Plain domain input structs (`New*`/`Update*`) consumed by service functions. No HTTP serde.
 
@@ -72,7 +72,7 @@ cd frontend && bun run check  # svelte-check + TypeScript check
 
 **Errors** (`error.rs`): `DomainError::{NotFound, Invalid{field,message}, BadRequest, Db, Internal}` with `DomainResult<T>` alias.
 
-**Migrations** (`migration/`): 16 migration files, auto-run on startup via `Migrator::up()`.
+**Migrations** (`migration/`): 18 migration files, auto-run on startup via `Migrator::up()`.
 
 **Test harness** (`test_support.rs`): `test_db()` — in-memory SQLite with migrations applied, for service-layer unit tests. Compiled under `#[cfg(any(test, feature = "test-support"))]`; sibling crates use it in their integration tests via a dev-dependency on `glovebox-shared` with the `test-support` feature (see `glovebox-mcp/Cargo.toml`).
 
@@ -80,7 +80,7 @@ cd frontend && bun run check  # svelte-check + TypeScript check
 
 **Mount** (`lib.rs`): `router(db) -> axum::Router` wraps rmcp's `StreamableHttpService` (+ `LocalSessionManager`, 7-day session keep-alive); the backend nests it at `/mcp`. LAN hostnames must be allowlisted via `GLOVEBOX_MCP_ALLOWED_HOSTS` (rmcp's DNS-rebinding defense 403s unknown `Host` headers).
 
-**Tools** (`handler.rs`): 16 domain verbs, named as things a person would say (`record_service`, not `create_service_record`). Inputs are schemars-derived structs in `schemas.rs` (doc comments become the LLM-visible field descriptions). `LenientParameters<T>` defers deserialize errors so malformed args come back as actionable tool errors, not bare JSON-RPC `-32602`s — pair it with an explicit `input_schema = schema_for_type::<T>()` on every `#[tool]`.
+**Tools** (`handler.rs`): 17 domain verbs, named as things a person would say (`record_service`, not `create_service_record`). Inputs are schemars-derived structs in `schemas.rs` (doc comments become the LLM-visible field descriptions). `LenientParameters<T>` defers deserialize errors so malformed args come back as actionable tool errors, not bare JSON-RPC `-32602`s — pair it with an explicit `input_schema = schema_for_type::<T>()` on every `#[tool]`.
 
 **Resources**: stable URIs (`glovebox://vehicles`, `…/{id}`, `…/{id}/activity`, `…/{id}/builds/{build_id}`). `list_resources` enumerates concrete URIs from the DB; `read_resource` parses them (rmcp resource templates are not used).
 
@@ -90,7 +90,7 @@ cd frontend && bun run check  # svelte-check + TypeScript check
 
 ### Frontend (`frontend/`)
 
-Svelte 5 SPA using `@keenmate/svelte-spa-router`. Routes: Garage (list), Shops, VehicleNew, VehicleDetail. VehicleDetail uses tab-based navigation (Schedule, History, Parts, Observations, Documents, Accidents, Costs, Research).
+Svelte 5 SPA using `@keenmate/svelte-spa-router`. Routes: Garage (list), Shops, VehicleNew, VehicleDetail. VehicleDetail uses tab-based navigation (Schedule, History, Parts, Incidents, Documents, Costs, Research).
 
 Vite dev server proxies `/api` and `/files` to the backend at `:3003`. In production, the backend serves `frontend/dist/` as SPA fallback.
 
