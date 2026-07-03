@@ -143,12 +143,14 @@ pub async fn decode_vin(vin: &str) -> Result<VinDecodeResult, String> {
 }
 
 /// Replace a vehicle's `vin_decode`-sourced attributes with the freshly decoded set.
-/// The caller is responsible for verifying the vehicle exists first.
+/// Verifies the vehicle exists (`NotFound` otherwise) so direct callers are self-guarded.
 pub async fn store_attributes<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
     decoded: &VinDecodeResult,
 ) -> DomainResult<()> {
+    crate::services::vehicle::require(db, vehicle_id).await?;
+
     let txn = db.begin().await?;
 
     // Delete any existing vin_decode attributes for this vehicle, then re-insert
@@ -171,4 +173,61 @@ pub async fn store_attributes<C: ConnectionTrait + TransactionTrait>(
 
     txn.commit().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{error::DomainError, test_support::test_db};
+
+    fn decoded() -> VinDecodeResult {
+        VinDecodeResult {
+            year: Some(2017),
+            make: Some("VW".into()),
+            model: Some("GTI".into()),
+            trim: None,
+            body_style: None,
+            engine: None,
+            transmission: None,
+            drivetrain: None,
+            all_attributes: HashMap::from([("Make".to_string(), "VW".to_string())]),
+        }
+    }
+
+    #[tokio::test]
+    async fn store_attributes_missing_vehicle_is_not_found() {
+        let db = test_db().await;
+        assert!(matches!(
+            store_attributes(&db, 999, &decoded()).await.unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+        // Nothing was written for the bogus vehicle id.
+        assert!(
+            vehicle_attribute::Entity::find()
+                .all(&db)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn store_attributes_round_trips_for_existing_vehicle() {
+        use crate::entities::vehicle;
+        let db = test_db().await;
+        let vid = vehicle::ActiveModel {
+            name: Set("Car".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap()
+        .id;
+
+        store_attributes(&db, vid, &decoded()).await.unwrap();
+        let attrs = vehicle_attribute::Entity::find().all(&db).await.unwrap();
+        assert_eq!(attrs.len(), 1);
+        assert_eq!(attrs[0].vehicle_id, vid);
+        assert_eq!(attrs[0].key, "Make");
+    }
 }
