@@ -101,27 +101,18 @@ async fn main() -> anyhow::Result<()> {
             "/api/vehicles/{vehicle_id}/reminders",
             get(api::reminders::get_reminders),
         )
-        // Observations (per vehicle)
+        // Incidents (per vehicle; unified observations + accidents)
         .route(
-            "/api/vehicles/{vehicle_id}/observations",
-            get(api::observations::list).post(api::observations::create),
+            "/api/vehicles/{vehicle_id}/incidents",
+            get(api::incidents::list).post(api::incidents::create),
         )
         .route(
-            "/api/vehicles/{vehicle_id}/observations/{id}",
-            get(api::observations::get_one).put(api::observations::update),
-        )
-        // Accidents (per vehicle)
-        .route(
-            "/api/vehicles/{vehicle_id}/accidents",
-            get(api::accidents::list).post(api::accidents::create),
+            "/api/vehicles/{vehicle_id}/incidents/{id}",
+            get(api::incidents::get_one).put(api::incidents::update),
         )
         .route(
-            "/api/vehicles/{vehicle_id}/accidents/{id}",
-            get(api::accidents::get_one).put(api::accidents::update),
-        )
-        .route(
-            "/api/vehicles/{vehicle_id}/accidents/{accident_id}/correspondence",
-            get(api::accidents::list_correspondence).post(api::accidents::create_correspondence),
+            "/api/vehicles/{vehicle_id}/incidents/{incident_id}/followups",
+            get(api::incidents::list_followups).post(api::incidents::create_followup),
         )
         // Parts (per vehicle)
         .route(

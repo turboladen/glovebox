@@ -221,7 +221,8 @@ async fn tools_list_advertises_the_full_verb_set() {
         "get_vehicle",
         "record_service",
         "record_part",
-        "log_observation",
+        "log_incident",
+        "save_note",
         "log_mileage",
         "check_due_maintenance",
         "summarize_recent_activity",
@@ -247,7 +248,7 @@ async fn tools_list_advertises_the_full_verb_set() {
     let tools = parsed["result"]["tools"]
         .as_array()
         .unwrap_or_else(|| panic!("tools/list result must carry a tools array; got: {body}"));
-    assert_eq!(tools.len(), 16, "expected exactly 16 tools; got: {body}");
+    assert_eq!(tools.len(), 17, "expected exactly 17 tools; got: {body}");
     for tool in tools {
         let name = tool["name"].as_str().expect("tool name");
         if name == "list_vehicles" {
@@ -363,7 +364,7 @@ async fn record_service_then_summarize_recent_activity_round_trip() {
 }
 
 #[tokio::test]
-async fn log_observation_and_mileage_write_through() {
+async fn log_incident_and_mileage_write_through() {
     let (app, db) = setup().await;
     let session = handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
@@ -372,7 +373,7 @@ async fn log_observation_and_mileage_write_through() {
         &app,
         &session,
         call_tool(
-            "log_observation",
+            "log_incident",
             serde_json::json!({
                 "vehicle_id": v.id,
                 "title": "Squeak from front left",
@@ -404,6 +405,200 @@ async fn log_observation_and_mileage_write_through() {
     )
     .await;
     assert!(body.contains("Squeak from front left") && body.contains("48250"));
+}
+
+#[tokio::test]
+async fn log_incident_rejects_unknown_category_and_wrong_links() {
+    let (app, db) = setup().await;
+    let session = handshake(&app).await;
+    let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
+    let other = vehicle::create(&db, new_vehicle("Other")).await.unwrap();
+
+    // Unknown category -> tool-level error listing the whitelist.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "log_incident",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "title": "Bad category",
+                "category": "bogus"
+            }),
+        ),
+    )
+    .await;
+    assert_tool_error(&body);
+    assert!(
+        body.contains("Invalid category") && body.contains("warning_light"),
+        "the error must steer toward valid categories; got: {body}"
+    );
+
+    // Accident-category incident round-trips.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "log_incident",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "title": "Rear-ended at a stoplight",
+                "category": "accident",
+                "description": "Other driver ran the light"
+            }),
+        ),
+    )
+    .await;
+    assert_success(&body);
+    assert!(body.contains("Rear-ended at a stoplight"));
+    let incident_id = extract_json(&body)["result"]["content"][0]["text"]
+        .as_str()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(t).ok())
+        .and_then(|v| v["id"].as_i64())
+        .expect("created incident payload must carry an id");
+
+    // A recurrence pointing at another vehicle's incident must be
+    // indistinguishable from a nonexistent one.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "log_incident",
+            serde_json::json!({
+                "vehicle_id": other.id,
+                "title": "Not my incident",
+                "recurrence_of_id": incident_id
+            }),
+        ),
+    )
+    .await;
+    assert_tool_error(&body);
+    assert!(
+        body.contains("not found"),
+        "cross-vehicle recurrence must read as missing; got: {body}"
+    );
+
+    // Same-vehicle recurrence works.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "log_incident",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "title": "Hit again in the same spot",
+                "category": "accident",
+                "recurrence_of_id": incident_id
+            }),
+        ),
+    )
+    .await;
+    assert_success(&body);
+    assert!(body.contains("recurrence_of_id"));
+}
+
+#[tokio::test]
+async fn save_note_is_searchable_via_search_records() {
+    let (app, db) = setup().await;
+    let session = handshake(&app).await;
+    let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
+
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "save_note",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "note": "Steve prefers Liqui Moly 5W-40 for this engine"
+            }),
+        ),
+    )
+    .await;
+    assert_success(&body);
+    assert!(
+        body.contains("\\\"note\\\"") || body.contains("\"note\""),
+        "saved note must carry the note category; got: {body}"
+    );
+
+    // The FTS trigger on incidents must make the note findable immediately.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "search_records",
+            serde_json::json!({ "query": "Liqui Moly", "scope": "incidents" }),
+        ),
+    )
+    .await;
+    assert_success(&body);
+    assert!(
+        body.contains("Liqui Moly"),
+        "note must be searchable under the incidents scope; got: {body}"
+    );
+
+    // Nonexistent vehicle -> clean tool error.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "save_note",
+            serde_json::json!({ "vehicle_id": 999, "note": "orphan" }),
+        ),
+    )
+    .await;
+    assert_tool_error(&body);
+}
+
+#[tokio::test]
+async fn search_records_builds_scope_finds_seeded_build() {
+    let (app, db) = setup().await;
+    let session = handshake(&app).await;
+    let v = vehicle::create(&db, new_vehicle("Project")).await.unwrap();
+    build_svc::create(
+        &db,
+        v.id,
+        NewBuild {
+            name: "Big turbo kilonewton build".into(),
+            description: Some("IS38 swap".into()),
+            target_date: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "search_records",
+            serde_json::json!({ "query": "kilonewton", "scope": "builds" }),
+        ),
+    )
+    .await;
+    assert_success(&body);
+    assert!(
+        body.contains("Big turbo kilonewton build") && body.contains("build"),
+        "builds scope must find the seeded build by name; got: {body}"
+    );
+
+    // Retired scopes are clean tool errors, not silent empties.
+    for retired in ["observations", "accidents"] {
+        let body = post_rpc(
+            &app,
+            &session,
+            call_tool(
+                "search_records",
+                serde_json::json!({ "query": "anything", "scope": retired }),
+            ),
+        )
+        .await;
+        assert_tool_error(&body);
+        assert!(
+            body.contains("unknown search scope"),
+            "retired scope '{retired}' must be rejected; got: {body}"
+        );
+    }
 }
 
 #[tokio::test]

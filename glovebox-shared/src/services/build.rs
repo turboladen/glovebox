@@ -2,7 +2,7 @@ use sea_orm::*;
 use serde::Serialize;
 
 use crate::{
-    entities::{build, observation, part, service_record},
+    entities::{build, incident, part, service_record},
     error::{DomainError, DomainResult},
     inputs::build::{NewBuild, UpdateBuild},
 };
@@ -25,7 +25,7 @@ fn validate_status(status: &str) -> DomainResult<()> {
 /// must be indistinguishable from a nonexistent one.
 ///
 /// Shared guard for sub-resource services (`service_record`, `part`,
-/// `observation`) that accept a `build_id` link.
+/// `incident`) that accept a `build_id` link.
 pub async fn require_owned(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -48,7 +48,7 @@ pub struct BuildProgress {
     pub services_count: usize,
     pub parts_total: usize,
     pub parts_installed: usize,
-    pub observations_count: usize,
+    pub incidents_count: usize,
     /// Sum of linked service records' `total_cost_cents` plus linked parts'
     /// `cost_cents`. Integer cents only (no float math).
     pub total_cost_cents: i64,
@@ -63,7 +63,7 @@ pub struct BuildProgress {
 pub struct LinkedRecords {
     pub service_record_ids: Vec<i32>,
     pub part_ids: Vec<i32>,
-    pub observation_ids: Vec<i32>,
+    pub incident_ids: Vec<i32>,
 }
 
 pub async fn list(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult<Vec<build::Model>> {
@@ -182,12 +182,12 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .filter(part::Column::BuildId.eq(existing.id))
         .exec(&txn)
         .await?;
-    observation::Entity::update_many()
-        .set(observation::ActiveModel {
+    incident::Entity::update_many()
+        .set(incident::ActiveModel {
             build_id: Set(None),
             ..Default::default()
         })
-        .filter(observation::Column::BuildId.eq(existing.id))
+        .filter(incident::Column::BuildId.eq(existing.id))
         .exec(&txn)
         .await?;
 
@@ -216,9 +216,9 @@ pub async fn progress(
         .order_by_asc(part::Column::Id)
         .all(db)
         .await?;
-    let observations = observation::Entity::find()
-        .filter(observation::Column::BuildId.eq(build.id))
-        .order_by_asc(observation::Column::Id)
+    let incidents = incident::Entity::find()
+        .filter(incident::Column::BuildId.eq(build.id))
+        .order_by_asc(incident::Column::Id)
         .all(db)
         .await?;
 
@@ -262,13 +262,13 @@ pub async fn progress(
         services_count: services.len(),
         parts_total: parts.len(),
         parts_installed: parts.iter().filter(|p| p.status == "installed").count(),
-        observations_count: observations.len(),
+        incidents_count: incidents.len(),
         total_cost_cents: services_cost + extra_parts_cost,
         out_of_pocket_cents: self_services_cost + out_of_pocket_extra_parts,
         linked: LinkedRecords {
             service_record_ids: services.iter().map(|s| s.id).collect(),
             part_ids: parts.iter().map(|p| p.id).collect(),
-            observation_ids: observations.iter().map(|o| o.id).collect(),
+            incident_ids: incidents.iter().map(|i| i.id).collect(),
         },
         build,
     })
@@ -279,11 +279,11 @@ mod tests {
     use super::*;
     use crate::{
         inputs::{
-            observation::UpdateObservation,
+            incident::UpdateIncident,
             part::{NewPart, UpdatePart},
             service_record::{NewServiceRecord, UpdateServiceRecord},
         },
-        services::{observation as observation_svc, part as part_svc, service_record as svc_svc},
+        services::{incident as incident_svc, part as part_svc, service_record as svc_svc},
         test_support::test_db,
     };
 
@@ -353,16 +353,12 @@ mod tests {
         }
     }
 
-    fn minimal_observation(build_id: Option<i32>) -> crate::inputs::observation::NewObservation {
-        crate::inputs::observation::NewObservation {
+    fn minimal_incident(build_id: Option<i32>) -> crate::inputs::incident::NewIncident {
+        crate::inputs::incident::NewIncident {
             category: "note".into(),
-            title: "Obs".into(),
-            description: None,
-            odometer: None,
-            observed_at: None,
-            obd_codes: None,
-            notes: None,
+            title: "Inc".into(),
             build_id,
+            ..Default::default()
         }
     }
 
@@ -611,34 +607,34 @@ mod tests {
         .unwrap();
         assert_eq!(cleared.build_id, None);
 
-        // observation
-        let o = observation_svc::create(&db, vid, minimal_observation(None))
+        // incident
+        let o = incident_svc::create(&db, vid, minimal_incident(None))
             .await
             .unwrap();
-        let linked = observation_svc::update(
+        let linked = incident_svc::update(
             &db,
             vid,
-            o.id,
-            UpdateObservation {
+            o.incident.id,
+            UpdateIncident {
                 build_id: Some(Some(b.id)),
                 ..Default::default()
             },
         )
         .await
         .unwrap();
-        assert_eq!(linked.build_id, Some(b.id));
-        let cleared = observation_svc::update(
+        assert_eq!(linked.incident.build_id, Some(b.id));
+        let cleared = incident_svc::update(
             &db,
             vid,
-            o.id,
-            UpdateObservation {
+            o.incident.id,
+            UpdateIncident {
                 build_id: Some(None),
                 ..Default::default()
             },
         )
         .await
         .unwrap();
-        assert_eq!(cleared.build_id, None);
+        assert_eq!(cleared.incident.build_id, None);
     }
 
     #[tokio::test]
@@ -669,7 +665,7 @@ mod tests {
             DomainError::NotFound(_)
         ));
         assert!(matches!(
-            observation_svc::create(&db, owner, minimal_observation(Some(foreign_build.id)))
+            incident_svc::create(&db, owner, minimal_incident(Some(foreign_build.id)))
                 .await
                 .unwrap_err(),
             DomainError::NotFound(_)
@@ -681,7 +677,7 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        assert!(observation_svc::list(&db, owner).await.unwrap().is_empty());
+        assert!(incident_svc::list(&db, owner).await.unwrap().is_empty());
 
         // Updates referencing a foreign build must 404 and mutate nothing.
         let svc = svc_svc::create(&db, owner, minimal_service(None, None))
@@ -690,7 +686,7 @@ mod tests {
         let p = part_svc::create(&db, owner, minimal_part("P", None, None))
             .await
             .unwrap();
-        let o = observation_svc::create(&db, owner, minimal_observation(None))
+        let o = incident_svc::create(&db, owner, minimal_incident(None))
             .await
             .unwrap();
 
@@ -723,11 +719,11 @@ mod tests {
             DomainError::NotFound(_)
         ));
         assert!(matches!(
-            observation_svc::update(
+            incident_svc::update(
                 &db,
                 owner,
-                o.id,
-                UpdateObservation {
+                o.incident.id,
+                UpdateIncident {
                     build_id: Some(Some(foreign_build.id)),
                     ..Default::default()
                 },
@@ -749,9 +745,10 @@ mod tests {
             None
         );
         assert_eq!(
-            observation_svc::get(&db, owner, o.id)
+            incident_svc::get(&db, owner, o.incident.id)
                 .await
                 .unwrap()
+                .incident
                 .build_id,
             None
         );
@@ -776,12 +773,12 @@ mod tests {
         )
         .await
         .unwrap();
-        let o = observation_svc::create(&db, vid, minimal_observation(Some(b.id)))
+        let o = incident_svc::create(&db, vid, minimal_incident(Some(b.id)))
             .await
             .unwrap();
         assert_eq!(svc.record.build_id, Some(b.id));
         assert_eq!(p.build_id, Some(b.id));
-        assert_eq!(o.build_id, Some(b.id));
+        assert_eq!(o.incident.build_id, Some(b.id));
 
         delete(&db, vid, b.id).await.unwrap();
 
@@ -800,7 +797,11 @@ mod tests {
         );
         assert_eq!(part_svc::get(&db, vid, p.id).await.unwrap().build_id, None);
         assert_eq!(
-            observation_svc::get(&db, vid, o.id).await.unwrap().build_id,
+            incident_svc::get(&db, vid, o.incident.id)
+                .await
+                .unwrap()
+                .incident
+                .build_id,
             None
         );
     }
@@ -811,7 +812,7 @@ mod tests {
         let vid = seed_vehicle(&db).await;
         let b = create(&db, vid, new_build("B")).await.unwrap();
 
-        // 2 services with costs, 3 parts (2 installed), 1 observation.
+        // 2 services with costs, 3 parts (2 installed), 1 incident.
         let s1 = svc_svc::create(&db, vid, minimal_service(Some(10_000), Some(b.id)))
             .await
             .unwrap();
@@ -848,7 +849,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let o1 = observation_svc::create(&db, vid, minimal_observation(Some(b.id)))
+        let o1 = incident_svc::create(&db, vid, minimal_incident(Some(b.id)))
             .await
             .unwrap();
 
@@ -865,7 +866,7 @@ mod tests {
         assert_eq!(view.services_count, 2);
         assert_eq!(view.parts_total, 3);
         assert_eq!(view.parts_installed, 2);
-        assert_eq!(view.observations_count, 1);
+        assert_eq!(view.incidents_count, 1);
         // 10_000 + 2_500 service cents; the linked invoices carry no
         // parts_cost_cents, so the full 5_000 + 1_500 part spend is extra.
         assert_eq!(view.total_cost_cents, 19_000);
@@ -874,7 +875,7 @@ mod tests {
             vec![s1.record.id, s2.record.id]
         );
         assert_eq!(view.linked.part_ids, vec![p1.id, p2.id, p3.id]);
-        assert_eq!(view.linked.observation_ids, vec![o1.id]);
+        assert_eq!(view.linked.incident_ids, vec![o1.incident.id]);
     }
 
     #[tokio::test]

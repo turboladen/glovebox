@@ -4,7 +4,7 @@
 //! Each FTS5 table is external-content (index only), so every subquery joins
 //! back to its content table to produce domain-shaped hits: `vehicle_id` is
 //! derived through parents where needed (line item → service record,
-//! correspondence → accident, finding → report), and line-item hits fold into
+//! followup → incident, finding → report), and line-item hits fold into
 //! their parent service record so callers think in domain records, not rows.
 
 use sea_orm::*;
@@ -19,26 +19,26 @@ pub enum SearchScope {
     All,
     Vehicles,
     Services,
-    Observations,
-    Accidents,
+    Incidents,
+    Builds,
     Documents,
     Research,
 }
 
 impl SearchScope {
-    /// Parse the wire form (`all|vehicles|services|observations|accidents|documents|research`).
+    /// Parse the wire form (`all|vehicles|services|incidents|builds|documents|research`).
     pub fn parse(s: &str) -> DomainResult<Self> {
         match s {
             "all" => Ok(Self::All),
             "vehicles" => Ok(Self::Vehicles),
             "services" => Ok(Self::Services),
-            "observations" => Ok(Self::Observations),
-            "accidents" => Ok(Self::Accidents),
+            "incidents" => Ok(Self::Incidents),
+            "builds" => Ok(Self::Builds),
             "documents" => Ok(Self::Documents),
             "research" => Ok(Self::Research),
             other => Err(DomainError::BadRequest(format!(
                 "unknown search scope '{other}' (expected one of: all, vehicles, services, \
-                 observations, accidents, documents, research)"
+                 incidents, builds, documents, research)"
             ))),
         }
     }
@@ -46,8 +46,8 @@ impl SearchScope {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SearchHit {
-    /// Domain record kind: `vehicle`, `service`, `observation`, `accident`,
-    /// `accident_correspondence`, `document`, or `research_finding`.
+    /// Domain record kind: `vehicle`, `service`, `incident`,
+    /// `incident_followup`, `build`, `document`, or `research_finding`.
     pub kind: String,
     pub id: i32,
     pub vehicle_id: Option<i32>,
@@ -164,35 +164,35 @@ pub async fn search(
             filt,
         ));
     }
-    if want(SearchScope::Observations) {
+    if want(SearchScope::Incidents) {
         subs.push(subquery(
-            "observation",
-            "fts_observations",
-            "JOIN observations o ON o.id = fts_observations.rowid",
-            "o.id",
-            "o.vehicle_id",
-            "o.title",
+            "incident",
+            "fts_incidents",
+            "JOIN incidents i ON i.id = fts_incidents.rowid",
+            "i.id",
+            "i.vehicle_id",
+            "i.title",
+            filt,
+        ));
+        subs.push(subquery(
+            "incident_followup",
+            "fts_incident_followups",
+            "JOIN incident_followups f ON f.id = fts_incident_followups.rowid JOIN incidents i ON \
+             i.id = f.incident_id",
+            "f.id",
+            "i.vehicle_id",
+            "f.summary",
             filt,
         ));
     }
-    if want(SearchScope::Accidents) {
+    if want(SearchScope::Builds) {
         subs.push(subquery(
-            "accident",
-            "fts_accidents",
-            "JOIN accidents a ON a.id = fts_accidents.rowid",
-            "a.id",
-            "a.vehicle_id",
-            "a.description",
-            filt,
-        ));
-        subs.push(subquery(
-            "accident_correspondence",
-            "fts_accident_correspondence",
-            "JOIN accident_correspondence c ON c.id = fts_accident_correspondence.rowid JOIN \
-             accidents a ON a.id = c.accident_id",
-            "c.id",
-            "a.vehicle_id",
-            "c.summary",
+            "build",
+            "fts_builds",
+            "JOIN builds b ON b.id = fts_builds.rowid",
+            "b.id",
+            "b.vehicle_id",
+            "b.name",
             filt,
         ));
     }
@@ -332,7 +332,7 @@ mod tests {
             "brake brake brake pads pads brake fluid flush brake",
         )
         .await;
-        entities::observation::ActiveModel {
+        entities::incident::ActiveModel {
             vehicle_id: Set(vid),
             category: Set("noise".into()),
             title: Set("Brake squeal".into()),
@@ -492,10 +492,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn finds_vehicle_observation_accident_and_research() {
+    async fn finds_vehicle_incident_followup_build_and_research() {
         let db = test_db().await;
         let vid = seed_vehicle(&db, "Golf R with unicorn paint").await;
-        entities::observation::ActiveModel {
+        entities::incident::ActiveModel {
             vehicle_id: Set(vid),
             category: Set("noise".into()),
             title: Set("Turbo whistle".into()),
@@ -505,19 +505,30 @@ mod tests {
         .insert(&db)
         .await
         .unwrap();
-        let accident = entities::accident::ActiveModel {
+        let crash = entities::incident::ActiveModel {
             vehicle_id: Set(vid),
+            category: Set("accident".into()),
+            title: Set("rear-ended at a stoplight".into()),
+            description: Set(Some("rear-ended at a stoplight".into())),
             occurred_at: Set("2026-02-01".into()),
-            description: Set("rear-ended at a stoplight".into()),
             ..Default::default()
         }
         .insert(&db)
         .await
         .unwrap();
-        entities::accident_correspondence::ActiveModel {
-            accident_id: Set(accident.id),
+        entities::incident_followup::ActiveModel {
+            incident_id: Set(crash.id),
             occurred_at: Set("2026-02-02".into()),
             summary: Set("Adjuster approved bumper repair".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        entities::build::ActiveModel {
+            vehicle_id: Set(vid),
+            name: Set("Big turbo kilonewton build".into()),
+            description: Set(Some("IS38 swap with methanol injection".into())),
             ..Default::default()
         }
         .insert(&db)
@@ -557,15 +568,23 @@ mod tests {
         let hits = search(&db, "whistle", SearchScope::All, None)
             .await
             .unwrap();
-        assert_kind(&hits, "observation", vid);
+        assert_kind(&hits, "incident", vid);
         let hits = search(&db, "stoplight", SearchScope::All, None)
             .await
             .unwrap();
-        assert_kind(&hits, "accident", vid);
-        let hits = search(&db, "adjuster bumper", SearchScope::Accidents, None)
+        assert_kind(&hits, "incident", vid);
+        let hits = search(&db, "adjuster bumper", SearchScope::Incidents, None)
             .await
             .unwrap();
-        assert_kind(&hits, "accident_correspondence", vid);
+        assert_kind(&hits, "incident_followup", vid);
+        let hits = search(&db, "kilonewton", SearchScope::Builds, None)
+            .await
+            .unwrap();
+        assert_kind(&hits, "build", vid);
+        let hits = search(&db, "methanol", SearchScope::All, None)
+            .await
+            .unwrap();
+        assert_kind(&hits, "build", vid);
         let hits = search(&db, "impeller", SearchScope::Research, None)
             .await
             .unwrap();
@@ -643,13 +662,19 @@ mod tests {
             SearchScope::Services
         );
         assert_eq!(
-            SearchScope::parse("observations").unwrap(),
-            SearchScope::Observations
+            SearchScope::parse("incidents").unwrap(),
+            SearchScope::Incidents
         );
-        assert_eq!(
-            SearchScope::parse("accidents").unwrap(),
-            SearchScope::Accidents
-        );
+        assert_eq!(SearchScope::parse("builds").unwrap(), SearchScope::Builds);
+        for retired in ["observations", "accidents"] {
+            assert!(
+                matches!(
+                    SearchScope::parse(retired).unwrap_err(),
+                    DomainError::BadRequest(_)
+                ),
+                "retired scope '{retired}' must be rejected"
+            );
+        }
         assert_eq!(
             SearchScope::parse("documents").unwrap(),
             SearchScope::Documents

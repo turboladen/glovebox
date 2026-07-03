@@ -8,8 +8,8 @@
 use glovebox_shared::{
     entities::vehicle,
     inputs::{
+        incident::NewIncident,
         mileage::NewMileageEntry,
-        observation::NewObservation,
         part::NewPart,
         service_record::{NewLineItem, NewServiceRecord},
     },
@@ -121,38 +121,73 @@ impl RecordServiceInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
-pub struct LogObservationInput {
+pub struct LogIncidentInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
     /// Short title, e.g. "Squeak from front left on braking".
     pub title: String,
-    /// Longer description of what was noticed.
-    pub description: Option<String>,
-    /// Category, e.g. "noise", "leak", "`warning_light`", "note". Defaults to "note".
+    /// One of: `general`, `noise`, `leak`, `warning_light`, `cosmetic`,
+    /// `performance`, `obd_code`, `damage`, `accident`, `note`. Defaults to
+    /// `general`. Collisions/crashes with another party belong under
+    /// category `accident`.
     pub category: Option<String>,
-    /// Odometer reading when observed.
+    /// Longer description of what happened or was noticed.
+    pub description: Option<String>,
+    /// Odometer reading when it happened.
     pub odometer: Option<i32>,
-    /// When it was observed, `YYYY-MM-DD HH:MM:SS`. Defaults to now.
-    pub observed_at: Option<String>,
+    /// When it happened, `YYYY-MM-DD HH:MM:SS`. Defaults to now.
+    pub occurred_at: Option<String>,
     /// OBD-II codes if a scanner was involved, e.g. "P0301,P0420".
     pub obd_codes: Option<String>,
-    /// Link this observation to a build (from `list_builds`).
+    /// Free-form notes.
+    pub notes: Option<String>,
+    /// Link this incident to a build (from `list_builds`).
     pub build_id: Option<i32>,
+    /// If this is the same problem coming back, the id of the earlier
+    /// incident it recurs from (same vehicle).
+    pub recurrence_of_id: Option<i32>,
 }
 
-impl LogObservationInput {
-    pub fn into_domain(self) -> (i32, NewObservation) {
+impl LogIncidentInput {
+    pub fn into_domain(self) -> (i32, NewIncident) {
         (
             self.vehicle_id,
-            NewObservation {
-                category: self.category.unwrap_or_else(|| "note".to_string()),
+            NewIncident {
+                category: self.category.unwrap_or_else(|| "general".to_string()),
                 title: self.title,
                 description: self.description,
                 odometer: self.odometer,
-                observed_at: self.observed_at,
+                occurred_at: self.occurred_at,
                 obd_codes: self.obd_codes,
-                notes: None,
+                notes: self.notes,
                 build_id: self.build_id,
+                recurrence_of_id: self.recurrence_of_id,
+                ..Default::default()
+            },
+        )
+    }
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct SaveNoteInput {
+    /// Vehicle id, from `list_vehicles`.
+    pub vehicle_id: i32,
+    /// The thing to remember, in plain words.
+    pub note: String,
+}
+
+impl SaveNoteInput {
+    /// Thin alias over `incident::create`: category `note`, title = first 80
+    /// chars of the note, description = the full note.
+    pub fn into_domain(self) -> (i32, NewIncident) {
+        let title: String = self.note.chars().take(80).collect();
+        (
+            self.vehicle_id,
+            NewIncident {
+                category: "note".to_string(),
+                title,
+                description: Some(self.note),
+                ..Default::default()
             },
         )
     }
@@ -269,7 +304,7 @@ pub struct SearchRecordsInput {
     /// Full-text query. Plain words; no special syntax needed.
     pub query: String,
     /// Restrict to one record kind: `all`, `vehicles`, `services`,
-    /// `observations`, `accidents`, `documents`, or `research`. Default `all`.
+    /// `incidents`, `builds`, `documents`, or `research`. Default `all`.
     pub scope: Option<String>,
     /// Restrict to one vehicle (from `list_vehicles`). Omit to search the garage.
     pub vehicle_id: Option<i32>,

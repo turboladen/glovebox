@@ -1,12 +1,11 @@
-pub mod accident;
-pub mod accident_correspondence;
-pub mod accident_service_link;
 pub mod build;
 pub mod document;
+pub mod incident;
+pub mod incident_followup;
+pub mod incident_service_link;
 pub mod maintenance_schedule_item;
 pub mod mileage_log;
 pub mod model_template;
-pub mod observation;
 pub mod part;
 pub mod platform;
 pub mod research_finding;

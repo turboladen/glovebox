@@ -251,7 +251,7 @@ pub async fn update_finding(
 
     // When this update SETS link fields, validate the effective post-update
     // pair: a linked id must point at one of THIS vehicle's records (same
-    // invariant as observation.resolved_service_id / part.installed_service_id
+    // invariant as incident service links / part.installed_service_id
     // — no storing pointers into another vehicle's data), and its type must be
     // a known kind. Unrelated updates (e.g. status-only) skip this so a link
     // whose target was later deleted can't block them.
