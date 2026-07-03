@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
   import { link, push } from '@keenmate/svelte-spa-router'
   import { vehicles as vehiclesApi, reminders as remindersApi, mileage as mileageApi, vehicleExport, research } from '../lib/api'
   import type { Vehicle, RemindersResponse } from '../lib/types'
   import { formatDate } from '../lib/dates'
+  import Dashboard from './Dashboard.svelte'
   import ScheduleTab from './ScheduleTab.svelte'
   import HistoryTab from './HistoryTab.svelte'
   import MileageEntry from './MileageEntry.svelte'
@@ -22,10 +22,18 @@
   let plannedCount = $state(0)
   let loading = $state(true)
   let error = $state('')
-  let activeTab = $state('schedule')
   let showMileageForm = $state(false)
   let showServiceForm = $state(false)
   let showEditForm = $state(false)
+
+  // Tabs are URL-driven (/vehicles/:id/:tab[/:sub]) so dashboard rows,
+  // sidebar entries, and search hits can deep-link into a view.
+  let vehicleId = $derived(parseInt(routeParams.id))
+  let activeTab = $derived(routeParams.tab ?? 'overview')
+
+  function openTab(tab: string) {
+    push(`/vehicles/${vehicleId}${tab === 'overview' ? '' : `/${tab}`}`)
+  }
 
   async function loadData() {
     try {
@@ -45,7 +53,16 @@
     }
   }
 
-  onMount(loadData)
+  // Reload when the sidebar switches vehicles in place (same component,
+  // new :id param).
+  let loadedId: number | null = $state(null)
+  $effect(() => {
+    if (!Number.isNaN(vehicleId) && vehicleId !== loadedId) {
+      loadedId = vehicleId
+      loading = true
+      loadData()
+    }
+  })
 
   async function onMileageAdded() {
     showMileageForm = false
@@ -163,7 +180,7 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
 {:else if vehicle}
   <div class="vehicle-detail">
     <div class="detail-header">
-      <a href="/" use:link class="back-link">← Garage</a>
+      <a href="/" use:link class="back-link">← All vehicles</a>
       <h1>{vehicle.name}</h1>
       {#if vehicle.year || vehicle.make || vehicle.model}
         <p class="vehicle-subtitle">
@@ -227,32 +244,37 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
     {/if}
 
     <div class="tabs">
-      <button class="tab" class:active={activeTab === 'schedule'} onclick={() => (activeTab = 'schedule')}>
+      <button class="tab" class:active={activeTab === 'overview'} onclick={() => openTab('overview')}>
+        Overview
+      </button>
+      <button class="tab" class:active={activeTab === 'schedule'} onclick={() => openTab('schedule')}>
         Schedule
       </button>
-      <button class="tab" class:active={activeTab === 'history'} onclick={() => (activeTab = 'history')}>
+      <button class="tab" class:active={activeTab === 'history'} onclick={() => openTab('history')}>
         History
       </button>
-      <button class="tab" class:active={activeTab === 'parts'} onclick={() => (activeTab = 'parts')}>
+      <button class="tab" class:active={activeTab === 'parts'} onclick={() => openTab('parts')}>
         Parts
       </button>
-      <button class="tab" class:active={activeTab === 'incidents'} onclick={() => (activeTab = 'incidents')}>
+      <button class="tab" class:active={activeTab === 'incidents'} onclick={() => openTab('incidents')}>
         Incidents
       </button>
-      <button class="tab" class:active={activeTab === 'documents'} onclick={() => (activeTab = 'documents')}>
+      <button class="tab" class:active={activeTab === 'documents'} onclick={() => openTab('documents')}>
         Docs
       </button>
-      <button class="tab" class:active={activeTab === 'costs'} onclick={() => (activeTab = 'costs')}>
+      <button class="tab" class:active={activeTab === 'costs'} onclick={() => openTab('costs')}>
         Costs
       </button>
-      <button class="tab" class:active={activeTab === 'research'} onclick={() => (activeTab = 'research')}>
+      <button class="tab" class:active={activeTab === 'research'} onclick={() => openTab('research')}>
         Research{#if plannedCount > 0} <span class="badge badge-planned">{plannedCount}</span>{/if}
       </button>
     </div>
 
     {#key activeTab}
       <div class="tab-content tab-content-enter">
-        {#if activeTab === 'schedule'}
+        {#if activeTab === 'overview'}
+          <Dashboard vehicleId={vehicle.id} />
+        {:else if activeTab === 'schedule'}
           <ScheduleTab {reminderData} vehicleId={vehicle.id} onScheduleChanged={refreshReminders} />
         {:else if activeTab === 'history'}
           <HistoryTab vehicleId={vehicle.id} />

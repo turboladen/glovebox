@@ -69,6 +69,10 @@ pub struct AttentionItem {
     pub label: String,
     pub entity_id: i32,
     pub deep_link_hint: String,
+    /// True when a participating work item already links this source —
+    /// the "plan it" quick action becomes a "planned" marker instead of
+    /// creating a duplicate.
+    pub planned: bool,
 }
 
 /// An open visit with its owning vehicle named for garage-wide display.
@@ -133,6 +137,21 @@ pub async fn garage(db: &DatabaseConnection) -> DomainResult<GarageDashboard> {
         let rems = reminders::calculate_reminders(db, v.id).await?;
         let forecast = budget::forecast_from(db, v.id, &rems).await?;
 
+        // Open (participating) work items: the unscheduled count, plus the
+        // already-planned sets that flip attention rows to "planned".
+        let open_items = work_item::list(db, v.id, false).await?;
+        let unscheduled_work_count = open_items.iter().filter(|i| i.visit_id.is_none()).count();
+        let planned_schedule: std::collections::HashSet<i32> = open_items
+            .iter()
+            .filter_map(|i| i.schedule_item_id)
+            .collect();
+        let planned_findings: std::collections::HashSet<i32> = open_items
+            .iter()
+            .filter_map(|i| i.research_finding_id)
+            .collect();
+        let planned_incidents: std::collections::HashSet<i32> =
+            open_items.iter().filter_map(|i| i.incident_id).collect();
+
         let mut overdue_count = 0;
         let mut due_soon_count = 0;
         for r in &rems.reminders {
@@ -146,6 +165,7 @@ pub async fn garage(db: &DatabaseConnection) -> DomainResult<GarageDashboard> {
                         label: overdue_label(r),
                         entity_id: r.schedule_item.id,
                         deep_link_hint: "plan/due".into(),
+                        planned: planned_schedule.contains(&r.schedule_item.id),
                     });
                 }
                 "upcoming" => {
@@ -157,6 +177,7 @@ pub async fn garage(db: &DatabaseConnection) -> DomainResult<GarageDashboard> {
                         label: due_soon_label(r),
                         entity_id: r.schedule_item.id,
                         deep_link_hint: "plan/due".into(),
+                        planned: planned_schedule.contains(&r.schedule_item.id),
                     });
                 }
                 _ => {}
@@ -177,6 +198,7 @@ pub async fn garage(db: &DatabaseConnection) -> DomainResult<GarageDashboard> {
                 label: f.title.clone(),
                 entity_id: f.id,
                 deep_link_hint: "records/research".into(),
+                planned: planned_findings.contains(&f.id),
             });
         }
 
@@ -195,11 +217,9 @@ pub async fn garage(db: &DatabaseConnection) -> DomainResult<GarageDashboard> {
                 label: i.incident.title.clone(),
                 entity_id: i.incident.id,
                 deep_link_hint: "timeline".into(),
+                planned: planned_incidents.contains(&i.incident.id),
             });
         }
-
-        let open_items = work_item::list(db, v.id, false).await?;
-        let unscheduled_work_count = open_items.iter().filter(|i| i.visit_id.is_none()).count();
 
         for open in visit::list(db, v.id, false).await? {
             upcoming_visits.push(UpcomingVisit {
@@ -416,13 +436,21 @@ mod tests {
         .await
         .unwrap();
 
-        // Golf planning: one unattached item, one item in an open visit.
+        // Golf planning: one unattached item, one item in an open visit
+        // (linked to the incident — its attention row reads as planned).
         work_item_svc::create(&db, golf, work("Wipers", Some(2_500)))
             .await
             .unwrap();
-        let attached = work_item_svc::create(&db, golf, work("Brakes", Some(10_000)))
-            .await
-            .unwrap();
+        let attached = work_item_svc::create(
+            &db,
+            golf,
+            NewWorkItem {
+                incident_id: Some(inc.incident.id),
+                ..work("Brakes", Some(10_000))
+            },
+        )
+        .await
+        .unwrap();
         visit::create(
             &db,
             golf,
@@ -505,6 +533,14 @@ mod tests {
         );
         assert!(d.attention[0].label.contains("Brake fluid flush"));
         assert!(d.attention.iter().all(|a| a.vehicle_name == "Golf"));
+        // Only the incident has a linked open work item → planned.
+        assert_eq!(
+            d.attention
+                .iter()
+                .map(|a| (a.kind.as_str(), a.planned))
+                .collect::<Vec<_>>(),
+            vec![("overdue", false), ("recall", false), ("incident", true)]
+        );
 
         // Upcoming visits: the one open visit, vehicle-labeled, rolled up.
         assert_eq!(d.upcoming_visits.len(), 1);

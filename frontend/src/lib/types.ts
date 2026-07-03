@@ -707,6 +707,8 @@ export interface AttentionItem {
   label: string
   entity_id: number
   deep_link_hint: string
+  // A participating work item already links this source.
+  planned: boolean
 }
 
 // Flattened VisitWithItems + the owning vehicle.

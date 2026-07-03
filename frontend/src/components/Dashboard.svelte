@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { link } from '@keenmate/svelte-spa-router'
-  import { dashboard as dashboardApi } from '../lib/api'
+  import { dashboard as dashboardApi, workItems as workItemsApi } from '../lib/api'
   import { garageDashboard, refreshDashboard } from '../lib/stores'
   import type { ActivityItem, AttentionItem } from '../lib/types'
   import { formatDate } from '../lib/dates'
@@ -64,6 +64,36 @@
     return `/vehicles/${a.vehicle_id}/${a.deep_link_hint}`
   }
 
+  // "Plan it" quick action: put the attention row on the to-do list with
+  // its source linked, so completing the work later closes the loop.
+  let planningKey: string | null = $state(null)
+
+  function rowKey(a: AttentionItem): string {
+    return `${a.kind}-${a.vehicle_id}-${a.entity_id}`
+  }
+
+  function canPlan(a: AttentionItem): boolean {
+    return a.kind === 'overdue' || a.kind === 'due_soon' || a.kind === 'recall'
+  }
+
+  async function planIt(a: AttentionItem) {
+    planningKey = rowKey(a)
+    try {
+      // Labels are built as "Name — status detail"; the name is the title.
+      const title = a.label.split(' — ')[0]
+      await workItemsApi.create(a.vehicle_id, {
+        title,
+        schedule_item_id: a.kind === 'recall' ? undefined : a.entity_id,
+        research_finding_id: a.kind === 'recall' ? a.entity_id : undefined,
+      })
+      await refreshDashboard()
+    } catch (e: any) {
+      error = e.message
+    } finally {
+      planningKey = null
+    }
+  }
+
   function formatDollars(cents: number): string {
     return `$${(cents / 100).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
   }
@@ -116,12 +146,25 @@
       <section class="block attention-block" data-testid="attention-block">
         <h3 class="block-title attention-title">⚠ Needs attention ({attention.length})</h3>
         <div class="block-rows">
-          {#each attention as a (a.kind + '-' + a.vehicle_id + '-' + a.entity_id)}
-            <div class="row">
+          {#each attention as a (rowKey(a))}
+            <div class="row attention-row">
               <a href={attentionTarget(a)} use:link class="row-link">
                 {#if garageScope}<span class="row-vehicle">{a.vehicle_name}</span> ·{/if}
                 {a.label}
               </a>
+              {#if canPlan(a)}
+                {#if a.planned}
+                  <span class="planned-chip">planned</span>
+                {:else}
+                  <button
+                    class="plan-it"
+                    onclick={() => planIt(a)}
+                    disabled={planningKey === rowKey(a)}
+                  >
+                    {planningKey === rowKey(a) ? 'planning…' : 'plan it'}
+                  </button>
+                {/if}
+              {/if}
             </div>
           {/each}
         </div>
@@ -261,6 +304,41 @@
 
   .attention-title {
     color: var(--danger);
+  }
+
+  .attention-row {
+    display: flex;
+    align-items: baseline;
+    gap: var(--sp-2);
+  }
+
+  .plan-it {
+    padding: 0;
+    border: none;
+    background: none;
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--primary);
+    cursor: pointer;
+    text-decoration: underline;
+    white-space: nowrap;
+  }
+
+  .plan-it:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .planned-chip {
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0 var(--sp-1);
+    border-radius: var(--radius-sm);
+    background: var(--success-bg);
+    color: var(--success);
+    border: 1px solid var(--success-border);
   }
 
   .plan-block {
