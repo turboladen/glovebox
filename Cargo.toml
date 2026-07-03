@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["glovebox-shared", "glovebox-backend"]
+members = ["glovebox-shared", "glovebox-backend", "glovebox-mcp"]
 
 [workspace.package]
 edition = "2024"

@@ -252,6 +252,17 @@ async fn main() -> anyhow::Result<()> {
         .nest_service("/files", ServeDir::new(&files_dir))
         .fallback_service(spa_fallback)
         .layer(CorsLayer::permissive())
+        // MCP server (glovebox-mcp): the LLM-facing surface over the same
+        // domain library. Unauthenticated by design, like the rest of the
+        // app — LAN-only deployment posture; see glovebox-mcp's crate docs
+        // before exposing this port beyond the LAN.
+        //
+        // Mounted AFTER the CORS layer on purpose: MCP clients aren't
+        // browsers, so /mcp gains nothing from CORS — and permissive CORS
+        // here would let any web page a LAN user visits drive the tools
+        // from their browser. Without CORS headers, cross-origin
+        // preflights simply fail.
+        .nest_service("/mcp", glovebox_mcp::router(state.db.clone()))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(&listen_addr).await?;
