@@ -34,6 +34,7 @@ pub struct CreatePart {
     pub installed_odometer: Option<i32>,
     pub installed_service_id: Option<i32>,
     pub notes: Option<String>,
+    pub build_id: Option<i32>,
 }
 
 #[derive(Deserialize)]
@@ -74,6 +75,8 @@ pub struct UpdatePart {
     pub replaced_odometer: Option<Option<i32>>,
     #[serde(default, deserialize_with = "deserialize_optional")]
     pub notes: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional")]
+    pub build_id: Option<Option<i32>>,
 }
 
 #[derive(Deserialize)]
@@ -134,6 +137,7 @@ pub async fn create(
             installed_odometer: input.installed_odometer,
             installed_service_id: input.installed_service_id,
             notes: input.notes,
+            build_id: input.build_id,
         },
     )
     .await?;
@@ -169,6 +173,7 @@ pub async fn update(
             replaced_date: input.replaced_date,
             replaced_odometer: input.replaced_odometer,
             notes: input.notes,
+            build_id: input.build_id,
         },
     )
     .await?;

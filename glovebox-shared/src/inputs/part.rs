@@ -16,6 +16,7 @@ pub struct NewPart {
     pub installed_odometer: Option<i32>,
     pub installed_service_id: Option<i32>,
     pub notes: Option<String>,
+    pub build_id: Option<i32>,
 }
 
 #[derive(Default)]
@@ -39,6 +40,7 @@ pub struct UpdatePart {
     pub replaced_date: Option<Option<String>>,
     pub replaced_odometer: Option<Option<i32>>,
     pub notes: Option<Option<String>>,
+    pub build_id: Option<Option<i32>>,
 }
 
 /// Filter for listing parts within a vehicle.

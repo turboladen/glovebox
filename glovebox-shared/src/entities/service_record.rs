@@ -21,6 +21,7 @@ pub struct Model {
     pub created_at: String,
     pub updated_at: String,
     pub shop_id: Option<i32>,
+    pub build_id: Option<i32>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -37,8 +38,20 @@ pub enum Relation {
         to = "super::shop::Column::Id"
     )]
     Shop,
+    #[sea_orm(
+        belongs_to = "super::build::Entity",
+        from = "Column::BuildId",
+        to = "super::build::Column::Id"
+    )]
+    Build,
     #[sea_orm(has_many = "super::service_record_line_item::Entity")]
     LineItems,
+}
+
+impl Related<super::build::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Build.def()
+    }
 }
 
 impl Related<super::shop::Entity> for Entity {

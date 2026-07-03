@@ -1,6 +1,7 @@
 pub mod accident;
 pub mod ai;
 pub mod ai_ops;
+pub mod build;
 pub mod conversation;
 pub mod costs;
 pub mod document;

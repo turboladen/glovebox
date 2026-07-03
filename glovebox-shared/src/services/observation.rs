@@ -34,6 +34,10 @@ pub async fn create(
     vehicle_id: i32,
     input: NewObservation,
 ) -> DomainResult<observation::Model> {
+    if let Some(build_id) = input.build_id {
+        crate::services::build::require_owned(db, vehicle_id, build_id).await?;
+    }
+
     let mut model = observation::ActiveModel {
         vehicle_id: Set(vehicle_id),
         category: Set(input.category),
@@ -42,6 +46,7 @@ pub async fn create(
         odometer: Set(input.odometer),
         obd_codes: Set(input.obd_codes),
         notes: Set(input.notes),
+        build_id: Set(input.build_id),
         ..Default::default()
     };
 
@@ -72,6 +77,12 @@ pub async fn update(
             })?;
     }
 
+    // A linked build must belong to the same vehicle; a cross-vehicle build
+    // must be indistinguishable from a nonexistent one.
+    if let Some(Some(build_id)) = input.build_id {
+        crate::services::build::require_owned(db, vehicle_id, build_id).await?;
+    }
+
     let mut active: observation::ActiveModel = existing.into();
 
     if let Some(v) = input.category {
@@ -100,6 +111,9 @@ pub async fn update(
     }
     if let Some(v) = input.notes {
         active.notes = Set(v);
+    }
+    if let Some(v) = input.build_id {
+        active.build_id = Set(v);
     }
 
     active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
@@ -138,6 +152,7 @@ mod tests {
                 observed_at: None,
                 obd_codes: None,
                 notes: None,
+                build_id: None,
             },
         )
         .await
@@ -162,6 +177,7 @@ mod tests {
                 observed_at: None,
                 obd_codes: None,
                 notes: None,
+                build_id: None,
             },
         )
         .await
@@ -217,6 +233,7 @@ mod tests {
                 observed_at: None,
                 obd_codes: None,
                 notes: None,
+                build_id: None,
             },
         )
         .await
@@ -259,6 +276,7 @@ mod tests {
                 observed_at: None,
                 obd_codes: None,
                 notes: None,
+                build_id: None,
             },
         )
         .await

@@ -62,6 +62,14 @@ pub enum Relation {
     Part,
     #[sea_orm(has_many = "super::research_report::Entity")]
     ResearchReport,
+    #[sea_orm(has_many = "super::build::Entity")]
+    Build,
+}
+
+impl Related<super::build::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Build.def()
+    }
 }
 
 impl Related<super::model_template::Entity> for Entity {

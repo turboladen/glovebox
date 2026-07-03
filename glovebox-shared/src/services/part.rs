@@ -72,6 +72,9 @@ pub async fn create(
     if let Some(service_id) = input.installed_service_id {
         require_service_record_owned(db, vehicle_id, service_id).await?;
     }
+    if let Some(build_id) = input.build_id {
+        crate::services::build::require_owned(db, vehicle_id, build_id).await?;
+    }
 
     let model = part::ActiveModel {
         vehicle_id: Set(vehicle_id),
@@ -92,6 +95,7 @@ pub async fn create(
         installed_odometer: Set(input.installed_odometer),
         installed_service_id: Set(input.installed_service_id),
         notes: Set(input.notes),
+        build_id: Set(input.build_id),
         ..Default::default()
     };
     Ok(model.insert(db).await?)
@@ -110,6 +114,9 @@ pub async fn update(
     }
     if let Some(Some(service_id)) = input.installed_service_id {
         require_service_record_owned(db, vehicle_id, service_id).await?;
+    }
+    if let Some(Some(build_id)) = input.build_id {
+        crate::services::build::require_owned(db, vehicle_id, build_id).await?;
     }
 
     let mut active: part::ActiveModel = existing.into();
@@ -171,6 +178,9 @@ pub async fn update(
     if let Some(v) = input.notes {
         active.notes = Set(v);
     }
+    if let Some(v) = input.build_id {
+        active.build_id = Set(v);
+    }
 
     active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
     Ok(active.update(db).await?)
@@ -224,6 +234,7 @@ mod tests {
                 installed_odometer: None,
                 installed_service_id: None,
                 notes: None,
+                build_id: None,
             },
         )
         .await
@@ -286,6 +297,7 @@ mod tests {
                 installed_odometer: None,
                 installed_service_id: Some(svc_id),
                 notes: None,
+                build_id: None,
             },
         )
         .await
@@ -341,6 +353,7 @@ mod tests {
             installed_odometer: None,
             installed_service_id,
             notes: None,
+            build_id: None,
         }
     }
 
@@ -443,6 +456,7 @@ mod tests {
                 installed_odometer: None,
                 installed_service_id: None,
                 notes: None,
+                build_id: None,
             },
         )
         .await
@@ -468,6 +482,7 @@ mod tests {
                 installed_odometer: None,
                 installed_service_id: None,
                 notes: None,
+                build_id: None,
             },
         )
         .await
