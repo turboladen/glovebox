@@ -249,6 +249,11 @@ async fn main() -> anyhow::Result<()> {
             "/api/documents/{id}",
             get(api::documents::get_one).delete(api::documents::delete),
         )
+        // MCP server (glovebox-mcp): the LLM-facing surface over the same
+        // domain library. Unauthenticated by design, like the rest of the
+        // app — LAN-only deployment posture; see glovebox-mcp's crate docs
+        // before exposing this port beyond the LAN.
+        .nest_service("/mcp", glovebox_mcp::router(state.db.clone()))
         .nest_service("/files", ServeDir::new(&files_dir))
         .fallback_service(spa_fallback)
         .layer(CorsLayer::permissive())

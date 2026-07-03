@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 glovebox-shared = { path = "../glovebox-shared" }
+glovebox-mcp = { path = "../glovebox-mcp" }
 axum = { version = "0.8", features = ["multipart"] }
 tokio.workspace = true
 sea-orm.workspace = true
