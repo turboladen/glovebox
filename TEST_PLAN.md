@@ -174,11 +174,13 @@ Playwright e2e tests. Keep it updated as features are added.
 | 3 | Add incident (fill title, category) | Form submits, incident appears in list |
 | 4 | Incident shows category badge and date | Category in uppercase, date formatted |
 | 5 | OBD code category shows code input | Extra field for JSON array of codes |
-| 6 | Category `accident` reveals accident fieldset | Other-party + insurance claim fields shown; values render on the expanded card |
-| 7 | "Mark Resolved" button on expanded card | Toggles resolved state, card becomes dimmed; "Reopen" reverts |
+| 6 | Category `accident` reveals accident fieldset | Other-party (name/phone/email/insurance/policy) + insurance claim fields shown; values render on the expanded card |
+| 7 | "Mark Resolved" button on expanded card | Shows a service picker: pick a service to resolve + link in one step, or "Resolve without service"; card becomes dimmed; "Reopen" reverts |
 | 8 | Add followup to an expanded incident | Followup entry appears with date, method, and summary |
 | 9 | Incidents appear in History tab | Interleaved with services, tagged "Incident" |
 | 10 | Category filter chips | Filter the list to one category |
+| 11 | Edit accident: financial fields (repair cost, deductible, payout in dollars) | Stored as cents; expanded card's detail grid shows the amounts |
+| 12 | "Link Service" select in the create/edit form | Appends the chosen service to the incident's links; "Services:" chips on the card and "Incidents:" chips in History reflect it |
 
 ## TP-15: Documents & Upload
 

@@ -4,7 +4,7 @@
   // Unit F's Timeline is the real navigation home for incidents.
   import { onMount } from 'svelte'
   import { incidents as incidentsApi, services as servicesApi } from '../lib/api'
-  import type { IncidentWithDetails, ServiceRecordWithLinks } from '../lib/types'
+  import type { IncidentWithDetails, ServiceRecordWithLinks, UpdateIncident } from '../lib/types'
   import { formatDate } from '../lib/dates'
 
   let { vehicleId, estimatedMileage }: { vehicleId: number; estimatedMileage?: number } = $props()
@@ -43,10 +43,21 @@
   let fault = $state('')
   let otherPartyName = $state('')
   let otherPartyPhone = $state('')
+  let otherPartyEmail = $state('')
   let otherPartyInsurance = $state('')
+  let otherPartyPolicy = $state('')
   let claimNumber = $state('')
   let adjuster = $state('')
   let adjusterPhone = $state('')
+  // Financial fields (dollars as strings; edit-only, matching old AccidentsTab)
+  let repairCost = $state('')
+  let deductible = $state('')
+  let payout = $state('')
+  // Service linking: sending service_record_ids REPLACES the set server-side,
+  // so the form appends the selected service to the links captured at edit time.
+  let existingServiceLinks: number[] = $state([])
+  let linkServiceId = $state<number | ''>('')
+  let resolvingId: number | null = $state(null)
 
   const faultOptions = ['', 'at_fault', 'not_at_fault', 'shared', 'unknown']
 
@@ -98,7 +109,10 @@
     occurredAt = new Date().toISOString().slice(0, 10)
     odometer = estimatedMileage; odometerTouched = false
     fault = ''; otherPartyName = ''; otherPartyPhone = ''; otherPartyInsurance = ''
+    otherPartyEmail = ''; otherPartyPolicy = ''
     claimNumber = ''; adjuster = ''; adjusterPhone = ''
+    repairCost = ''; deductible = ''; payout = ''
+    existingServiceLinks = []; linkServiceId = ''
     formError = ''
     showForm = false
   }
@@ -121,10 +135,17 @@
     fault = inc.fault ?? ''
     otherPartyName = inc.other_party_name ?? ''
     otherPartyPhone = inc.other_party_phone ?? ''
+    otherPartyEmail = inc.other_party_email ?? ''
     otherPartyInsurance = inc.other_party_insurance ?? ''
+    otherPartyPolicy = inc.other_party_policy_number ?? ''
     claimNumber = inc.insurance_claim_number ?? ''
     adjuster = inc.insurance_adjuster ?? ''
     adjusterPhone = inc.insurance_adjuster_phone ?? ''
+    repairCost = inc.total_repair_cost_cents !== null ? (inc.total_repair_cost_cents / 100).toFixed(2) : ''
+    deductible = inc.deductible_cents !== null ? (inc.deductible_cents / 100).toFixed(2) : ''
+    payout = inc.insurance_payout_cents !== null ? (inc.insurance_payout_cents / 100).toFixed(2) : ''
+    existingServiceLinks = [...inc.service_record_ids]
+    linkServiceId = ''
     formError = ''
     showForm = true
   }
@@ -133,6 +154,9 @@
     if (!title.trim()) { formError = 'Title is required'; return }
     saving = true
     formError = ''
+    // Full replacement set: existing links (captured at edit time) plus the
+    // optional newly-selected service.
+    const linkedIds = [...new Set([...existingServiceLinks, ...(linkServiceId !== '' ? [linkServiceId] : [])])]
     try {
       if (editingId) {
         await incidentsApi.update(vehicleId, editingId, {
@@ -146,10 +170,16 @@
           fault: fault || null,
           other_party_name: otherPartyName || null,
           other_party_phone: otherPartyPhone || null,
+          other_party_email: otherPartyEmail || null,
           other_party_insurance: otherPartyInsurance || null,
+          other_party_policy_number: otherPartyPolicy || null,
           insurance_claim_number: claimNumber || null,
           insurance_adjuster: adjuster || null,
           insurance_adjuster_phone: adjusterPhone || null,
+          total_repair_cost_cents: repairCost ? Math.round(parseFloat(repairCost) * 100) : null,
+          deductible_cents: deductible ? Math.round(parseFloat(deductible) * 100) : null,
+          insurance_payout_cents: payout ? Math.round(parseFloat(payout) * 100) : null,
+          service_record_ids: linkedIds,
         })
       } else {
         await incidentsApi.create(vehicleId, {
@@ -163,10 +193,13 @@
           fault: fault || undefined,
           other_party_name: otherPartyName || undefined,
           other_party_phone: otherPartyPhone || undefined,
+          other_party_email: otherPartyEmail || undefined,
           other_party_insurance: otherPartyInsurance || undefined,
+          other_party_policy_number: otherPartyPolicy || undefined,
           insurance_claim_number: claimNumber || undefined,
           insurance_adjuster: adjuster || undefined,
           insurance_adjuster_phone: adjusterPhone || undefined,
+          service_record_ids: linkedIds.length > 0 ? linkedIds : undefined,
         })
       }
       resetForm()
@@ -180,6 +213,17 @@
 
   async function toggleResolved(inc: IncidentWithDetails) {
     await incidentsApi.update(vehicleId, inc.id, { resolved: !inc.resolved })
+    await loadData()
+  }
+
+  // Resolve, optionally linking a service at the same time (old ObservationsTab UX).
+  async function resolveWith(inc: IncidentWithDetails, serviceId: number | null) {
+    const payload: UpdateIncident = { resolved: true }
+    if (serviceId !== null) {
+      payload.service_record_ids = [...new Set([...inc.service_record_ids, serviceId])]
+    }
+    await incidentsApi.update(vehicleId, inc.id, payload)
+    resolvingId = null
     await loadData()
   }
 
@@ -285,15 +329,23 @@
             </div>
             <div class="form-row">
               <div class="field">
+                <label for="inc-op-email">Other Party Email</label>
+                <input id="inc-op-email" type="email" bind:value={otherPartyEmail} />
+              </div>
+              <div class="field">
                 <label for="inc-op-ins">Other Party Insurance</label>
                 <input id="inc-op-ins" type="text" bind:value={otherPartyInsurance} />
               </div>
               <div class="field">
-                <label for="inc-claim">Claim Number</label>
-                <input id="inc-claim" type="text" bind:value={claimNumber} />
+                <label for="inc-op-policy">Policy Number</label>
+                <input id="inc-op-policy" type="text" bind:value={otherPartyPolicy} />
               </div>
             </div>
             <div class="form-row">
+              <div class="field">
+                <label for="inc-claim">Claim Number</label>
+                <input id="inc-claim" type="text" bind:value={claimNumber} />
+              </div>
               <div class="field">
                 <label for="inc-adjuster">Adjuster</label>
                 <input id="inc-adjuster" type="text" bind:value={adjuster} />
@@ -303,7 +355,37 @@
                 <input id="inc-adjuster-phone" type="tel" bind:value={adjusterPhone} />
               </div>
             </div>
+            {#if editingId}
+              <div class="form-row">
+                <div class="field">
+                  <label for="inc-repair-cost">Total Repair Cost ($)</label>
+                  <input id="inc-repair-cost" type="number" step="0.01" min="0" bind:value={repairCost} />
+                </div>
+                <div class="field">
+                  <label for="inc-deductible">Deductible ($)</label>
+                  <input id="inc-deductible" type="number" step="0.01" min="0" bind:value={deductible} />
+                </div>
+                <div class="field">
+                  <label for="inc-payout">Insurance Payout ($)</label>
+                  <input id="inc-payout" type="number" step="0.01" min="0" bind:value={payout} />
+                </div>
+              </div>
+            {/if}
           </fieldset>
+        {/if}
+        {#if serviceRecords.length > 0}
+          <div class="field">
+            <label for="inc-link-svc">Link Service</label>
+            <select id="inc-link-svc" bind:value={linkServiceId}>
+              <option value="">-- No service --</option>
+              {#each serviceRecords as svc (svc.id)}
+                <option value={svc.id}>{formatDate(svc.service_date)} — {svc.description || 'Service'}</option>
+              {/each}
+            </select>
+            {#if existingServiceLinks.length > 0}
+              <p class="link-hint">Already linked: {existingServiceLinks.map(serviceLabel).join(', ')}. Selecting a service adds to these links.</p>
+            {/if}
+          </div>
         {/if}
         <div class="field">
           <label for="inc-notes">Notes</label>
@@ -360,9 +442,27 @@
             <div class="inc-details">
               <div class="detail-actions">
                 <button class="btn btn-sm btn-secondary" onclick={() => startEdit(inc)}>Edit</button>
-                <button class="btn btn-sm btn-secondary" onclick={() => toggleResolved(inc)}>
-                  {inc.resolved ? 'Reopen' : 'Mark Resolved'}
-                </button>
+                {#if inc.resolved}
+                  <button class="btn btn-sm btn-secondary" onclick={() => toggleResolved(inc)}>Reopen</button>
+                {:else if resolvingId === inc.id}
+                  <select
+                    class="resolve-select"
+                    aria-label="Link to a service"
+                    onchange={(e) => {
+                      const val = (e.target as HTMLSelectElement).value
+                      resolveWith(inc, val === '' ? null : parseInt(val))
+                    }}
+                  >
+                    <option value="" disabled selected>Link to a service...</option>
+                    <option value="">Resolve without service</option>
+                    {#each serviceRecords as svc (svc.id)}
+                      <option value={svc.id}>{formatDate(svc.service_date)} — {svc.description || 'Service'}</option>
+                    {/each}
+                  </select>
+                  <button class="btn btn-sm btn-secondary" onclick={() => (resolvingId = null)}>Cancel</button>
+                {:else}
+                  <button class="btn btn-sm btn-secondary" onclick={() => (resolvingId = inc.id)}>Mark Resolved</button>
+                {/if}
               </div>
 
               {#if inc.description || inc.notes}
@@ -579,8 +679,18 @@
 
   .detail-actions {
     display: flex;
+    align-items: center;
     gap: var(--sp-2);
     margin: var(--sp-3) 0;
+    flex-wrap: wrap;
+  }
+
+  .resolve-select { font-size: 0.85rem; max-width: 320px; }
+
+  .link-hint {
+    margin: var(--sp-1) 0 0;
+    font-size: 0.75rem;
+    color: var(--text-muted);
   }
 
   .detail-grid {

@@ -80,10 +80,72 @@ test.describe('Incidents', () => {
 
     await page.getByText('Resolve toggle incident').click()
     await page.getByRole('button', { name: 'Mark Resolved' }).click()
+    // Resolving now offers an optional service link; decline it.
+    await page.getByLabel('Link to a service').selectOption({ label: 'Resolve without service' })
     await expect(page.getByRole('button', { name: 'Reopen' })).toBeVisible()
 
     await page.getByRole('button', { name: 'Reopen' }).click()
     await expect(page.getByRole('button', { name: 'Mark Resolved' })).toBeVisible()
+  })
+
+  test('resolving with a service links it and surfaces chips', async ({ page }) => {
+    await page.goto(vehicleUrl)
+    // Create a service record to link against.
+    await page.getByRole('button', { name: 'Log Service' }).click()
+    await page.getByLabel('Description').fill('Brake pad replacement')
+    await page.getByRole('button', { name: 'Save Service' }).click()
+    await expect(page.getByLabel('Description')).not.toBeVisible()
+
+    await page.getByRole('button', { name: 'Incidents' }).click()
+    await page.getByRole('button', { name: '+ Add Incident' }).click()
+    await page.getByLabel('Title').fill('Grinding when braking')
+    await page.getByRole('button', { name: 'Save' }).click()
+    await expect(page.getByText('Grinding when braking')).toBeVisible()
+
+    // Resolve via the picker, choosing the service.
+    await page.getByText('Grinding when braking').click()
+    await page.getByRole('button', { name: 'Mark Resolved' }).click()
+    const picker = page.getByLabel('Link to a service')
+    const optionValue = await picker
+      .locator('option', { hasText: 'Brake pad replacement' })
+      .getAttribute('value')
+    await picker.selectOption(optionValue!)
+
+    // The incident card shows the linked service chip.
+    await expect(page.getByRole('button', { name: 'Reopen' })).toBeVisible()
+    await expect(page.getByText('Services:', { exact: true })).toBeVisible()
+    await expect(page.locator('.linked-chip').filter({ hasText: 'Brake pad replacement' })).toBeVisible()
+
+    // The History tab derives its "Incidents:" chips from the same links.
+    await page.getByRole('button', { name: 'History', exact: true }).click()
+    await expect(page.getByText('Incidents:', { exact: true })).toBeVisible()
+    await expect(page.locator('.linked-chip').filter({ hasText: 'Grinding when braking' })).toBeVisible()
+  })
+
+  test('editing an accident records insurance costs', async ({ page }) => {
+    await page.goto(vehicleUrl)
+    await page.getByRole('button', { name: 'Incidents' }).click()
+    await page.getByRole('button', { name: '+ Add Incident' }).click()
+    await page.getByLabel('Category').selectOption('accident')
+    await page.getByLabel('Title').fill('Hail damage claim')
+    // Financial fields are edit-only (matching the old AccidentsTab).
+    await expect(page.getByLabel('Total Repair Cost ($)')).not.toBeVisible()
+    await page.getByRole('button', { name: 'Save' }).click()
+    await expect(page.getByText('Hail damage claim')).toBeVisible()
+
+    await page.getByText('Hail damage claim').click()
+    // Scope to the expanded card: the vehicle header also has an "Edit" button.
+    await page.locator('.detail-actions').getByRole('button', { name: 'Edit' }).click()
+    await page.getByLabel('Total Repair Cost ($)').fill('2500')
+    await page.getByLabel('Deductible ($)').fill('500')
+    await page.getByLabel('Insurance Payout ($)').fill('2000')
+    await page.getByRole('button', { name: 'Update', exact: true }).click()
+
+    // The still-expanded detail grid shows the amounts.
+    await expect(page.getByText('Repair Cost')).toBeVisible()
+    await expect(page.getByText('$2500.00')).toBeVisible()
+    await expect(page.getByText('$500.00')).toBeVisible()
+    await expect(page.getByText('$2000.00')).toBeVisible()
   })
 
   test('incident appears in history tab', async ({ page }) => {
