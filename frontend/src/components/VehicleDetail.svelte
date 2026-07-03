@@ -5,10 +5,9 @@
   import { formatDate } from '../lib/dates'
   import Dashboard from './Dashboard.svelte'
   import ScheduleTab from './ScheduleTab.svelte'
-  import HistoryTab from './HistoryTab.svelte'
+  import TimelineTab from './TimelineTab.svelte'
   import MileageEntry from './MileageEntry.svelte'
   import ServiceForm from './ServiceForm.svelte'
-  import IncidentsTab from './IncidentsTab.svelte'
   import DocumentsTab from './DocumentsTab.svelte'
   import PartsTab from './PartsTab.svelte'
   import CostsTab from './CostsTab.svelte'
@@ -247,17 +246,14 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
       <button class="tab" class:active={activeTab === 'overview'} onclick={() => openTab('overview')}>
         Overview
       </button>
+      <button class="tab" class:active={activeTab === 'timeline'} onclick={() => openTab('timeline')}>
+        Timeline
+      </button>
       <button class="tab" class:active={activeTab === 'schedule'} onclick={() => openTab('schedule')}>
         Schedule
       </button>
-      <button class="tab" class:active={activeTab === 'history'} onclick={() => openTab('history')}>
-        History
-      </button>
       <button class="tab" class:active={activeTab === 'parts'} onclick={() => openTab('parts')}>
         Parts
-      </button>
-      <button class="tab" class:active={activeTab === 'incidents'} onclick={() => openTab('incidents')}>
-        Incidents
       </button>
       <button class="tab" class:active={activeTab === 'documents'} onclick={() => openTab('documents')}>
         Docs
@@ -274,14 +270,12 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
       <div class="tab-content tab-content-enter">
         {#if activeTab === 'overview'}
           <Dashboard vehicleId={vehicle.id} />
+        {:else if activeTab === 'timeline'}
+          <TimelineTab vehicleId={vehicle.id} estimatedMileage={reminderData?.estimated_mileage} onChanged={refreshReminders} />
         {:else if activeTab === 'schedule'}
           <ScheduleTab {reminderData} vehicleId={vehicle.id} onScheduleChanged={refreshReminders} />
-        {:else if activeTab === 'history'}
-          <HistoryTab vehicleId={vehicle.id} />
         {:else if activeTab === 'parts'}
           <PartsTab vehicleId={vehicle.id} />
-        {:else if activeTab === 'incidents'}
-          <IncidentsTab vehicleId={vehicle.id} estimatedMileage={reminderData?.estimated_mileage} />
         {:else if activeTab === 'documents'}
           <DocumentsTab vehicleId={vehicle.id} />
         {:else if activeTab === 'costs'}

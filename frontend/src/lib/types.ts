@@ -83,6 +83,9 @@ export interface MileageEntry {
   recorded_at: string
   source: string | null
   notes: string | null
+  // Set on logs auto-created by a service record (that service already
+  // shows the reading — exclude these from merged timelines).
+  service_record_id: number | null
   created_at: string
 }
 
