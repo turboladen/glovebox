@@ -94,6 +94,10 @@ pub async fn suggestions(
     vehicle_id: i32,
     provider_id: Option<i32>,
 ) -> DomainResult<Vec<AiSuggestion>> {
+    // Verify the vehicle exists before doing anything else — the handler layer
+    // does not pre-check, and MCP callers hit this fn directly.
+    crate::services::vehicle::require(db, vehicle_id).await?;
+
     let provider = registry
         .resolve(provider_id)
         .await
@@ -258,12 +262,9 @@ pub async fn chat(
     config: &AppConfig,
     input: ChatInput,
 ) -> DomainResult<ChatResult> {
-    let provider = registry
-        .resolve(input.provider_id)
-        .await
-        .map_err(|e| DomainError::BadRequest(e.to_string()))?;
-
-    // Verify conversation exists and belongs to the specified vehicle
+    // Verify the conversation exists and belongs to the claimed vehicle BEFORE
+    // anything else. A wrong-vehicle conversation must be indistinguishable
+    // from a nonexistent one (no ownership oracle).
     let convo_check = conversation::Entity::find_by_id(input.conversation_id)
         .one(db)
         .await?
@@ -271,10 +272,16 @@ pub async fn chat(
             DomainError::NotFound(format!("Conversation {} not found", input.conversation_id))
         })?;
     if convo_check.vehicle_id != input.vehicle_id {
-        return Err(DomainError::BadRequest(
-            "Conversation does not belong to the specified vehicle".to_string(),
-        ));
+        return Err(DomainError::NotFound(format!(
+            "Conversation {} not found",
+            input.conversation_id
+        )));
     }
+
+    let provider = registry
+        .resolve(input.provider_id)
+        .await
+        .map_err(|e| DomainError::BadRequest(e.to_string()))?;
 
     // Build vehicle context if vehicle_id is provided
     let preamble = context::GLOVEBOX_PREAMBLE;
@@ -746,6 +753,77 @@ mod tests {
         assert_eq!(parsed.line_items[1].category.as_deref(), Some("labor"));
         assert!(parsed.line_items[1].quantity.is_none());
         assert_eq!(parsed.line_items[2].category.as_deref(), Some("fee"));
+    }
+
+    #[tokio::test]
+    async fn suggestions_missing_vehicle_is_not_found() {
+        use crate::test_support::test_db;
+        let db = test_db().await;
+        let registry = AiProviderRegistry::new(db.clone());
+
+        // The vehicle check must fire before provider resolution, so this 404s
+        // even with no AI provider configured.
+        assert!(matches!(
+            suggestions(&db, &registry, 999, None).await.unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn chat_wrong_vehicle_conversation_is_not_found() {
+        use crate::test_support::test_db;
+        let db = test_db().await;
+        let registry = AiProviderRegistry::new(db.clone());
+        let config = AppConfig {
+            db_path: "unused".into(),
+            listen: "unused".into(),
+            files_dir: "unused".into(),
+        };
+
+        use crate::entities::vehicle;
+        let owner = vehicle::ActiveModel {
+            name: Set("A".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap()
+        .id;
+        let other = vehicle::ActiveModel {
+            name: Set("B".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap()
+        .id;
+        let convo = crate::services::conversation::create(&db, owner, None)
+            .await
+            .unwrap();
+
+        // Chatting into another vehicle's conversation must be indistinguishable
+        // from a nonexistent conversation (NotFound, not a BadRequest oracle).
+        let err = chat(
+            &db,
+            &registry,
+            &config,
+            ChatInput {
+                vehicle_id: Some(other),
+                conversation_id: convo.id,
+                message: "hi".into(),
+                provider_id: None,
+                document_id: None,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::NotFound(_)));
+
+        // No message was persisted to the conversation.
+        let msgs = crate::services::conversation::messages(&db, owner, convo.id)
+            .await
+            .unwrap();
+        assert!(msgs.is_empty());
     }
 
     #[tokio::test]

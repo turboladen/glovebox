@@ -2,10 +2,50 @@ use sea_orm::*;
 use serde::Serialize;
 
 use crate::{
-    entities::{accident, accident_correspondence, accident_service_link},
+    entities::{accident, accident_correspondence, accident_service_link, service_record},
     error::{DomainError, DomainResult},
     inputs::accident::{NewAccident, NewCorrespondence, UpdateAccident},
 };
+
+/// Fetch an accident scoped to its owning vehicle. A wrong-vehicle lookup is
+/// indistinguishable from a nonexistent accident.
+async fn require_accident(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    id: i32,
+) -> DomainResult<accident::Model> {
+    accident::Entity::find_by_id(id)
+        .filter(accident::Column::VehicleId.eq(vehicle_id))
+        .one(db)
+        .await?
+        .ok_or_else(|| DomainError::NotFound(format!("Accident {id} not found")))
+}
+
+/// Verify every referenced service record belongs to the vehicle. Cross-vehicle
+/// references must be indistinguishable from nonexistent records.
+async fn require_service_records_owned(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    service_record_ids: &[i32],
+) -> DomainResult<()> {
+    if service_record_ids.is_empty() {
+        return Ok(());
+    }
+    let owned: std::collections::HashSet<i32> = service_record::Entity::find()
+        .filter(service_record::Column::Id.is_in(service_record_ids.to_vec()))
+        .filter(service_record::Column::VehicleId.eq(vehicle_id))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|s| s.id)
+        .collect();
+    if let Some(missing) = service_record_ids.iter().find(|id| !owned.contains(id)) {
+        return Err(DomainError::NotFound(format!(
+            "Service record {missing} not found"
+        )));
+    }
+    Ok(())
+}
 
 #[derive(Debug, Serialize)]
 pub struct AccidentWithDetails {
@@ -96,11 +136,7 @@ pub async fn get(
     vehicle_id: i32,
     id: i32,
 ) -> DomainResult<AccidentWithDetails> {
-    let acc = accident::Entity::find_by_id(id)
-        .filter(accident::Column::VehicleId.eq(vehicle_id))
-        .one(db)
-        .await?
-        .ok_or_else(|| DomainError::NotFound(format!("Accident {id} not found")))?;
+    let acc = require_accident(db, vehicle_id, id).await?;
 
     let (correspondence, service_record_ids) = load_accident_details(db, acc.id).await?;
 
@@ -116,6 +152,9 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     vehicle_id: i32,
     input: NewAccident,
 ) -> DomainResult<AccidentWithDetails> {
+    let service_record_ids = input.service_record_ids.unwrap_or_default();
+    require_service_records_owned(db, vehicle_id, &service_record_ids).await?;
+
     let txn = db.begin().await?;
 
     let model = accident::ActiveModel {
@@ -137,7 +176,6 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     };
     let acc = model.insert(&txn).await?;
 
-    let service_record_ids = input.service_record_ids.unwrap_or_default();
     for sid in &service_record_ids {
         let link = accident_service_link::ActiveModel {
             accident_id: Set(acc.id),
@@ -162,11 +200,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     id: i32,
     input: UpdateAccident,
 ) -> DomainResult<AccidentWithDetails> {
-    let existing = accident::Entity::find_by_id(id)
-        .filter(accident::Column::VehicleId.eq(vehicle_id))
-        .one(db)
-        .await?
-        .ok_or_else(|| DomainError::NotFound(format!("Accident {id} not found")))?;
+    let existing = require_accident(db, vehicle_id, id).await?;
 
     let txn = db.begin().await?;
 
@@ -238,6 +272,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     let acc = active.update(&txn).await?;
 
     let service_record_ids = if let Some(sids) = input.service_record_ids {
+        require_service_records_owned(&txn, vehicle_id, &sids).await?;
         accident_service_link::Entity::delete_many()
             .filter(accident_service_link::Column::AccidentId.eq(acc.id))
             .exec(&txn)
@@ -275,8 +310,12 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
 
 pub async fn list_correspondence(
     db: &impl ConnectionTrait,
+    vehicle_id: i32,
     accident_id: i32,
 ) -> DomainResult<Vec<accident_correspondence::Model>> {
+    // Verify the accident belongs to this vehicle before exposing its correspondence.
+    require_accident(db, vehicle_id, accident_id).await?;
+
     Ok(accident_correspondence::Entity::find()
         .filter(accident_correspondence::Column::AccidentId.eq(accident_id))
         .order_by_asc(accident_correspondence::Column::OccurredAt)
@@ -286,13 +325,12 @@ pub async fn list_correspondence(
 
 pub async fn create_correspondence(
     db: &impl ConnectionTrait,
+    vehicle_id: i32,
     accident_id: i32,
     input: NewCorrespondence,
 ) -> DomainResult<accident_correspondence::Model> {
-    accident::Entity::find_by_id(accident_id)
-        .one(db)
-        .await?
-        .ok_or_else(|| DomainError::NotFound(format!("Accident {accident_id} not found")))?;
+    // Verify the accident belongs to this vehicle before attaching correspondence.
+    require_accident(db, vehicle_id, accident_id).await?;
 
     let model = accident_correspondence::ActiveModel {
         accident_id: Set(accident_id),
@@ -380,6 +418,7 @@ mod tests {
 
         let c = create_correspondence(
             &db,
+            vid,
             acc.accident.id,
             NewCorrespondence {
                 occurred_at: "2024-05-02".into(),
@@ -393,7 +432,9 @@ mod tests {
         .unwrap();
         assert_eq!(c.accident_id, acc.accident.id);
 
-        let listed = list_correspondence(&db, acc.accident.id).await.unwrap();
+        let listed = list_correspondence(&db, vid, acc.accident.id)
+            .await
+            .unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].summary, "Filed claim");
 
@@ -405,8 +446,10 @@ mod tests {
     #[tokio::test]
     async fn correspondence_on_missing_accident_is_not_found() {
         let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
         let err = create_correspondence(
             &db,
+            vid,
             999,
             NewCorrespondence {
                 occurred_at: "2024-05-02".into(),
@@ -419,6 +462,114 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(err, DomainError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn list_correspondence_wrong_vehicle_is_not_found() {
+        let db = test_db().await;
+        let owner = seed_vehicle(&db).await;
+        let other = seed_vehicle(&db).await;
+        let acc = create(&db, owner, new_accident(None)).await.unwrap();
+        create_correspondence(
+            &db,
+            owner,
+            acc.accident.id,
+            NewCorrespondence {
+                occurred_at: "2024-05-02".into(),
+                contact_method: None,
+                contact_with: None,
+                summary: "private".into(),
+                notes: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        // Reading through the wrong vehicle must 404, not leak the other
+        // vehicle's correspondence.
+        assert!(matches!(
+            list_correspondence(&db, other, acc.accident.id)
+                .await
+                .unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn create_correspondence_wrong_vehicle_is_not_found_and_adds_nothing() {
+        let db = test_db().await;
+        let owner = seed_vehicle(&db).await;
+        let other = seed_vehicle(&db).await;
+        let acc = create(&db, owner, new_accident(None)).await.unwrap();
+
+        assert!(matches!(
+            create_correspondence(
+                &db,
+                other,
+                acc.accident.id,
+                NewCorrespondence {
+                    occurred_at: "2024-05-02".into(),
+                    contact_method: None,
+                    contact_with: None,
+                    summary: "intruder".into(),
+                    notes: None,
+                },
+            )
+            .await
+            .unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+        let listed = list_correspondence(&db, owner, acc.accident.id)
+            .await
+            .unwrap();
+        assert!(listed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn create_rejects_other_vehicles_service_records() {
+        let db = test_db().await;
+        let owner = seed_vehicle(&db).await;
+        let other = seed_vehicle(&db).await;
+        let foreign_svc = seed_service(&db, other).await;
+
+        // Linking another vehicle's service record must 404 and create nothing.
+        assert!(matches!(
+            create(&db, owner, new_accident(Some(vec![foreign_svc])))
+                .await
+                .unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+        assert!(list(&db, owner).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn update_rejects_other_vehicles_service_records() {
+        let db = test_db().await;
+        let owner = seed_vehicle(&db).await;
+        let other = seed_vehicle(&db).await;
+        let own_svc = seed_service(&db, owner).await;
+        let foreign_svc = seed_service(&db, other).await;
+        let acc = create(&db, owner, new_accident(Some(vec![own_svc])))
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            update(
+                &db,
+                owner,
+                acc.accident.id,
+                UpdateAccident {
+                    service_record_ids: Some(vec![foreign_svc]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+        // Existing links survive the rejected update (transaction rolled back).
+        let fetched = get(&db, owner, acc.accident.id).await.unwrap();
+        assert_eq!(fetched.service_record_ids, vec![own_svc]);
     }
 
     #[tokio::test]

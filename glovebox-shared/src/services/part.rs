@@ -1,10 +1,40 @@
 use sea_orm::*;
 
 use crate::{
-    entities::part,
+    entities::{part, part_slot, service_record},
     error::{DomainError, DomainResult},
     inputs::part::{NewPart, PartFilter, UpdatePart},
 };
+
+/// Verify a referenced part slot belongs to the vehicle. A cross-vehicle slot
+/// must be indistinguishable from a nonexistent one.
+async fn require_slot_owned(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    slot_id: i32,
+) -> DomainResult<()> {
+    part_slot::Entity::find_by_id(slot_id)
+        .filter(part_slot::Column::VehicleId.eq(vehicle_id))
+        .one(db)
+        .await?
+        .ok_or_else(|| DomainError::NotFound(format!("Part slot {slot_id} not found")))?;
+    Ok(())
+}
+
+/// Verify a referenced service record belongs to the vehicle. A cross-vehicle
+/// service must be indistinguishable from a nonexistent one.
+async fn require_service_record_owned(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    service_id: i32,
+) -> DomainResult<()> {
+    service_record::Entity::find_by_id(service_id)
+        .filter(service_record::Column::VehicleId.eq(vehicle_id))
+        .one(db)
+        .await?
+        .ok_or_else(|| DomainError::NotFound(format!("Service record {service_id} not found")))?;
+    Ok(())
+}
 
 pub async fn list(
     db: &impl ConnectionTrait,
@@ -36,6 +66,13 @@ pub async fn create(
     vehicle_id: i32,
     input: NewPart,
 ) -> DomainResult<part::Model> {
+    if let Some(slot_id) = input.slot_id {
+        require_slot_owned(db, vehicle_id, slot_id).await?;
+    }
+    if let Some(service_id) = input.installed_service_id {
+        require_service_record_owned(db, vehicle_id, service_id).await?;
+    }
+
     let model = part::ActiveModel {
         vehicle_id: Set(vehicle_id),
         slot_id: Set(input.slot_id),
@@ -67,6 +104,14 @@ pub async fn update(
     input: UpdatePart,
 ) -> DomainResult<part::Model> {
     let existing = get(db, vehicle_id, id).await?;
+
+    if let Some(Some(slot_id)) = input.slot_id {
+        require_slot_owned(db, vehicle_id, slot_id).await?;
+    }
+    if let Some(Some(service_id)) = input.installed_service_id {
+        require_service_record_owned(db, vehicle_id, service_id).await?;
+    }
+
     let mut active: part::ActiveModel = existing.into();
 
     if let Some(v) = input.slot_id {
@@ -275,6 +320,100 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(cleared.installed_service_id, None);
+    }
+
+    fn minimal_part(slot_id: Option<i32>, installed_service_id: Option<i32>) -> NewPart {
+        NewPart {
+            slot_id,
+            name: "Part".into(),
+            manufacturer: None,
+            part_number: None,
+            oe_part_number_replaced: None,
+            seller: None,
+            purchase_date: None,
+            cost_cents: None,
+            cost_currency: None,
+            invoice_url: None,
+            manufacturer_url: None,
+            retailer_url: None,
+            status: None,
+            installed_date: None,
+            installed_odometer: None,
+            installed_service_id,
+            notes: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn create_rejects_other_vehicles_slot_and_service() {
+        let db = test_db().await;
+        let owner = seed_vehicle(&db).await;
+        let other = seed_vehicle(&db).await;
+        let foreign_slot = seed_slot(&db, other, "foreign slot").await;
+        let foreign_svc = seed_service(&db, other).await;
+
+        // Referencing another vehicle's slot or service must 404 and create nothing.
+        assert!(matches!(
+            create(&db, owner, minimal_part(Some(foreign_slot), None))
+                .await
+                .unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+        assert!(matches!(
+            create(&db, owner, minimal_part(None, Some(foreign_svc)))
+                .await
+                .unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+        assert!(
+            list(&db, owner, PartFilter::default())
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn update_rejects_other_vehicles_slot_and_service() {
+        let db = test_db().await;
+        let owner = seed_vehicle(&db).await;
+        let other = seed_vehicle(&db).await;
+        let foreign_slot = seed_slot(&db, other, "foreign slot").await;
+        let foreign_svc = seed_service(&db, other).await;
+        let p = create(&db, owner, minimal_part(None, None)).await.unwrap();
+
+        assert!(matches!(
+            update(
+                &db,
+                owner,
+                p.id,
+                UpdatePart {
+                    slot_id: Some(Some(foreign_slot)),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+        assert!(matches!(
+            update(
+                &db,
+                owner,
+                p.id,
+                UpdatePart {
+                    installed_service_id: Some(Some(foreign_svc)),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+        // The part is untouched by the rejected updates.
+        let fetched = get(&db, owner, p.id).await.unwrap();
+        assert_eq!(fetched.slot_id, None);
+        assert_eq!(fetched.installed_service_id, None);
     }
 
     #[tokio::test]

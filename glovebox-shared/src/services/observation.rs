@@ -1,7 +1,7 @@
 use sea_orm::*;
 
 use crate::{
-    entities::observation,
+    entities::{observation, service_record},
     error::{DomainError, DomainResult},
     inputs::observation::{NewObservation, UpdateObservation},
 };
@@ -59,6 +59,19 @@ pub async fn update(
     input: UpdateObservation,
 ) -> DomainResult<observation::Model> {
     let existing = get(db, vehicle_id, id).await?;
+
+    // A resolving service record must belong to the same vehicle; a cross-vehicle
+    // reference must be indistinguishable from a nonexistent record.
+    if let Some(Some(service_id)) = input.resolved_service_id {
+        service_record::Entity::find_by_id(service_id)
+            .filter(service_record::Column::VehicleId.eq(vehicle_id))
+            .one(db)
+            .await?
+            .ok_or_else(|| {
+                DomainError::NotFound(format!("Service record {service_id} not found"))
+            })?;
+    }
+
     let mut active: observation::ActiveModel = existing.into();
 
     if let Some(v) = input.category {
@@ -177,6 +190,57 @@ mod tests {
             get(&db, vid, 999).await.unwrap_err(),
             DomainError::NotFound(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn update_rejects_other_vehicles_resolved_service() {
+        let db = test_db().await;
+        let owner = seed_vehicle(&db).await;
+        let other = seed_vehicle(&db).await;
+        let foreign_svc = service_record::ActiveModel {
+            vehicle_id: Set(other),
+            service_date: Set("2024-01-01".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap()
+        .id;
+        let o = create(
+            &db,
+            owner,
+            NewObservation {
+                category: "noise".into(),
+                title: "T".into(),
+                description: None,
+                odometer: None,
+                observed_at: None,
+                obd_codes: None,
+                notes: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        // Resolving with another vehicle's service record must 404 and change nothing.
+        assert!(matches!(
+            update(
+                &db,
+                owner,
+                o.id,
+                UpdateObservation {
+                    resolved: Some(true),
+                    resolved_service_id: Some(Some(foreign_svc)),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+        let fetched = get(&db, owner, o.id).await.unwrap();
+        assert!(!fetched.resolved);
+        assert_eq!(fetched.resolved_service_id, None);
     }
 
     #[tokio::test]

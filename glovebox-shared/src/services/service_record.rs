@@ -3,11 +3,56 @@ use serde::Serialize;
 
 use crate::{
     entities::{
-        mileage_log, part, service_record, service_record_line_item, service_schedule_link,
+        maintenance_schedule_item, mileage_log, model_template, part, service_record,
+        service_record_line_item, service_schedule_link,
     },
     error::{DomainError, DomainResult},
     inputs::service_record::{NewLineItem, NewServiceRecord, UpdateServiceRecord},
 };
+
+/// Verify each schedule item is within the vehicle's schedule scope: owned by
+/// the vehicle itself, by its model template, or by that template's platform.
+/// Anything else must be indistinguishable from a nonexistent item.
+async fn require_schedule_items_in_scope(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    schedule_item_ids: &[i32],
+) -> DomainResult<()> {
+    if schedule_item_ids.is_empty() {
+        return Ok(());
+    }
+
+    let v = crate::services::vehicle::require(db, vehicle_id).await?;
+    let template = match v.model_template_id {
+        Some(mt_id) => model_template::Entity::find_by_id(mt_id).one(db).await?,
+        None => None,
+    };
+
+    let mut owner =
+        Condition::any().add(maintenance_schedule_item::Column::VehicleId.eq(vehicle_id));
+    if let Some(mt) = &template {
+        owner = owner.add(maintenance_schedule_item::Column::ModelTemplateId.eq(mt.id));
+        if let Some(platform_id) = mt.platform_id {
+            owner = owner.add(maintenance_schedule_item::Column::PlatformId.eq(platform_id));
+        }
+    }
+
+    let in_scope: std::collections::HashSet<i32> = maintenance_schedule_item::Entity::find()
+        .filter(maintenance_schedule_item::Column::Id.is_in(schedule_item_ids.to_vec()))
+        .filter(owner)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|i| i.id)
+        .collect();
+
+    if let Some(missing) = schedule_item_ids.iter().find(|id| !in_scope.contains(id)) {
+        return Err(DomainError::NotFound(format!(
+            "Schedule item {missing} not found"
+        )));
+    }
+    Ok(())
+}
 
 #[derive(Debug, Serialize)]
 pub struct ServiceRecordWithLinks {
@@ -162,6 +207,9 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     vehicle_id: i32,
     input: NewServiceRecord,
 ) -> DomainResult<ServiceRecordWithLinks> {
+    let schedule_item_ids = input.schedule_item_ids.unwrap_or_default();
+    require_schedule_items_in_scope(db, vehicle_id, &schedule_item_ids).await?;
+
     let txn = db.begin().await?;
 
     let record = service_record::ActiveModel {
@@ -182,7 +230,6 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     };
     let record = record.insert(&txn).await?;
 
-    let schedule_item_ids = input.schedule_item_ids.unwrap_or_default();
     for item_id in &schedule_item_ids {
         let link = service_schedule_link::ActiveModel {
             service_record_id: Set(record.id),
@@ -303,6 +350,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     let record = active.update(&txn).await?;
 
     let schedule_item_ids = if let Some(item_ids) = input.schedule_item_ids {
+        require_schedule_items_in_scope(&txn, vehicle_id, &item_ids).await?;
         service_schedule_link::Entity::delete_many()
             .filter(service_schedule_link::Column::ServiceRecordId.eq(record.id))
             .exec(&txn)
@@ -690,5 +738,138 @@ mod tests {
             get(&db, vid, 999).await.unwrap_err(),
             DomainError::NotFound(_)
         ));
+    }
+
+    fn minimal_record(schedule_item_ids: Option<Vec<i32>>) -> NewServiceRecord {
+        NewServiceRecord {
+            service_date: "2024-03-01".into(),
+            mileage: None,
+            description: None,
+            parts_cost_cents: None,
+            parts_cost_currency: None,
+            labor_cost_cents: None,
+            labor_cost_currency: None,
+            total_cost_cents: None,
+            total_cost_currency: None,
+            shop_name: None,
+            shop_id: None,
+            notes: None,
+            schedule_item_ids,
+            part_ids: None,
+            line_items: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn create_rejects_other_vehicles_schedule_items() {
+        let db = test_db().await;
+        let owner = seed_vehicle(&db).await;
+        let other = seed_vehicle(&db).await;
+        let foreign_item = seed_schedule_item(&db, other, "Foreign").await;
+
+        // Linking another vehicle's schedule item must 404 and create nothing.
+        assert!(matches!(
+            create(&db, owner, minimal_record(Some(vec![foreign_item])))
+                .await
+                .unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+        assert!(list(&db, owner).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn update_rejects_other_vehicles_schedule_items() {
+        let db = test_db().await;
+        let owner = seed_vehicle(&db).await;
+        let other = seed_vehicle(&db).await;
+        let own_item = seed_schedule_item(&db, owner, "Mine").await;
+        let foreign_item = seed_schedule_item(&db, other, "Foreign").await;
+        let created = create(&db, owner, minimal_record(Some(vec![own_item])))
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            update(
+                &db,
+                owner,
+                created.record.id,
+                UpdateServiceRecord {
+                    schedule_item_ids: Some(vec![foreign_item]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+        // Existing links survive the rejected update (transaction rolled back).
+        let fetched = get(&db, owner, created.record.id).await.unwrap();
+        assert_eq!(fetched.schedule_item_ids, vec![own_item]);
+    }
+
+    #[tokio::test]
+    async fn create_allows_inherited_template_and_platform_schedule_items() {
+        use crate::entities::{model_template, platform, vehicle};
+        let db = test_db().await;
+
+        let platform_id = platform::ActiveModel {
+            name: Set("MQB".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap()
+        .id;
+        let template_id = model_template::ActiveModel {
+            platform_id: Set(Some(platform_id)),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap()
+        .id;
+        let vid = vehicle::ActiveModel {
+            name: Set("Car".into()),
+            model_template_id: Set(Some(template_id)),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap()
+        .id;
+
+        let platform_item = maintenance_schedule_item::ActiveModel {
+            platform_id: Set(Some(platform_id)),
+            name: Set("Platform oil change".into()),
+            enabled: Set(true),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap()
+        .id;
+        let template_item = maintenance_schedule_item::ActiveModel {
+            model_template_id: Set(Some(template_id)),
+            name: Set("Template inspection".into()),
+            enabled: Set(true),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap()
+        .id;
+
+        // Items inherited via the vehicle's template/platform chain are legit link targets.
+        let created = create(
+            &db,
+            vid,
+            minimal_record(Some(vec![platform_item, template_item])),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            created.schedule_item_ids,
+            vec![platform_item, template_item]
+        );
     }
 }

@@ -2,7 +2,7 @@ use sea_orm::*;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    entities::{research_finding, research_report, vehicle},
+    entities::{part, research_finding, research_report, service_record, vehicle},
     error::{DomainError, DomainResult},
     inputs::research::UpdateFinding,
     services::{
@@ -356,6 +356,49 @@ pub async fn update_finding(
         .await?
         .ok_or_else(|| DomainError::NotFound("Finding not found".to_string()))?;
 
+    // When this update SETS link fields, validate the effective post-update
+    // pair: a linked id must point at one of THIS vehicle's records (same
+    // invariant as observation.resolved_service_id / part.installed_service_id
+    // — no storing pointers into another vehicle's data), and its type must be
+    // a known kind. Unrelated updates (e.g. status-only) skip this so a link
+    // whose target was later deleted can't block them.
+    let sets_link = matches!(input.linked_entity_type, Some(Some(_)))
+        || matches!(input.linked_entity_id, Some(Some(_)));
+    let effective_type = match &input.linked_entity_type {
+        Some(t) => t.clone(),
+        None => finding.linked_entity_type.clone(),
+    };
+    let effective_id = match input.linked_entity_id {
+        Some(v) => v,
+        None => finding.linked_entity_id,
+    };
+    if let (true, Some(linked_id)) = (sets_link, effective_id) {
+        match effective_type.as_deref() {
+            Some("service") => {
+                service_record::Entity::find_by_id(linked_id)
+                    .filter(service_record::Column::VehicleId.eq(vehicle_id))
+                    .one(db)
+                    .await?
+                    .ok_or_else(|| {
+                        DomainError::NotFound(format!("Service record {linked_id} not found"))
+                    })?;
+            }
+            Some("part") => {
+                part::Entity::find_by_id(linked_id)
+                    .filter(part::Column::VehicleId.eq(vehicle_id))
+                    .one(db)
+                    .await?
+                    .ok_or_else(|| DomainError::NotFound(format!("Part {linked_id} not found")))?;
+            }
+            other => {
+                return Err(DomainError::BadRequest(format!(
+                    "Invalid linked_entity_type '{}'. Must be one of: service, part",
+                    other.unwrap_or("")
+                )));
+            }
+        }
+    }
+
     let mut active: research_finding::ActiveModel = finding.into();
 
     if let Some(status) = input.status {
@@ -619,5 +662,141 @@ mod tests {
             list_reports(&db, 999).await.unwrap_err(),
             DomainError::NotFound(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn update_finding_scopes_linked_entity_to_vehicle() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let other = seed_vehicle(&db).await;
+        let report = research_report::ActiveModel {
+            vehicle_id: Set(vid),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        let finding = research_finding::ActiveModel {
+            report_id: Set(report.id),
+            category: Set("recall".into()),
+            title: Set("Fix".into()),
+            status: Set("new".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        let own_svc = service_record::ActiveModel {
+            vehicle_id: Set(vid),
+            service_date: Set("2026-01-01".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        let foreign_svc = service_record::ActiveModel {
+            vehicle_id: Set(other),
+            service_date: Set("2026-01-01".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        // Another vehicle's service record is indistinguishable from nonexistent
+        let err = update_finding(
+            &db,
+            vid,
+            report.id,
+            finding.id,
+            UpdateFinding {
+                linked_entity_type: Some(Some("service".into())),
+                linked_entity_id: Some(Some(foreign_svc.id)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::NotFound(_)));
+
+        // Unknown entity type is rejected outright
+        let err = update_finding(
+            &db,
+            vid,
+            report.id,
+            finding.id,
+            UpdateFinding {
+                linked_entity_type: Some(Some("vehicle".into())),
+                linked_entity_id: Some(Some(own_svc.id)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::BadRequest(_)));
+
+        // Linking this vehicle's own record works, and an explicit clear works
+        let updated = update_finding(
+            &db,
+            vid,
+            report.id,
+            finding.id,
+            UpdateFinding {
+                status: Some("completed".into()),
+                linked_entity_type: Some(Some("service".into())),
+                linked_entity_id: Some(Some(own_svc.id)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.linked_entity_id, Some(own_svc.id));
+        let cleared = update_finding(
+            &db,
+            vid,
+            report.id,
+            finding.id,
+            UpdateFinding {
+                linked_entity_type: Some(None),
+                linked_entity_id: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(cleared.linked_entity_id, None);
+
+        // A stale stored link (target deleted after linking) must NOT block
+        // unrelated updates like a status-only change from the UI.
+        update_finding(
+            &db,
+            vid,
+            report.id,
+            finding.id,
+            UpdateFinding {
+                linked_entity_type: Some(Some("service".into())),
+                linked_entity_id: Some(Some(own_svc.id)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        service_record::Entity::delete_by_id(own_svc.id)
+            .exec(&db)
+            .await
+            .unwrap();
+        let dismissed = update_finding(
+            &db,
+            vid,
+            report.id,
+            finding.id,
+            UpdateFinding {
+                status: Some("dismissed".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(dismissed.status, "dismissed");
     }
 }
