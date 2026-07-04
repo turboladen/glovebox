@@ -718,6 +718,9 @@ export interface AttentionItem {
   deep_link_hint: string
   // A participating work item already links this source.
   planned: boolean
+  // …and its id, so the "planned" chip links to the work item itself
+  // (hypermedia affordance) and supports un-planning.
+  planned_work_item_id: number | null
 }
 
 // Flattened VisitWithItems + the owning vehicle.
