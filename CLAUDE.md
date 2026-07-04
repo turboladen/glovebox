@@ -30,7 +30,11 @@ cd frontend && bunx playwright test e2e/dashboard.spec.ts  # Single e2e test fil
 
 # Lint / Check
 just ci                   # Everything CI runs except e2e (nightly fmt-check, layering, backend, frontend)
+just fmt                  # cargo +nightly fmt — rustfmt.toml uses nightly-only options; plain `cargo fmt` passes locally but CI's format job will fail
 just check-layering       # Layering gate only (scripts/check-layering.sh)
+
+# Merging PRs: gate on parsed `gh pr checks` output showing zero pending/failed —
+# `--watch` exits 0 when it races a run that hasn't registered yet
 cargo clippy --workspace -- -D clippy::pedantic  # Rust lints (pedantic is the CI gate)
 cd frontend && bun run check  # svelte-check + TypeScript check
 ```
@@ -126,11 +130,16 @@ Vite dev server proxies `/api` and `/files` to the backend at `:3003`. In produc
 - **Router**: `@keenmate/svelte-spa-router` uses `routeParams` (not `params`) in Svelte 5
 - **Currency**: Stored as cents (`i32`), displayed as dollars in frontend. Use integer division for formatting (not `as f64 / 100.0` which loses precision)
 - **DB datetimes**: `String` type at SeaORM boundary (SQLite TEXT)
-- **Migrations**: Use `Expr::cust()` for SQL expressions, not string literals
+- **Migrations**: `Expr::cust()` for expressions inside builder queries; raw `execute_unprepared` only where no builder form exists (FTS5 DDL, cross-table copies)
+- **Migrations are NOT transactional on SQLite** (sea-orm-migration only wraps Postgres) — write them rerun-safe: `IF NOT EXISTS` DDL, `INSERT OR IGNORE`/`NOT EXISTS`-gated DML, pragma-guarded ALTERs (000019 is the pattern)
+- **SQLite can't `DROP COLUMN` named in an FK clause** — use the table-rebuild pattern (000016). FTS5: copy 000013's canonical external-content trigger trio; aggregating over `bm25()` arms needs a `MATERIALIZED` CTE (query flattening breaks bm25)
+- **Verify data-moving migrations against a populated copy of `data/glovebox.db`** (boot the branch binary against the copy), not just `test_db()`
 - **Entity field order**: Must match physical DB column order. ALTER TABLE appends columns to the end, so new fields go after `created_at`/`updated_at` in the entity struct
 - **Axum routing**: Vehicle sub-resources use flat routes in `main.rs` (not nested), so `Path((vehicle_id, id))` tuple extraction works correctly
 - **Update DTOs**: Use `Option<Option<T>>` (double-option) to distinguish "not sent" vs "explicitly set to null"
 - **Vehicle ownership checks**: All vehicle sub-resource handlers must call `glovebox_shared::services::vehicle::require(&state.db, vehicle_id).await?` before delegating to the sub-resource service (moving the check into service fns is tracked as `glovebox-paxy`)
+- **Cross-reference guards**: services self-guard EVERY foreign id they accept (build_id, service ids, schedule items, recurrence links, …) — MCP calls services directly with no handler pre-checks. Wrong-parent errors must be byte-identical `NotFound` to nonexistent (no ownership oracles), with a wrong-parent regression test per link
+- **Svelte edit forms clearing a field must send explicit `null`** — the `|| undefined` idiom omits the key, which the double-option backend reads as "not sent", silently keeping the stale value
 - **N+1 queries**: List endpoints that load related data must use batch loading with `is_in()` queries, not per-record queries in a loop
 - **Svelte 5 bind:this**: Elements used with `bind:this` must be declared with `$state(undefined)`, not bare `let`
 - **Imports**: Use `sea_orm::*` glob imports (idiomatic for SeaORM). Explicit imports create maintenance burden with unused-import warnings
