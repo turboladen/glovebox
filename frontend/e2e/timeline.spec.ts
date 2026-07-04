@@ -47,9 +47,9 @@ test.describe('Timeline', () => {
   test('insurance-paid service shows the costs split', async ({ page }) => {
     await page.goto(vehicleUrl)
     // The header's "Record service" routes to the Timeline with the ONE
-    // service form open (?action=record).
+    // service form open (the ?action=record param is consumed on arrival).
     await page.getByRole('button', { name: 'Record service' }).click()
-    await expect(page).toHaveURL(/\/timeline\?action=record/)
+    await expect(page.getByRole('heading', { name: 'Record service' })).toBeVisible()
     await page.getByLabel('Description').fill('Collision repair')
     await page.getByLabel('Total Cost ($)').fill('150.00')
     // Payer note field only appears once a non-self payer is chosen

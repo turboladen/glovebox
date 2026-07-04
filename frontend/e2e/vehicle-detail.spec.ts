@@ -29,10 +29,20 @@ test.describe('Vehicle Detail', () => {
   test('header "Record service" routes to the Timeline with the form open (one verb, one form)', async ({ page }) => {
     await page.goto(vehicleUrl)
     await page.getByRole('button', { name: 'Record service' }).click()
-    await expect(page).toHaveURL(new RegExp(`${vehicleUrl}/timeline\\?action=record`))
-    await expect(page.getByRole('button', { name: 'Timeline' })).toHaveClass(/active/)
+    // The ?action=record param is CONSUMED once handled (an identical hash
+    // push fires no event, so leaving it would kill the second click) —
+    // the URL settles on the clean timeline path with the form open.
     await expect(page.getByRole('heading', { name: 'Record service' })).toBeVisible()
+    await expect(page).toHaveURL(new RegExp(`${vehicleUrl}/timeline$`))
+    await expect(page.getByRole('button', { name: 'Timeline' })).toHaveClass(/active/)
     await expect(page.getByLabel('Description')).toBeVisible()
+
+    // Second click must work too (the dead-affordance regression): close the
+    // form, then re-open it from the header.
+    await page.locator('form').getByRole('button', { name: 'Cancel' }).click()
+    await expect(page.getByRole('heading', { name: 'Record service' })).not.toBeVisible()
+    await page.getByRole('button', { name: 'Record service' }).first().click()
+    await expect(page.getByRole('heading', { name: 'Record service' })).toBeVisible()
   })
 
   test('one record-service verb everywhere — no "Log Service" text remains', async ({ page }) => {
