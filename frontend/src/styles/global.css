@@ -1,51 +1,72 @@
-/* ═══════════════════════════════════════════════
-   GLOVEBOX — "Porsche Design" Design System
-   Dark-first. Cool. Precision. Guards Red.
-   ═══════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════
+   GLOVEBOX — "Night Shift" design system
+   After-hours garage: asphalt surfaces, machined hairlines,
+   cockpit-mono numerals, one loud signal.
+
+   Color roles (deliberately distinct — see CLAUDE.md):
+     brand   = acid lime   (action, focus, identity)
+     danger  = redline red (overdue, destructive — red is ONLY this)
+     warning = check-engine amber (due soon)
+     success = jade green  (done, ok, active build)
+     info    = cluster blue (neutral status)
+     planned = violet      (intent, not yet done)
+
+   Type:
+     Barlow            — interface voice (road-signage heritage)
+     Barlow Condensed  — display: headings, tabs, gauge labels
+     B612 Mono         — numerals: odometer, money, dates
+                         (the typeface Airbus designed for cockpits)
+   ═══════════════════════════════════════════════════════════ */
 
 /* --- Fonts ----------------------------------- */
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300..700;1,9..40,300..700&family=Outfit:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Barlow:ital,wght@0,400;0,500;0,600;1,400&family=Barlow+Condensed:wght@500;600;700&family=B612+Mono:wght@400;700&display=swap');
 
 /* --- Design Tokens --------------------------- */
 :root {
-  /* — Palette: cool matte black + Guards Red — */
-  --bg:             #0a0a0c;
-  --bg-raised:      #141418;
-  --surface:        #1e1e24;
-  --surface-hover:  #2a2a32;
-  --border:         #2e2e36;
-  --border-subtle:  #1e1e24;
+  /* — Asphalt neutrals (dark-first) — */
+  --bg:             #0d0f0d;
+  --bg-raised:      #141714;
+  --surface:        #1c201c;
+  --surface-hover:  #262b26;
+  --border:         #313731;
+  --border-subtle:  #212621;
+  --edge-highlight: rgba(255, 255, 255, 0.045);
 
-  --text:           #e8e8ec;
-  --text-secondary: #9a9aa4;
-  --text-muted:     #62626c;
+  --text:           #eef1ea;
+  --text-secondary: #a2aa9e;
+  --text-muted:     #6d756a;
 
-  /* — Accent: Guards Red — */
-  --primary:        #d4000d;
-  --primary-hover:  #b8000b;
-  --primary-muted:  rgba(212, 0, 13, 0.12);
-  --primary-text:   #ffffff;
+  /* — Brand: acid lime (caliper green) — */
+  --primary:        #b5e33d;
+  --primary-hover:  #c9f558;
+  --primary-muted:  rgba(181, 227, 61, 0.13);
+  --primary-text:   #131602;
 
   /* — Semantic — */
-  --danger:         #ff6b6b;
-  --danger-bg:      rgba(255, 107, 107, 0.12);
-  --danger-border:  rgba(255, 107, 107, 0.25);
+  --danger:         #ff5d55;
+  --danger-bg:      rgba(255, 93, 85, 0.11);
+  --danger-border:  rgba(255, 93, 85, 0.3);
 
-  --warning:        #e5a84b;
-  --warning-bg:     rgba(229, 168, 75, 0.15);
-  --warning-border: rgba(229, 168, 75, 0.25);
+  --warning:        #f2ac3c;
+  --warning-bg:     rgba(242, 172, 60, 0.12);
+  --warning-border: rgba(242, 172, 60, 0.3);
 
-  --success:        #6bca8a;
-  --success-bg:     rgba(107, 202, 138, 0.12);
-  --success-border: rgba(107, 202, 138, 0.25);
+  --success:        #4cc38a;
+  --success-bg:     rgba(76, 195, 138, 0.11);
+  --success-border: rgba(76, 195, 138, 0.3);
 
-  --info:           #7ab0e8;
-  --info-bg:        rgba(122, 176, 232, 0.12);
+  --info:           #6cb2f5;
+  --info-bg:        rgba(108, 178, 245, 0.11);
+  --info-border:    rgba(108, 178, 245, 0.3);
+
+  --planned:        #b18af8;
+  --planned-bg:     rgba(177, 138, 248, 0.12);
+  --planned-border: rgba(177, 138, 248, 0.3);
 
   /* — Typography — */
-  --font-body:      'DM Sans', system-ui, -apple-system, sans-serif;
-  --font-display:   'Outfit', var(--font-body);
-  --font-mono:      'DM Mono', 'SF Mono', 'Fira Code', monospace;
+  --font-body:      'Barlow', system-ui, -apple-system, sans-serif;
+  --font-display:   'Barlow Condensed', var(--font-body);
+  --font-mono:      'B612 Mono', 'SF Mono', 'Fira Code', monospace;
 
   /* — Spacing scale (4px base) — */
   --sp-1:  0.25rem;   /*  4px */
@@ -61,14 +82,14 @@
   /* — Radii — */
   --radius-sm:  4px;
   --radius-md:  6px;
-  --radius-lg:  8px;
-  --radius-xl:  10px;
+  --radius-lg:  10px;
+  --radius-xl:  14px;
 
   /* — Shadows — */
-  --shadow-sm:  0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-md:  0 4px 12px rgba(0, 0, 0, 0.4);
-  --shadow-lg:  0 8px 24px rgba(0, 0, 0, 0.5);
-  --shadow-glow: 0 0 20px rgba(212, 0, 13, 0.10);
+  --shadow-sm:  0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-md:  0 4px 14px rgba(0, 0, 0, 0.45);
+  --shadow-lg:  0 12px 32px rgba(0, 0, 0, 0.55);
+  --shadow-glow: 0 0 18px rgba(181, 227, 61, 0.14);
 
   /* — Transitions — */
   --ease-out:   cubic-bezier(0.16, 1, 0.3, 1);
@@ -87,44 +108,50 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* --- Light mode override --------------------- */
+/* --- Light mode: "Day Shift" (workshop paper) - */
 @media (prefers-color-scheme: light) {
   :root {
-    --bg:             #f0f0f2;
-    --bg-raised:      #e6e6ea;
-    --surface:        #dcdce2;
-    --surface-hover:  #d0d0d8;
-    --border:         #c4c4cc;
-    --border-subtle:  #d8d8e0;
+    --bg:             #eff1ea;
+    --bg-raised:      #f9faf5;
+    --surface:        #e5e8de;
+    --surface-hover:  #dbdfd2;
+    --border:         #c5cab9;
+    --border-subtle:  #dcdfd2;
+    --edge-highlight: rgba(255, 255, 255, 0.6);
 
-    --text:           #18181c;
-    --text-secondary: #52525c;
-    --text-muted:     #9a9aa4;
+    --text:           #1b1e18;
+    --text-secondary: #4f564a;
+    --text-muted:     #878e80;
 
-    --primary:        #b8000b;
-    --primary-hover:  #9e0009;
-    --primary-muted:  rgba(184, 0, 11, 0.10);
+    --primary:        #5d7a08;
+    --primary-hover:  #48610a;
+    --primary-muted:  rgba(109, 141, 15, 0.14);
     --primary-text:   #ffffff;
 
-    --danger:         #e04520;
-    --danger-bg:      rgba(224, 69, 32, 0.1);
-    --danger-border:  rgba(224, 69, 32, 0.25);
+    --danger:         #c22e2e;
+    --danger-bg:      rgba(194, 46, 46, 0.09);
+    --danger-border:  rgba(194, 46, 46, 0.3);
 
-    --warning:        #b45309;
-    --warning-bg:     rgba(180, 83, 9, 0.1);
-    --warning-border: rgba(180, 83, 9, 0.25);
+    --warning:        #96660a;
+    --warning-bg:     rgba(150, 102, 10, 0.11);
+    --warning-border: rgba(150, 102, 10, 0.3);
 
-    --success:        #16803c;
-    --success-bg:     rgba(22, 128, 60, 0.1);
-    --success-border: rgba(22, 128, 60, 0.25);
+    --success:        #187a4b;
+    --success-bg:     rgba(24, 122, 75, 0.1);
+    --success-border: rgba(24, 122, 75, 0.3);
 
-    --info:           #2563eb;
-    --info-bg:        rgba(37, 99, 235, 0.1);
+    --info:           #2564ae;
+    --info-bg:        rgba(37, 100, 174, 0.09);
+    --info-border:    rgba(37, 100, 174, 0.3);
 
-    --shadow-sm:  0 1px 2px rgba(0, 0, 0, 0.08);
-    --shadow-md:  0 4px 12px rgba(0, 0, 0, 0.1);
-    --shadow-lg:  0 8px 24px rgba(0, 0, 0, 0.12);
-    --shadow-glow: 0 0 20px rgba(184, 0, 11, 0.08);
+    --planned:        #7440cf;
+    --planned-bg:     rgba(116, 64, 207, 0.09);
+    --planned-border: rgba(116, 64, 207, 0.3);
+
+    --shadow-sm:  0 1px 2px rgba(28, 32, 22, 0.07);
+    --shadow-md:  0 4px 14px rgba(28, 32, 22, 0.09);
+    --shadow-lg:  0 12px 32px rgba(28, 32, 22, 0.12);
+    --shadow-glow: 0 0 18px rgba(93, 122, 8, 0.12);
   }
 }
 
@@ -136,22 +163,30 @@
 body {
   margin: 0;
   padding: 0;
+  background:
+    radial-gradient(1100px 500px at 50% -10%, var(--edge-highlight), transparent 70%),
+    var(--bg);
+  background-attachment: fixed;
 }
 
 /* --- Typography ------------------------------ */
 h1, h2, h3, h4, h5, h6 {
   font-family: var(--font-display);
   font-weight: 600;
-  letter-spacing: -0.01em;
-  line-height: 1.25;
+  line-height: 1.2;
   margin: 0 0 var(--sp-3);
   color: var(--text);
 }
 
-h1 { font-size: 1.75rem; font-weight: 700; letter-spacing: -0.02em; }
-h2 { font-size: 1.35rem; }
-h3 { font-size: 1.1rem; }
-h4 { font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); font-weight: 500; }
+h1 {
+  font-size: 2rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+h2 { font-size: 1.5rem; letter-spacing: 0.01em; }
+h3 { font-size: 1.2rem; letter-spacing: 0.015em; }
+h4 { font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.09em; color: var(--text-muted); font-weight: 600; }
 
 p { margin: 0 0 var(--sp-4); }
 
@@ -159,6 +194,23 @@ small, .text-sm { font-size: 0.8rem; }
 .text-xs { font-size: 0.7rem; letter-spacing: 0.03em; }
 .text-muted { color: var(--text-muted); }
 .text-secondary { color: var(--text-secondary); }
+
+/* Cockpit numerals — mileage, money, dates */
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+/* Gauge label — the section-heading voice of the whole app */
+.overline {
+  font-family: var(--font-display);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--text-muted);
+}
 
 a {
   color: var(--primary);
@@ -174,14 +226,14 @@ body::before {
   inset: 0;
   pointer-events: none;
   z-index: 9999;
-  opacity: 0.012;
+  opacity: 0.02;
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   background-size: 256px 256px;
 }
 
 @media (prefers-color-scheme: light) {
   body::before {
-    opacity: 0.02;
+    opacity: 0.028;
   }
 }
 
@@ -194,14 +246,16 @@ body::before {
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   font-family: var(--font-display);
-  font-size: 0.85rem;
-  font-weight: 500;
-  letter-spacing: 0.01em;
+  font-size: 0.92rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
   cursor: pointer;
   text-decoration: none;
   transition:
     background var(--duration-fast) var(--ease-out),
     border-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
     box-shadow var(--duration-fast) var(--ease-out),
     transform var(--duration-fast) var(--ease-out);
 }
@@ -256,7 +310,7 @@ body::before {
 }
 
 .btn-sm {
-  font-size: 0.75rem;
+  font-size: 0.78rem;
   padding: 0.2rem 0.55rem;
   border-radius: var(--radius-sm);
 }
@@ -266,14 +320,14 @@ body::before {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
-  padding: 0.15rem 0.5rem;
-  border-radius: var(--radius-sm);
+  padding: 0.12rem 0.5rem;
+  border-radius: 999px;
   font-family: var(--font-display);
-  font-size: 0.7rem;
-  font-weight: 500;
-  letter-spacing: 0.04em;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  line-height: 1.4;
+  line-height: 1.5;
 }
 
 .badge-danger {
@@ -295,15 +349,15 @@ body::before {
 }
 
 .badge-planned {
-  background: rgba(168, 85, 247, 0.12);
-  color: #a855f7;
-  border: 1px solid rgba(168, 85, 247, 0.25);
+  background: var(--planned-bg);
+  color: var(--planned);
+  border: 1px solid var(--planned-border);
 }
 
 .badge-info {
   background: var(--info-bg);
   color: var(--info);
-  border: 1px solid transparent;
+  border: 1px solid var(--info-border);
 }
 
 .badge-muted {
@@ -313,11 +367,13 @@ body::before {
 }
 
 /* --- Card ------------------------------------ */
+/* The house card: raised surface, hairline border, machined top edge. */
 .card {
   background: var(--bg-raised);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
   padding: var(--sp-4);
+  box-shadow: inset 0 1px 0 var(--edge-highlight), var(--shadow-sm);
   transition:
     border-color var(--duration-base) var(--ease-out),
     box-shadow var(--duration-base) var(--ease-out);
@@ -329,7 +385,7 @@ body::before {
 
 .card-interactive:hover {
   border-color: var(--primary);
-  box-shadow: var(--shadow-md), 0 0 0 1px var(--primary-muted);
+  box-shadow: inset 0 1px 0 var(--edge-highlight), var(--shadow-md), 0 0 0 1px var(--primary-muted);
 }
 
 /* --- Form elements --------------------------- */
@@ -348,6 +404,12 @@ input, select, textarea {
     box-shadow var(--duration-fast) var(--ease-out);
 }
 
+input[type='number'],
+input[type='date'] {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+}
+
 input:focus, select:focus, textarea:focus {
   outline: none;
   border-color: var(--primary);
@@ -361,9 +423,11 @@ input::placeholder, textarea::placeholder {
 label,
 .field-label {
   display: block;
-  font-size: 0.8rem;
-  font-weight: 500;
-  letter-spacing: 0.02em;
+  font-family: var(--font-display);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
   color: var(--text-secondary);
   margin-bottom: var(--sp-1);
 }
@@ -381,6 +445,7 @@ label,
   border-radius: var(--radius-lg);
   padding: var(--sp-5);
   margin-bottom: var(--sp-4);
+  box-shadow: inset 0 1px 0 var(--edge-highlight), var(--shadow-md);
 }
 
 .field {
@@ -440,6 +505,15 @@ label,
   animation: fade-in-up var(--duration-base) var(--ease-out) both;
 }
 
+/* Staggered section reveal (dashboard blocks) */
+.reveal {
+  animation: fade-in-up var(--duration-slow) var(--ease-out) both;
+}
+.reveal:nth-child(2) { animation-delay: 40ms; }
+.reveal:nth-child(3) { animation-delay: 80ms; }
+.reveal:nth-child(4) { animation-delay: 120ms; }
+.reveal:nth-child(5) { animation-delay: 160ms; }
+
 /* Form card slide-in */
 .form-card {
   animation: fade-in-down var(--duration-base) var(--ease-out) both;
@@ -482,7 +556,8 @@ label,
 }
 
 /* --- Hypermedia deep-link highlight ----------- */
-/* Applied by lib/highlight.ts to the `?hl=` target for ~2s. */
+/* Applied by lib/highlight.ts to the `?hl=` target for ~2s.
+   Brand lime — a spotlight, never an alarm. */
 @keyframes hl-flash-fade {
   0%, 55% {
     outline-color: var(--primary);
