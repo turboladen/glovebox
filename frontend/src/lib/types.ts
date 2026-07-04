@@ -744,6 +744,19 @@ export interface GarageDashboard {
   active_builds: BuildSnapshot[]
 }
 
+// --- Record-service routing ---
+
+// Prefill for the ONE ServiceForm on the Timeline, carried by the routed
+// ?action=record flow (Plan → Due's "Record service…" / "Mark done
+// previously" and the context strip's plain verb).
+export interface ServicePrefill {
+  description?: string
+  scheduleItemId?: number
+  // "Mark done previously": start the date empty (capped at today) so a
+  // past date is a deliberate choice, and mark the notes retroactive.
+  retro?: boolean
+}
+
 // --- Search ---
 
 export interface SearchHit {

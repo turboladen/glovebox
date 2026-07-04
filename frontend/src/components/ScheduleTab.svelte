@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { link } from '@keenmate/svelte-spa-router'
+  import { link, push } from '@keenmate/svelte-spa-router'
   import { services as servicesApi, schedules as schedulesApi } from '../lib/api'
   import { formatCents as formatCentsShared } from '../lib/money'
   import type { RemindersResponse, ReminderStatus, ServiceRecordWithLinks } from '../lib/types'
@@ -20,13 +20,6 @@
   let allServices: ServiceRecordWithLinks[] = $state([])
   let expandedItemId: number | null = $state(null)
   let actionError = $state('')
-
-  // Inline minimal-record form (Record service… / Mark done previously)
-  let recordTarget: { id: number; name: string; retro: boolean } | null = $state(null)
-  let recordDate = $state('')
-  let recordOdometer = $state('')
-  let recordCost = $state('')
-  let recordSaving = $state(false)
 
   async function loadOwnData() {
     try {
@@ -53,38 +46,18 @@
     await onScheduleChanged?.()
   }
 
-  function openRecordForm(reminder: ReminderStatus, retro: boolean) {
-    actionError = ''
-    recordTarget = { id: reminder.schedule_item.id, name: reminder.schedule_item.name, retro }
-    recordDate = retro ? '' : new Date().toISOString().split('T')[0]
-    recordOdometer = ''
-    recordCost = ''
-  }
-
-  async function submitRecord() {
-    if (!recordTarget) return
-    recordSaving = true
-    actionError = ''
-    try {
-      await servicesApi.create(vehicleId, {
-        service_date: recordDate,
-        description: recordTarget.name,
-        mileage: recordOdometer ? parseInt(recordOdometer, 10) : undefined,
-        total_cost_cents: recordTarget.retro
-          ? 0
-          : recordCost
-            ? Math.round(parseFloat(recordCost) * 100)
-            : undefined,
-        notes: recordTarget.retro ? 'recorded retroactively' : undefined,
-        schedule_item_ids: [recordTarget.id],
-      })
-      recordTarget = null
-      await refresh()
-    } catch (e: any) {
-      actionError = e.message
-    } finally {
-      recordSaving = false
-    }
+  // Record service… / Mark done previously route to the ONE real
+  // ServiceForm on the Timeline, prefilled (round-2 feedback #9) — the
+  // stripped mini-forms produced records the user never saw take shape.
+  // TimelineTab consumes these params the same way as ?action=record.
+  function recordService(reminder: ReminderStatus, retro: boolean) {
+    const params = new URLSearchParams({
+      action: 'record',
+      schedule_item: String(reminder.schedule_item.id),
+      desc: reminder.schedule_item.name,
+    })
+    if (retro) params.set('retro', '1')
+    push(`/vehicles/${vehicleId}/timeline?${params}`)
   }
 
   async function dismissItem(reminder: ReminderStatus) {
@@ -139,39 +112,10 @@
         <button class="action-link" onclick={() => onPlanIt(reminder)}>Plan it</button>
       {/if}
     {/if}
-    <button class="action-link" onclick={() => openRecordForm(reminder, false)}>Record service…</button>
-    <button class="action-link" onclick={() => openRecordForm(reminder, true)}>Mark done previously</button>
+    <button class="action-link" onclick={() => recordService(reminder, false)}>Record service…</button>
+    <button class="action-link" onclick={() => recordService(reminder, true)}>Mark done previously</button>
     <button class="action-link dismiss" onclick={() => dismissItem(reminder)}>Dismiss for this vehicle</button>
   </div>
-  {#if recordTarget?.id === reminder.schedule_item.id}
-    <form class="record-form" onsubmit={(e) => { e.preventDefault(); submitRecord() }}>
-      <div class="record-form-fields">
-        <label>
-          Date
-          <input type="date" bind:value={recordDate} required max={recordTarget.retro ? new Date().toISOString().split('T')[0] : undefined} />
-        </label>
-        <label>
-          Odometer
-          <input type="number" min="0" bind:value={recordOdometer} placeholder="optional" />
-        </label>
-        {#if !recordTarget.retro}
-          <label>
-            Cost ($)
-            <input type="number" step="0.01" min="0" bind:value={recordCost} placeholder="optional" />
-          </label>
-        {/if}
-      </div>
-      {#if recordTarget.retro}
-        <p class="record-form-hint">Recorded retroactively — pick the date it was actually done.</p>
-      {/if}
-      <div class="record-form-actions">
-        <button type="button" class="action-link" onclick={() => (recordTarget = null)}>Cancel</button>
-        <button type="submit" class="btn btn-primary btn-small" disabled={recordSaving || !recordDate}>
-          {recordSaving ? 'Saving…' : recordTarget.retro ? 'Save past service' : 'Save service'}
-        </button>
-      </div>
-    </form>
-  {/if}
 {/snippet}
 
 {#if !reminderData}
@@ -186,21 +130,19 @@
   {#if groups.overdue.length > 0}
     <section class="reminder-group">
       <h3 class="group-label overdue-label">Overdue</h3>
+      <div class="ledger">
       {#each groups.overdue as reminder (reminder.schedule_item.id)}
         <div class="reminder-card overdue" id={anchorId('schedule_item', reminder.schedule_item.id)}>
           <div class="reminder-header">
             <strong>{reminder.schedule_item.name}</strong>
-            <span class="trigger">{reminder.trigger}</span>
-          </div>
-          <div class="reminder-details">
-            {#if reminder.due_at_miles}
-              <span>Due at {formatMileage(reminder.due_at_miles)} mi</span>
-            {/if}
-            {#if reminder.due_at_date}
-              <span>or {formatDate(reminder.due_at_date)}</span>
-            {/if}
+            <span class="due-readout num">
+              {#if reminder.due_at_miles}Due at {formatMileage(reminder.due_at_miles)} mi{/if}
+              {#if reminder.due_at_miles && reminder.due_at_date}·{/if}
+              {#if reminder.due_at_date}{formatDate(reminder.due_at_date)}{/if}
+            </span>
           </div>
           <div class="reminder-meta">
+            <span class="trigger">{reminder.trigger}</span>
             {#if reminder.miles_remaining != null}
               <span>{formatMileage(reminder.miles_remaining)} mi remaining</span>
             {/if}
@@ -237,24 +179,23 @@
           {@render reminderActions(reminder)}
         </div>
       {/each}
+      </div>
     </section>
   {/if}
 
   {#if groups.upcoming.length > 0}
     <section class="reminder-group">
       <h3 class="group-label upcoming-label">Upcoming</h3>
+      <div class="ledger">
       {#each groups.upcoming as reminder (reminder.schedule_item.id)}
         <div class="reminder-card upcoming" id={anchorId('schedule_item', reminder.schedule_item.id)}>
           <div class="reminder-header">
             <strong>{reminder.schedule_item.name}</strong>
-          </div>
-          <div class="reminder-details">
-            {#if reminder.due_at_miles}
-              <span>Due at {formatMileage(reminder.due_at_miles)} mi</span>
-            {/if}
-            {#if reminder.due_at_date}
-              <span>or {formatDate(reminder.due_at_date)}</span>
-            {/if}
+            <span class="due-readout num">
+              {#if reminder.due_at_miles}Due at {formatMileage(reminder.due_at_miles)} mi{/if}
+              {#if reminder.due_at_miles && reminder.due_at_date}·{/if}
+              {#if reminder.due_at_date}{formatDate(reminder.due_at_date)}{/if}
+            </span>
           </div>
           <div class="reminder-meta">
             {#if reminder.miles_remaining != null}
@@ -285,6 +226,7 @@
           {@render reminderActions(reminder)}
         </div>
       {/each}
+      </div>
     </section>
   {/if}
 
@@ -302,18 +244,16 @@
   {#if groups.ok.length > 0}
     <section class="reminder-group">
       <h3 class="group-label ok-label">OK (not yet due)</h3>
+      <div class="ledger">
       {#each groups.ok as reminder (reminder.schedule_item.id)}
         <div class="reminder-card ok" id={anchorId('schedule_item', reminder.schedule_item.id)}>
           <div class="reminder-header">
             <strong>{reminder.schedule_item.name}</strong>
-          </div>
-          <div class="reminder-details">
-            {#if reminder.due_at_miles}
-              <span>Due at {formatMileage(reminder.due_at_miles)} mi</span>
-            {/if}
-            {#if reminder.due_at_date}
-              <span>or {formatDate(reminder.due_at_date)}</span>
-            {/if}
+            <span class="due-readout num">
+              {#if reminder.due_at_miles}Due at {formatMileage(reminder.due_at_miles)} mi{/if}
+              {#if reminder.due_at_miles && reminder.due_at_date}·{/if}
+              {#if reminder.due_at_date}{formatDate(reminder.due_at_date)}{/if}
+            </span>
           </div>
           {#if servicesForItem(reminder.schedule_item.id).length > 0}
             <button class="history-toggle" onclick={() => expandedItemId = expandedItemId === reminder.schedule_item.id ? null : reminder.schedule_item.id}>
@@ -335,6 +275,7 @@
           {/if}
         </div>
       {/each}
+      </div>
     </section>
   {/if}
 
@@ -369,23 +310,18 @@
   .ok-label { color: var(--success); }
   .bundle-label { color: var(--primary); }
 
+  /* Ledger rows (round-2 feedback #5): each group is ONE card of
+     hairline-ruled entries with a status rail — the same row grammar as
+     the dashboard's attention table and the Timeline. */
   .reminder-card {
     padding: var(--sp-3) var(--sp-4);
-    border: 1px solid var(--border-subtle);
     border-left: 3px solid var(--border-subtle);
-    margin-bottom: var(--sp-2);
-    background: var(--bg-raised);
-    border-radius: var(--radius-sm) var(--radius-lg) var(--radius-lg) var(--radius-sm);
-    box-shadow: inset 0 1px 0 var(--edge-highlight);
-    transition:
-      border-color var(--duration-fast) var(--ease-out),
-      background var(--duration-fast) var(--ease-out),
-      transform var(--duration-fast) var(--ease-out);
+    background: none;
+    transition: background var(--duration-fast) var(--ease-out);
   }
 
   .reminder-card:hover {
     background: var(--surface);
-    transform: translateX(2px);
   }
 
   .reminder-card.overdue { border-left-color: var(--danger); }
@@ -395,14 +331,23 @@
   .reminder-header {
     display: flex;
     justify-content: space-between;
-    align-items: center;
+    align-items: baseline;
+    gap: var(--sp-3);
   }
 
   .reminder-header strong {
     font-family: var(--font-display);
-    font-size: 1.05rem;
+    font-size: 1.02rem;
     font-weight: 600;
     letter-spacing: 0.015em;
+  }
+
+  /* The due figures: mono, right-aligned — the ledger's number column. */
+  .due-readout {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    text-align: right;
+    white-space: nowrap;
   }
 
   .trigger {
@@ -410,10 +355,12 @@
     color: var(--text-muted);
   }
 
-  .reminder-details, .reminder-meta, .last-service {
-    font-size: 0.85rem;
+  .reminder-meta, .last-service {
+    font-size: 0.82rem;
     color: var(--text-muted);
-    margin-top: var(--sp-1);
+    margin-top: 2px;
+    display: flex;
+    gap: var(--sp-3);
   }
 
   .bundle-card {
@@ -514,47 +461,5 @@
   .action-error {
     color: var(--danger);
     font-size: 0.85rem;
-  }
-
-  .record-form {
-    margin-top: var(--sp-3);
-    padding: var(--sp-3);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-sm);
-    background: var(--bg);
-  }
-
-  .record-form-fields {
-    display: flex;
-    gap: var(--sp-3);
-    flex-wrap: wrap;
-  }
-
-  .record-form-fields label {
-    display: flex;
-    flex-direction: column;
-    gap: var(--sp-1);
-    font-size: 0.8rem;
-    color: var(--text-muted);
-  }
-
-  .record-form-hint {
-    margin: var(--sp-2) 0 0;
-    font-size: 0.75rem;
-    color: var(--text-muted);
-    font-style: italic;
-  }
-
-  .record-form-actions {
-    display: flex;
-    justify-content: flex-end;
-    align-items: center;
-    gap: var(--sp-3);
-    margin-top: var(--sp-3);
-  }
-
-  .btn-small {
-    font-size: 0.8rem;
-    padding: var(--sp-1) var(--sp-3);
   }
 </style>

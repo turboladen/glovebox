@@ -12,28 +12,26 @@ test.describe('Timeline', () => {
   test('shows empty state', async ({ page }) => {
     await page.goto(`${vehicleUrl}/timeline`)
     await expect(page.getByText('No history yet.')).toBeVisible()
-    // Scope to the tab's own actions — the vehicle header shares the verb.
-    await expect(page.locator('.create-actions').getByRole('button', { name: 'Record service' })).toBeVisible()
+    // ONE record-service verb per screen: the context strip owns it; the
+    // Timeline toolbar keeps only the incident verb.
+    await expect(page.getByRole('button', { name: 'Record service' })).toHaveCount(1)
     await expect(page.getByRole('button', { name: 'Log incident' })).toBeVisible()
   })
 
-  test('Record service toggles to Cancel and closes without saving', async ({ page }) => {
+  test('Record service opens the form; its Cancel closes without saving', async ({ page }) => {
     await page.goto(`${vehicleUrl}/timeline`)
-    const toggle = page.locator('.create-actions').getByRole('button', { name: 'Record service' })
-    await toggle.click()
-    // The toggle button flips to Cancel while the form is open…
-    const cancel = page.locator('.create-actions').getByRole('button', { name: 'Cancel' })
-    await expect(cancel).toBeVisible()
+    // The strip's verb opens the ONE form on the Timeline…
+    await page.getByRole('button', { name: 'Record service' }).click()
     await expect(page.getByLabel('Description')).toBeVisible()
-    // …and clicking it closes the form without creating anything.
-    await cancel.click()
+    // …and the form's own Cancel closes it without creating anything.
+    await page.locator('form').getByRole('button', { name: 'Cancel' }).click()
     await expect(page.getByLabel('Description')).not.toBeVisible()
-    await expect(page.locator('.create-actions').getByRole('button', { name: 'Record service' })).toBeVisible()
+    await expect(page.getByText('No history yet.')).toBeVisible()
   })
 
   test('record a service from the Timeline', async ({ page }) => {
     await page.goto(`${vehicleUrl}/timeline`)
-    await page.locator('.create-actions').getByRole('button', { name: 'Record service' }).click()
+    await page.getByRole('button', { name: 'Record service' }).click()
     await page.getByLabel('Odometer').fill('45200')
     await page.getByLabel('Description').fill('Oil Change')
     await page.getByLabel('Total Cost ($)').fill('49.99')
@@ -130,8 +128,8 @@ test.describe('Timeline', () => {
 
   test('resolving with a service links it and surfaces chips both ways', async ({ page }) => {
     await page.goto(`${vehicleUrl}/timeline`)
-    // A service record to link against.
-    await page.locator('.create-actions').getByRole('button', { name: 'Record service' }).click()
+    // A service record to link against (the strip owns the one verb).
+    await page.getByRole('button', { name: 'Record service' }).click()
     await page.getByLabel('Description').fill('Brake pad replacement')
     await page.getByRole('button', { name: 'Save Service' }).click()
     await expect(page.getByLabel('Description')).not.toBeVisible()
