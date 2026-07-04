@@ -1,17 +1,16 @@
 <script lang="ts">
-  // Records tab (unit F): reference material — sub-nav Parts / Documents /
-  // Research, re-homing the existing tabs unchanged.
+  // Records tab (unit F): reference material — sub-nav Parts / Documents.
+  // (Research moved to Plan — it's future work, not a record of the past;
+  // VehicleDetail redirects old records/research deep links.)
   import { push } from '@keenmate/svelte-spa-router'
   import PartsTab from './PartsTab.svelte'
   import DocumentsTab from './DocumentsTab.svelte'
-  import ResearchTab from './ResearchTab.svelte'
 
   let { vehicleId, sub = 'parts' }: { vehicleId: number; sub?: string } = $props()
 
   const subTabs = [
     { id: 'parts', label: 'Parts' },
     { id: 'documents', label: 'Documents' },
-    { id: 'research', label: 'Research' },
   ]
 
   // Unknown :sub params fall back to Parts instead of a blank pane.
@@ -33,8 +32,6 @@
 
   {#if activeSub === 'documents'}
     <DocumentsTab {vehicleId} />
-  {:else if activeSub === 'research'}
-    <ResearchTab {vehicleId} />
   {:else}
     <PartsTab {vehicleId} />
   {/if}
