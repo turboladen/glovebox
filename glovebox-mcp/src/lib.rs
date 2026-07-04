@@ -28,6 +28,7 @@
 use std::{sync::Arc, time::Duration};
 
 use axum::Router;
+use glovebox_shared::config::AppConfig;
 use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager,
     tower::{StreamableHttpServerConfig, StreamableHttpService},
@@ -40,8 +41,9 @@ mod handler;
 mod schemas;
 
 /// Build the Axum router for the MCP endpoint. The backend mounts this at
-/// `/mcp` via `.nest_service("/mcp", glovebox_mcp::router(db))`.
-pub fn router(db: DatabaseConnection) -> Router {
+/// `/mcp` via `.nest_service("/mcp", glovebox_mcp::router(db, config))`.
+/// The config supplies `files_dir` for `attach_document`'s file storage.
+pub fn router(db: DatabaseConnection, config: Arc<AppConfig>) -> Router {
     // Extend rmcp's idle-session reaper from its 5-minute default to 7 days:
     // long enough that a chat client left idle overnight doesn't come back to
     // a stale session id (a 404 most clients surface badly), short enough
@@ -54,12 +56,12 @@ pub fn router(db: DatabaseConnection) -> Router {
         default_config.allowed_hosts.clone(),
         std::env::var("GLOVEBOX_MCP_ALLOWED_HOSTS").ok().as_deref(),
     );
-    let config = default_config.with_allowed_hosts(allowed_hosts);
+    let http_config = default_config.with_allowed_hosts(allowed_hosts);
 
     let streamable = StreamableHttpService::new(
-        move || Ok(GloveboxMcp::new(db.clone())),
+        move || Ok(GloveboxMcp::new(db.clone(), config.clone())),
         Arc::new(session_manager),
-        config,
+        http_config,
     );
 
     Router::new().fallback_service(streamable)

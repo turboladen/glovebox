@@ -21,22 +21,25 @@ use sea_orm::DatabaseConnection;
 use serde::{Serialize, de::DeserializeOwned};
 
 use glovebox_shared::{
+    config::AppConfig,
     entities::work_item,
     error::{DomainError, DomainResult},
     inputs::build::UpdateBuild,
     services::{
-        activity, budget, budget::BudgetForecast, build, costs, incident, mileage, part, reminders,
-        reminders::RemindersResponse, research, schedule, search, search::SearchScope,
-        service_record, vehicle, visit, visit::VisitWithItems, work_item as work_item_svc,
+        activity, budget, budget::BudgetForecast, build, costs, document, incident, mileage, part,
+        reminders, reminders::RemindersResponse, research, schedule, search, search::SearchScope,
+        service_record, service_record::LinkMode, vehicle, visit, visit::VisitWithItems,
+        work_item as work_item_svc,
     },
 };
 
 use crate::schemas::{
-    BuildParams, CancelVisitInput, CompleteVisitInput, DismissScheduleItemInput, EmptyParams,
-    FileResearchFindingInput, FindDocumentsInput, ListPlannedWorkInput, LogIncidentInput,
-    LogMileageInput, PlanWorkInput, RecordPartInput, RecordServiceInput, SaveNoteInput,
-    ScheduleVisitInput, SearchRecordsInput, SummarizeActivityInput, UpdateBuildStatusInput,
-    VehicleBrief, VehicleParams,
+    AttachDocumentInput, BuildParams, CancelVisitInput, CompleteVisitInput,
+    DismissScheduleItemInput, EmptyParams, FileResearchFindingInput, FindDocumentsInput,
+    LinkServiceToMaintenanceInput, ListPlannedWorkInput, LogIncidentInput, LogMileageInput,
+    PlanWorkInput, RecordPartInput, RecordServiceInput, SaveNoteInput, ScheduleVisitInput,
+    SearchRecordsInput, SummarizeActivityInput, UpdateBuildStatusInput, VehicleBrief,
+    VehicleParams,
 };
 
 pub const VEHICLES_URI: &str = "glovebox://vehicles";
@@ -44,12 +47,16 @@ pub const VEHICLES_URI: &str = "glovebox://vehicles";
 #[derive(Clone)]
 pub struct GloveboxMcp {
     db: Arc<DatabaseConnection>,
+    config: Arc<AppConfig>,
 }
 
 #[tool_router]
 impl GloveboxMcp {
-    pub fn new(db: DatabaseConnection) -> Self {
-        Self { db: Arc::new(db) }
+    pub fn new(db: DatabaseConnection, config: Arc<AppConfig>) -> Self {
+        Self {
+            db: Arc::new(db),
+            config,
+        }
     }
 
     #[tool(
@@ -89,7 +96,7 @@ impl GloveboxMcp {
 
     #[tool(
         name = "record_service",
-        description = "Record maintenance or repair work that was done: what, when, at what mileage, and what it cost (integer cents). Providing `mileage` also logs an odometer reading. Use `line_items` for itemized invoices and `build_id` to link the work to a build project. If the work satisfies due/overdue schedule items from `check_due_maintenance`, pass their ids in `schedule_item_ids` so the reminders clear.",
+        description = "Record maintenance or repair work that was done: what, when, at what mileage, and what it cost (integer cents). Providing `mileage` also logs an odometer reading. Use `line_items` for itemized invoices and `build_id` to link the work to a build project. If the work satisfies due/overdue schedule items from `check_due_maintenance`, pass their ids in `schedule_item_ids` so the reminders clear; for records you already created (e.g. a bulk import), reconcile afterwards with `link_service_to_maintenance` instead of re-recording. When importing a scanned invoice, follow up with `attach_document` (linked to the returned record id) so the original file and its text are kept.",
         input_schema = rmcp::handler::server::common::schema_for_type::<RecordServiceInput>()
     )]
     async fn record_service(
@@ -189,7 +196,7 @@ impl GloveboxMcp {
 
     #[tool(
         name = "check_due_maintenance",
-        description = "Answer \"what does this car need?\" — the vehicle's maintenance schedule evaluated against its estimated current mileage: each item's status (ok/due_soon/overdue), when it's due, bundle suggestions for combining work, a 12-month budget forecast, and the warranty status (possibly_covered — remind the user to check coverage before paying). Call before recommending any maintenance. For due/overdue items, offer to plan_work them (linked via schedule_item_id) so the work lands on the to-do list; when recorded work satisfies an item, link it via `record_service`'s `schedule_item_ids` so the reminder clears; for an item that doesn't apply to this vehicle, use `dismiss_schedule_item`.",
+        description = "Answer \"what does this car need?\" — the vehicle's maintenance schedule evaluated against its estimated current mileage: each item's status (ok/due_soon/overdue), when it's due, bundle suggestions for combining work, a 12-month budget forecast, and the warranty status (possibly_covered — remind the user to check coverage before paying). Call before recommending any maintenance. For due/overdue items, offer to plan_work them (linked via schedule_item_id) so the work lands on the to-do list; when recorded work satisfies an item, link it via `record_service`'s `schedule_item_ids` so the reminder clears — or, for service records that already exist (an import you just finished), call `link_service_to_maintenance` with the matching schedule item ids to reconcile them all at once; for an item that doesn't apply to this vehicle, use `dismiss_schedule_item`.",
         input_schema = rmcp::handler::server::common::schema_for_type::<VehicleParams>()
     )]
     async fn check_due_maintenance(
@@ -504,6 +511,55 @@ impl GloveboxMcp {
         };
         domain_result(visit::cancel(&*self.db, p.vehicle_id, p.visit_id).await)
     }
+
+    #[tool(
+        name = "attach_document",
+        description = "Store a file (scanned invoice, receipt, manual page, photo) against a vehicle: the bytes land on disk and a document record is created. Pass the file as base64 in `content_base64` (max 10 MiB decoded). ALWAYS pass `extracted_text` with the text you read out of the document — that is what makes it findable later via `find_documents`. Link it to the record it belongs to (e.g. the service record you just created from the invoice) via `linked_entity_type` + `linked_entity_id`.",
+        input_schema = rmcp::handler::server::common::schema_for_type::<AttachDocumentInput>()
+    )]
+    async fn attach_document(
+        &self,
+        params: LenientParameters<AttachDocumentInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = match params.into_tool_input("attach_document") {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        };
+        let input = match p.into_domain() {
+            Ok(v) => v,
+            Err(e) => return domain_error(e),
+        };
+        domain_result(document::store(&*self.db, &self.config.files_dir, input).await)
+    }
+
+    #[tool(
+        name = "link_service_to_maintenance",
+        description = "Link an EXISTING service record to maintenance schedule items (from `check_due_maintenance`) so the matching reminders clear — the reconciliation step after an import, when the records were created without `schedule_item_ids`. Default mode `add` unions with the record's existing links (safe to call repeatedly while working through a list); mode `replace` overwrites them. For new work, prefer passing `schedule_item_ids` to `record_service` directly.",
+        input_schema = rmcp::handler::server::common::schema_for_type::<LinkServiceToMaintenanceInput>()
+    )]
+    async fn link_service_to_maintenance(
+        &self,
+        params: LenientParameters<LinkServiceToMaintenanceInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = match params.into_tool_input("link_service_to_maintenance") {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        };
+        let mode = match LinkMode::parse(p.mode.as_deref().unwrap_or("add")) {
+            Ok(m) => m,
+            Err(e) => return domain_error(e),
+        };
+        domain_result(
+            service_record::link_schedule_items(
+                &*self.db,
+                p.vehicle_id,
+                p.service_record_id,
+                &p.schedule_item_ids,
+                mode,
+            )
+            .await,
+        )
+    }
 }
 
 #[tool_handler]
@@ -523,22 +579,25 @@ impl ServerHandler for GloveboxMcp {
                  recent history. (2) ANSWER \"what does it need?\" — `check_due_maintenance` \
                  before recommending any work (it includes the 12-month budget forecast and \
                  warranty status); `check_recalls` for safety recalls. Resolve due/overdue items \
-                 by linking completed work (`record_service` with `schedule_item_ids`) or waiving \
-                 ones that don't apply (`dismiss_schedule_item`). (3) PLAN — when the user \
-                 intends to do something about a recall, an overdue item, or an incident, \
-                 `plan_work` it with the source linked; group items into a shop visit or DIY \
-                 session with `schedule_visit`; review with `list_planned_work`; when the work \
-                 happens, `complete_visit` records the service, clears the reminders, and closes \
-                 the linked recalls/incidents in one step; a visit that won't happen is \
-                 `cancel_visit`-ed and its items return to the to-do list. (4) CAPTURE what \
-                 happened outside a visit — `record_service` for completed work, `record_part` \
-                 for parts bought or installed, `log_incident` for symptoms/damage/accidents, \
-                 `save_note` for facts worth remembering, `log_mileage` whenever the user \
-                 mentions an odometer reading. (5) LOOK THINGS UP — `find_documents` for \
-                 receipts/manuals, `search_records` for anything else, `cost_summary` for spend. \
-                 (6) PROJECTS — `list_builds` / `get_build_progress` / `update_build_status` for \
-                 upgrade or restoration builds. All money is integer cents; all dates are \
-                 YYYY-MM-DD.",
+                 by linking completed work (`record_service` with `schedule_item_ids`, or \
+                 `link_service_to_maintenance` for records that already exist — the import \
+                 reconciliation loop) or waiving ones that don't apply (`dismiss_schedule_item`). \
+                 (3) PLAN — when the user intends to do something about a recall, an overdue \
+                 item, or an incident, `plan_work` it with the source linked; group items into a \
+                 shop visit or DIY session with `schedule_visit`; review with \
+                 `list_planned_work`; when the work happens, `complete_visit` records the \
+                 service, clears the reminders, and closes the linked recalls/incidents in one \
+                 step; a visit that won't happen is `cancel_visit`-ed and its items return to the \
+                 to-do list. (4) CAPTURE what happened outside a visit — `record_service` for \
+                 completed work, `record_part` for parts bought or installed, `log_incident` for \
+                 symptoms/damage/accidents, `save_note` for facts worth remembering, \
+                 `log_mileage` whenever the user mentions an odometer reading, `attach_document` \
+                 for scanned invoices/receipts (pass your extraction as `extracted_text` and link \
+                 the service record so one conversation yields record + document). (5) LOOK \
+                 THINGS UP — `find_documents` for receipts/manuals, `search_records` for anything \
+                 else, `cost_summary` for spend. (6) PROJECTS — `list_builds` / \
+                 `get_build_progress` / `update_build_status` for upgrade or restoration builds. \
+                 All money is integer cents; all dates are YYYY-MM-DD.",
             )
     }
 

@@ -248,7 +248,10 @@ async fn main() -> anyhow::Result<()> {
         // here would let any web page a LAN user visits drive the tools
         // from their browser. Without CORS headers, cross-origin
         // preflights simply fail.
-        .nest_service("/mcp", glovebox_mcp::router(state.db.clone()))
+        .nest_service(
+            "/mcp",
+            glovebox_mcp::router(state.db.clone(), state.config.clone()),
+        )
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(&listen_addr).await?;
