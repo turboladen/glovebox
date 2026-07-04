@@ -26,7 +26,7 @@ dashboard scoped as an **Overview** tab, and the vehicle tabs are intent-shaped:
 
 | # | Step | Expected |
 |---|------|----------|
-| 1 | Navigate to `/` | "Garage" heading; dashboard blocks render |
+| 1 | Navigate to `/` | "Garage" heading with a page-level "+ Add vehicle" action beside it (→ `/vehicles/new`); dashboard blocks render |
 | 2 | Needs attention block (red tint) | One row per overdue/due-soon reminder, open recall, unresolved incident — vehicle-labeled; each deep-links WITH a `?hl=` param (reminder → Plan/Due, recall → Plan/Research, incident → Timeline) so the target row scrolls into view and flashes |
 | 3 | "plan it" on an overdue/due-soon/recall row | Creates a source-linked work item; row flips to a "planned" chip that LINKS to the work item (`plan/todo?hl=work_item:{id}`), with a confirm-free ✕ (Un-plan) beside it that deletes the item and restores "plan it" |
 | 4 | Plan & budget block (blue tint) | Upcoming visits with date/shop/est rollup (→ Plan/Visits), unscheduled to-do count, 12-mo forecast total (garage-wide sum) |
@@ -45,10 +45,10 @@ dashboard scoped as an **Overview** tab, and the vehicle tabs are intent-shaped:
 | # | Step | Expected |
 |---|------|----------|
 | 1 | Header | Logo (→ `/`), global search input, sidebar toggle (hamburger), shops icon |
-| 2 | Sidebar | "Garage" label, "All vehicles" entry (active on `/`), one card per vehicle: name, year/make/model, mileage + status hints ("N due" red — a LINK to that vehicle's Plan/Due view (card nav unaffected), "N soon" amber, "recall", "build active" green chip) |
+| 2 | Sidebar | "Garage" section header (a LINK to `/`, hover affordance), "All vehicles" entry (active on `/`), one card per vehicle: name, year/make/model, mileage + status hints ("N due" red — a LINK to that vehicle's Plan/Due view (card nav unaffected), "N soon" amber, "recall", "build active" green chip). The panel is viewport-height: head (logo/search) and foot (Shops) stay pinned; the vehicle list scrolls internally |
 | 3 | Click a sidebar vehicle | Navigates to `/vehicles/:id` (Overview); entry gains active state; switching cars reloads in place |
 | 4 | Archived vehicles | Collapsed "Archived (n)" group; entries dimmed |
-| 5 | "+ Add vehicle" at the sidebar bottom | Navigates to `/vehicles/new` |
+| 5 | Sidebar foot | Shops only — adding a vehicle is a page-level action on the garage dashboard (TP-00), not a sidebar nav verb |
 | 6 | Hamburger toggle | Sidebar fully hides; a slim reopen handle appears at the left edge; state persists across reloads (localStorage) |
 | 7 | Global search (type ≥1 word) | Grouped results dropdown (Vehicles/Services/Incidents/Builds/Documents/Research); every hit deep-links: service/incident → Timeline (`?hl=` highlights the row), document → Records/Documents, research → Plan/Research (`?hl=finding:…` expands + highlights), build → Builds, vehicle → Overview |
 
@@ -129,11 +129,12 @@ matching row scrolls into view and flashes for ~2s; see
 
 | # | Step | Expected |
 |---|------|----------|
-| 1 | Vehicle with schedule data | Reminders grouped overdue (red) / upcoming (amber) / ok (green); bundle suggestions |
-| 2 | "Plan it" | Creates a schedule-linked work item; the reminder shows a "planned" chip that LINKS to the work item (`plan/todo?hl=work_item:{id}`) instead of the button |
-| 3 | "Record service…" | Inline minimal form (today prefilled); save links the schedule item and the reminder clears |
-| 4 | "Mark done previously" | Past-dated backfill record; reminder clears; record is real Timeline history |
-| 5 | "Dismiss for this vehicle" | Item leaves the reminder groups (the override lives under Schedule ⚙) |
+| 1 | Vehicle with schedule data | Reminders grouped overdue (red) / upcoming (amber) / ok (green); bundle suggestions. Rows with a linked completion show a "Last done <date> — <description> @ <mi>" reference that deep-links to the record on the Timeline (`?hl=service:{id}`); otherwise "No service recorded" |
+| 2 | "Plan it" | Creates a schedule-linked work item; the reminder shows a "planned" chip that LINKS to the work item (`plan/todo?hl=work_item:{id}`) instead of the button, with a confirm-free "⊖ unplan" beside it (hidden when the item sits in a visit) that deletes the item and restores "Plan it" — same affordance as the dashboard's attention rows |
+| 3 | "Record service…" | Routes to the ONE real ServiceForm on the Timeline (`?action=record`), description prefilled + schedule item pre-linked; save links the schedule item and the reminder clears |
+| 4 | "Mark done previously" | Same routed form in retroactive mode (date starts empty, capped at today); past-dated record clears the reminder; record is real Timeline history |
+| 5 | "Link existing service…" | Compact picker of the vehicle's service records (date · description · mileage, newest first; already-linked rows marked). Choosing one adds this schedule item to the record's links (wholesale-replace PUT with existing links + this item) — the reminder recomputes and the row shows the "Last done" reference |
+| 6 | "Dismiss for this vehicle" | Item leaves the reminder groups (the override lives under Schedule ⚙) |
 
 ### To-do (work items)
 
