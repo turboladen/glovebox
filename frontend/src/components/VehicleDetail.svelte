@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { link, push } from '@keenmate/svelte-spa-router'
+  import { link, push, replace } from '@keenmate/svelte-spa-router'
   import { vehicles as vehiclesApi, reminders as remindersApi, mileage as mileageApi, vehicleExport, research } from '../lib/api'
   import type { Vehicle, RemindersResponse } from '../lib/types'
   import { formatDate } from '../lib/dates'
@@ -10,7 +10,6 @@
   import BuildsTab from './BuildsTab.svelte'
   import RecordsTab from './RecordsTab.svelte'
   import MileageEntry from './MileageEntry.svelte'
-  import ServiceForm from './ServiceForm.svelte'
   import CostsTab from './CostsTab.svelte'
   import VehicleEdit from './VehicleEdit.svelte'
 
@@ -22,8 +21,9 @@
   let loading = $state(true)
   let error = $state('')
   let showMileageForm = $state(false)
-  let showServiceForm = $state(false)
   let showEditForm = $state(false)
+  let menuOpen = $state(false)
+  let menuWrap: HTMLElement | undefined = $state(undefined)
 
   // Tabs are URL-driven (/vehicles/:id/:tab[/:sub]) so dashboard rows,
   // sidebar entries, and search hits can deep-link into a view.
@@ -34,8 +34,32 @@
     routeParams.tab && knownTabs.includes(routeParams.tab) ? routeParams.tab : 'overview',
   )
 
+  // Research moved from Records to Plan (UX quick wins) — keep old deep
+  // links working.
+  $effect(() => {
+    if (routeParams.tab === 'records' && routeParams.sub === 'research') {
+      replace(`/vehicles/${routeParams.id}/plan/research`)
+    }
+  })
+
   function openTab(tab: string) {
     push(`/vehicles/${vehicleId}${tab === 'overview' ? '' : `/${tab}`}`)
+  }
+
+  // ONE record-service verb, ONE form: route to the Timeline with its
+  // service form open (the ?action=record param is read by TimelineTab).
+  function openRecordService() {
+    push(`/vehicles/${vehicleId}/timeline?action=record`)
+  }
+
+  function onDocClick(e: MouseEvent) {
+    if (menuOpen && menuWrap && !menuWrap.contains(e.target as Node)) {
+      menuOpen = false
+    }
+  }
+
+  function onDocKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape') menuOpen = false
   }
 
   async function loadData() {
@@ -69,11 +93,6 @@
 
   async function onMileageAdded() {
     showMileageForm = false
-    await refreshReminders()
-  }
-
-  async function onServiceAdded() {
-    showServiceForm = false
     await refreshReminders()
   }
 
@@ -150,6 +169,7 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
 
   async function archiveVehicle() {
     if (!vehicle) return
+    if (!confirm(`Archive "${vehicle.name}"? It moves to the sidebar's Archived group (reversible).`)) return
     try {
       vehicle = await vehiclesApi.archive(vehicle.id)
       refreshDashboard().catch(() => {})
@@ -181,6 +201,8 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
   }
 </script>
 
+<svelte:document onclick={onDocClick} onkeydown={onDocKeydown} />
+
 {#if loading}
   <p class="loading">Loading...</p>
 {:else if error}
@@ -211,31 +233,49 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
           <span class="mileage-date">as of {formatDate(reminderData.mileage_as_of)}</span>
         </div>
       {/if}
+      <!-- The two everyday verbs stay visible at equal weight; everything
+           occasional lives behind the ⋯ overflow menu. -->
       <div class="actions">
-        <button class="btn btn-secondary" onclick={() => (showEditForm = !showEditForm)}>
-          Edit
-        </button>
         <button class="btn btn-secondary" onclick={() => (showMileageForm = !showMileageForm)}>
-          Update Mileage
+          Update mileage
         </button>
-        <button class="btn btn-primary" onclick={() => (showServiceForm = !showServiceForm)}>
-          Log Service
+        <button class="btn btn-secondary" onclick={openRecordService}>
+          Record service
         </button>
-        <button class="btn btn-secondary" onclick={exportHistory}>
-          Export History
-        </button>
-        {#if vehicle.archived_at}
-          <button class="btn btn-secondary" onclick={unarchiveVehicle}>
-            Unarchive
+        <div class="overflow-wrap" bind:this={menuWrap}>
+          <button
+            class="btn btn-secondary btn-overflow"
+            aria-label="More actions"
+            title="More actions"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            onclick={() => (menuOpen = !menuOpen)}
+          >
+            ⋯
           </button>
-          <button class="btn btn-delete" onclick={deleteVehicle}>
-            Delete
-          </button>
-        {:else}
-          <button class="btn btn-secondary" onclick={archiveVehicle}>
-            Archive
-          </button>
-        {/if}
+          {#if menuOpen}
+            <div class="overflow-menu" role="menu">
+              <button role="menuitem" class="menu-item" onclick={() => { menuOpen = false; showEditForm = !showEditForm }}>
+                Edit vehicle…
+              </button>
+              <button role="menuitem" class="menu-item" onclick={() => { menuOpen = false; exportHistory() }}>
+                Export history
+              </button>
+              {#if vehicle.archived_at}
+                <button role="menuitem" class="menu-item" onclick={() => { menuOpen = false; unarchiveVehicle() }}>
+                  Unarchive vehicle
+                </button>
+                <button role="menuitem" class="menu-item danger" onclick={() => { menuOpen = false; deleteVehicle() }}>
+                  Delete vehicle…
+                </button>
+              {:else}
+                <button role="menuitem" class="menu-item" onclick={() => { menuOpen = false; archiveVehicle() }}>
+                  Archive vehicle…
+                </button>
+              {/if}
+            </div>
+          {/if}
+        </div>
       </div>
     </div>
 
@@ -247,10 +287,6 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
       <MileageEntry vehicleId={vehicle.id} onComplete={onMileageAdded} onCancel={() => (showMileageForm = false)} />
     {/if}
 
-    {#if showServiceForm}
-      <ServiceForm vehicleId={vehicle.id} onComplete={onServiceAdded} onCancel={() => (showServiceForm = false)} />
-    {/if}
-
     <div class="tabs">
       <button class="tab" class:active={activeTab === 'overview'} onclick={() => openTab('overview')}>
         Overview
@@ -259,13 +295,13 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
         Timeline
       </button>
       <button class="tab" class:active={activeTab === 'plan'} onclick={() => openTab('plan')}>
-        Plan
+        Plan{#if plannedCount > 0} <span class="badge badge-planned">{plannedCount}</span>{/if}
       </button>
       <button class="tab" class:active={activeTab === 'builds'} onclick={() => openTab('builds')}>
         Builds
       </button>
       <button class="tab" class:active={activeTab === 'records'} onclick={() => openTab('records')}>
-        Records{#if plannedCount > 0} <span class="badge badge-planned">{plannedCount}</span>{/if}
+        Records
       </button>
       <button class="tab" class:active={activeTab === 'costs'} onclick={() => openTab('costs')}>
         Costs
@@ -350,16 +386,6 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
     border: 1px solid var(--warning);
   }
 
-  .btn-delete {
-    color: var(--danger);
-    border-color: var(--danger);
-  }
-
-  .btn-delete:hover {
-    background: var(--danger);
-    color: white;
-  }
-
   /* --- Instrument cluster status bar --- */
   .status-bar {
     display: flex;
@@ -406,6 +432,63 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
     margin-left: auto;
     display: flex;
     gap: var(--sp-2);
+  }
+
+  /* --- ⋯ overflow menu --- */
+  .overflow-wrap {
+    position: relative;
+  }
+
+  .btn-overflow {
+    padding-left: var(--sp-3);
+    padding-right: var(--sp-3);
+    font-weight: 700;
+    letter-spacing: 0.05em;
+  }
+
+  .overflow-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    min-width: 170px;
+    padding: var(--sp-1);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
+    z-index: 40;
+    display: flex;
+    flex-direction: column;
+    animation: fade-in-down var(--duration-fast) var(--ease-out) both;
+  }
+
+  .menu-item {
+    padding: var(--sp-2) var(--sp-3);
+    border: none;
+    border-radius: var(--radius-sm);
+    background: none;
+    text-align: left;
+    font-family: var(--font-display);
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+    white-space: nowrap;
+    transition:
+      background var(--duration-fast) var(--ease-out),
+      color var(--duration-fast) var(--ease-out);
+  }
+
+  .menu-item:hover {
+    background: var(--surface-hover);
+    color: var(--text);
+  }
+
+  .menu-item.danger {
+    color: var(--danger);
+  }
+
+  .menu-item.danger:hover {
+    background: var(--danger-bg);
   }
 
   /* --- Tab navigation --- */

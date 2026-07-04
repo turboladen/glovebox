@@ -7,6 +7,7 @@
   // lives here too: Record service (existing ServiceForm) and Log
   // incident (IncidentForm).
   import { onMount } from 'svelte'
+  import { querystring } from '@keenmate/svelte-spa-router'
   import {
     services as servicesApi,
     incidents as incidentsApi,
@@ -14,6 +15,7 @@
     shops as shopsApi,
     mileage as mileageApi,
   } from '../lib/api'
+  import { anchorId, flashHighlightFromQuery } from '../lib/highlight'
   import type {
     ServiceRecordWithLinks,
     IncidentWithDetails,
@@ -99,7 +101,24 @@
     }
   }
 
-  onMount(loadData)
+  onMount(async () => {
+    await loadData()
+    // Deep-link highlight (?hl=service:N / incident:N — see lib/highlight).
+    for (const kind of ['service', 'incident', 'mileage']) {
+      flashHighlightFromQuery(kind)
+    }
+  })
+
+  // The vehicle header's "Record service" routes here with ?action=record
+  // so there is ONE service form; reacting to the querystring also covers
+  // clicking it while already on the Timeline.
+  $effect(() => {
+    if (new URLSearchParams(querystring() ?? '').get('action') === 'record') {
+      showServiceForm = true
+      showIncidentForm = false
+      editingIncident = null
+    }
+  })
 
   async function refresh() {
     await loadData()
@@ -301,6 +320,9 @@
         {@const isExpanded = expandedId === key}
         {#if entry.type === 'service'}
           {@const record = entry.data}
+          <!-- One contiguous card: the wrapper owns the border; the row and
+               its expanded panel are borderless halves inside it. -->
+          <div class="service-entry" class:expanded={isExpanded} id={anchorId('service', record.id)}>
           <div
             class="history-card service-card"
             class:expanded={isExpanded}
@@ -455,9 +477,10 @@
               {/if}
             </div>
           {/if}
+          </div>
         {:else if entry.type === 'incident'}
           {@const inc = entry.data}
-          <div class="history-card obs-card" class:resolved={inc.resolved} class:expanded={isExpanded}>
+          <div class="history-card obs-card" class:resolved={inc.resolved} class:expanded={isExpanded} id={anchorId('incident', inc.id)}>
             <div
               class="inc-header"
               role="button"
@@ -489,7 +512,7 @@
           </div>
         {:else}
           {@const log = entry.data}
-          <div class="history-card mileage-card">
+          <div class="history-card mileage-card" id={anchorId('mileage', log.id)}>
             <div class="history-header">
               <span class="type-badge mileage-badge">Mileage</span>
               <span class="date">{formatDate(log.recorded_at)}</span>
@@ -572,9 +595,33 @@
     border-color: var(--primary);
   }
 
-  .service-card.expanded {
-    border-bottom-left-radius: 0;
-    border-bottom-right-radius: 0;
+  /* Service entries wrap the row + its expanded panel so the expanded
+     state reads as ONE contiguous card: the border lives on the wrapper,
+     never on both halves. */
+  .service-entry {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--bg-raised);
+    transition:
+      border-color var(--duration-base) var(--ease-out),
+      box-shadow var(--duration-base) var(--ease-out);
+  }
+
+  .service-entry:hover {
+    border-color: var(--border);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .service-entry.expanded {
+    border-color: var(--primary);
+  }
+
+  .service-entry .service-card,
+  .service-entry .service-card:hover,
+  .service-entry .service-card.expanded {
+    border: none;
+    box-shadow: none;
+    background: none;
   }
 
   .history-card.resolved { opacity: 0.6; }
@@ -632,13 +679,11 @@
   .part-chip { background: var(--success-bg); color: var(--success); }
   .obs-chip { background: var(--warning-bg); color: var(--warning); }
 
-  /* Expanded panel (service rows) */
+  /* Expanded panel (service rows): a borderless bottom half of the
+     wrapping .service-entry, separated by a hairline. */
   .expanded-panel {
-    border: 1px solid var(--primary);
-    border-top: none;
-    border-bottom-left-radius: var(--radius-md);
-    border-bottom-right-radius: var(--radius-md);
-    background: var(--bg-raised);
+    border-top: 1px solid var(--border-subtle);
+    background: none;
     padding: var(--sp-3) var(--sp-4);
   }
 
