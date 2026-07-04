@@ -142,7 +142,7 @@
 </script>
 
 <div class="form-card">
-  <h3>Log Service</h3>
+  <h3>Record service</h3>
   <form onsubmit={(e) => { e.preventDefault(); submit() }}>
     <div class="form-row">
       <div class="field">

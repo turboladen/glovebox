@@ -40,7 +40,7 @@
   {:else if !data}
     <p class="empty">Could not load cost data.</p>
   {:else if data.total_cost_cents === 0 && data.part_count === 0}
-    <p class="empty">No cost data yet. Log services or add parts to see ownership costs.</p>
+    <p class="empty">No cost data yet. Record services or add parts to see ownership costs.</p>
   {:else}
     <div class="summary-grid">
       <div class="summary-card">

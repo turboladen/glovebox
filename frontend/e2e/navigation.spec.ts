@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { createVehicle } from './helpers'
+import { createVehicle, seedOverdueItem, vehicleIdFrom } from './helpers'
 
 // TP-01: Shell — header, sidebar, routing
 test.describe('Navigation', () => {
@@ -44,6 +44,23 @@ test.describe('Navigation', () => {
     // "All vehicles" returns to the garage dashboard.
     await sidebar.getByText('All vehicles').click()
     await expect(page).toHaveURL('/')
+  })
+
+  test('sidebar "N due" badge deep-links to the Plan due view', async ({ browser, page }) => {
+    const url = await createVehicle(browser, 'Sidebar Due Badge Car')
+    const vehicleId = vehicleIdFrom(url)
+    await seedOverdueItem(page, vehicleId, 'Badge overdue item')
+
+    await page.goto('/')
+    const entry = page
+      .getByTestId('sidebar')
+      .locator('.entry', { hasText: 'Sidebar Due Badge Car' })
+    // The badge is a link to what's due, not just a count…
+    await entry.getByRole('button', { name: /due/ }).click()
+    await expect(page).toHaveURL(new RegExp(`/vehicles/${vehicleId}/plan/due`))
+    await expect(
+      page.locator('.reminder-card.overdue', { hasText: 'Badge overdue item' }),
+    ).toBeVisible()
   })
 
   test('sidebar collapses to a slim handle and the state persists', async ({ page }) => {

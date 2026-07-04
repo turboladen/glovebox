@@ -59,7 +59,7 @@ pub struct VehicleSummary {
 /// One row in the "Needs attention" block. `entity_id` is the underlying
 /// record (schedule item / research finding / incident) so quick actions
 /// like "plan it" can link the source; `deep_link_hint` names where the
-/// row navigates (`plan/due`, `records/research`, `timeline`).
+/// row navigates (`plan/due`, `plan/research`, `timeline`).
 #[derive(Debug, Serialize)]
 pub struct AttentionItem {
     pub vehicle_id: i32,
@@ -75,8 +75,19 @@ pub struct AttentionItem {
     pub deep_link_hint: String,
     /// True when a participating work item already links this source —
     /// the "plan it" quick action becomes a "planned" marker instead of
-    /// creating a duplicate.
+    /// creating a duplicate. Derived from `planned_work_item_id` (kept
+    /// as a bool for existing consumers).
     pub planned: bool,
+    /// The id of that already-linking work item, so the "planned" marker
+    /// can be a hypermedia link to the work item itself (and support
+    /// un-planning). First participating item wins if several link the
+    /// same source.
+    pub planned_work_item_id: Option<i32>,
+    /// True when that work item is attached to a visit (`scheduled`).
+    /// The dashboard's confirm-free un-plan ✕ hides for these: deleting a
+    /// scheduled item silently removes it from its visit, which re-planning
+    /// would NOT restore — manage it from the Plan tab instead.
+    pub planned_item_in_visit: bool,
 }
 
 /// An open visit with its owning vehicle named for garage-wide display.
@@ -141,20 +152,31 @@ pub async fn garage(db: &DatabaseConnection) -> DomainResult<GarageDashboard> {
         let rems = reminders::calculate_reminders(db, v.id).await?;
         let forecast = budget::forecast_from(db, v.id, &rems).await?;
 
-        // Open (participating) work items: the unscheduled count, plus the
-        // already-planned sets that flip attention rows to "planned".
+        // Open (participating) work items: the unscheduled count, plus
+        // source-id → work-item-id maps that flip attention rows to a
+        // "planned" link targeting the linking item (first item wins).
         let open_items = work_item::list(db, v.id, false).await?;
         let unscheduled_work_count = open_items.iter().filter(|i| i.visit_id.is_none()).count();
-        let planned_schedule: std::collections::HashSet<i32> = open_items
-            .iter()
-            .filter_map(|i| i.schedule_item_id)
-            .collect();
-        let planned_findings: std::collections::HashSet<i32> = open_items
-            .iter()
-            .filter_map(|i| i.research_finding_id)
-            .collect();
-        let planned_incidents: std::collections::HashSet<i32> =
-            open_items.iter().filter_map(|i| i.incident_id).collect();
+        // Map value: (work_item_id, in_visit) — in_visit hides the dashboard's
+        // confirm-free un-plan for items already attached to a visit.
+        let mut planned_schedule: std::collections::HashMap<i32, (i32, bool)> =
+            std::collections::HashMap::new();
+        let mut planned_findings: std::collections::HashMap<i32, (i32, bool)> =
+            std::collections::HashMap::new();
+        let mut planned_incidents: std::collections::HashMap<i32, (i32, bool)> =
+            std::collections::HashMap::new();
+        for item in &open_items {
+            let entry = (item.id, item.visit_id.is_some());
+            if let Some(sid) = item.schedule_item_id {
+                planned_schedule.entry(sid).or_insert(entry);
+            }
+            if let Some(fid) = item.research_finding_id {
+                planned_findings.entry(fid).or_insert(entry);
+            }
+            if let Some(iid) = item.incident_id {
+                planned_incidents.entry(iid).or_insert(entry);
+            }
+        }
 
         let mut overdue_count = 0;
         let mut due_soon_count = 0;
@@ -162,6 +184,7 @@ pub async fn garage(db: &DatabaseConnection) -> DomainResult<GarageDashboard> {
             match r.status.as_str() {
                 "overdue" => {
                     overdue_count += 1;
+                    let planned_id = planned_schedule.get(&r.schedule_item.id).copied();
                     attention.push(AttentionItem {
                         vehicle_id: v.id,
                         vehicle_name: v.name.clone(),
@@ -170,11 +193,14 @@ pub async fn garage(db: &DatabaseConnection) -> DomainResult<GarageDashboard> {
                         schedule_item_name: Some(r.schedule_item.name.clone()),
                         entity_id: r.schedule_item.id,
                         deep_link_hint: "plan/due".into(),
-                        planned: planned_schedule.contains(&r.schedule_item.id),
+                        planned: planned_id.is_some(),
+                        planned_work_item_id: planned_id.map(|(id, _)| id),
+                        planned_item_in_visit: planned_id.is_some_and(|(_, v)| v),
                     });
                 }
                 "upcoming" => {
                     due_soon_count += 1;
+                    let planned_id = planned_schedule.get(&r.schedule_item.id).copied();
                     attention.push(AttentionItem {
                         vehicle_id: v.id,
                         vehicle_name: v.name.clone(),
@@ -183,7 +209,9 @@ pub async fn garage(db: &DatabaseConnection) -> DomainResult<GarageDashboard> {
                         schedule_item_name: Some(r.schedule_item.name.clone()),
                         entity_id: r.schedule_item.id,
                         deep_link_hint: "plan/due".into(),
-                        planned: planned_schedule.contains(&r.schedule_item.id),
+                        planned: planned_id.is_some(),
+                        planned_work_item_id: planned_id.map(|(id, _)| id),
+                        planned_item_in_visit: planned_id.is_some_and(|(_, v)| v),
                     });
                 }
                 _ => {}
@@ -197,6 +225,7 @@ pub async fn garage(db: &DatabaseConnection) -> DomainResult<GarageDashboard> {
             .filter(|f| f.category == "recall")
             .collect();
         for f in &open_recalls {
+            let planned_id = planned_findings.get(&f.id).copied();
             attention.push(AttentionItem {
                 vehicle_id: v.id,
                 vehicle_name: v.name.clone(),
@@ -204,8 +233,10 @@ pub async fn garage(db: &DatabaseConnection) -> DomainResult<GarageDashboard> {
                 label: f.title.clone(),
                 schedule_item_name: None,
                 entity_id: f.id,
-                deep_link_hint: "records/research".into(),
-                planned: planned_findings.contains(&f.id),
+                deep_link_hint: "plan/research".into(),
+                planned: planned_id.is_some(),
+                planned_work_item_id: planned_id.map(|(id, _)| id),
+                planned_item_in_visit: planned_id.is_some_and(|(_, v)| v),
             });
         }
 
@@ -217,6 +248,7 @@ pub async fn garage(db: &DatabaseConnection) -> DomainResult<GarageDashboard> {
             .filter(|i| !i.incident.resolved && i.incident.category != "note")
             .collect();
         for i in &unresolved {
+            let planned_id = planned_incidents.get(&i.incident.id).copied();
             attention.push(AttentionItem {
                 vehicle_id: v.id,
                 vehicle_name: v.name.clone(),
@@ -225,7 +257,9 @@ pub async fn garage(db: &DatabaseConnection) -> DomainResult<GarageDashboard> {
                 schedule_item_name: None,
                 entity_id: i.incident.id,
                 deep_link_hint: "timeline".into(),
-                planned: planned_incidents.contains(&i.incident.id),
+                planned: planned_id.is_some(),
+                planned_work_item_id: planned_id.map(|(id, _)| id),
+                planned_item_in_visit: planned_id.is_some_and(|(_, v)| v),
             });
         }
 
@@ -535,7 +569,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 ("overdue", sched, "plan/due"),
-                ("recall", recall, "records/research"),
+                ("recall", recall, "plan/research"),
                 ("incident", inc.incident.id, "timeline"),
             ]
         );
@@ -551,13 +585,18 @@ mod tests {
             vec![Some("Brake fluid flush"), None, None]
         );
         assert!(d.attention.iter().all(|a| a.vehicle_name == "Golf"));
-        // Only the incident has a linked open work item → planned.
+        // Only the incident has a linked open work item → planned, and the
+        // row carries THAT work item's id so the chip can link to it.
         assert_eq!(
             d.attention
                 .iter()
-                .map(|a| (a.kind.as_str(), a.planned))
+                .map(|a| (a.kind.as_str(), a.planned, a.planned_work_item_id))
                 .collect::<Vec<_>>(),
-            vec![("overdue", false), ("recall", false), ("incident", true)]
+            vec![
+                ("overdue", false, None),
+                ("recall", false, None),
+                ("incident", true, Some(attached.id)),
+            ]
         );
 
         // Upcoming visits: the one open visit, vehicle-labeled, rolled up.

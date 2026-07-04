@@ -12,7 +12,8 @@ test.describe('Timeline', () => {
   test('shows empty state', async ({ page }) => {
     await page.goto(`${vehicleUrl}/timeline`)
     await expect(page.getByText('No history yet.')).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Record service' })).toBeVisible()
+    // Scope to the tab's own actions — the vehicle header shares the verb.
+    await expect(page.locator('.create-actions').getByRole('button', { name: 'Record service' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Log incident' })).toBeVisible()
   })
 
@@ -32,7 +33,7 @@ test.describe('Timeline', () => {
 
   test('record a service from the Timeline', async ({ page }) => {
     await page.goto(`${vehicleUrl}/timeline`)
-    await page.getByRole('button', { name: 'Record service' }).click()
+    await page.locator('.create-actions').getByRole('button', { name: 'Record service' }).click()
     await page.getByLabel('Odometer').fill('45200')
     await page.getByLabel('Description').fill('Oil Change')
     await page.getByLabel('Total Cost ($)').fill('49.99')
@@ -45,7 +46,10 @@ test.describe('Timeline', () => {
 
   test('insurance-paid service shows the costs split', async ({ page }) => {
     await page.goto(vehicleUrl)
-    await page.getByRole('button', { name: 'Log Service' }).click()
+    // The header's "Record service" routes to the Timeline with the ONE
+    // service form open (the ?action=record param is consumed on arrival).
+    await page.getByRole('button', { name: 'Record service' }).click()
+    await expect(page.getByRole('heading', { name: 'Record service' })).toBeVisible()
     await page.getByLabel('Description').fill('Collision repair')
     await page.getByLabel('Total Cost ($)').fill('150.00')
     // Payer note field only appears once a non-self payer is chosen
@@ -127,7 +131,7 @@ test.describe('Timeline', () => {
   test('resolving with a service links it and surfaces chips both ways', async ({ page }) => {
     await page.goto(`${vehicleUrl}/timeline`)
     // A service record to link against.
-    await page.getByRole('button', { name: 'Record service' }).click()
+    await page.locator('.create-actions').getByRole('button', { name: 'Record service' }).click()
     await page.getByLabel('Description').fill('Brake pad replacement')
     await page.getByRole('button', { name: 'Save Service' }).click()
     await expect(page.getByLabel('Description')).not.toBeVisible()

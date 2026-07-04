@@ -1,9 +1,11 @@
 <script lang="ts">
   // Plan tab (unit F): the whole future in one place — sub-nav
-  // Due / To-do / Visits / Schedule ⚙. Due re-homes the reminders view
-  // (ScheduleTab) with a "plan it" affordance; To-do is the work-item
-  // backlog; Visits groups items into shop trips with the complete/cancel
-  // lifecycle; Schedule ⚙ is the schedule CRUD (ScheduleConfig).
+  // Due / To-do / Visits / Research / Schedule ⚙. Due re-homes the
+  // reminders view (ScheduleTab) with a "plan it" affordance; To-do is the
+  // work-item backlog; Visits groups items into shop trips with the
+  // complete/cancel lifecycle; Research re-homes ResearchTab (recalls and
+  // findings are future work, so they live under Plan); Schedule ⚙ is the
+  // schedule CRUD (ScheduleConfig).
   import { onMount } from 'svelte'
   import { push } from '@keenmate/svelte-spa-router'
   import {
@@ -20,8 +22,10 @@
   } from '../lib/types'
   import { formatDate } from '../lib/dates'
   import { refreshDashboard } from '../lib/stores'
+  import { anchorId, flashHighlightFromQuery } from '../lib/highlight'
   import ScheduleTab from './ScheduleTab.svelte'
   import ScheduleConfig from './ScheduleConfig.svelte'
+  import ResearchTab from './ResearchTab.svelte'
 
   let { vehicleId, reminderData, sub = 'due', onScheduleChanged }: {
     vehicleId: number
@@ -34,6 +38,7 @@
     { id: 'due', label: 'Due' },
     { id: 'todo', label: 'To-do' },
     { id: 'visits', label: 'Visits' },
+    { id: 'research', label: 'Research' },
     { id: 'schedule', label: 'Schedule ⚙' },
   ]
 
@@ -67,6 +72,15 @@
 
   onMount(loadData)
 
+  // Deep-link highlight: e.g. the dashboard's "planned" chip links to
+  // /plan/todo?hl=work_item:{id} (see lib/highlight.ts). Reactive on the
+  // querystring so in-tab navigation (Due → To-do) highlights too.
+  $effect(() => {
+    if (activeSub === 'todo' && !loading) {
+      flashHighlightFromQuery('work_item')
+    }
+  })
+
   async function refresh() {
     await loadData()
     await onScheduleChanged?.()
@@ -77,13 +91,17 @@
     push(`/vehicles/${vehicleId}/plan${id === 'due' ? '' : `/${id}`}`)
   }
 
-  let plannedScheduleIds = $derived(
-    new Set(
-      items
-        .filter((i) => i.status === 'planned' || i.status === 'scheduled')
-        .flatMap((i) => (i.schedule_item_id != null ? [i.schedule_item_id] : [])),
-    ),
-  )
+  // schedule_item_id → linking work item id (first participating item
+  // wins), so Due's "planned" chip can LINK to the work item.
+  let plannedWorkItems = $derived.by(() => {
+    const map = new Map<number, number>()
+    for (const i of items) {
+      if ((i.status === 'planned' || i.status === 'scheduled') && i.schedule_item_id != null && !map.has(i.schedule_item_id)) {
+        map.set(i.schedule_item_id, i.id)
+      }
+    }
+    return map
+  })
 
   async function planIt(reminder: ReminderStatus) {
     await workItemsApi.create(vehicleId, {
@@ -173,11 +191,11 @@
   function sourceBadges(item: WorkItem): SourceBadge[] {
     const badges: SourceBadge[] = []
     if (item.schedule_item_id != null)
-      badges.push({ label: 'schedule', target: `/vehicles/${vehicleId}/plan` })
+      badges.push({ label: 'schedule', target: `/vehicles/${vehicleId}/plan?hl=schedule_item:${item.schedule_item_id}` })
     if (item.research_finding_id != null)
-      badges.push({ label: 'recall/finding', target: `/vehicles/${vehicleId}/records/research` })
+      badges.push({ label: 'recall/finding', target: `/vehicles/${vehicleId}/plan/research?hl=finding:${item.research_finding_id}` })
     if (item.incident_id != null)
-      badges.push({ label: 'incident', target: `/vehicles/${vehicleId}/timeline` })
+      badges.push({ label: 'incident', target: `/vehicles/${vehicleId}/timeline?hl=incident:${item.incident_id}` })
     if (item.build_id != null)
       badges.push({ label: 'build', target: `/vehicles/${vehicleId}/builds` })
     return badges
@@ -366,9 +384,11 @@
       {reminderData}
       {vehicleId}
       onScheduleChanged={refresh}
-      {plannedScheduleIds}
+      {plannedWorkItems}
       onPlanIt={planIt}
     />
+  {:else if activeSub === 'research'}
+    <ResearchTab {vehicleId} />
   {:else if activeSub === 'schedule'}
     <ScheduleConfig {vehicleId} onChanged={refresh} />
   {:else if activeSub === 'todo'}
@@ -423,7 +443,7 @@
     {:else}
       <div class="item-list" data-testid="todo-list">
         {#each openItems as item (item.id)}
-          <div class="work-card">
+          <div class="work-card" id={anchorId('work_item', item.id)}>
             <div class="work-main">
               <span class="status-badge status-{item.status}">{item.status}</span>
               <strong class="work-title">{item.title}</strong>

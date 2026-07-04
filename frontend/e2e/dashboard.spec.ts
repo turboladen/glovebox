@@ -78,6 +78,39 @@ test.describe('Dashboard', () => {
     await expect(page.getByTestId('todo-list').getByText('PlanIt timing belt')).toBeVisible()
   })
 
+  test('planned chip links to the work item (highlighted) and ✕ un-plans it', async ({ browser, page }) => {
+    const url = await createVehicle(browser, 'Dash Hypermedia Car')
+    const vehicleId = vehicleIdFrom(url)
+    await seedOverdueItem(page, vehicleId, 'Hypermedia diff fluid')
+
+    await page.goto('/')
+    const row = page
+      .getByTestId('attention-block')
+      .locator('.attention-row', { hasText: 'Hypermedia diff fluid' })
+    await row.getByRole('button', { name: 'plan it' }).click()
+
+    // The "planned" state display IS a link to the created work item…
+    const chip = row.getByRole('link', { name: 'planned' })
+    await expect(chip).toBeVisible()
+    await chip.click()
+    await expect(page).toHaveURL(new RegExp(`/vehicles/${vehicleId}/plan/todo\\?hl=work_item:\\d+`))
+
+    // …whose row the To-do view scrolls to and flashes.
+    const item = page.getByTestId('todo-list').locator('.work-card', { hasText: 'Hypermedia diff fluid' })
+    await expect(item).toBeVisible()
+    await expect(item).toHaveClass(/hl-flash/)
+
+    // Un-plan from the dashboard chip: confirm-free, reverts to "plan it".
+    await page.goto('/')
+    await row.getByRole('button', { name: 'Un-plan' }).click()
+    await expect(row.getByRole('button', { name: 'plan it' })).toBeVisible()
+    await expect(row.getByRole('link', { name: 'planned' })).toHaveCount(0)
+
+    // The work item is really gone from the backlog.
+    await page.goto(`${url}/plan/todo`)
+    await expect(page.getByText(/Nothing on the to-do list/)).toBeVisible()
+  })
+
   test('attention row deep-links into the vehicle Plan tab', async ({ browser, page }) => {
     const url = await createVehicle(browser, 'Dash DeepLink Car')
     const vehicleId = vehicleIdFrom(url)

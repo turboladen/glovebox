@@ -2,6 +2,7 @@
   import { research as researchApi, services as servicesApi, parts as partsApi } from '../lib/api'
   import type { RecallCheckResult, ResearchReport, ReportWithFindings, ResearchFinding, ServiceRecordWithLinks, Part } from '../lib/types'
   import { formatDate } from '../lib/dates'
+  import { anchorId, flashHighlightFromQuery, highlightId } from '../lib/highlight'
 
   let { vehicleId }: { vehicleId: number } = $props()
 
@@ -79,7 +80,24 @@
     }
   }
 
-  loadReports()
+  loadReports().then(openHighlightedFinding)
+
+  // Deep links (?hl=finding:N — dashboard recall rows, search hits, to-do
+  // source badges) land on a specific finding: expand its report, then
+  // scroll + flash it.
+  async function openHighlightedFinding() {
+    const id = highlightId('finding')
+    if (id == null) return
+    try {
+      const findings = await researchApi.listFindings(vehicleId)
+      const target = findings.find((f) => f.id === id)
+      if (!target) return
+      await viewReport(target.report_id)
+      await flashHighlightFromQuery('finding')
+    } catch (e) {
+      console.error('Failed to open highlighted finding:', e)
+    }
+  }
 
   async function checkRecalls() {
     recallLoading = true
@@ -271,7 +289,7 @@
               <div class="category-group">
                 <h5 class="category-header">{categoryLabel(group.category)}</h5>
                 {#each group.findings as finding}
-                  <div class="finding-card" class:dismissed={finding.status === 'dismissed'} class:completed={finding.status === 'completed'}>
+                  <div class="finding-card" id={anchorId('finding', finding.id)} class:dismissed={finding.status === 'dismissed'} class:completed={finding.status === 'completed'}>
                     <div class="finding-header">
                       <span class="badge {severityClass(finding.severity)}">{finding.severity ?? 'info'}</span>
                       <span class="badge status-badge status-{finding.status}">{statusLabel(finding.status)}</span>

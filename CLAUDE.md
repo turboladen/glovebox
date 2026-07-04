@@ -113,11 +113,13 @@ welcome state when empty), `/shops`, `/vehicles/new`, `/vehicles/:id[/:tab[/:sub
 `VehicleDetail` tabs are **URL-driven** and intent-shaped: **Overview** (the same `Dashboard`
 component scoped via its `vehicleId` prop) · **Timeline** (`TimelineTab` — merged
 services/incidents/mileage stream with kind filters; subsumed the old History/Incidents tabs;
-incident detail/form live in `IncidentDetail`/`IncidentForm`) · **Plan** (`PlanTab` — sub-nav
-Due (`ScheduleTab`) / To-do / Visits / Schedule ⚙ (`ScheduleConfig`)) · **Builds** (`BuildsTab`)
-· **Records** (`RecordsTab` — sub-nav re-homing `PartsTab`/`DocumentsTab`/`ResearchTab`) ·
-**Costs** (`CostsTab` + the 12-month forecast buckets). Deep links (dashboard rows, search
-hits, source badges) always target a tab/sub URL.
+incident detail/form live in `IncidentDetail`/`IncidentForm`; the header's "Record service"
+routes here with `?action=record` so there is ONE service form) · **Plan** (`PlanTab` — sub-nav
+Due (`ScheduleTab`) / To-do / Visits / Research (`ResearchTab`) / Schedule ⚙ (`ScheduleConfig`))
+· **Builds** (`BuildsTab`) · **Records** (`RecordsTab` — sub-nav `PartsTab`/`DocumentsTab`;
+legacy `records/research` URLs redirect to `plan/research`) · **Costs** (`CostsTab` + the
+12-month forecast buckets). Deep links (dashboard rows, search hits, source badges) always
+target a tab/sub URL, usually with an `?hl=` highlight param.
 
 Vite dev server proxies `/api` and `/files` to the backend at `:3003`. In production, the backend serves `frontend/dist/` as SPA fallback.
 
@@ -149,7 +151,7 @@ Vite dev server proxies `/api` and `/files` to the backend at `:3003`. In produc
 - **Vehicle ownership checks**: All vehicle sub-resource handlers must call `glovebox_shared::services::vehicle::require(&state.db, vehicle_id).await?` before delegating to the sub-resource service (moving the check into service fns is tracked as `glovebox-paxy`)
 - **Cross-reference guards**: services self-guard EVERY foreign id they accept (build_id, service ids, schedule items, recurrence links, …) — MCP calls services directly with no handler pre-checks. Wrong-parent errors must be byte-identical `NotFound` to nonexistent (no ownership oracles), with a wrong-parent regression test per link
 - **Svelte edit forms clearing a field must send explicit `null`** — the `|| undefined` idiom omits the key, which the double-option backend reads as "not sent", silently keeping the stale value
-- **Hypermedia affordances**: any UI element displaying state (badges, counts, status chips like "6 DUE" or "PLANNED") must LINK to where that state lives, and deep-link targets must highlight the linked record (scroll + flash). No dead-end facts. One verb per action app-wide (e.g. "Record service", never a "Log Service" twin)
+- **Hypermedia affordances**: any UI element displaying state (badges, counts, status chips like "6 DUE" or "PLANNED") must LINK to where that state lives, and deep-link targets must highlight the linked record (scroll + flash). No dead-end facts. One verb per action app-wide (e.g. "Record service", never a "Log Service" twin). Implementation: links carry `?hl=<kind>:<id>`; target views render `id="<kind>-<id>"` anchors (underscores → dashes) and call `flashHighlightFromQuery(kind)` from `frontend/src/lib/highlight.ts` once rows are in the DOM (2s flash via `.hl-flash`, `prefers-reduced-motion` respected)
 - **N+1 queries**: List endpoints that load related data must use batch loading with `is_in()` queries, not per-record queries in a loop
 - **Svelte 5 bind:this**: Elements used with `bind:this` must be declared with `$state(undefined)`, not bare `let`
 - **Imports**: Use `sea_orm::*` glob imports (idiomatic for SeaORM). Explicit imports create maintenance burden with unused-import warnings

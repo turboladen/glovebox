@@ -481,6 +481,34 @@ label,
   margin-bottom: var(--sp-3);
 }
 
+/* --- Hypermedia deep-link highlight ----------- */
+/* Applied by lib/highlight.ts to the `?hl=` target for ~2s. */
+@keyframes hl-flash-fade {
+  0%, 55% {
+    outline-color: var(--primary);
+    background-color: var(--primary-muted);
+  }
+  100% {
+    outline-color: transparent;
+    background-color: transparent;
+  }
+}
+
+.hl-flash {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-md);
+  animation: hl-flash-fade 2s var(--ease-out) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Static highlight (no fade); JS removes the class after 2s. */
+  .hl-flash {
+    animation: none;
+    background-color: var(--primary-muted);
+  }
+}
+
 /* --- Reduced motion -------------------------- */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

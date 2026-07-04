@@ -13,8 +13,44 @@ test.describe('Vehicle Detail', () => {
     await page.goto(vehicleUrl)
     await expect(page.getByRole('heading', { name: 'Detail Test Car' })).toBeVisible()
     await expect(page.getByText('← All vehicles')).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Update Mileage' })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Log Service' })).toBeVisible()
+    // Two everyday verbs at equal weight…
+    await expect(page.getByRole('button', { name: 'Update mileage' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Record service' })).toBeVisible()
+    // …and the occasional actions behind the ⋯ overflow menu.
+    await page.getByRole('button', { name: 'More actions' }).click()
+    await expect(page.getByRole('menuitem', { name: 'Edit vehicle…' })).toBeVisible()
+    await expect(page.getByRole('menuitem', { name: 'Export history' })).toBeVisible()
+    await expect(page.getByRole('menuitem', { name: 'Archive vehicle…' })).toBeVisible()
+    // Esc closes the menu.
+    await page.keyboard.press('Escape')
+    await expect(page.getByRole('menuitem', { name: 'Edit vehicle…' })).not.toBeVisible()
+  })
+
+  test('header "Record service" routes to the Timeline with the form open (one verb, one form)', async ({ page }) => {
+    await page.goto(vehicleUrl)
+    await page.getByRole('button', { name: 'Record service' }).click()
+    // The ?action=record param is CONSUMED once handled (an identical hash
+    // push fires no event, so leaving it would kill the second click) —
+    // the URL settles on the clean timeline path with the form open.
+    await expect(page.getByRole('heading', { name: 'Record service' })).toBeVisible()
+    await expect(page).toHaveURL(new RegExp(`${vehicleUrl}/timeline$`))
+    await expect(page.getByRole('button', { name: 'Timeline' })).toHaveClass(/active/)
+    await expect(page.getByLabel('Description')).toBeVisible()
+
+    // Second click must work too (the dead-affordance regression): close the
+    // form, then re-open it from the header.
+    await page.locator('form').getByRole('button', { name: 'Cancel' }).click()
+    await expect(page.getByRole('heading', { name: 'Record service' })).not.toBeVisible()
+    await page.getByRole('button', { name: 'Record service' }).first().click()
+    await expect(page.getByRole('heading', { name: 'Record service' })).toBeVisible()
+  })
+
+  test('one record-service verb everywhere — no "Log Service" text remains', async ({ page }) => {
+    for (const path of ['', '/timeline', '/costs']) {
+      await page.goto(`${vehicleUrl}${path}`)
+      await expect(page.getByRole('heading', { name: 'Detail Test Car' })).toBeVisible()
+      await expect(page.getByText(/log service/i)).toHaveCount(0)
+    }
   })
 
   test('Overview is the default tab and shows the scoped dashboard', async ({ page }) => {
@@ -57,7 +93,7 @@ test.describe('Vehicle Detail', () => {
   })
 })
 
-// TP-04a-e: Edit Vehicle
+// TP-04a-e: Edit Vehicle (opened from the ⋯ overflow menu)
 test.describe('Edit Vehicle', () => {
   let vehicleUrl: string
 
@@ -65,9 +101,14 @@ test.describe('Edit Vehicle', () => {
     vehicleUrl = await createVehicle(browser, 'Edit Test Car')
   })
 
+  async function openEditForm(page: import('@playwright/test').Page) {
+    await page.getByRole('button', { name: 'More actions' }).click()
+    await page.getByRole('menuitem', { name: 'Edit vehicle…' }).click()
+  }
+
   test('toggle edit form', async ({ page }) => {
     await page.goto(vehicleUrl)
-    await page.getByRole('button', { name: 'Edit' }).click()
+    await openEditForm(page)
     await expect(page.getByRole('heading', { name: 'Edit Vehicle' })).toBeVisible()
     await page.getByRole('button', { name: 'Cancel' }).click()
     await expect(page.getByRole('heading', { name: 'Edit Vehicle' })).not.toBeVisible()
@@ -75,7 +116,7 @@ test.describe('Edit Vehicle', () => {
 
   test('edit name updates heading', async ({ page }) => {
     await page.goto(vehicleUrl)
-    await page.getByRole('button', { name: 'Edit' }).click()
+    await openEditForm(page)
     await page.getByLabel('Vehicle Name').fill('Renamed Car')
     await page.getByRole('button', { name: 'Save Changes' }).click()
     await expect(page.getByRole('heading', { name: 'Edit Vehicle' })).not.toBeVisible()
@@ -84,7 +125,7 @@ test.describe('Edit Vehicle', () => {
 
   test('set vehicle details shows subtitle', async ({ page }) => {
     await page.goto(vehicleUrl)
-    await page.getByRole('button', { name: 'Edit' }).click()
+    await openEditForm(page)
     await page.getByLabel('Year').fill('2020')
     await page.getByLabel('Make').fill('Toyota')
     await page.getByRole('textbox', { name: 'Model' }).fill('Camry')
@@ -94,7 +135,7 @@ test.describe('Edit Vehicle', () => {
 
   test('set sold fields shows badge', async ({ page }) => {
     await page.goto(vehicleUrl)
-    await page.getByRole('button', { name: 'Edit' }).click()
+    await openEditForm(page)
     await page.getByLabel('Sold Date').fill('2025-06-15')
     await page.getByLabel('Sold Price ($)').fill('15000')
     await page.getByLabel('Sold Mileage').fill('85000')
@@ -106,13 +147,13 @@ test.describe('Edit Vehicle', () => {
   test('clear sold fields removes badge', async ({ page }) => {
     await page.goto(vehicleUrl)
     // First set sold fields
-    await page.getByRole('button', { name: 'Edit' }).click()
+    await openEditForm(page)
     await page.getByLabel('Sold Date').fill('2025-06-15')
     await page.getByRole('button', { name: 'Save Changes' }).click()
     await expect(page.getByRole('heading', { name: 'Edit Vehicle' })).not.toBeVisible()
     await expect(page.locator('.sold-badge')).toBeVisible()
     // Now clear them (edit clears send explicit null)
-    await page.getByRole('button', { name: 'Edit' }).click()
+    await openEditForm(page)
     await expect(page.getByRole('heading', { name: 'Edit Vehicle' })).toBeVisible()
     await page.getByLabel('Sold Date').clear()
     await page.getByLabel('Sold Price ($)').clear()

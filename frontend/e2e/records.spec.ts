@@ -138,46 +138,4 @@ test.describe('Records: Documents', () => {
   })
 })
 
-// TP-26, TP-27: Records → Research
-test.describe('Records: Research', () => {
-  let vehicleUrl: string
-
-  test.beforeAll(async ({ browser }) => {
-    vehicleUrl = await createVehicle(browser, 'Research Test Car')
-  })
-
-  test('research sub-view shows empty state', async ({ page }) => {
-    await page.goto(`${vehicleUrl}/records/research`)
-    await expect(page.getByRole('button', { name: 'Research' })).toHaveClass(/active/)
-    await expect(page.getByText(/No research reports yet/)).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Check Recalls' })).toBeVisible()
-  })
-
-  test('recall check requires make/model/year', async ({ page }) => {
-    await page.goto(`${vehicleUrl}/records/research`)
-    await page.getByRole('button', { name: 'Check Recalls' }).click()
-    // Vehicle was created without make/model/year, so should show error
-    await expect(page.getByText(/required for recall lookup/i)).toBeVisible()
-  })
-})
-
-test.describe('Records: Research with vehicle details', () => {
-  let vehicleUrl: string
-
-  test.beforeAll(async ({ browser }) => {
-    vehicleUrl = await createVehicle(browser, 'Research VW GTI', {
-      year: '2017',
-      make: 'Volkswagen',
-      model: 'Golf GTI',
-    })
-  })
-
-  test('recall check returns results for known vehicle', async ({ page }) => {
-    await page.goto(`${vehicleUrl}/records/research`)
-    await page.getByRole('button', { name: 'Check Recalls' }).click()
-    // Live NHTSA request — should show either recall count or "no recalls"
-    await expect(
-      page.getByText(/recall\(s\) found|No open recalls found/i).first()
-    ).toBeVisible({ timeout: 30000 })
-  })
-})
+// TP-26/TP-27 moved: Research now lives under Plan → Research (plan.spec.ts).
