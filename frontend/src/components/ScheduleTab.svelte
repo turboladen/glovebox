@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import { link } from '@keenmate/svelte-spa-router'
   import { services as servicesApi, schedules as schedulesApi } from '../lib/api'
+  import { formatCents as formatCentsShared } from '../lib/money'
   import type { RemindersResponse, ReminderStatus, ServiceRecordWithLinks } from '../lib/types'
   import { formatDate } from '../lib/dates'
   import { anchorId, flashHighlightFromQuery } from '../lib/highlight'
@@ -116,7 +117,7 @@
 
   function formatCents(cents: number | null): string {
     if (cents == null) return ''
-    return `$${(cents / 100).toFixed(2)}`
+    return formatCentsShared(cents)
   }
 
 </script>
@@ -345,11 +346,22 @@
   }
 
   .group-label {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
     font-family: var(--font-display);
-    font-size: 0.85rem;
+    font-size: 0.8rem;
+    font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.13em;
     margin-bottom: var(--sp-2);
+  }
+
+  .group-label::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border-subtle);
   }
 
   .overdue-label { color: var(--danger); }
@@ -359,10 +371,12 @@
 
   .reminder-card {
     padding: var(--sp-3) var(--sp-4);
+    border: 1px solid var(--border-subtle);
     border-left: 3px solid var(--border-subtle);
     margin-bottom: var(--sp-2);
     background: var(--bg-raised);
-    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    border-radius: var(--radius-sm) var(--radius-lg) var(--radius-lg) var(--radius-sm);
+    box-shadow: inset 0 1px 0 var(--edge-highlight);
     transition:
       border-color var(--duration-fast) var(--ease-out),
       background var(--duration-fast) var(--ease-out),
@@ -382,6 +396,13 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
+  }
+
+  .reminder-header strong {
+    font-family: var(--font-display);
+    font-size: 1.05rem;
+    font-weight: 600;
+    letter-spacing: 0.015em;
   }
 
   .trigger {
@@ -470,23 +491,24 @@
   }
 
   .planned-chip {
-    font-size: 0.65rem;
+    font-family: var(--font-display);
+    font-size: 0.68rem;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
-    padding: 0 var(--sp-1);
-    border-radius: var(--radius-sm);
-    background: var(--success-bg);
-    color: var(--success);
-    border: 1px solid var(--success-border);
+    letter-spacing: 0.07em;
+    padding: 0 var(--sp-2);
+    border-radius: 999px;
+    background: var(--planned-bg);
+    color: var(--planned);
+    border: 1px solid var(--planned-border);
     align-self: center;
     text-decoration: none;
   }
 
   a.planned-chip:hover {
     text-decoration: underline;
-    border-color: var(--success);
-    color: var(--success);
+    border-color: var(--planned);
+    color: var(--planned);
   }
 
   .action-error {

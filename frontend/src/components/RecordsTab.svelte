@@ -40,25 +40,34 @@
 <style>
   .sub-nav {
     display: flex;
-    gap: var(--sp-1);
+    gap: 2px;
+    padding: 2px;
     margin-bottom: var(--sp-4);
+    background: var(--surface);
     border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    overflow: hidden;
+    border-radius: 999px;
     width: fit-content;
   }
 
   .sub-btn {
-    padding: var(--sp-1) var(--sp-3);
+    padding: 0.2rem var(--sp-3);
     border: none;
     background: none;
+    border-radius: 999px;
     font-family: var(--font-display);
-    font-size: 0.85rem;
+    font-size: 0.88rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
     cursor: pointer;
     color: var(--text-muted);
     transition:
       background var(--duration-fast) var(--ease-out),
       color var(--duration-fast) var(--ease-out);
+  }
+
+  .sub-btn:hover:not(.active) {
+    color: var(--text);
   }
 
   .sub-btn.active {

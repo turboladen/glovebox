@@ -5,6 +5,7 @@
   // from the old Schedule tab).
   import { onMount } from 'svelte'
   import { schedules as schedulesApi } from '../lib/api'
+  import { formatCents as formatCentsShared } from '../lib/money'
   import type { ResolvedScheduleItem, ScheduleItem } from '../lib/types'
 
   let { vehicleId, onChanged }: {
@@ -136,7 +137,7 @@
 
   function formatCents(cents: number | null): string {
     if (cents == null) return ''
-    return `$${(cents / 100).toFixed(2)}`
+    return formatCentsShared(cents)
   }
 </script>
 
@@ -261,8 +262,9 @@
   .item-card {
     padding: var(--sp-3) var(--sp-4);
     border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-lg);
     background: var(--bg-raised);
+    box-shadow: inset 0 1px 0 var(--edge-highlight);
   }
 
   .item-main {
@@ -293,13 +295,14 @@
   }
 
   .inherited-badge {
-    font-size: 0.7rem;
+    font-family: var(--font-display);
+    font-size: 0.68rem;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.08em;
     color: var(--text-muted);
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+    border-radius: 999px;
     padding: 1px var(--sp-2);
   }
 
@@ -339,13 +342,14 @@
   }
 
   .overridden-badge {
-    font-size: 0.7rem;
+    font-family: var(--font-display);
+    font-size: 0.68rem;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.08em;
     color: var(--text-muted);
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+    border-radius: 999px;
     padding: 1px var(--sp-2);
   }
 

@@ -399,10 +399,11 @@
   }
 
   .section {
-    padding: var(--sp-4);
+    padding: var(--sp-4) var(--sp-5);
     background: var(--bg-raised);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg);
+    box-shadow: inset 0 1px 0 var(--edge-highlight), var(--shadow-sm);
   }
 
   .section-header {
@@ -593,11 +594,11 @@
 
   .severity-critical { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger-border); }
   .severity-recommended { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning-border); }
-  .severity-optional { background: var(--info-bg); color: var(--info); border: 1px solid transparent; }
+  .severity-optional { background: var(--info-bg); color: var(--info); border: 1px solid var(--info-border); }
   .severity-info { background: var(--surface); color: var(--text-muted); border: 1px solid var(--border-subtle); }
 
-  .status-new { background: var(--info-bg); color: var(--info); border: 1px solid transparent; }
-  .status-planned { background: rgba(168, 85, 247, 0.12); color: #a855f7; border: 1px solid rgba(168, 85, 247, 0.25); }
+  .status-new { background: var(--info-bg); color: var(--info); border: 1px solid var(--info-border); }
+  .status-planned { background: var(--planned-bg); color: var(--planned); border: 1px solid var(--planned-border); }
   .status-completed { background: var(--success-bg); color: var(--success); border: 1px solid var(--success-border); }
   .status-dismissed { background: var(--surface); color: var(--text-muted); border: 1px solid var(--border-subtle); }
 

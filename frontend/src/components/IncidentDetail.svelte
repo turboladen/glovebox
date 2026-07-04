@@ -3,6 +3,7 @@
   // followups), re-homed from the retired IncidentsTab (unit F): Timeline
   // rows expand into this.
   import { incidents as incidentsApi } from '../lib/api'
+  import { formatCents } from '../lib/money'
   import type { IncidentWithDetails, ServiceRecordWithLinks, UpdateIncident } from '../lib/types'
   import { formatDate } from '../lib/dates'
 
@@ -156,13 +157,13 @@
         <div class="detail-item"><span class="detail-label">Adjuster</span><span>{incident.insurance_adjuster}{incident.insurance_adjuster_phone ? ` (${incident.insurance_adjuster_phone})` : ''}</span></div>
       {/if}
       {#if incident.total_repair_cost_cents !== null}
-        <div class="detail-item"><span class="detail-label">Repair Cost</span><span>${(incident.total_repair_cost_cents / 100).toFixed(2)}</span></div>
+        <div class="detail-item"><span class="detail-label">Repair Cost</span><span>{formatCents(incident.total_repair_cost_cents)}</span></div>
       {/if}
       {#if incident.deductible_cents !== null}
-        <div class="detail-item"><span class="detail-label">Deductible</span><span>${(incident.deductible_cents / 100).toFixed(2)}</span></div>
+        <div class="detail-item"><span class="detail-label">Deductible</span><span>{formatCents(incident.deductible_cents)}</span></div>
       {/if}
       {#if incident.insurance_payout_cents !== null}
-        <div class="detail-item"><span class="detail-label">Payout</span><span>${(incident.insurance_payout_cents / 100).toFixed(2)}</span></div>
+        <div class="detail-item"><span class="detail-label">Payout</span><span>{formatCents(incident.insurance_payout_cents)}</span></div>
       {/if}
     </div>
   {/if}
@@ -346,11 +347,12 @@
   }
 
   .linked-chip {
-    padding: 0.1rem 0.5rem;
-    border-radius: var(--radius-sm);
-    font-size: 0.8rem;
+    padding: 0.1rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.78rem;
     background: var(--success-bg);
     color: var(--success);
+    border: 1px solid var(--success-border);
   }
 
   .followups-section {

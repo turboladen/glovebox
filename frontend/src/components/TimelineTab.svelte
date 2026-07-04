@@ -24,6 +24,7 @@
     Shop,
   } from '../lib/types'
   import { formatDate } from '../lib/dates'
+  import { formatCents as formatCentsShared } from '../lib/money'
   import ServiceForm from './ServiceForm.svelte'
   import IncidentForm from './IncidentForm.svelte'
   import IncidentDetail from './IncidentDetail.svelte'
@@ -167,7 +168,7 @@
 
   function formatCents(cents: number | null): string {
     if (cents == null) return ''
-    return `$${(cents / 100).toFixed(2)}`
+    return formatCentsShared(cents)
   }
 
   function formatMileage(n: number | null): string {
@@ -553,15 +554,27 @@
     gap: var(--sp-2);
   }
 
+  /* Segmented control — the house filter language. */
   .filter-bar {
-    display: flex; gap: var(--sp-1);
-    border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; width: fit-content;
+    display: flex; gap: 2px;
+    padding: 2px;
+    background: var(--surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: 999px;
+    width: fit-content;
   }
 
   .filter-btn {
-    padding: var(--sp-1) var(--sp-3); border: none; background: none;
-    font-family: var(--font-display); font-size: 0.85rem; cursor: pointer; color: var(--text-muted);
+    padding: 0.2rem var(--sp-3); border: none; background: none;
+    border-radius: 999px;
+    font-family: var(--font-display); font-size: 0.88rem; font-weight: 600;
+    letter-spacing: 0.05em; text-transform: uppercase;
+    cursor: pointer; color: var(--text-muted);
     transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+  }
+
+  .filter-btn:hover:not(.active) {
+    color: var(--text);
   }
 
   .filter-btn.active {
@@ -581,8 +594,9 @@
   .history-list { display: flex; flex-direction: column; gap: var(--sp-2); }
 
   .history-card {
-    padding: var(--sp-3) var(--sp-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+    padding: var(--sp-3) var(--sp-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg);
     background: var(--bg-raised);
+    box-shadow: inset 0 1px 0 var(--edge-highlight);
     transition:
       border-color var(--duration-base) var(--ease-out),
       box-shadow var(--duration-base) var(--ease-out);
@@ -604,8 +618,9 @@
      never on both halves. */
   .service-entry {
     border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-lg);
     background: var(--bg-raised);
+    box-shadow: inset 0 1px 0 var(--edge-highlight);
     transition:
       border-color var(--duration-base) var(--ease-out),
       box-shadow var(--duration-base) var(--ease-out);
@@ -647,18 +662,29 @@
 
   .type-badge {
     font-family: var(--font-display);
-    font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em;
-    padding: 0.1rem 0.4rem; border-radius: var(--radius-sm); font-weight: 600;
+    font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em;
+    padding: 0.1rem 0.5rem; border-radius: 999px; font-weight: 600;
   }
 
-  .service-badge { background: var(--success-bg); color: var(--success); }
-  .obs-badge { background: var(--warning-bg); color: var(--warning); }
-  .mileage-badge { background: var(--info-bg); color: var(--info); }
+  .service-badge { background: var(--success-bg); color: var(--success); border: 1px solid var(--success-border); }
+  .obs-badge { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning-border); }
+  .mileage-badge { background: var(--info-bg); color: var(--info); border: 1px solid var(--info-border); }
   .resolved-badge { font-size: 0.75rem; color: var(--success); }
 
-  .date { font-weight: 600; }
-  .cost { margin-left: auto; font-weight: 600; }
-  .description { margin: var(--sp-1) 0; }
+  .date {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+  }
+  .cost {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.9rem;
+    font-weight: 700;
+  }
+  .description { margin: var(--sp-1) 0; font-weight: 500; font-size: 0.95rem; }
   .inc-title { font-weight: 600; flex: 1; }
   .meta { font-size: 0.85rem; color: var(--text-muted); display: flex; gap: var(--sp-3); }
   .category { text-transform: capitalize; font-size: 0.8rem; color: var(--text-muted); }
@@ -677,11 +703,11 @@
   }
 
   .linked-chip {
-    padding: 0.1rem 0.5rem; border-radius: var(--radius-sm); font-size: 0.8rem;
+    padding: 0.1rem 0.55rem; border-radius: 999px; font-size: 0.78rem;
   }
 
-  .part-chip { background: var(--success-bg); color: var(--success); }
-  .obs-chip { background: var(--warning-bg); color: var(--warning); }
+  .part-chip { background: var(--success-bg); color: var(--success); border: 1px solid var(--success-border); }
+  .obs-chip { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning-border); }
 
   /* Expanded panel (service rows): a borderless bottom half of the
      wrapping .service-entry, separated by a hairline. */
@@ -772,12 +798,16 @@
   .load-more {
     display: block;
     margin: var(--sp-4) auto 0;
-    padding: var(--sp-2) var(--sp-4);
+    padding: var(--sp-2) var(--sp-5);
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: var(--radius-md);
+    border-radius: 999px;
     color: var(--text-secondary);
+    font-family: var(--font-display);
     font-size: 0.85rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
     cursor: pointer;
     transition: border-color var(--duration-fast) var(--ease-out);
   }

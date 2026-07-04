@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { costs as costsApi, budget as budgetApi } from '../lib/api'
+  import { formatCents } from '../lib/money'
   import type { BudgetForecast, CostSummary } from '../lib/types'
   import { formatMonth } from '../lib/dates'
 
@@ -22,13 +23,11 @@
     }
   })
 
-  function fmt(cents: number): string {
-    return `$${(cents / 100).toFixed(2)}`
-  }
+  const fmt = formatCents
 
   function fmtLong(cents: number | null): string {
     if (cents === null) return 'N/A'
-    return `$${(cents / 100).toFixed(2)}`
+    return formatCents(cents)
   }
 </script>
 
@@ -149,8 +148,9 @@
   .summary-card {
     padding: var(--sp-3) var(--sp-4);
     border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-lg);
     background: var(--bg-raised);
+    box-shadow: inset 0 1px 0 var(--edge-highlight);
     display: flex;
     flex-direction: column;
     transition: border-color var(--duration-base) var(--ease-out);
@@ -162,21 +162,24 @@
 
   .card-label {
     font-family: var(--font-display);
-    font-size: 0.8rem;
+    font-size: 0.74rem;
+    font-weight: 600;
     color: var(--text-muted);
     text-transform: uppercase;
-    letter-spacing: 0.03em;
+    letter-spacing: 0.11em;
   }
 
   .card-value {
-    font-family: var(--font-display);
-    font-size: 1.3rem;
-    font-weight: 600;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 1.35rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
     margin-top: var(--sp-1);
   }
 
   .card-sub {
-    font-size: 0.8rem;
+    font-size: 0.78rem;
     color: var(--text-muted);
   }
 
@@ -192,15 +195,32 @@
     border-bottom: 1px solid var(--border-subtle);
   }
 
+  /* Numeric columns read like a ledger. */
+  .cost-table th:not(:first-child),
+  .cost-table td:not(:first-child) {
+    text-align: right;
+  }
+
+  .cost-table td:not(:first-child) {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.82rem;
+  }
+
   .cost-table th {
     font-family: var(--font-display);
     font-weight: 600;
-    font-size: 0.8rem;
+    font-size: 0.76rem;
     text-transform: uppercase;
+    letter-spacing: 0.09em;
     color: var(--text-muted);
   }
 
-  .cost-table .total { font-weight: 600; }
+  .cost-table tbody tr:hover td {
+    background: var(--surface);
+  }
+
+  .cost-table .total { font-weight: 700; }
 
   .empty { color: var(--text-muted); text-align: center; padding: var(--sp-8) 0; }
 </style>

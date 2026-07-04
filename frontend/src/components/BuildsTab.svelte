@@ -6,6 +6,7 @@
   import { onMount } from 'svelte'
   import { push } from '@keenmate/svelte-spa-router'
   import { builds as buildsApi } from '../lib/api'
+  import { formatCents } from '../lib/money'
   import type { Build, BuildProgress } from '../lib/types'
   import { formatDate } from '../lib/dates'
   import { refreshDashboard } from '../lib/stores'
@@ -142,9 +143,7 @@
     return s.replace(/_/g, ' ')
   }
 
-  function fmt(cents: number): string {
-    return `$${(cents / 100).toFixed(2)}`
-  }
+  const fmt = formatCents
 </script>
 
 <div class="builds-tab">
@@ -304,9 +303,10 @@
 
   .build-card {
     border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-lg);
     background: var(--bg-raised);
     padding: var(--sp-3) var(--sp-4);
+    box-shadow: inset 0 1px 0 var(--edge-highlight);
     transition: border-color var(--duration-base) var(--ease-out);
   }
 
@@ -349,19 +349,19 @@
 
   .status-badge {
     font-family: var(--font-display);
-    font-size: 0.65rem;
+    font-size: 0.68rem;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    padding: 0.1rem 0.4rem;
-    border-radius: var(--radius-sm);
+    letter-spacing: 0.08em;
+    padding: 0.1rem 0.5rem;
+    border-radius: 999px;
   }
 
-  .status-planned { background: var(--info-bg); color: var(--info); }
-  .status-active { background: var(--success-bg); color: var(--success); }
-  .status-on_hold { background: var(--warning-bg); color: var(--warning); }
-  .status-completed { background: var(--surface); color: var(--text-secondary); }
-  .status-abandoned { background: var(--surface); color: var(--text-muted); }
+  .status-planned { background: var(--planned-bg); color: var(--planned); border: 1px solid var(--planned-border); }
+  .status-active { background: var(--success-bg); color: var(--success); border: 1px solid var(--success-border); }
+  .status-on_hold { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning-border); }
+  .status-completed { background: var(--surface); color: var(--text-secondary); border: 1px solid var(--border-subtle); }
+  .status-abandoned { background: var(--surface); color: var(--text-muted); border: 1px solid var(--border-subtle); }
 
   .build-detail {
     margin-top: var(--sp-3);
@@ -383,16 +383,18 @@
 
   .stat-label {
     font-family: var(--font-display);
-    font-size: 0.7rem;
+    font-size: 0.72rem;
+    font-weight: 600;
     color: var(--text-muted);
     text-transform: uppercase;
-    letter-spacing: 0.03em;
+    letter-spacing: 0.1em;
   }
 
   .stat-value {
-    font-family: var(--font-display);
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
     font-size: 1.1rem;
-    font-weight: 600;
+    font-weight: 700;
   }
 
   .linked-links {
