@@ -5,6 +5,7 @@
   // area — wider than the sidebar so snippets stay readable.
   import { push } from '@keenmate/svelte-spa-router'
   import { search as searchApi } from '../lib/api'
+  import { garageDashboard } from '../lib/stores'
   import type { SearchHit } from '../lib/types'
 
   let { searchSignal = 0 }: { searchSignal?: number } = $props()
@@ -29,6 +30,20 @@
     build: 'Builds',
     document: 'Documents',
     research_finding: 'Research',
+    schedule_item: 'Maintenance',
+    work_item: 'To-do',
+  }
+
+  // Planning hits fan out per applicable vehicle (an inherited "Air filter"
+  // item is a destination on each car it applies to), so those rows carry the
+  // vehicle name for disambiguation — sourced from the shared dashboard store.
+  let vehicleNames = $derived(
+    new Map(($garageDashboard?.vehicles ?? []).map((s) => [s.vehicle.id, s.vehicle.name])),
+  )
+
+  function vehicleName(hit: SearchHit): string | null {
+    if (hit.kind !== 'schedule_item' && hit.kind !== 'work_item') return null
+    return (hit.vehicle_id != null && vehicleNames.get(hit.vehicle_id)) || null
   }
 
   function onInput() {
@@ -68,14 +83,31 @@
         return `/vehicles/${v}/records/documents`
       case 'research_finding':
         return `/vehicles/${v}/plan/research?hl=finding:${hit.id}`
+      case 'schedule_item':
+        // Primary destination: the item's Due/overdue context. Items without
+        // an active reminder card (dismissed/overridden) let the ?hl silently
+        // no-op — the secondary ⚙ link reaches their Schedule-config entry.
+        return `/vehicles/${v}/plan/due?hl=schedule_item:${hit.id}`
+      case 'work_item':
+        return `/vehicles/${v}/plan/todo?hl=work_item:${hit.id}`
       default:
         return `/vehicles/${v}`
     }
   }
 
+  /** Secondary destination for schedule-item hits: the Schedule ⚙ entry. */
+  function scheduleConfigTarget(hit: SearchHit): string {
+    return `/vehicles/${hit.vehicle_id}/plan/schedule?hl=schedule_item:${hit.id}`
+  }
+
   function openHit(hit: SearchHit) {
     closeSearch()
     push(hitTarget(hit))
+  }
+
+  function openScheduleConfig(hit: SearchHit) {
+    closeSearch()
+    push(scheduleConfigTarget(hit))
   }
 
   function closeSearch() {
@@ -127,13 +159,33 @@
         {#each grouped as [kind, group] (kind)}
           <div class="hit-group">
             <div class="hit-group-label">{kindLabels[kind] ?? kind}</div>
-            {#each group as hit (hit.kind + '-' + hit.id)}
-              <button class="hit" onclick={() => openHit(hit)}>
-                <span class="hit-title">{hit.title}</span>
-                {#if hit.snippet}
-                  <span class="hit-snippet">{hit.snippet.replace(/[\[\]]/g, '')}</span>
+            <!-- Key includes vehicle_id: planning hits fan out per vehicle. -->
+            {#each group as hit (`${hit.kind}-${hit.id}-${hit.vehicle_id}`)}
+              <div class="hit-row">
+                <button class="hit" onclick={() => openHit(hit)}>
+                  <span class="hit-title">
+                    {hit.title}
+                    {#if vehicleName(hit)}
+                      <span class="hit-vehicle">{vehicleName(hit)}</span>
+                    {/if}
+                  </span>
+                  {#if hit.snippet}
+                    <span class="hit-snippet">{hit.snippet.replace(/[\[\]]/g, '')}</span>
+                  {/if}
+                </button>
+                {#if hit.kind === 'schedule_item'}
+                  <!-- Both destinations of a schedule item: the primary row
+                       goes to its Due context, ⚙ to its Schedule-config entry. -->
+                  <button
+                    class="hit-alt"
+                    title="Open in Schedule ⚙"
+                    aria-label="Open in Schedule ⚙"
+                    onclick={() => openScheduleConfig(hit)}
+                  >
+                    ⚙ schedule
+                  </button>
                 {/if}
-              </button>
+              </div>
             {/each}
           </div>
         {/each}
@@ -165,7 +217,10 @@
   }
 
   /* Results fly out OVER the main area — the sidebar is too narrow to
-     contain snippets, and clipping them would defeat the search. */
+     contain snippets, and clipping them would defeat the search. This
+     z-index only orders the overlay WITHIN the sidebar's own stacking
+     context (position: sticky creates one); floating above the main
+     area's positioned elements is the sidebar's z-index in Sidebar.svelte. */
   .search-results {
     position: absolute;
     top: calc(100% + 4px);
@@ -204,12 +259,19 @@
     padding: 0 var(--sp-2) var(--sp-1);
   }
 
+  .hit-row {
+    display: flex;
+    align-items: stretch;
+    gap: 2px;
+  }
+
   .hit {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
     gap: 1px;
-    width: 100%;
+    flex: 1;
+    min-width: 0;
     padding: var(--sp-2);
     border: none;
     border-radius: var(--radius-sm);
@@ -236,5 +298,42 @@
     overflow: hidden;
     text-overflow: ellipsis;
     max-width: 100%;
+  }
+
+  /* Vehicle chip on planning hits (they fan out per applicable vehicle). */
+  .hit-vehicle {
+    font-family: var(--font-display);
+    font-size: 0.66rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 0 var(--sp-2);
+    margin-left: var(--sp-1);
+    vertical-align: 1px;
+  }
+
+  /* Secondary destination for a schedule-item hit: its Schedule ⚙ entry. */
+  .hit-alt {
+    flex-shrink: 0;
+    align-self: center;
+    padding: var(--sp-1) var(--sp-2);
+    border: none;
+    border-radius: var(--radius-sm);
+    background: none;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+      color var(--duration-fast) var(--ease-out),
+      background var(--duration-fast) var(--ease-out);
+  }
+
+  .hit-alt:hover {
+    color: var(--primary);
+    background: var(--surface-hover);
   }
 </style>

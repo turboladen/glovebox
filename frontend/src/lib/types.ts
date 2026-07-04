@@ -760,7 +760,7 @@ export interface ServicePrefill {
 // --- Search ---
 
 export interface SearchHit {
-  kind: 'vehicle' | 'service' | 'incident' | 'incident_followup' | 'build' | 'document' | 'research_finding'
+  kind: 'vehicle' | 'service' | 'incident' | 'incident_followup' | 'build' | 'document' | 'research_finding' | 'schedule_item' | 'work_item'
   id: number
   vehicle_id: number | null
   title: string

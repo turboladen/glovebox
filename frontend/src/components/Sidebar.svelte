@@ -169,7 +169,16 @@
     top: 0;
     align-self: flex-start;
     height: 100vh;
-    overflow: hidden;
+    /* NO `overflow: hidden` here: it would clip the search-results overlay
+       at the sidebar's right edge (round-3 regression). Internal scrolling
+       is .sidebar-scroll's job; nothing else overflows the fixed height.
+       And because position: sticky makes the sidebar a stacking context,
+       the overlay's own z-index can never escape it — without a z-index
+       HERE the whole sidebar (overlay included) paints under the main
+       area's positioned elements (dropdowns z:10, overflow menus z:40).
+       50 floats the overlay over all page content while staying under
+       modal backdrops (z:100). */
+    z-index: 50;
   }
 
   /* The garage list scrolls internally between the pinned head and foot. */

@@ -120,4 +120,62 @@ test.describe('Navigation', () => {
     await expect(page).toHaveURL(new RegExp(`/vehicles/${vehicleId}/timeline`))
     await expect(page.getByText('Flux capacitor overhaul')).toBeVisible()
   })
+
+  test('global search finds a schedule item and lands highlighted on Due', async ({ browser, page }) => {
+    const url = await createVehicle(browser, 'Search Schedule Car')
+    const vehicleId = vehicleIdFrom(url)
+    const itemId = await seedOverdueItem(page, vehicleId, 'Wombat air filter')
+
+    await page.goto('/')
+    await page.getByRole('searchbox', { name: 'Search' }).fill('wombat')
+    // Schedule-item hits group under MAINTENANCE.
+    await expect(page.locator('.hit-group-label', { hasText: 'Maintenance' })).toBeVisible()
+    await page.getByRole('button', { name: /Wombat air filter/ }).click()
+    await expect(page).toHaveURL(
+      new RegExp(`/vehicles/${vehicleId}/plan/due\\?hl=schedule_item:${itemId}`),
+    )
+    // The Due reminder card scrolls into view and flashes.
+    const card = page.locator(`#schedule-item-${itemId}`)
+    await expect(card).toBeVisible()
+    await expect(card).toHaveClass(/hl-flash/)
+  })
+
+  test('schedule-item hit offers a secondary link to its Schedule ⚙ entry', async ({ browser, page }) => {
+    const url = await createVehicle(browser, 'Search Config Car')
+    const vehicleId = vehicleIdFrom(url)
+    const itemId = await seedOverdueItem(page, vehicleId, 'Pangolin coolant flush')
+
+    await page.goto('/')
+    await page.getByRole('searchbox', { name: 'Search' }).fill('pangolin')
+    await expect(page.getByRole('button', { name: /Pangolin coolant flush/ })).toBeVisible()
+    await page.getByRole('button', { name: 'Open in Schedule ⚙' }).click()
+    await expect(page).toHaveURL(
+      new RegExp(`/vehicles/${vehicleId}/plan/schedule\\?hl=schedule_item:${itemId}`),
+    )
+    const card = page.locator(`#schedule-item-${itemId}`)
+    await expect(card).toBeVisible()
+    await expect(card).toHaveClass(/hl-flash/)
+  })
+
+  test('global search finds a work item and lands highlighted on To-do', async ({ browser, page }) => {
+    const url = await createVehicle(browser, 'Search Todo Car')
+    const vehicleId = vehicleIdFrom(url)
+    const res = await page.request.post(`/api/vehicles/${vehicleId}/work-items`, {
+      data: { title: 'Axolotl downpipe install' },
+    })
+    expect(res.ok()).toBe(true)
+    const itemId = (await res.json()).id as number
+
+    await page.goto('/')
+    await page.getByRole('searchbox', { name: 'Search' }).fill('axolotl')
+    // Work-item hits group under TO-DO.
+    await expect(page.locator('.hit-group-label', { hasText: 'To-do' })).toBeVisible()
+    await page.getByRole('button', { name: /Axolotl downpipe install/ }).click()
+    await expect(page).toHaveURL(
+      new RegExp(`/vehicles/${vehicleId}/plan/todo\\?hl=work_item:${itemId}`),
+    )
+    const card = page.locator(`#work-item-${itemId}`)
+    await expect(card).toBeVisible()
+    await expect(card).toHaveClass(/hl-flash/)
+  })
 })

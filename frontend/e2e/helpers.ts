@@ -27,8 +27,8 @@ export function vehicleIdFrom(vehicleUrl: string): number {
 
 /** Seed an overdue 12-month schedule item: backdate the purchase and add a
  *  vehicle-level item via the API (the UI equivalent lives in Plan →
- *  Schedule ⚙, exercised by its own test). */
-export async function seedOverdueItem(page: Page, vehicleId: number, name: string, estCostCents?: number) {
+ *  Schedule ⚙, exercised by its own test). Returns the item id. */
+export async function seedOverdueItem(page: Page, vehicleId: number, name: string, estCostCents?: number): Promise<number> {
   const res = await page.request.put(`/api/vehicles/${vehicleId}`, {
     data: { purchase_date: '2020-01-01' },
   })
@@ -37,4 +37,5 @@ export async function seedOverdueItem(page: Page, vehicleId: number, name: strin
     data: { vehicle_id: vehicleId, name, interval_months: 12, est_cost_cents: estCostCents },
   })
   expect(item.ok()).toBe(true)
+  return (await item.json()).id as number
 }

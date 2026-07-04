@@ -5,6 +5,7 @@
   // from the old Schedule tab).
   import { onMount } from 'svelte'
   import { schedules as schedulesApi } from '../lib/api'
+  import { anchorId, flashHighlightFromQuery } from '../lib/highlight'
   import { formatCents as formatCentsShared } from '../lib/money'
   import type { ResolvedScheduleItem, ScheduleItem } from '../lib/types'
 
@@ -46,6 +47,16 @@
   }
 
   onMount(loadData)
+
+  // Deep-link highlight (?hl=schedule_item:N from a global-search hit's
+  // ⚙ link) once the item cards have rendered.
+  let flashedHighlight = false
+  $effect(() => {
+    if (!loading && !flashedHighlight) {
+      flashedHighlight = true
+      flashHighlightFromQuery('schedule_item')
+    }
+  })
 
   async function refresh() {
     await loadData()
@@ -196,7 +207,7 @@
     <div class="item-list">
       {#each resolved as r (r.effective_item.id)}
         {@const item = r.effective_item}
-        <div class="item-card">
+        <div class="item-card" id={anchorId('schedule_item', item.id)}>
           <div class="item-main">
             <strong>{item.name}</strong>
             <span class="item-interval">{intervalText(item)}</span>
@@ -224,7 +235,7 @@
     <section class="dismissed-section">
       <h3 class="dismissed-label">Dismissed</h3>
       {#each dismissedItems as item (item.id)}
-        <div class="item-card dismissed">
+        <div class="item-card dismissed" id={anchorId('schedule_item', item.id)}>
           <div class="item-main">
             <strong>{item.name}</strong>
             <span class="overridden-badge">overridden</span>

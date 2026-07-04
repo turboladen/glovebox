@@ -50,7 +50,10 @@ dashboard scoped as an **Overview** tab, and the vehicle tabs are intent-shaped:
 | 4 | Archived vehicles | Collapsed "Archived (n)" group; entries dimmed |
 | 5 | Sidebar foot | Shops only — adding a vehicle is a page-level action on the garage dashboard (TP-00), not a sidebar nav verb |
 | 6 | Hamburger toggle | Sidebar fully hides; a slim reopen handle appears at the left edge; state persists across reloads (localStorage) |
-| 7 | Global search (type ≥1 word) | Grouped results dropdown (Vehicles/Services/Incidents/Builds/Documents/Research); every hit deep-links: service/incident → Timeline (`?hl=` highlights the row), document → Records/Documents, research → Plan/Research (`?hl=finding:…` expands + highlights), build → Builds, vehicle → Overview |
+| 7 | Global search (type ≥1 word) | Grouped results dropdown (Vehicles/Services/Incidents/Builds/Documents/Research/Maintenance/To-do); every hit deep-links: service/incident → Timeline (`?hl=` highlights the row), document → Records/Documents, research → Plan/Research (`?hl=finding:…` expands + highlights), build → Builds, vehicle → Overview |
+| 8 | Search a maintenance schedule item by name | Hit appears under MAINTENANCE with a vehicle chip (inherited platform/template items fan out one hit per applicable car); primary click → Plan/Due (`?hl=schedule_item:…` scrolls + flashes the reminder card; dismissed/overridden items no-op the highlight); secondary "⚙ schedule" link → Plan/Schedule ⚙ (`?hl=` flashes the item card) |
+| 9 | Search a work item by title | Hit appears under TO-DO with a vehicle chip; click → Plan/To-do (`?hl=work_item:…` scrolls + flashes the work card) |
+| 10 | Results overlay stacking | The dropdown overhangs the sidebar's right edge and floats ABOVE all main-area content (context strip, tab bar, sticky bits, overflow menus) in both themes — never clipped at the sidebar edge, never painted under |
 
 ## TP-02: Add Vehicle (VIN Flow)
 
@@ -364,7 +367,7 @@ Tests live in `frontend/e2e/` and mirror this plan:
 ```
 frontend/e2e/
   helpers.ts             # createVehicle / seedOverdueItem
-  navigation.spec.ts     # TP-01, TP-10 (shell: sidebar, search, routing)      (8)
+  navigation.spec.ts     # TP-01, TP-10 (shell: sidebar, search, routing)     (12)
   dashboard.spec.ts      # TP-00, TP-04 (garage + scoped Overview, plan-it)    (7)
   vehicle-new.spec.ts    # TP-02, TP-03                                        (6)
   vehicle-detail.spec.ts # TP-04, TP-05 (shell, edit, mileage, tab fallbacks) (15)
