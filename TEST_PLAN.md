@@ -27,8 +27,8 @@ dashboard scoped as an **Overview** tab, and the vehicle tabs are intent-shaped:
 | # | Step | Expected |
 |---|------|----------|
 | 1 | Navigate to `/` | "Garage" heading; dashboard blocks render |
-| 2 | Needs attention block (red tint) | One row per overdue/due-soon reminder, open recall, unresolved incident — vehicle-labeled; each deep-links (reminder → Plan/Due, recall → Records/Research, incident → Timeline) |
-| 3 | "plan it" on an overdue/due-soon/recall row | Creates a source-linked work item; row flips to a "planned" chip (no duplicate button) |
+| 2 | Needs attention block (red tint) | One row per overdue/due-soon reminder, open recall, unresolved incident — vehicle-labeled; each deep-links WITH a `?hl=` param (reminder → Plan/Due, recall → Plan/Research, incident → Timeline) so the target row scrolls into view and flashes |
+| 3 | "plan it" on an overdue/due-soon/recall row | Creates a source-linked work item; row flips to a "planned" chip that LINKS to the work item (`plan/todo?hl=work_item:{id}`), with a confirm-free ✕ (Un-plan) beside it that deletes the item and restores "plan it" |
 | 4 | Plan & budget block (blue tint) | Upcoming visits with date/shop/est rollup (→ Plan/Visits), unscheduled to-do count, 12-mo forecast total (garage-wide sum) |
 | 5 | Builds block (green tint, conditional) | One row per ACTIVE build: vehicle · name · parts installed/total · spend (→ Builds tab) |
 | 6 | Recent activity block | Cross-vehicle merged feed (services/incidents/mileage), vehicle-labeled, newest first; rows deep-link to the vehicle's Timeline |
@@ -45,12 +45,12 @@ dashboard scoped as an **Overview** tab, and the vehicle tabs are intent-shaped:
 | # | Step | Expected |
 |---|------|----------|
 | 1 | Header | Logo (→ `/`), global search input, sidebar toggle (hamburger), shops icon |
-| 2 | Sidebar | "Garage" label, "All vehicles" entry (active on `/`), one card per vehicle: name, year/make/model, mileage + status hints ("N due" red, "N soon" amber, "recall", "build active" green chip) |
+| 2 | Sidebar | "Garage" label, "All vehicles" entry (active on `/`), one card per vehicle: name, year/make/model, mileage + status hints ("N due" red — a LINK to that vehicle's Plan/Due view (card nav unaffected), "N soon" amber, "recall", "build active" green chip) |
 | 3 | Click a sidebar vehicle | Navigates to `/vehicles/:id` (Overview); entry gains active state; switching cars reloads in place |
 | 4 | Archived vehicles | Collapsed "Archived (n)" group; entries dimmed |
 | 5 | "+ Add vehicle" at the sidebar bottom | Navigates to `/vehicles/new` |
 | 6 | Hamburger toggle | Sidebar fully hides; a slim reopen handle appears at the left edge; state persists across reloads (localStorage) |
-| 7 | Global search (type ≥1 word) | Grouped results dropdown (Vehicles/Services/Incidents/Builds/Documents/Research); every hit deep-links: service/incident → Timeline, document → Records/Documents, research → Records/Research, build → Builds, vehicle → Overview |
+| 7 | Global search (type ≥1 word) | Grouped results dropdown (Vehicles/Services/Incidents/Builds/Documents/Research); every hit deep-links: service/incident → Timeline (`?hl=` highlights the row), document → Records/Documents, research → Plan/Research (`?hl=finding:…` expands + highlights), build → Builds, vehicle → Overview |
 
 ## TP-02: Add Vehicle (VIN Flow)
 
@@ -77,12 +77,14 @@ dashboard scoped as an **Overview** tab, and the vehicle tabs are intent-shaped:
 
 | # | Step | Expected |
 |---|------|----------|
-| 1 | Navigate to `/vehicles/:id` | Vehicle name heading, "← All vehicles" back link, status bar (mileage readout + Edit / Update Mileage / Log Service / Export History) |
+| 1 | Navigate to `/vehicles/:id` | Vehicle name heading, "← All vehicles" back link, status bar (mileage readout + two equal-weight actions: Update mileage / Record service, plus a ⋯ overflow menu: Edit vehicle… / Export history / Archive vehicle… — Unarchive vehicle / Delete vehicle… when archived) |
+| 1a | ⋯ overflow menu | Click-toggled; closes on outside click and Esc |
+| 1b | "Record service" | Routes to Timeline with the service form open (`?action=record`) — ONE record-service verb and ONE form app-wide (no "Log Service" anywhere) |
 | 2 | Default tab | **Overview** active: the SAME dashboard blocks scoped to this vehicle (rows not vehicle-labeled; other cars' items absent) |
 | 3 | Tab bar | Overview · Timeline · Plan · Builds · Records · Costs |
-| 4 | Tabs are URL-driven | Clicking a tab pushes `/vehicles/:id/<tab>`; direct URLs (`/timeline`, `/plan/visits`, `/records/research`) land on that view |
+| 4 | Tabs are URL-driven | Clicking a tab pushes `/vehicles/:id/<tab>`; direct URLs (`/timeline`, `/plan/visits`, `/plan/research`) land on that view; legacy `/records/research` URLs redirect to `/plan/research` |
 | 4b | Unknown `:tab` / `:sub` URLs | Fall back instead of a blank pane: bogus tab → Overview (rendered AND marked active); bogus Plan sub → Due; bogus Records sub → Parts |
-| 4a | "Edit" button | Toggles vehicle edit form; name/subtitle/sold-badge behavior as before (clearing sold fields sends explicit null and removes the badge) |
+| 4a | "Edit vehicle…" (⋯ menu) | Toggles vehicle edit form; name/subtitle/sold-badge behavior as before (clearing sold fields sends explicit null and removes the badge) |
 | 5 | Status bar mileage | "mi est." with as-of date when estimated; plain "mi" after a same-day reading |
 | 6 | Click "← All vehicles" | Returns to `/` |
 
@@ -90,7 +92,7 @@ dashboard scoped as an **Overview** tab, and the vehicle tabs are intent-shaped:
 
 | # | Step | Expected |
 |---|------|----------|
-| 1 | Click "Update Mileage" | Form appears with odometer input and notes field |
+| 1 | Click "Update mileage" | Form appears with odometer input and notes field |
 | 2 | Enter 0 or negative, submit | "Odometer must be greater than 0" error |
 | 3 | Enter valid mileage, submit | Form closes, status bar updates, shows "mi" (no "est.") |
 | 4 | Click "Cancel" | Form closes without saving |
@@ -108,7 +110,7 @@ manual odometer readings. Creation actions live here.
 | 3 | "Record service" | The service form (date defaults today, odometer/description/cost/shop/notes, schedule-item checkboxes, Paid By with payer note); saved record appears in the stream with cost |
 | 4 | "Log incident" | Incident form (category/date/odometer/title/details); category `accident` reveals the accident fieldset (other party, claim, adjuster); category `obd_code` reveals the codes input |
 | 5 | Service rows | Green "Service" badge; date, cost, mileage, shop; preview shows notes + linked Parts/Incidents chips |
-| 6 | Expand a service row | Detail panel: parts/labor costs, payer, chips; **Edit** (all fields incl. Paid By; clearing a field saves null) and **Delete** (confirm) |
+| 6 | Expand a service row | Detail panel: parts/labor costs, payer, chips; **Edit** (all fields incl. Paid By; clearing a field saves null) and **Delete** (confirm). The row and its panel read as ONE contiguous card (border on the wrapper, hairline separator between the halves — no split-box seam) |
 | 7 | Incident rows | Amber "Incident" badge; expanding shows the full detail: description, recurrence, odometer, OBD chips, accident grid, linked-services chips, followups |
 | 8 | Incident detail actions | Edit (opens the form pre-filled; accident financial fields are edit-only), Mark Resolved (with optional service link picker), Reopen |
 | 9 | Add followup | Date/method/contact/summary; entry appears in the followup timeline |
@@ -116,16 +118,19 @@ manual odometer readings. Creation actions live here.
 | 11 | Mileage rows | Blue "Mileage" badge + reading; manual logs only (service-created logs are folded into their service row) |
 | 12 | Load more | Stream windows at 25 rows; button reveals older entries |
 
-## TP-07: Plan Tab (Due / To-do / Visits / Schedule ⚙)
+## TP-07: Plan Tab (Due / To-do / Visits / Research / Schedule ⚙)
 
-URL-driven sub-nav: `/vehicles/:id/plan[/todo|/visits|/schedule]`.
+URL-driven sub-nav: `/vehicles/:id/plan[/todo|/visits|/research|/schedule]`.
+Deep links into Plan may carry `?hl=<kind>:<id>` (hypermedia highlight — the
+matching row scrolls into view and flashes for ~2s; see
+`frontend/src/lib/highlight.ts`).
 
 ### Due (reminders)
 
 | # | Step | Expected |
 |---|------|----------|
 | 1 | Vehicle with schedule data | Reminders grouped overdue (red) / upcoming (amber) / ok (green); bundle suggestions |
-| 2 | "Plan it" | Creates a schedule-linked work item; the reminder shows a "planned" chip instead of the button |
+| 2 | "Plan it" | Creates a schedule-linked work item; the reminder shows a "planned" chip that LINKS to the work item (`plan/todo?hl=work_item:{id}`) instead of the button |
 | 3 | "Record service…" | Inline minimal form (today prefilled); save links the schedule item and the reminder clears |
 | 4 | "Mark done previously" | Past-dated backfill record; reminder clears; record is real Timeline history |
 | 5 | "Dismiss for this vehicle" | Item leaves the reminder groups (the override lives under Schedule ⚙) |
@@ -137,7 +142,7 @@ URL-driven sub-nav: `/vehicles/:id/plan[/todo|/visits|/schedule]`.
 | 1 | Empty | Hint text + "+ Add work item" |
 | 2 | Add item (title, est cost, notes) | Card with status badge (planned), est cost |
 | 3 | Edit inline | Title/est/notes update; clearing est cost sends explicit null |
-| 4 | Source badges | schedule / recall/finding / incident / build badges deep-link to the item's origin |
+| 4 | Source badges | schedule / recall/finding / incident / build badges deep-link to the item's origin (with `?hl=` so the origin row highlights: schedule → Plan/Due, finding → Plan/Research, incident → Timeline) |
 | 5 | Drop | Item leaves the open list; visible with "Show finished" (status dropped) |
 | 6 | Delete | Item removed outright (confirm) |
 | 7 | Attached items | Show a "visit …" reference |
@@ -223,7 +228,7 @@ URL-driven sub-nav: `/vehicles/:id/plan[/todo|/visits|/schedule]`.
 
 | # | Step | Expected |
 |---|------|----------|
-| 1 | `GET /api/dashboard` | Per-vehicle summaries (counts, forecast total, active build), attention items (kind/label/schedule_item_name/entity_id/deep_link_hint/planned — `schedule_item_name` set for overdue/due-soon rows so "plan it" titles the work item without label-splitting), upcoming visits, summed budget, active-build snapshots |
+| 1 | `GET /api/dashboard` | Per-vehicle summaries (counts, forecast total, active build), attention items (kind/label/schedule_item_name/entity_id/deep_link_hint/planned/planned_work_item_id — `schedule_item_name` set for overdue/due-soon rows so "plan it" titles the work item without label-splitting; `planned_work_item_id` names the linking open work item so the "planned" chip can link to it and un-plan it), upcoming visits, summed budget, active-build snapshots |
 | 2 | Archived vehicles | Listed with zeroed counts; contribute nothing to attention/budget |
 | 3 | `GET /api/dashboard/activity?limit=N` | Garage-wide merged feed, vehicle-labeled, newest first, capped at N |
 | 4 | `GET /api/vehicles/:id/activity?limit=N` | Per-vehicle feed (Timeline's stream); service-created mileage logs excluded |
@@ -290,7 +295,7 @@ URL-driven sub-nav: `/vehicles/:id/plan[/todo|/visits|/schedule]`.
 
 | # | Step | Expected |
 |---|------|----------|
-| 1 | Click "Export History" | Printable history opens (vehicle info, records table, parts table, totals, print button) |
+| 1 | ⋯ menu → "Export history" | Printable history opens (vehicle info, records table, parts table, totals, print button) |
 
 ## TP-21: Link Parts to Services
 
@@ -306,20 +311,21 @@ The in-app AI features these sections covered are retired; Claude replaces them
 over `/mcp` (23 tools). MCP surface coverage lives in
 `glovebox-mcp/tests/mcp_integration_test.rs`.
 
-## TP-26: Records → Research (NHTSA Recall Check)
+## TP-26: Plan → Research (NHTSA Recall Check)
 
 | # | Step | Expected |
 |---|------|----------|
-| 1 | Records tab → Research sub-view | "Check Recalls" button |
+| 1 | Plan tab → Research sub-view (`/plan/research`) | "Check Recalls" button; legacy `/records/research` URLs redirect here |
 | 2 | No data initially | "No research reports yet." message |
 | 3 | Click "Check Recalls" | Loading, then recall results or "No open recalls found" |
 | 4 | Vehicle missing make/model/year | Error about missing required fields |
 | 5 | `GET /api/vehicles/:id/recalls` | Returns recall data |
-| 6 | Open recall findings | Surface in the dashboard's attention block with a "plan it" action |
+| 6 | Open recall findings | Surface in the dashboard's attention block with a "plan it" action; the row deep-links to `plan/research?hl=finding:{id}`, which expands the finding's report and highlights it |
 
 ## TP-27: Research Reports & Findings
 
-Unchanged from before the shell redesign, now under Records → Research: reports
+Unchanged from before the shell redesign, now under Plan → Research (moved
+from Records in the UX quick-wins pass — research is future work): reports
 from recall checks and MCP `file_research_finding`; findings grouped by
 category with severity/status chips, dismiss/plan/complete actions, and
 service/part linking. (See `frontend/src/components/ResearchTab.svelte`.)
@@ -357,14 +363,14 @@ Tests live in `frontend/e2e/` and mirror this plan:
 ```
 frontend/e2e/
   helpers.ts             # createVehicle / seedOverdueItem
-  navigation.spec.ts     # TP-01, TP-10 (shell: sidebar, search, routing)      (7)
-  dashboard.spec.ts      # TP-00, TP-04 (garage + scoped Overview, plan-it)    (6)
+  navigation.spec.ts     # TP-01, TP-10 (shell: sidebar, search, routing)      (8)
+  dashboard.spec.ts      # TP-00, TP-04 (garage + scoped Overview, plan-it)    (7)
   vehicle-new.spec.ts    # TP-02, TP-03                                        (6)
-  vehicle-detail.spec.ts # TP-04, TP-05 (shell, edit, mileage, tab fallbacks) (13)
+  vehicle-detail.spec.ts # TP-04, TP-05 (shell, edit, mileage, tab fallbacks) (15)
   timeline.spec.ts       # TP-06 (stream, service + incident flows, filters)  (12)
-  plan.spec.ts           # TP-07 (due, to-do CRUD, visit round-trip, config)   (9)
+  plan.spec.ts           # TP-07, TP-26 (due, to-do, visits, research, config)(13)
   builds.spec.ts         # TP-08                                               (3)
-  records.spec.ts        # TP-15, TP-18, TP-19 smoke, TP-26                   (13)
+  records.spec.ts        # TP-15, TP-18, TP-19 smoke                          (10)
 ```
 
 **Count reconciliation (shell rewrite, kept honest):** the pre-shell suite was
@@ -378,7 +384,15 @@ since been restored: the add-vehicle affordance CLICK-THROUGH to
 `/vehicles/new` (now in dashboard.spec) and the service-form cancel/toggle path
 (now in timeline.spec). With those two restored plus three review-fix
 regression tests (incident category chips, shop-select-authoritative visit
-form, unknown tab/sub fallback), the suite is **69 tests**.
+form, unknown tab/sub fallback), the suite reached **69 tests**.
+
+**UX quick-wins pass (hypermedia affordances):** the 3 research tests moved
+from records.spec to plan.spec (Research now lives under Plan), and 5 tests
+were added — the sidebar due-badge click-through (navigation), the plan-it →
+chip-link → highlight → un-plan round trip (dashboard), the legacy
+`records/research` redirect (plan), the header Record-service routing, and the
+one-verb no-"Log Service" regression (both vehicle-detail) — bringing the
+suite to **74 tests**.
 
 Run: `just test-e2e` (needs `just dev` running) or `just test-e2e-ci` (self-contained).
 

@@ -113,11 +113,13 @@ welcome state when empty), `/shops`, `/vehicles/new`, `/vehicles/:id[/:tab[/:sub
 `VehicleDetail` tabs are **URL-driven** and intent-shaped: **Overview** (the same `Dashboard`
 component scoped via its `vehicleId` prop) · **Timeline** (`TimelineTab` — merged
 services/incidents/mileage stream with kind filters; subsumed the old History/Incidents tabs;
-incident detail/form live in `IncidentDetail`/`IncidentForm`) · **Plan** (`PlanTab` — sub-nav
-Due (`ScheduleTab`) / To-do / Visits / Schedule ⚙ (`ScheduleConfig`)) · **Builds** (`BuildsTab`)
-· **Records** (`RecordsTab` — sub-nav re-homing `PartsTab`/`DocumentsTab`/`ResearchTab`) ·
-**Costs** (`CostsTab` + the 12-month forecast buckets). Deep links (dashboard rows, search
-hits, source badges) always target a tab/sub URL.
+incident detail/form live in `IncidentDetail`/`IncidentForm`; the header's "Record service"
+routes here with `?action=record` so there is ONE service form) · **Plan** (`PlanTab` — sub-nav
+Due (`ScheduleTab`) / To-do / Visits / Research (`ResearchTab`) / Schedule ⚙ (`ScheduleConfig`))
+· **Builds** (`BuildsTab`) · **Records** (`RecordsTab` — sub-nav `PartsTab`/`DocumentsTab`;
+legacy `records/research` URLs redirect to `plan/research`) · **Costs** (`CostsTab` + the
+12-month forecast buckets). Deep links (dashboard rows, search hits, source badges) always
+target a tab/sub URL, usually with an `?hl=` highlight param.
 
 Vite dev server proxies `/api` and `/files` to the backend at `:3003`. In production, the backend serves `frontend/dist/` as SPA fallback.
 
@@ -134,6 +136,7 @@ Vite dev server proxies `/api` and `/files` to the backend at `:3003`. In produc
 
 ### General
 
+- **Hypermedia affordances** (UX): state displays LINK to their source — a "planned" chip links to the work item, the sidebar's "N due" badge links to Plan/Due, never dead-end text. Deep links carry `?hl=<kind>:<id>`; target views render `id="<kind>-<id>"` anchors (underscores → dashes) and call `flashHighlightFromQuery(kind)` from `frontend/src/lib/highlight.ts` once rows are in the DOM (scroll + 2s flash, `prefers-reduced-motion` respected). ONE verb per action app-wide: "Record service" (never "Log Service"; "Log incident" is a different action)
 - **Issue tracking**: Use `bd` (beads), never markdown TODOs
 - **Testing**: Update `TEST_PLAN.md` and add Playwright tests when changing UI
 - **Router**: `@keenmate/svelte-spa-router` uses `routeParams` (not `params`) in Svelte 5
