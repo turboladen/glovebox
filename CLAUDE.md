@@ -39,6 +39,12 @@ cargo clippy --workspace -- -D clippy::pedantic  # Rust lints (pedantic is the C
 cd frontend && bun run check  # svelte-check + TypeScript check
 ```
 
+## Environment
+
+All optional (defaults in `glovebox-shared/src/config.rs`):
+- `GLOVEBOX_DB_PATH` (default `data/glovebox.db`) · `GLOVEBOX_LISTEN` (default `0.0.0.0:3003`) · `GLOVEBOX_FILES_DIR` (default `data/files`)
+- `GLOVEBOX_MCP_ALLOWED_HOSTS` — extra Host-header allowlist entries for `/mcp` (defaults: localhost/127.0.0.1/::1)
+
 ## Architecture
 
 ### Workspace layout
@@ -81,6 +87,9 @@ cd frontend && bun run check  # svelte-check + TypeScript check
 **Test harness** (`test_support.rs`): `test_db()` — in-memory SQLite with migrations applied, for service-layer unit tests. Compiled under `#[cfg(any(test, feature = "test-support"))]`; sibling crates use it in their integration tests via a dev-dependency on `glovebox-shared` with the `test-support` feature (see `glovebox-mcp/Cargo.toml`).
 
 ### MCP surface (`glovebox-mcp/src/`)
+
+**Connect a client:** Streamable HTTP at `http://<host>:3003/mcp` (e.g. Claude Desktop/Code custom
+connector; non-localhost hosts need `GLOVEBOX_MCP_ALLOWED_HOSTS`).
 
 **Mount** (`lib.rs`): `router(db) -> axum::Router` wraps rmcp's `StreamableHttpService` (+ `LocalSessionManager`, 7-day session keep-alive); the backend nests it at `/mcp`. LAN hostnames must be allowlisted via `GLOVEBOX_MCP_ALLOWED_HOSTS` (rmcp's DNS-rebinding defense 403s unknown `Host` headers).
 
