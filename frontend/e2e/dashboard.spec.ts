@@ -12,21 +12,25 @@ test.describe('Dashboard', () => {
         .getByRole('heading', { name: 'Garage' })
         .or(page.getByRole('heading', { name: 'Welcome to Glovebox' })),
     ).toBeVisible()
+    // Adding a vehicle is a page-level action on the garage dashboard
+    // (round 3) — next to the Garage heading, or the welcome CTA when empty.
     await expect(
       page
-        .getByTestId('sidebar')
-        .getByText('+ Add vehicle')
+        .getByTestId('dashboard')
+        .getByRole('link', { name: '+ Add vehicle' })
         .or(page.getByRole('link', { name: 'Add Your First Vehicle' })),
     ).toBeVisible()
+    // The sidebar foot carries Shops only — no add-vehicle nav verb.
+    await expect(page.getByTestId('sidebar').getByText('+ Add vehicle')).toHaveCount(0)
   })
 
   test('add-vehicle affordance navigates to /vehicles/new', async ({ page }) => {
     await page.goto('/')
-    // Shared-DB suite: either the sidebar's "+ Add vehicle" (populated
+    // Shared-DB suite: either the garage page's "+ Add vehicle" (populated
     // garage) or the welcome CTA (empty garage) — both must click through.
     await page
-      .getByTestId('sidebar')
-      .getByText('+ Add vehicle')
+      .getByTestId('dashboard')
+      .getByRole('link', { name: '+ Add vehicle' })
       .or(page.getByRole('link', { name: 'Add Your First Vehicle' }))
       .first()
       .click()

@@ -249,8 +249,9 @@
   .docs-list { display: flex; flex-direction: column; gap: var(--sp-2); }
 
   .doc-card {
-    padding: var(--sp-3) var(--sp-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+    padding: var(--sp-3) var(--sp-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg);
     background: var(--bg-raised);
+    box-shadow: inset 0 1px 0 var(--edge-highlight);
     display: flex; align-items: center; gap: var(--sp-4);
     transition: border-color var(--duration-base) var(--ease-out);
   }
@@ -266,8 +267,9 @@
   .doc-title { font-weight: 600; }
   .doc-meta { font-size: 0.8rem; color: var(--text-muted); display: flex; gap: var(--sp-2); flex-wrap: wrap; }
   .doc-type-badge {
-    background: var(--surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
-    padding: 0 var(--sp-1); text-transform: uppercase; font-size: 0.7rem; font-weight: 500;
+    background: var(--surface); border: 1px solid var(--border-subtle); border-radius: 999px;
+    padding: 0 var(--sp-2); text-transform: uppercase; font-size: 0.7rem; font-weight: 600;
+    letter-spacing: 0.07em;
     font-family: var(--font-display);
   }
   .doc-link-badge {

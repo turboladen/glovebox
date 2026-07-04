@@ -1,17 +1,27 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { services as servicesApi, schedules as schedulesApi, parts as partsApi, shops as shopsApi } from '../lib/api'
-  import type { ResolvedScheduleItem, Part, Shop } from '../lib/types'
+  import type { ResolvedScheduleItem, Part, ServicePrefill, Shop } from '../lib/types'
 
-  let { vehicleId, onComplete, onCancel }: {
+  let { vehicleId, onComplete, onCancel, prefill = null }: {
     vehicleId: number
     onComplete: () => void
     onCancel: () => void
+    // Routed prefill (Plan → Due lands here with the schedule item linked
+    // and the description set); TimelineTab keys the component on it.
+    prefill?: ServicePrefill | null
   } = $props()
 
-  let serviceDate = $state(new Date().toISOString().split('T')[0])
+  const today = new Date().toISOString().split('T')[0]
+  // Captured ONCE by design: TimelineTab keys this component on `prefill`,
+  // so a new prefill re-mounts the form with fresh initial values.
+  // svelte-ignore state_referenced_locally
+  const initial = prefill
+  // "Mark done previously" starts the date EMPTY and capped at today: a
+  // past date must be a deliberate choice, never a silent default.
+  let serviceDate = $state(initial?.retro ? '' : today)
   let odometer = $state(0)
-  let description = $state('')
+  let description = $state(initial?.description ?? '')
   let totalCostDollars = $state('')
   let shopName = $state('')
   let shopList: Shop[] = $state([])
@@ -23,11 +33,13 @@
       ? shopList.filter(s => s.name.toLowerCase().includes(shopName.trim().toLowerCase()))
       : shopList
   )
-  let notes = $state('')
+  let notes = $state(initial?.retro ? 'recorded retroactively' : '')
   let paidBy = $state('self')
   let payerNote = $state('')
   let isDiy = $state(false)
-  let selectedScheduleIds: number[] = $state([])
+  let selectedScheduleIds: number[] = $state(
+    initial?.scheduleItemId != null ? [initial.scheduleItemId] : [],
+  )
   let scheduleItems: ResolvedScheduleItem[] = $state([])
   let availableParts: Part[] = $state([])
   let selectedPartIds: number[] = $state([])
@@ -143,11 +155,14 @@
 
 <div class="form-card">
   <h3>Record service</h3>
+  {#if initial?.retro}
+    <p class="retro-hint">Recorded retroactively — pick the date it was actually done.</p>
+  {/if}
   <form onsubmit={(e) => { e.preventDefault(); submit() }}>
     <div class="form-row">
       <div class="field">
         <label for="svc-date">Date</label>
-        <input id="svc-date" type="date" bind:value={serviceDate} required />
+        <input id="svc-date" type="date" bind:value={serviceDate} required max={initial?.retro ? today : undefined} />
       </div>
       <div class="field">
         <label for="svc-odometer">Odometer</label>
@@ -279,6 +294,13 @@
 <style>
   .form-card h3 {
     margin: 0 0 var(--sp-3);
+  }
+
+  .retro-hint {
+    margin: calc(-1 * var(--sp-2)) 0 var(--sp-3);
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    font-style: italic;
   }
 
   .checkbox-list {

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { parts as partsApi, services as servicesApi } from '../lib/api'
+  import { formatCents } from '../lib/money'
   import type { Part, ServiceRecordWithLinks } from '../lib/types'
   import { formatDate } from '../lib/dates'
 
@@ -67,7 +68,7 @@
 
   function formatCost(cents: number | null): string {
     if (cents === null) return ''
-    return `$${(cents / 100).toFixed(2)}`
+    return formatCents(cents)
   }
 
   function statusBadgeClass(status: string): string {
@@ -430,10 +431,11 @@
 
   .part-card {
     border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-lg);
     padding: var(--sp-3) var(--sp-4);
     margin-bottom: var(--sp-2);
     background: var(--bg-raised);
+    box-shadow: inset 0 1px 0 var(--edge-highlight);
     transition: border-color var(--duration-base) var(--ease-out);
   }
 
@@ -451,11 +453,11 @@
   .part-name { font-weight: 600; }
 
   .part-location {
-    font-size: 0.8rem;
+    font-size: 0.78rem;
     color: var(--text-muted);
     border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-sm);
-    padding: 0 var(--sp-1);
+    border-radius: 999px;
+    padding: 0 var(--sp-2);
   }
 
   .part-actions { display: flex; gap: var(--sp-1); }
@@ -472,8 +474,8 @@
   .part-link { font-size: 0.8rem; color: var(--primary); text-decoration: none; }
   .part-link:hover { text-decoration: underline; }
 
-  .badge-ok { background: var(--success-bg); color: var(--success); }
-  .badge-upcoming { background: var(--warning-bg); color: var(--warning); }
+  .badge-ok { background: var(--success-bg); color: var(--success); border: 1px solid var(--success-border); }
+  .badge-upcoming { background: var(--info-bg); color: var(--info); border: 1px solid var(--info-border); }
 
   .empty { color: var(--text-muted); text-align: center; padding: var(--sp-8) 0; }
 

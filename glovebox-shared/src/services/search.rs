@@ -1,11 +1,13 @@
-//! Full-text search across vehicle, event, and document text — one domain
-//! operation over the FTS5 indexes created by migration 000013.
+//! Full-text search across vehicle, event, document, and planning text — one
+//! domain operation over the FTS5 indexes created by migrations 000013 and
+//! 000021.
 //!
 //! Each FTS5 table is external-content (index only), so every subquery joins
 //! back to its content table to produce domain-shaped hits: `vehicle_id` is
 //! derived through parents where needed (line item → service record,
-//! followup → incident, finding → report), and line-item hits fold into
-//! their parent service record so callers think in domain records, not rows.
+//! followup → incident, finding → report, schedule item → owning
+//! platform/template/vehicle), and line-item hits fold into their parent
+//! service record so callers think in domain records, not rows.
 
 use sea_orm::*;
 
@@ -23,10 +25,13 @@ pub enum SearchScope {
     Builds,
     Documents,
     Research,
+    Maintenance,
+    Todo,
 }
 
 impl SearchScope {
-    /// Parse the wire form (`all|vehicles|services|incidents|builds|documents|research`).
+    /// Parse the wire form
+    /// (`all|vehicles|services|incidents|builds|documents|research|maintenance|todo`).
     pub fn parse(s: &str) -> DomainResult<Self> {
         match s {
             "all" => Ok(Self::All),
@@ -36,9 +41,11 @@ impl SearchScope {
             "builds" => Ok(Self::Builds),
             "documents" => Ok(Self::Documents),
             "research" => Ok(Self::Research),
+            "maintenance" => Ok(Self::Maintenance),
+            "todo" => Ok(Self::Todo),
             other => Err(DomainError::BadRequest(format!(
                 "unknown search scope '{other}' (expected one of: all, vehicles, services, \
-                 incidents, builds, documents, research)"
+                 incidents, builds, documents, research, maintenance, todo)"
             ))),
         }
     }
@@ -47,7 +54,8 @@ impl SearchScope {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SearchHit {
     /// Domain record kind: `vehicle`, `service`, `incident`,
-    /// `incident_followup`, `build`, `document`, or `research_finding`.
+    /// `incident_followup`, `build`, `document`, `research_finding`,
+    /// `schedule_item`, or `work_item`.
     pub kind: String,
     pub id: i32,
     pub vehicle_id: Option<i32>,
@@ -219,18 +227,58 @@ pub async fn search(
             filt,
         ));
     }
+    if want(SearchScope::Maintenance) {
+        // A schedule item is owned by exactly one of platform / model template /
+        // vehicle, and applies to every vehicle that resolves it (vehicle →
+        // template → platform), so the join fans out to one hit per applicable
+        // vehicle — each is a distinct navigable destination (Plan → Due).
+        // Override/dismissal resolution is deliberately NOT replicated here: an
+        // overridden or disabled item is still discoverable (it lives in
+        // Schedule ⚙'s Dismissed section), and its `?hl` on Due silently no-ops
+        // per the deep-link convention. Items whose platform/template has no
+        // vehicles have no destination and drop out via the inner join.
+        subs.push(subquery(
+            "schedule_item",
+            "fts_maintenance_schedule_items",
+            "JOIN maintenance_schedule_items msi ON msi.id = fts_maintenance_schedule_items.rowid \
+             JOIN vehicles v ON v.id = msi.vehicle_id OR (msi.model_template_id IS NOT NULL AND \
+             v.model_template_id = msi.model_template_id) OR (msi.platform_id IS NOT NULL AND \
+             msi.platform_id = (SELECT mt.platform_id FROM model_templates mt WHERE mt.id = \
+             v.model_template_id))",
+            "msi.id",
+            "v.id",
+            "msi.name",
+            filt,
+        ));
+    }
+    if want(SearchScope::Todo) {
+        subs.push(subquery(
+            "work_item",
+            "fts_work_items",
+            "JOIN work_items wi ON wi.id = fts_work_items.rowid",
+            "wi.id",
+            "wi.vehicle_id",
+            "wi.title",
+            filt,
+        ));
+    }
 
-    // Dedupe by (kind, id) IN SQL, before the LIMIT: a service matching in its
-    // own text and in several line items is one domain record, and duplicate raw
-    // rows must not starve other matching records out of the capped result set.
-    // SQLite's bare-columns-with-MIN semantics make title/snippet/vehicle_id come
-    // from the best-ranked row of each group; kind/id tiebreakers keep equal-rank
-    // ordering deterministic. The CTE must be MATERIALIZED: if SQLite flattens
-    // the arms into the aggregate query, bm25() lands outside its FTS cursor and
-    // fails with "unable to use function bm25 in the requested context".
+    // Dedupe by (kind, id, vehicle_id) IN SQL, before the LIMIT: a service
+    // matching in its own text and in several line items is one domain record,
+    // and duplicate raw rows must not starve other matching records out of the
+    // capped result set. vehicle_id joins the key for the schedule-item arm,
+    // where one inherited item legitimately fans out to one hit per applicable
+    // vehicle (every other kind has exactly one vehicle_id per (kind, id), so
+    // the extra key is a no-op for them). SQLite's bare-columns-with-MIN
+    // semantics make title/snippet come from the best-ranked row of each group;
+    // kind/id/vehicle_id tiebreakers keep equal-rank ordering deterministic.
+    // The CTE must be MATERIALIZED: if SQLite flattens the arms into the
+    // aggregate query, bm25() lands outside its FTS cursor and fails with
+    // "unable to use function bm25 in the requested context".
     let sql = format!(
         "WITH raw AS MATERIALIZED ({}) SELECT kind, id, vehicle_id, title, snippet, MIN(rank) AS \
-         rank FROM raw GROUP BY kind, id ORDER BY rank ASC, kind ASC, id ASC LIMIT {LIMIT}",
+         rank FROM raw GROUP BY kind, id, vehicle_id ORDER BY rank ASC, kind ASC, id ASC, \
+         vehicle_id ASC LIMIT {LIMIT}",
         subs.join(" UNION ALL ")
     );
     let values: Vec<Value> = match vehicle_id {
@@ -591,6 +639,165 @@ mod tests {
         assert_kind(&hits, "research_finding", vid);
     }
 
+    async fn seed_schedule_item(db: &impl ConnectionTrait, vehicle_id: i32, name: &str) -> i32 {
+        entities::maintenance_schedule_item::ActiveModel {
+            vehicle_id: Set(Some(vehicle_id)),
+            name: Set(name.into()),
+            enabled: Set(true),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+        .id
+    }
+
+    async fn seed_work_item(db: &impl ConnectionTrait, vehicle_id: i32, title: &str) -> i32 {
+        entities::work_item::ActiveModel {
+            vehicle_id: Set(vehicle_id),
+            title: Set(title.into()),
+            status: Set("planned".into()),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+        .id
+    }
+
+    #[tokio::test]
+    async fn finds_schedule_item_by_name() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db, "Golf R").await;
+        let item = seed_schedule_item(&db, vid, "Engine air filter").await;
+
+        let hits = search(&db, "air filter", SearchScope::All, None)
+            .await
+            .unwrap();
+        let hit = hits.iter().find(|h| h.kind == "schedule_item").unwrap();
+        assert_eq!(hit.id, item);
+        assert_eq!(hit.vehicle_id, Some(vid));
+        assert_eq!(hit.title, "Engine air filter");
+
+        // The dedicated scope returns only schedule items.
+        let hits = search(&db, "air filter", SearchScope::Maintenance, None)
+            .await
+            .unwrap();
+        assert!(!hits.is_empty());
+        assert!(hits.iter().all(|h| h.kind == "schedule_item"));
+    }
+
+    #[tokio::test]
+    async fn inherited_schedule_items_fan_out_per_applicable_vehicle() {
+        let db = test_db().await;
+        // Platform → template → two vehicles; the platform-level item must
+        // surface once per car (each is a distinct Plan → Due destination).
+        let platform = entities::platform::ActiveModel {
+            name: Set("MQB".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        let template = entities::model_template::ActiveModel {
+            platform_id: Set(Some(platform.id)),
+            model: Set(Some("Golf".into())),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        let mut vids = Vec::new();
+        for name in ["Golf R", "GTI"] {
+            let v = entities::vehicle::ActiveModel {
+                name: Set(name.into()),
+                model_template_id: Set(Some(template.id)),
+                ..Default::default()
+            }
+            .insert(&db)
+            .await
+            .unwrap();
+            vids.push(v.id);
+        }
+        let item = entities::maintenance_schedule_item::ActiveModel {
+            platform_id: Set(Some(platform.id)),
+            name: Set("Haldex fluid change".into()),
+            enabled: Set(true),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap()
+        .id;
+
+        let hits = search(&db, "haldex", SearchScope::Maintenance, None)
+            .await
+            .unwrap();
+        let mut hit_vids: Vec<_> = hits
+            .iter()
+            .filter(|h| h.kind == "schedule_item" && h.id == item)
+            .map(|h| h.vehicle_id)
+            .collect();
+        hit_vids.sort_unstable();
+        assert_eq!(
+            hit_vids,
+            vec![Some(vids[0]), Some(vids[1])],
+            "one hit per applicable vehicle: {hits:?}"
+        );
+
+        // Vehicle-scoped: the same inherited item resolves to just that car.
+        let hits = search(&db, "haldex", SearchScope::All, Some(vids[1]))
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].vehicle_id, Some(vids[1]));
+    }
+
+    #[tokio::test]
+    async fn finds_work_item_by_title() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db, "Golf R").await;
+        let wid = seed_work_item(&db, vid, "Install dogbone insert").await;
+
+        let hits = search(&db, "dogbone", SearchScope::All, None)
+            .await
+            .unwrap();
+        let hit = hits.iter().find(|h| h.kind == "work_item").unwrap();
+        assert_eq!(hit.id, wid);
+        assert_eq!(hit.vehicle_id, Some(vid));
+        assert_eq!(hit.title, "Install dogbone insert");
+
+        let hits = search(&db, "dogbone", SearchScope::Todo, None)
+            .await
+            .unwrap();
+        assert!(!hits.is_empty());
+        assert!(hits.iter().all(|h| h.kind == "work_item"));
+    }
+
+    #[tokio::test]
+    async fn vehicle_filter_excludes_planning_hits_of_other_vehicles() {
+        let db = test_db().await;
+        let mine = seed_vehicle(&db, "Golf R").await;
+        let other = seed_vehicle(&db, "Jetta").await;
+        let my_item = seed_schedule_item(&db, mine, "Cabin air filter").await;
+        seed_schedule_item(&db, other, "Cabin air filter too").await;
+        let my_work = seed_work_item(&db, mine, "air ride install").await;
+        seed_work_item(&db, other, "air suspension quote").await;
+
+        let hits = search(&db, "air", SearchScope::All, Some(mine))
+            .await
+            .unwrap();
+        assert!(hits.iter().all(|h| h.vehicle_id == Some(mine)));
+        assert!(
+            hits.iter()
+                .any(|h| h.kind == "schedule_item" && h.id == my_item)
+        );
+        assert!(
+            hits.iter()
+                .any(|h| h.kind == "work_item" && h.id == my_work)
+        );
+    }
+
     #[tokio::test]
     async fn operator_and_quote_injection_never_errors() {
         let db = test_db().await;
@@ -683,6 +890,11 @@ mod tests {
             SearchScope::parse("research").unwrap(),
             SearchScope::Research
         );
+        assert_eq!(
+            SearchScope::parse("maintenance").unwrap(),
+            SearchScope::Maintenance
+        );
+        assert_eq!(SearchScope::parse("todo").unwrap(), SearchScope::Todo);
         assert!(matches!(
             SearchScope::parse("nonsense").unwrap_err(),
             DomainError::BadRequest(_)

@@ -21,6 +21,7 @@
     WorkItem,
   } from '../lib/types'
   import { formatDate } from '../lib/dates'
+  import { formatCents as formatCentsShared } from '../lib/money'
   import { refreshDashboard } from '../lib/stores'
   import { anchorId, flashHighlightFromQuery } from '../lib/highlight'
   import ScheduleTab from './ScheduleTab.svelte'
@@ -91,13 +92,14 @@
     push(`/vehicles/${vehicleId}/plan${id === 'due' ? '' : `/${id}`}`)
   }
 
-  // schedule_item_id → linking work item id (first participating item
-  // wins), so Due's "planned" chip can LINK to the work item.
+  // schedule_item_id → the linking work item (first participating item
+  // wins), so Due's "planned" chip can LINK to the work item; inVisit
+  // lets Due hide ⊖ unplan for items already grouped into a visit.
   let plannedWorkItems = $derived.by(() => {
-    const map = new Map<number, number>()
+    const map = new Map<number, { id: number; inVisit: boolean }>()
     for (const i of items) {
       if ((i.status === 'planned' || i.status === 'scheduled') && i.schedule_item_id != null && !map.has(i.schedule_item_id)) {
-        map.set(i.schedule_item_id, i.id)
+        map.set(i.schedule_item_id, { id: i.id, inVisit: i.visit_id != null })
       }
     }
     return map
@@ -108,6 +110,13 @@
       title: reminder.schedule_item.name,
       schedule_item_id: reminder.schedule_item.id,
     })
+    await refresh()
+  }
+
+  // Un-plan from Due (round-3 feedback #5): the same DELETE the dashboard
+  // uses — the work item vanishes, the row reverts to "Plan it".
+  async function unplanIt(workItemId: number) {
+    await workItemsApi.delete(vehicleId, workItemId)
     await refresh()
   }
 
@@ -359,7 +368,7 @@
 
   function formatCents(cents: number | null): string {
     if (cents == null) return ''
-    return `$${(cents / 100).toFixed(2)}`
+    return formatCentsShared(cents)
   }
 
   let openItems = $derived(items.filter(participates))
@@ -386,6 +395,7 @@
       onScheduleChanged={refresh}
       {plannedWorkItems}
       onPlanIt={planIt}
+      onUnplanIt={unplanIt}
     />
   {:else if activeSub === 'research'}
     <ResearchTab {vehicleId} />
@@ -441,7 +451,7 @@
     {:else if openItems.length === 0 && (!includeDone || doneItems.length === 0)}
       <p class="empty">Nothing on the to-do list. Plan work from the Due view, a recall, or an incident — or add one here.</p>
     {:else}
-      <div class="item-list" data-testid="todo-list">
+      <div class="item-list ledger" data-testid="todo-list">
         {#each openItems as item (item.id)}
           <div class="work-card" id={anchorId('work_item', item.id)}>
             <div class="work-main">
@@ -563,7 +573,7 @@
     {:else if visitList.length === 0}
       <p class="empty">No visits planned. Group to-do items into a shop trip or DIY session.</p>
     {:else}
-      <div class="item-list" data-testid="visit-list">
+      <div class="item-list ledger" data-testid="visit-list">
         {#each visitList as v (v.id)}
           <div class="visit-card" class:closed={v.status === 'completed' || v.status === 'canceled'}>
             <div class="work-main">
@@ -667,25 +677,34 @@
 <style>
   .sub-nav {
     display: flex;
-    gap: var(--sp-1);
+    gap: 2px;
+    padding: 2px;
     margin-bottom: var(--sp-4);
+    background: var(--surface);
     border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    overflow: hidden;
+    border-radius: 999px;
     width: fit-content;
   }
 
   .sub-btn {
-    padding: var(--sp-1) var(--sp-3);
+    padding: 0.2rem var(--sp-3);
     border: none;
     background: none;
+    border-radius: 999px;
     font-family: var(--font-display);
-    font-size: 0.85rem;
+    font-size: 0.88rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
     cursor: pointer;
     color: var(--text-muted);
     transition:
       background var(--duration-fast) var(--ease-out),
       color var(--duration-fast) var(--ease-out);
+  }
+
+  .sub-btn:hover:not(.active) {
+    color: var(--text);
   }
 
   .sub-btn.active {
@@ -724,18 +743,23 @@
     width: auto;
   }
 
+  /* Ledger rows (round-2 feedback #5): same grammar as attention/Due/
+     Timeline — one card, hairline-ruled entries, mono figures right. */
   .item-list {
     display: flex;
     flex-direction: column;
-    gap: var(--sp-2);
   }
 
   .work-card,
   .visit-card {
     padding: var(--sp-3) var(--sp-4);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    background: var(--bg-raised);
+    border-left: 3px solid transparent;
+    transition: background var(--duration-fast) var(--ease-out);
+  }
+
+  .work-card:hover,
+  .visit-card:hover {
+    background: var(--surface);
   }
 
   .work-card.finished,
@@ -755,9 +779,10 @@
   }
 
   .work-cost {
-    font-size: 0.82rem;
+    font-variant-numeric: tabular-nums;
+    font-size: 0.8rem;
     color: var(--text-secondary);
-    font-weight: 600;
+    text-align: right;
   }
 
   .work-notes {
@@ -783,30 +808,34 @@
 
   .status-badge {
     font-family: var(--font-display);
-    font-size: 0.65rem;
+    font-size: 0.68rem;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    padding: 0.1rem 0.4rem;
-    border-radius: var(--radius-sm);
+    letter-spacing: 0.08em;
+    padding: 0.1rem 0.5rem;
+    border-radius: 999px;
   }
 
-  .status-planned { background: var(--info-bg); color: var(--info); }
-  .status-scheduled { background: var(--warning-bg); color: var(--warning); }
-  .status-done, .status-completed { background: var(--success-bg); color: var(--success); }
-  .status-dropped, .status-canceled { background: var(--surface); color: var(--text-muted); }
+  .status-planned { background: var(--planned-bg); color: var(--planned); border: 1px solid var(--planned-border); }
+  .status-scheduled { background: var(--info-bg); color: var(--info); border: 1px solid var(--info-border); }
+  .status-done, .status-completed { background: var(--success-bg); color: var(--success); border: 1px solid var(--success-border); }
+  .status-dropped, .status-canceled { background: var(--surface); color: var(--text-muted); border: 1px solid var(--border-subtle); }
 
   .source-badge {
+    font-family: var(--font-display);
     font-size: 0.7rem;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
-    padding: 0 var(--sp-1);
-    border-radius: var(--radius-sm);
+    letter-spacing: 0.07em;
+    padding: 0 var(--sp-2);
+    border-radius: 999px;
     background: var(--surface);
     color: var(--text-secondary);
     border: 1px solid var(--border);
     cursor: pointer;
+    transition:
+      color var(--duration-fast) var(--ease-out),
+      border-color var(--duration-fast) var(--ease-out);
   }
 
   .source-badge:hover {

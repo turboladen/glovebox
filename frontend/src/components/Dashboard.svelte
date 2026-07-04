@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import { link } from '@keenmate/svelte-spa-router'
   import { dashboard as dashboardApi, workItems as workItemsApi } from '../lib/api'
+  import { formatCents as formatCentsShared, formatWholeDollars } from '../lib/money'
   import { garageDashboard, refreshDashboard } from '../lib/stores'
   import type { ActivityItem, AttentionItem } from '../lib/types'
   import { formatDate } from '../lib/dates'
@@ -122,13 +123,29 @@
     }
   }
 
-  function formatDollars(cents: number): string {
-    return `$${(cents / 100).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
-  }
+  const formatDollars = formatWholeDollars
 
   function formatCents(cents: number | null): string {
     if (cents == null) return ''
-    return `$${(cents / 100).toFixed(2)}`
+    return formatCentsShared(cents)
+  }
+
+  // Ledger columns (round-2 feedback #4): split the backend's display
+  // label ("Name — overdue by N mi") into a name cell and a status cell
+  // so overdue-by amounts line up as a mono column instead of prose.
+  function attentionName(a: AttentionItem): string {
+    return a.schedule_item_name ?? a.label
+  }
+
+  function attentionStatus(a: AttentionItem): string {
+    if (a.kind === 'recall') return 'recall'
+    if (a.kind === 'incident') return 'unresolved'
+    const dash = a.label.indexOf(' — ')
+    const status =
+      dash >= 0 ? a.label.slice(dash + 3) : a.kind === 'overdue' ? 'overdue' : 'due soon'
+    // The backend label carries raw figures ("36976 mi"); a ledger column
+    // gets thousands separators.
+    return status.replace(/\d{4,}/g, (n) => Number(n).toLocaleString())
   }
 </script>
 
@@ -167,53 +184,65 @@
 {:else}
   <div class="dashboard" data-testid="dashboard">
     {#if garageScope}
-      <h1 class="dash-title">Garage</h1>
+      <!-- Adding a vehicle is a page-level action where the garage lives
+           (round-3 feedback #3) — not a nav verb in the sidebar foot. -->
+      <div class="dash-head">
+        <h1 class="dash-title">Garage</h1>
+        <a href="/vehicles/new" use:link class="add-vehicle">+ Add vehicle</a>
+      </div>
     {/if}
 
     {#if attention.length > 0}
       <section class="block attention-block" data-testid="attention-block">
         <h3 class="block-title attention-title">⚠ Needs attention ({attention.length})</h3>
-        <div class="block-rows">
+        <!-- Ledger grid (feedback #4): item | overdue-by (mono, right) |
+             action — hairline-ruled rows, not free-floating prose. -->
+        <div class="attention-ledger">
           {#each attention as a (rowKey(a))}
-            <div class="row attention-row">
-              <a href={attentionTarget(a)} use:link class="row-link">
-                {#if garageScope}<span class="row-vehicle">{a.vehicle_name}</span> ·{/if}
-                {a.label}
+            <div class="attention-row">
+              <a href={attentionTarget(a)} use:link class="row-link attention-item">
+                {#if garageScope}<span class="row-vehicle">{a.vehicle_name}</span><span class="cell-sep">·</span>{/if}
+                {attentionName(a)}
               </a>
-              {#if canPlan(a)}
-                {#if a.planned_work_item_id != null}
-                  <!-- The state display IS the link to its source. -->
-                  <a
-                    class="planned-chip planned-link"
-                    href="/vehicles/{a.vehicle_id}/plan/todo?hl=work_item:{a.planned_work_item_id}"
-                    use:link
-                    title="View the planned work item"
-                  >
-                    planned
-                  </a>
-                  {#if !a.planned_item_in_visit}
+              <span class="attention-status num status-{a.kind}">{attentionStatus(a)}</span>
+              <span class="attention-action">
+                {#if canPlan(a)}
+                  {#if a.planned_work_item_id != null}
+                    <!-- The state display IS the link to its source. -->
+                    <a
+                      class="planned-chip planned-link"
+                      href="/vehicles/{a.vehicle_id}/plan/todo?hl=work_item:{a.planned_work_item_id}"
+                      use:link
+                      title="View the planned work item"
+                    >
+                      planned
+                    </a>
+                    {#if !a.planned_item_in_visit}
+                      <!-- Explicit labeled control (feedback #6): the bare ✕
+                           read as "delete this row". -->
+                      <button
+                        class="unplan"
+                        title="Un-plan (removes the to-do item)"
+                        aria-label="Un-plan"
+                        onclick={() => unplanIt(a)}
+                        disabled={planningKey === rowKey(a)}
+                      >
+                        <span aria-hidden="true">⊖</span> unplan
+                      </button>
+                    {/if}
+                  {:else if a.planned}
+                    <span class="planned-chip">planned</span>
+                  {:else}
                     <button
-                      class="unplan"
-                      title="Un-plan"
-                      aria-label="Un-plan"
-                      onclick={() => unplanIt(a)}
+                      class="plan-it"
+                      onclick={() => planIt(a)}
                       disabled={planningKey === rowKey(a)}
                     >
-                      ✕
+                      {planningKey === rowKey(a) ? 'planning…' : 'plan it'}
                     </button>
                   {/if}
-                {:else if a.planned}
-                  <span class="planned-chip">planned</span>
-                {:else}
-                  <button
-                    class="plan-it"
-                    onclick={() => planIt(a)}
-                    disabled={planningKey === rowKey(a)}
-                  >
-                    {planningKey === rowKey(a) ? 'planning…' : 'plan it'}
-                  </button>
                 {/if}
-              {/if}
+              </span>
             </div>
           {/each}
         </div>
@@ -288,8 +317,42 @@
 {/if}
 
 <style>
+  .dash-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--sp-4);
+    margin-bottom: var(--sp-5);
+    padding-bottom: var(--sp-3);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
   .dash-title {
-    margin-bottom: var(--sp-4);
+    margin: 0;
+  }
+
+  /* The dashed bay: same "open slot" affordance the sidebar foot used to
+     carry, now adjacent to the garage it adds to. */
+  .add-vehicle {
+    flex-shrink: 0;
+    padding: 0.3rem var(--sp-3);
+    font-family: var(--font-display);
+    font-size: 0.85rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    text-decoration: none;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-md);
+    transition:
+      color var(--duration-fast) var(--ease-out),
+      border-color var(--duration-fast) var(--ease-out);
+  }
+
+  .add-vehicle:hover {
+    color: var(--primary);
+    border-color: var(--primary);
   }
 
   .dashboard {
@@ -298,41 +361,69 @@
     gap: var(--sp-4);
   }
 
+  /* House cards with a staggered arrival. */
   .block {
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg);
-    padding: var(--sp-3) var(--sp-4);
+    padding: var(--sp-4) var(--sp-5);
     background: var(--bg-raised);
+    box-shadow: inset 0 1px 0 var(--edge-highlight), var(--shadow-sm);
+    animation: fade-in-up var(--duration-slow) var(--ease-out) both;
   }
 
+  .block-pair .block:nth-child(2) { animation-delay: 60ms; }
+  .block-pair .block:nth-child(3) { animation-delay: 120ms; }
+
+  /* Gauge-label block titles. */
   .block-title {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
     font-family: var(--font-display);
-    font-size: 0.85rem;
+    font-size: 0.8rem;
     font-weight: 600;
-    margin: 0 0 var(--sp-2);
-    text-transform: none;
-    letter-spacing: 0;
+    text-transform: uppercase;
+    letter-spacing: 0.13em;
+    color: var(--text-secondary);
+    margin: 0 0 var(--sp-3);
+  }
+
+  .block-title::before {
+    content: '';
+    width: 3px;
+    height: 12px;
+    border-radius: 1px;
+    background: var(--text-muted);
+    flex-shrink: 0;
   }
 
   .block-rows {
     display: flex;
     flex-direction: column;
-    gap: var(--sp-1);
   }
 
   .row {
-    font-size: 0.85rem;
+    font-size: 0.88rem;
     margin: 0;
+    padding: var(--sp-2) 0;
+  }
+
+  /* Same ledger rules as the attention grid — one row language. */
+  .row + .row {
+    border-top: 1px dotted var(--border-subtle);
   }
 
   .row-link {
     color: var(--text-secondary);
     text-decoration: none;
+    transition: color var(--duration-fast) var(--ease-out);
   }
 
   .row-link:hover {
     color: var(--text);
     text-decoration: underline;
+    text-decoration-color: var(--primary);
+    text-underline-offset: 3px;
   }
 
   .row-vehicle {
@@ -344,21 +435,81 @@
     color: var(--text-muted);
   }
 
-  /* Mockup block tints, translated into the house semantic tokens:
-     attention = danger, plan & budget = info, builds = success. */
+  /* Attention: redline rail + a wash that fades before it shouts. */
   .attention-block {
-    background: var(--danger-bg);
+    position: relative;
+    overflow: hidden;
     border-color: var(--danger-border);
+    border-left: 3px solid var(--danger);
+    background:
+      linear-gradient(105deg, var(--danger-bg), transparent 55%),
+      var(--bg-raised);
   }
 
   .attention-title {
     color: var(--danger);
   }
 
+  .attention-title::before {
+    background: var(--danger);
+  }
+
+  /* Ledger grid: name | status (mono, right) | action. */
+  .attention-ledger {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) max-content minmax(88px, max-content);
+    column-gap: var(--sp-4);
+  }
+
   .attention-row {
+    display: grid;
+    grid-template-columns: subgrid;
+    grid-column: 1 / -1;
+    align-items: baseline;
+    padding: var(--sp-2) 0;
+  }
+
+  .attention-row + .attention-row {
+    border-top: 1px dotted var(--border);
+  }
+
+  .attention-item {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .cell-sep {
+    color: var(--text-muted);
+    margin: 0 var(--sp-1);
+  }
+
+  .attention-status {
+    font-size: 0.8rem;
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .status-overdue,
+  .status-recall {
+    color: var(--danger);
+  }
+
+  .status-due_soon {
+    color: var(--warning);
+  }
+
+  .status-incident {
+    color: var(--info);
+  }
+
+  .attention-action {
     display: flex;
     align-items: baseline;
+    justify-content: flex-end;
     gap: var(--sp-2);
+    white-space: nowrap;
   }
 
   .plan-it {
@@ -379,15 +530,16 @@
   }
 
   .planned-chip {
-    font-size: 0.65rem;
+    font-family: var(--font-display);
+    font-size: 0.68rem;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
-    padding: 0 var(--sp-1);
-    border-radius: var(--radius-sm);
-    background: var(--success-bg);
-    color: var(--success);
-    border: 1px solid var(--success-border);
+    letter-spacing: 0.07em;
+    padding: 0 var(--sp-2);
+    border-radius: 999px;
+    background: var(--planned-bg);
+    color: var(--planned);
+    border: 1px solid var(--planned-border);
   }
 
   a.planned-link {
@@ -397,22 +549,26 @@
 
   a.planned-link:hover {
     text-decoration: underline;
-    border-color: var(--success);
-    color: var(--success);
+    border-color: var(--planned);
+    color: var(--planned);
   }
 
+  /* "⊖ unplan": clarity over minimalism — a bare ✕ read as row-delete. */
   .unplan {
-    padding: 0 var(--sp-1);
+    padding: 0;
     border: none;
     background: none;
-    font-size: 0.7rem;
-    line-height: 1;
+    font-size: 0.74rem;
+    font-weight: 500;
+    line-height: 1.4;
     color: var(--text-muted);
     cursor: pointer;
+    white-space: nowrap;
   }
 
   .unplan:hover {
     color: var(--danger);
+    text-decoration: underline;
   }
 
   .unplan:disabled {
@@ -420,22 +576,24 @@
     cursor: default;
   }
 
-  .plan-block {
-    background: var(--info-bg);
-    border-color: var(--border-subtle);
-  }
-
   .plan-title {
     color: var(--info);
   }
 
-  .builds-block {
-    background: var(--success-bg);
-    border-color: var(--success-border);
+  .plan-title::before {
+    background: var(--info);
   }
 
   .builds-title {
     color: var(--success);
+  }
+
+  .builds-title::before {
+    background: var(--success);
+  }
+
+  .activity-block .block-title::before {
+    background: var(--primary);
   }
 
   /* Mockup grid on wide screens: attention spans full width above; Plan &
@@ -453,12 +611,28 @@
     grid-column: 1 / -1;
   }
 
-  .forecast-line {
+  /* The total line: a solid rule and a right-aligned figure — ledger
+     semantics (entries dotted, totals ruled). */
+  .row.forecast-line,
+  .row + .row.forecast-line {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: var(--sp-3);
     color: var(--text-secondary);
+    margin-top: var(--sp-1);
+    border-top: 1px solid var(--border);
+  }
+
+  .forecast-line strong {
+    font-variant-numeric: tabular-nums;
+    font-size: 1.05rem;
+    color: var(--text);
   }
 
   .activity-date {
-    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    font-size: 0.78rem;
     color: var(--text);
   }
 

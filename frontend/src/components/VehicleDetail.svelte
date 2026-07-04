@@ -209,30 +209,37 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
   <p class="error">{error}</p>
 {:else if vehicle}
   <div class="vehicle-detail">
-    <div class="detail-header">
-      <a href="/" use:link class="back-link">← All vehicles</a>
-      <h1>{vehicle.name}</h1>
-      {#if vehicle.year || vehicle.make || vehicle.model}
-        <p class="vehicle-subtitle">
-          {[vehicle.year, vehicle.make, vehicle.model, vehicle.trim_level].filter(Boolean).join(' ')}
-        </p>
-      {/if}
-      {#if vehicle.archived_at}
-        <span class="archived-badge">Archived</span>
-      {/if}
-      {#if vehicle.sold_date}
-        <span class="sold-badge">Sold {formatDate(vehicle.sold_date)}</span>
-      {/if}
-    </div>
+    <!-- ONE slim context strip (round-2 feedback #1): breadcrumb · name ·
+         subtitle · odometer · verbs — then the tab row, then CONTENT. The
+         old back-link + H1 + subtitle + status-bar tower pushed content
+         halfway down the viewport. -->
+    <header class="context-strip">
+      <div class="strip-id">
+        <a href="/" use:link class="crumb">Garage</a>
+        <span class="crumb-sep" aria-hidden="true">/</span>
+        <h1 class="strip-name">{vehicle.name}</h1>
+        {#if vehicle.year || vehicle.make || vehicle.model}
+          <span class="vehicle-subtitle">
+            {[vehicle.year, vehicle.make, vehicle.model, vehicle.trim_level].filter(Boolean).join(' ')}
+          </span>
+        {/if}
+        {#if vehicle.archived_at}
+          <span class="archived-badge">Archived</span>
+        {/if}
+        {#if vehicle.sold_date}
+          <span class="sold-badge">Sold {formatDate(vehicle.sold_date)}</span>
+        {/if}
+      </div>
 
-    <div class="status-bar">
       {#if reminderData}
         <div class="mileage-readout">
           <span class="est-mileage">{formatMileage(reminderData.estimated_mileage)}</span>
-          <span class="mileage-unit">mi{#if reminderData.mileage_is_estimate} est.{/if}</span>
+          <span class="mileage-unit">mi</span>
+          {#if reminderData.mileage_is_estimate}<span class="est-flag">est.</span>{/if}
           <span class="mileage-date">as of {formatDate(reminderData.mileage_as_of)}</span>
         </div>
       {/if}
+
       <!-- The two everyday verbs stay visible at equal weight; everything
            occasional lives behind the ⋯ overflow menu. -->
       <div class="actions">
@@ -277,7 +284,7 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
           {/if}
         </div>
       </div>
-    </div>
+    </header>
 
     {#if showEditForm}
       <VehicleEdit {vehicle} onComplete={onVehicleUpdated} onCancel={() => (showEditForm = false)} />
@@ -329,56 +336,84 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
 {/if}
 
 <style>
-  .detail-header {
-    margin-bottom: var(--sp-4);
+  /* --- Context strip: the whole vehicle header in ~50px --- */
+  .context-strip {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-5);
+    flex-wrap: wrap;
+    margin-bottom: var(--sp-3);
+    padding: var(--sp-2) var(--sp-4);
+    background: var(--bg-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    box-shadow: inset 0 1px 0 var(--edge-highlight), var(--shadow-sm);
   }
 
-  .back-link {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--sp-1);
-    font-size: 0.8rem;
-    font-weight: 500;
+  .strip-id {
+    display: flex;
+    align-items: baseline;
+    gap: var(--sp-2);
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+
+  .crumb {
+    font-family: var(--font-display);
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
     color: var(--text-muted);
     text-decoration: none;
-    letter-spacing: 0.02em;
     transition: color var(--duration-fast) var(--ease-out);
   }
 
-  .back-link:hover {
+  .crumb:hover {
     color: var(--primary);
   }
 
-  .detail-header h1 {
-    margin: var(--sp-2) 0 0;
+  .crumb-sep {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    opacity: 0.6;
+  }
+
+  .strip-name {
+    margin: 0;
     font-family: var(--font-display);
-    font-size: 1.6rem;
+    font-size: 1.2rem;
     font-weight: 700;
-    letter-spacing: -0.02em;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    line-height: 1.3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 32ch;
   }
 
   .vehicle-subtitle {
-    margin: var(--sp-1) 0 0;
-    font-size: 0.9rem;
+    font-size: 0.8rem;
     color: var(--text-muted);
+    white-space: nowrap;
   }
 
   .archived-badge,
   .sold-badge {
     display: inline-block;
-    margin-top: var(--sp-2);
-    padding: var(--sp-1) var(--sp-3);
-    font-size: 0.75rem;
+    padding: 0 var(--sp-2);
+    font-size: 0.68rem;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    border-radius: var(--radius-sm);
+    border-radius: 999px;
+    align-self: center;
   }
 
   .archived-badge {
     color: var(--text-muted);
     border: 1px solid var(--border);
-    margin-right: var(--sp-2);
   }
 
   .sold-badge {
@@ -386,52 +421,65 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
     border: 1px solid var(--warning);
   }
 
-  /* --- Instrument cluster status bar --- */
-  .status-bar {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-4);
-    flex-wrap: wrap;
-    margin-bottom: var(--sp-5);
-    padding: var(--sp-4) var(--sp-5);
-    background: var(--bg-raised);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-lg);
-  }
-
   .mileage-readout {
     display: flex;
     align-items: baseline;
-    gap: var(--sp-1);
+    gap: var(--sp-2);
+    padding: 0 var(--sp-3);
+    border-left: 3px solid var(--primary);
+    margin-left: auto;
   }
 
+  /* The odometer: the number a car person actually reads. */
   .est-mileage {
-    font-family: var(--font-display);
+    font-variant-numeric: tabular-nums;
     font-weight: 700;
-    font-size: 1.25rem;
-    letter-spacing: -0.02em;
+    font-size: 1.15rem;
+    line-height: 1.2;
     color: var(--text);
   }
 
   .mileage-unit {
     font-family: var(--font-display);
-    font-size: 0.85rem;
+    font-size: 0.78rem;
     font-weight: 600;
     color: var(--text-muted);
     text-transform: uppercase;
-    letter-spacing: 0.03em;
+    letter-spacing: 0.09em;
+  }
+
+  .est-flag {
+    font-family: var(--font-display);
+    font-size: 0.66rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 0 var(--sp-2);
+    align-self: center;
   }
 
   .mileage-date {
-    font-size: 0.85rem;
+    font-size: 0.76rem;
     color: var(--text-muted);
-    margin-left: var(--sp-1);
   }
 
   .actions {
-    margin-left: auto;
     display: flex;
     gap: var(--sp-2);
+    margin-left: auto;
+  }
+
+  /* When the odometer readout is present, IT takes the auto margin. */
+  .mileage-readout ~ .actions {
+    margin-left: 0;
+  }
+
+  .actions .btn {
+    font-size: 0.82rem;
+    padding: 0.28rem 0.7rem;
   }
 
   /* --- ⋯ overflow menu --- */
@@ -496,7 +544,7 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
     display: flex;
     gap: 0;
     border-bottom: 1px solid var(--border-subtle);
-    margin-bottom: var(--sp-5);
+    margin-bottom: var(--sp-4);
     overflow-x: auto;
     scrollbar-width: none;
   }
@@ -512,8 +560,10 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
     border: none;
     cursor: pointer;
     font-family: var(--font-display);
-    font-size: 0.85rem;
-    font-weight: 500;
+    font-size: 0.95rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
     color: var(--text-muted);
     white-space: nowrap;
     transition:
@@ -568,17 +618,18 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
 
   /* --- Mobile --- */
   @media (max-width: 640px) {
-    .detail-header h1 {
-      font-size: 1.3rem;
+    .strip-name {
+      font-size: 1.05rem;
     }
 
-    .status-bar {
-      padding: var(--sp-3) var(--sp-4);
+    .context-strip {
+      padding: var(--sp-2) var(--sp-3);
       gap: var(--sp-2);
     }
 
-    .est-mileage {
-      font-size: 1.15rem;
+    .mileage-readout {
+      margin-left: 0;
+      padding-left: var(--sp-2);
     }
 
     .actions {

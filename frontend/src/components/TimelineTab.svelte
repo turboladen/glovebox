@@ -21,9 +21,11 @@
     IncidentWithDetails,
     MileageEntry,
     Part,
+    ServicePrefill,
     Shop,
   } from '../lib/types'
   import { formatDate } from '../lib/dates'
+  import { formatCents as formatCentsShared } from '../lib/money'
   import ServiceForm from './ServiceForm.svelte'
   import IncidentForm from './IncidentForm.svelte'
   import IncidentDetail from './IncidentDetail.svelte'
@@ -61,6 +63,11 @@
   let showServiceForm = $state(false)
   let showIncidentForm = $state(false)
   let editingIncident: IncidentWithDetails | null = $state(null)
+  // Prefill carried by the routed record-service flow (?action=record with
+  // optional &schedule_item=&desc=&retro= from Plan → Due): the Due
+  // actions land on THIS one real form, prefilled, instead of stripped
+  // mini-forms (round-2 feedback #9).
+  let servicePrefill: ServicePrefill | null = $state(null)
 
   // Expanded/editing state (service rows)
   let expandedId: string | null = $state(null)
@@ -109,20 +116,33 @@
     }
   })
 
-  // The vehicle header's "Record service" routes here with ?action=record
-  // so there is ONE service form; reacting to the querystring also covers
-  // clicking it while already on the Timeline.
+  // The context strip's "Record service" and Plan → Due's actions route
+  // here with ?action=record (+ optional prefill params) so there is ONE
+  // service form; reacting to the querystring also covers clicking it
+  // while already on the Timeline.
   $effect(() => {
-    if (new URLSearchParams(querystring() ?? '').get('action') === 'record') {
+    const qs = new URLSearchParams(querystring() ?? '')
+    if (qs.get('action') === 'record') {
+      const scheduleItem = qs.get('schedule_item')
+      servicePrefill = {
+        description: qs.get('desc') ?? undefined,
+        scheduleItemId: scheduleItem ? parseInt(scheduleItem, 10) : undefined,
+        retro: qs.get('retro') === '1',
+      }
       showServiceForm = true
       showIncidentForm = false
       editingIncident = null
-      // Consume the param: pushing an IDENTICAL hash fires no hashchange, so
-      // leaving it in place makes the header's second click dead and makes a
-      // refresh re-open the form.
+      // Consume the params: pushing an IDENTICAL hash fires no hashchange,
+      // so leaving them in place makes the strip's second click dead and
+      // makes a refresh re-open the form.
       replace(`/vehicles/${vehicleId}/timeline`)
     }
   })
+
+  function closeServiceForm() {
+    showServiceForm = false
+    servicePrefill = null
+  }
 
   async function refresh() {
     await loadData()
@@ -153,6 +173,25 @@
           : e.type === 'mileage'),
   )
 
+  // Category chips show only categories PRESENT in the data, with counts
+  // (round-2 feedback #8) — not the whole static whitelist. Canonical
+  // order is kept so chips don't jump around as data changes.
+  let categoryCounts = $derived.by(() => {
+    const counts = new Map<string, number>()
+    for (const i of incidents) counts.set(i.category, (counts.get(i.category) ?? 0) + 1)
+    return incidentCategories
+      .filter((c) => counts.has(c))
+      .map((c) => ({ category: c, count: counts.get(c)! }))
+  })
+
+  // If the selected category disappears (deletion, recategorized), fall
+  // back to All rather than filtering to an empty stream.
+  $effect(() => {
+    if (incidentCategory !== 'all' && !categoryCounts.some((x) => x.category === incidentCategory)) {
+      incidentCategory = 'all'
+    }
+  })
+
   let visible = $derived(filtered.slice(0, limit))
 
   function partsForService(service: ServiceRecordWithLinks): Part[] {
@@ -167,7 +206,7 @@
 
   function formatCents(cents: number | null): string {
     if (cents == null) return ''
-    return `$${(cents / 100).toFixed(2)}`
+    return formatCentsShared(cents)
   }
 
   function formatMileage(n: number | null): string {
@@ -267,39 +306,41 @@
       <button class="filter-btn" class:active={filter === 'incidents'} onclick={() => { filter = 'incidents'; incidentCategory = 'all' }}>Incidents</button>
       <button class="filter-btn" class:active={filter === 'mileage'} onclick={() => (filter = 'mileage')}>Mileage</button>
     </div>
+    <!-- ONE record-service verb per screen (round-2 feedback #7): the
+         context strip owns it. This toolbar keeps the kind filters and
+         the incident verb only. -->
     <div class="create-actions">
       <button
         class="btn btn-secondary"
-        onclick={() => { showIncidentForm = !showIncidentForm; editingIncident = null; showServiceForm = false }}
+        onclick={() => { showIncidentForm = !showIncidentForm; editingIncident = null; closeServiceForm() }}
       >
         {showIncidentForm && !editingIncident ? 'Cancel' : 'Log incident'}
-      </button>
-      <button
-        class="btn btn-primary"
-        onclick={() => { showServiceForm = !showServiceForm; showIncidentForm = false; editingIncident = null }}
-      >
-        {showServiceForm ? 'Cancel' : 'Record service'}
       </button>
     </div>
   </div>
 
-  {#if filter === 'incidents'}
+  {#if filter === 'incidents' && categoryCounts.length > 0}
     <div class="filter-bar category-bar" data-testid="category-filter">
-      <button class="filter-btn" class:active={incidentCategory === 'all'} onclick={() => (incidentCategory = 'all')}>All</button>
-      {#each incidentCategories as c (c)}
-        <button class="filter-btn" class:active={incidentCategory === c} onclick={() => (incidentCategory = c)}>
-          {incidentLabel(c)}
+      <button class="filter-btn" class:active={incidentCategory === 'all'} onclick={() => (incidentCategory = 'all')}>
+        All <span class="chip-count num">{incidents.length}</span>
+      </button>
+      {#each categoryCounts as { category, count } (category)}
+        <button class="filter-btn" class:active={incidentCategory === category} onclick={() => (incidentCategory = category)}>
+          {incidentLabel(category)} <span class="chip-count num">{count}</span>
         </button>
       {/each}
     </div>
   {/if}
 
   {#if showServiceForm}
-    <ServiceForm
-      {vehicleId}
-      onComplete={async () => { showServiceForm = false; await refresh() }}
-      onCancel={() => (showServiceForm = false)}
-    />
+    {#key servicePrefill}
+      <ServiceForm
+        {vehicleId}
+        prefill={servicePrefill}
+        onComplete={async () => { closeServiceForm(); await refresh() }}
+        onCancel={closeServiceForm}
+      />
+    {/key}
   {/if}
 
   {#if showIncidentForm}
@@ -318,7 +359,7 @@
   {:else if entries.length === 0}
     <p class="empty">No history yet.</p>
   {:else}
-    <div class="history-list">
+    <div class="history-list ledger">
       {#each visible as entry (entryKey(entry))}
         {@const key = entryKey(entry)}
         {@const isExpanded = expandedId === key}
@@ -553,15 +594,27 @@
     gap: var(--sp-2);
   }
 
+  /* Segmented control — the house filter language. */
   .filter-bar {
-    display: flex; gap: var(--sp-1);
-    border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; width: fit-content;
+    display: flex; gap: 2px;
+    padding: 2px;
+    background: var(--surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: 999px;
+    width: fit-content;
   }
 
   .filter-btn {
-    padding: var(--sp-1) var(--sp-3); border: none; background: none;
-    font-family: var(--font-display); font-size: 0.85rem; cursor: pointer; color: var(--text-muted);
+    padding: 0.2rem var(--sp-3); border: none; background: none;
+    border-radius: 999px;
+    font-family: var(--font-display); font-size: 0.88rem; font-weight: 600;
+    letter-spacing: 0.05em; text-transform: uppercase;
+    cursor: pointer; color: var(--text-muted);
     transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+  }
+
+  .filter-btn:hover:not(.active) {
+    color: var(--text);
   }
 
   .filter-btn.active {
@@ -578,54 +631,50 @@
     text-transform: capitalize;
   }
 
-  .history-list { display: flex; flex-direction: column; gap: var(--sp-2); }
+  .chip-count {
+    font-size: 0.72em;
+    opacity: 0.75;
+  }
+
+  /* The stream is ONE ledger (round-2 feedback #5): hairline-ruled rows
+     inside a single card — the same grammar as attention and Due — with
+     a status rail instead of per-row borders. */
+  .history-list {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .history-card,
+  .service-entry {
+    border-left: 3px solid transparent;
+    transition: background var(--duration-fast) var(--ease-out);
+  }
 
   .history-card {
-    padding: var(--sp-3) var(--sp-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
-    background: var(--bg-raised);
-    transition:
-      border-color var(--duration-base) var(--ease-out),
-      box-shadow var(--duration-base) var(--ease-out);
+    padding: var(--sp-3) var(--sp-4);
   }
 
   .service-card { cursor: pointer; }
 
-  .history-card:hover {
-    border-color: var(--border);
-    box-shadow: var(--shadow-sm);
-  }
-
-  .history-card.expanded {
-    border-color: var(--primary);
-  }
-
-  /* Service entries wrap the row + its expanded panel so the expanded
-     state reads as ONE contiguous card: the border lives on the wrapper,
-     never on both halves. */
-  .service-entry {
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    background: var(--bg-raised);
-    transition:
-      border-color var(--duration-base) var(--ease-out),
-      box-shadow var(--duration-base) var(--ease-out);
-  }
-
+  .history-card:hover,
   .service-entry:hover {
-    border-color: var(--border);
-    box-shadow: var(--shadow-sm);
+    background: var(--surface);
   }
 
+  /* Expanded rows anchor themselves with the signal rail + a raised wash. */
   .service-entry.expanded {
-    border-color: var(--primary);
+    border-left-color: var(--primary);
+    background: var(--surface);
   }
 
-  .service-entry .service-card,
-  .service-entry .service-card:hover,
-  .service-entry .service-card.expanded {
+  .history-card.obs-card.expanded {
+    border-left-color: var(--warning);
+    background: var(--surface);
+  }
+
+  .service-entry .service-card {
     border: none;
-    box-shadow: none;
-    background: none;
+    padding: var(--sp-3) var(--sp-4);
   }
 
   .history-card.resolved { opacity: 0.6; }
@@ -647,18 +696,27 @@
 
   .type-badge {
     font-family: var(--font-display);
-    font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em;
-    padding: 0.1rem 0.4rem; border-radius: var(--radius-sm); font-weight: 600;
+    font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em;
+    padding: 0.1rem 0.5rem; border-radius: 999px; font-weight: 600;
   }
 
-  .service-badge { background: var(--success-bg); color: var(--success); }
-  .obs-badge { background: var(--warning-bg); color: var(--warning); }
-  .mileage-badge { background: var(--info-bg); color: var(--info); }
+  .service-badge { background: var(--success-bg); color: var(--success); border: 1px solid var(--success-border); }
+  .obs-badge { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning-border); }
+  .mileage-badge { background: var(--info-bg); color: var(--info); border: 1px solid var(--info-border); }
   .resolved-badge { font-size: 0.75rem; color: var(--success); }
 
-  .date { font-weight: 600; }
-  .cost { margin-left: auto; font-weight: 600; }
-  .description { margin: var(--sp-1) 0; }
+  .date {
+    font-variant-numeric: tabular-nums;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+  }
+  .cost {
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+    font-size: 0.9rem;
+    font-weight: 700;
+  }
+  .description { margin: var(--sp-1) 0; font-weight: 500; font-size: 0.95rem; }
   .inc-title { font-weight: 600; flex: 1; }
   .meta { font-size: 0.85rem; color: var(--text-muted); display: flex; gap: var(--sp-3); }
   .category { text-transform: capitalize; font-size: 0.8rem; color: var(--text-muted); }
@@ -677,11 +735,11 @@
   }
 
   .linked-chip {
-    padding: 0.1rem 0.5rem; border-radius: var(--radius-sm); font-size: 0.8rem;
+    padding: 0.1rem 0.55rem; border-radius: 999px; font-size: 0.78rem;
   }
 
-  .part-chip { background: var(--success-bg); color: var(--success); }
-  .obs-chip { background: var(--warning-bg); color: var(--warning); }
+  .part-chip { background: var(--success-bg); color: var(--success); border: 1px solid var(--success-border); }
+  .obs-chip { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning-border); }
 
   /* Expanded panel (service rows): a borderless bottom half of the
      wrapping .service-entry, separated by a hairline. */
@@ -772,12 +830,16 @@
   .load-more {
     display: block;
     margin: var(--sp-4) auto 0;
-    padding: var(--sp-2) var(--sp-4);
+    padding: var(--sp-2) var(--sp-5);
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: var(--radius-md);
+    border-radius: 999px;
     color: var(--text-secondary);
+    font-family: var(--font-display);
     font-size: 0.85rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
     cursor: pointer;
     transition: border-color var(--duration-fast) var(--ease-out);
   }

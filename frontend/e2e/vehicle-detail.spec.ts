@@ -12,7 +12,11 @@ test.describe('Vehicle Detail', () => {
   test('shows vehicle detail layout', async ({ page }) => {
     await page.goto(vehicleUrl)
     await expect(page.getByRole('heading', { name: 'Detail Test Car' })).toBeVisible()
-    await expect(page.getByText('← All vehicles')).toBeVisible()
+    // The context strip's breadcrumb replaced the old back-link (the
+    // sidebar covers "All vehicles"; the strip stays slim).
+    // Scoped to main: the sidebar's "Garage" section header is a second,
+    // equivalent link to `/` (round 3), so the bare locator is ambiguous.
+    await expect(page.getByRole('main').getByRole('link', { name: 'Garage' })).toBeVisible()
     // Two everyday verbs at equal weight…
     await expect(page.getByRole('button', { name: 'Update mileage' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Record service' })).toBeVisible()
@@ -38,18 +42,20 @@ test.describe('Vehicle Detail', () => {
     await expect(page.getByLabel('Description')).toBeVisible()
 
     // Second click must work too (the dead-affordance regression): close the
-    // form, then re-open it from the header.
+    // form, then re-open it from the strip (now the ONLY such button).
     await page.locator('form').getByRole('button', { name: 'Cancel' }).click()
     await expect(page.getByRole('heading', { name: 'Record service' })).not.toBeVisible()
-    await page.getByRole('button', { name: 'Record service' }).first().click()
+    await page.getByRole('button', { name: 'Record service' }).click()
     await expect(page.getByRole('heading', { name: 'Record service' })).toBeVisible()
   })
 
-  test('one record-service verb everywhere — no "Log Service" text remains', async ({ page }) => {
+  test('one record-service verb everywhere — never two on a screen', async ({ page }) => {
     for (const path of ['', '/timeline', '/costs']) {
       await page.goto(`${vehicleUrl}${path}`)
       await expect(page.getByRole('heading', { name: 'Detail Test Car' })).toBeVisible()
       await expect(page.getByText(/log service/i)).toHaveCount(0)
+      // The strip owns the verb; no tab may duplicate it.
+      await expect(page.getByRole('button', { name: 'Record service' })).toHaveCount(1)
     }
   })
 
@@ -86,9 +92,17 @@ test.describe('Vehicle Detail', () => {
     await expect(page.getByRole('button', { name: 'Parts', exact: true })).toHaveClass(/active/)
   })
 
-  test('back link returns to the dashboard', async ({ page }) => {
+  test('breadcrumb returns to the dashboard', async ({ page }) => {
     await page.goto(vehicleUrl)
-    await page.getByText('← All vehicles').click()
+    await page.getByRole('main').getByRole('link', { name: 'Garage' }).click()
+    await expect(page).toHaveURL('/')
+  })
+
+  test('sidebar "Garage" section header links to the dashboard', async ({ page }) => {
+    // Round-3 feedback #2: the section header is a real control, not a
+    // dead label sitting next to a logo that navigates.
+    await page.goto(vehicleUrl)
+    await page.getByTestId('sidebar').getByRole('link', { name: 'Garage' }).click()
     await expect(page).toHaveURL('/')
   })
 })
