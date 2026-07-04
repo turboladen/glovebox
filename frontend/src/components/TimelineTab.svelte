@@ -7,7 +7,7 @@
   // lives here too: Record service (existing ServiceForm) and Log
   // incident (IncidentForm).
   import { onMount } from 'svelte'
-  import { querystring } from '@keenmate/svelte-spa-router'
+  import { querystring, replace } from '@keenmate/svelte-spa-router'
   import {
     services as servicesApi,
     incidents as incidentsApi,
@@ -117,6 +117,10 @@
       showServiceForm = true
       showIncidentForm = false
       editingIncident = null
+      // Consume the param: pushing an IDENTICAL hash fires no hashchange, so
+      // leaving it in place makes the header's second click dead and makes a
+      // refresh re-open the form.
+      replace(`/vehicles/${vehicleId}/timeline`)
     }
   })
 

@@ -83,6 +83,11 @@ pub struct AttentionItem {
     /// un-planning). First participating item wins if several link the
     /// same source.
     pub planned_work_item_id: Option<i32>,
+    /// True when that work item is attached to a visit (`scheduled`).
+    /// The dashboard's confirm-free un-plan ✕ hides for these: deleting a
+    /// scheduled item silently removes it from its visit, which re-planning
+    /// would NOT restore — manage it from the Plan tab instead.
+    pub planned_item_in_visit: bool,
 }
 
 /// An open visit with its owning vehicle named for garage-wide display.
@@ -152,21 +157,24 @@ pub async fn garage(db: &DatabaseConnection) -> DomainResult<GarageDashboard> {
         // "planned" link targeting the linking item (first item wins).
         let open_items = work_item::list(db, v.id, false).await?;
         let unscheduled_work_count = open_items.iter().filter(|i| i.visit_id.is_none()).count();
-        let mut planned_schedule: std::collections::HashMap<i32, i32> =
+        // Map value: (work_item_id, in_visit) — in_visit hides the dashboard's
+        // confirm-free un-plan for items already attached to a visit.
+        let mut planned_schedule: std::collections::HashMap<i32, (i32, bool)> =
             std::collections::HashMap::new();
-        let mut planned_findings: std::collections::HashMap<i32, i32> =
+        let mut planned_findings: std::collections::HashMap<i32, (i32, bool)> =
             std::collections::HashMap::new();
-        let mut planned_incidents: std::collections::HashMap<i32, i32> =
+        let mut planned_incidents: std::collections::HashMap<i32, (i32, bool)> =
             std::collections::HashMap::new();
         for item in &open_items {
+            let entry = (item.id, item.visit_id.is_some());
             if let Some(sid) = item.schedule_item_id {
-                planned_schedule.entry(sid).or_insert(item.id);
+                planned_schedule.entry(sid).or_insert(entry);
             }
             if let Some(fid) = item.research_finding_id {
-                planned_findings.entry(fid).or_insert(item.id);
+                planned_findings.entry(fid).or_insert(entry);
             }
             if let Some(iid) = item.incident_id {
-                planned_incidents.entry(iid).or_insert(item.id);
+                planned_incidents.entry(iid).or_insert(entry);
             }
         }
 
@@ -186,7 +194,8 @@ pub async fn garage(db: &DatabaseConnection) -> DomainResult<GarageDashboard> {
                         entity_id: r.schedule_item.id,
                         deep_link_hint: "plan/due".into(),
                         planned: planned_id.is_some(),
-                        planned_work_item_id: planned_id,
+                        planned_work_item_id: planned_id.map(|(id, _)| id),
+                        planned_item_in_visit: planned_id.is_some_and(|(_, v)| v),
                     });
                 }
                 "upcoming" => {
@@ -201,7 +210,8 @@ pub async fn garage(db: &DatabaseConnection) -> DomainResult<GarageDashboard> {
                         entity_id: r.schedule_item.id,
                         deep_link_hint: "plan/due".into(),
                         planned: planned_id.is_some(),
-                        planned_work_item_id: planned_id,
+                        planned_work_item_id: planned_id.map(|(id, _)| id),
+                        planned_item_in_visit: planned_id.is_some_and(|(_, v)| v),
                     });
                 }
                 _ => {}
@@ -225,7 +235,8 @@ pub async fn garage(db: &DatabaseConnection) -> DomainResult<GarageDashboard> {
                 entity_id: f.id,
                 deep_link_hint: "plan/research".into(),
                 planned: planned_id.is_some(),
-                planned_work_item_id: planned_id,
+                planned_work_item_id: planned_id.map(|(id, _)| id),
+                planned_item_in_visit: planned_id.is_some_and(|(_, v)| v),
             });
         }
 
@@ -247,7 +258,8 @@ pub async fn garage(db: &DatabaseConnection) -> DomainResult<GarageDashboard> {
                 entity_id: i.incident.id,
                 deep_link_hint: "timeline".into(),
                 planned: planned_id.is_some(),
-                planned_work_item_id: planned_id,
+                planned_work_item_id: planned_id.map(|(id, _)| id),
+                planned_item_in_visit: planned_id.is_some_and(|(_, v)| v),
             });
         }
 

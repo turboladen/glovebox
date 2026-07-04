@@ -721,6 +721,9 @@ export interface AttentionItem {
   // …and its id, so the "planned" chip links to the work item itself
   // (hypermedia affordance) and supports un-planning.
   planned_work_item_id: number | null
+  // The un-plan ✕ hides when the item is attached to a visit — deleting a
+  // scheduled item isn't cheaply reversible (the visit link wouldn't return).
+  planned_item_in_visit: boolean
 }
 
 // Flattened VisitWithItems + the owning vehicle.

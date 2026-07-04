@@ -105,7 +105,10 @@
   }
 
   // Un-plan: delete the linking work item and the row reverts to "plan it".
-  // Confirm-free — it's cheaply reversible (plan it again).
+  // Confirm-free because it's cheaply reversible (plan it again) — which is
+  // only true for UNSCHEDULED items; the ✕ is hidden when the item sits in a
+  // visit (deleting would silently strip it from the visit, and re-planning
+  // would not restore that link — manage those from the Plan tab).
   async function unplanIt(a: AttentionItem) {
     if (a.planned_work_item_id == null) return
     planningKey = rowKey(a)
@@ -188,15 +191,17 @@
                   >
                     planned
                   </a>
-                  <button
-                    class="unplan"
-                    title="Un-plan"
-                    aria-label="Un-plan"
-                    onclick={() => unplanIt(a)}
-                    disabled={planningKey === rowKey(a)}
-                  >
-                    ✕
-                  </button>
+                  {#if !a.planned_item_in_visit}
+                    <button
+                      class="unplan"
+                      title="Un-plan"
+                      aria-label="Un-plan"
+                      onclick={() => unplanIt(a)}
+                      disabled={planningKey === rowKey(a)}
+                    >
+                      ✕
+                    </button>
+                  {/if}
                 {:else if a.planned}
                   <span class="planned-chip">planned</span>
                 {:else}
