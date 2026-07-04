@@ -170,7 +170,7 @@
   }
 
   .card-value {
-    font-family: var(--font-mono);
+    font-family: var(--font-numeral);
     font-variant-numeric: tabular-nums;
     font-size: 1.35rem;
     font-weight: 700;
@@ -202,7 +202,7 @@
   }
 
   .cost-table td:not(:first-child) {
-    font-family: var(--font-mono);
+    font-family: var(--font-numeral);
     font-variant-numeric: tabular-nums;
     font-size: 0.82rem;
   }

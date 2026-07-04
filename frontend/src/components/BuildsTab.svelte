@@ -391,7 +391,7 @@
   }
 
   .stat-value {
-    font-family: var(--font-mono);
+    font-family: var(--font-numeral);
     font-variant-numeric: tabular-nums;
     font-size: 1.1rem;
     font-weight: 700;

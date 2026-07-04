@@ -319,7 +319,7 @@
   }
 
   .obd-chip {
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-numeral, monospace);
     font-size: 0.75rem;
     font-weight: 600;
     padding: 0.1rem 0.5rem;
