@@ -115,22 +115,36 @@
 
   .sidebar-label {
     font-family: var(--font-display);
-    font-size: 0.7rem;
+    font-size: 0.72rem;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.16em;
     color: var(--text-muted);
-    padding: 0 var(--sp-2);
+    padding: 0 var(--sp-2) var(--sp-1);
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
   }
 
+  /* gauge-label tick */
+  .sidebar-label::before {
+    content: '';
+    width: 3px;
+    height: 11px;
+    background: var(--primary);
+    border-radius: 1px;
+  }
+
+  /* Garage bays: flat rows with a signal rail when parked on one. */
   .entry {
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: 2px;
     padding: var(--sp-2) var(--sp-3);
-    border: 1px solid var(--border-subtle);
+    border: 1px solid transparent;
     border-radius: var(--radius-md);
-    background: var(--surface);
+    background: none;
     color: var(--text);
     text-decoration: none;
     transition:
@@ -138,20 +152,37 @@
       background var(--duration-fast) var(--ease-out);
   }
 
+  .entry::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 6px;
+    bottom: 6px;
+    width: 3px;
+    border-radius: 2px;
+    background: transparent;
+    transition: background var(--duration-fast) var(--ease-out);
+  }
+
   .entry:hover {
-    border-color: var(--border);
-    background: var(--surface-hover);
+    background: var(--surface);
   }
 
   .entry.active {
-    border-color: var(--primary);
-    background: var(--primary-muted);
+    background: var(--surface);
+    border-color: var(--border-subtle);
+    box-shadow: inset 0 1px 0 var(--edge-highlight);
+  }
+
+  .entry.active::before {
+    background: var(--primary);
   }
 
   .entry-name {
     font-family: var(--font-display);
-    font-size: 0.9rem;
+    font-size: 1rem;
     font-weight: 600;
+    letter-spacing: 0.02em;
   }
 
   .entry-sub {
@@ -172,19 +203,20 @@
   }
 
   .hint-mileage {
-    font-size: 0.72rem;
+    font-size: 0.7rem;
     color: var(--text-secondary);
-    font-family: var(--font-display);
-    font-weight: 600;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
   }
 
   .hint {
-    font-size: 0.65rem;
+    font-family: var(--font-display);
+    font-size: 0.68rem;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
-    padding: 0 var(--sp-1);
-    border-radius: var(--radius-sm);
+    letter-spacing: 0.07em;
+    padding: 0 var(--sp-2);
+    border-radius: 999px;
   }
 
   .hint-due {

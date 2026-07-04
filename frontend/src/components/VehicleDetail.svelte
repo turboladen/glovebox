@@ -229,7 +229,8 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
       {#if reminderData}
         <div class="mileage-readout">
           <span class="est-mileage">{formatMileage(reminderData.estimated_mileage)}</span>
-          <span class="mileage-unit">mi{#if reminderData.mileage_is_estimate} est.{/if}</span>
+          <span class="mileage-unit">mi</span>
+          {#if reminderData.mileage_is_estimate}<span class="est-flag">est.</span>{/if}
           <span class="mileage-date">as of {formatDate(reminderData.mileage_as_of)}</span>
         </div>
       {/if}
@@ -352,9 +353,10 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
   .detail-header h1 {
     margin: var(--sp-2) 0 0;
     font-family: var(--font-display);
-    font-size: 1.6rem;
+    font-size: 1.8rem;
     font-weight: 700;
-    letter-spacing: -0.02em;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
   }
 
   .vehicle-subtitle {
@@ -397,19 +399,26 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
     background: var(--bg-raised);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg);
+    box-shadow: inset 0 1px 0 var(--edge-highlight), var(--shadow-sm);
   }
 
   .mileage-readout {
     display: flex;
     align-items: baseline;
-    gap: var(--sp-1);
+    gap: var(--sp-2);
+    padding: var(--sp-1) var(--sp-3);
+    margin-left: calc(-1 * var(--sp-3));
+    border-left: 3px solid var(--primary);
   }
 
+  /* The odometer: the number a car person actually reads. */
   .est-mileage {
-    font-family: var(--font-display);
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
     font-weight: 700;
-    font-size: 1.25rem;
-    letter-spacing: -0.02em;
+    font-size: 1.65rem;
+    letter-spacing: 0.01em;
+    line-height: 1.1;
     color: var(--text);
   }
 
@@ -419,11 +428,24 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
     font-weight: 600;
     color: var(--text-muted);
     text-transform: uppercase;
-    letter-spacing: 0.03em;
+    letter-spacing: 0.09em;
+  }
+
+  .est-flag {
+    font-family: var(--font-display);
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 0 var(--sp-2);
+    align-self: center;
   }
 
   .mileage-date {
-    font-size: 0.85rem;
+    font-size: 0.82rem;
     color: var(--text-muted);
     margin-left: var(--sp-1);
   }
@@ -512,8 +534,10 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
     border: none;
     cursor: pointer;
     font-family: var(--font-display);
-    font-size: 0.85rem;
-    font-weight: 500;
+    font-size: 0.95rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
     color: var(--text-muted);
     white-space: nowrap;
     transition:

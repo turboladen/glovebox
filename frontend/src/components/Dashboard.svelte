@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import { link } from '@keenmate/svelte-spa-router'
   import { dashboard as dashboardApi, workItems as workItemsApi } from '../lib/api'
+  import { formatCents as formatCentsShared, formatWholeDollars } from '../lib/money'
   import { garageDashboard, refreshDashboard } from '../lib/stores'
   import type { ActivityItem, AttentionItem } from '../lib/types'
   import { formatDate } from '../lib/dates'
@@ -122,13 +123,11 @@
     }
   }
 
-  function formatDollars(cents: number): string {
-    return `$${(cents / 100).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
-  }
+  const formatDollars = formatWholeDollars
 
   function formatCents(cents: number | null): string {
     if (cents == null) return ''
-    return `$${(cents / 100).toFixed(2)}`
+    return formatCentsShared(cents)
   }
 </script>
 
@@ -289,7 +288,9 @@
 
 <style>
   .dash-title {
-    margin-bottom: var(--sp-4);
+    margin-bottom: var(--sp-5);
+    padding-bottom: var(--sp-3);
+    border-bottom: 1px solid var(--border-subtle);
   }
 
   .dashboard {
@@ -298,41 +299,64 @@
     gap: var(--sp-4);
   }
 
+  /* House cards with a staggered arrival. */
   .block {
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg);
-    padding: var(--sp-3) var(--sp-4);
+    padding: var(--sp-4) var(--sp-5);
     background: var(--bg-raised);
+    box-shadow: inset 0 1px 0 var(--edge-highlight), var(--shadow-sm);
+    animation: fade-in-up var(--duration-slow) var(--ease-out) both;
   }
 
+  .block-pair .block:nth-child(2) { animation-delay: 60ms; }
+  .block-pair .block:nth-child(3) { animation-delay: 120ms; }
+
+  /* Gauge-label block titles. */
   .block-title {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
     font-family: var(--font-display);
-    font-size: 0.85rem;
+    font-size: 0.8rem;
     font-weight: 600;
-    margin: 0 0 var(--sp-2);
-    text-transform: none;
-    letter-spacing: 0;
+    text-transform: uppercase;
+    letter-spacing: 0.13em;
+    color: var(--text-secondary);
+    margin: 0 0 var(--sp-3);
+  }
+
+  .block-title::before {
+    content: '';
+    width: 3px;
+    height: 12px;
+    border-radius: 1px;
+    background: var(--text-muted);
+    flex-shrink: 0;
   }
 
   .block-rows {
     display: flex;
     flex-direction: column;
-    gap: var(--sp-1);
+    gap: var(--sp-2);
   }
 
   .row {
-    font-size: 0.85rem;
+    font-size: 0.88rem;
     margin: 0;
   }
 
   .row-link {
     color: var(--text-secondary);
     text-decoration: none;
+    transition: color var(--duration-fast) var(--ease-out);
   }
 
   .row-link:hover {
     color: var(--text);
     text-decoration: underline;
+    text-decoration-color: var(--primary);
+    text-underline-offset: 3px;
   }
 
   .row-vehicle {
@@ -344,15 +368,23 @@
     color: var(--text-muted);
   }
 
-  /* Mockup block tints, translated into the house semantic tokens:
-     attention = danger, plan & budget = info, builds = success. */
+  /* Attention: redline rail + a wash that fades before it shouts. */
   .attention-block {
-    background: var(--danger-bg);
+    position: relative;
+    overflow: hidden;
     border-color: var(--danger-border);
+    border-left: 3px solid var(--danger);
+    background:
+      linear-gradient(105deg, var(--danger-bg), transparent 55%),
+      var(--bg-raised);
   }
 
   .attention-title {
     color: var(--danger);
+  }
+
+  .attention-title::before {
+    background: var(--danger);
   }
 
   .attention-row {
@@ -379,15 +411,16 @@
   }
 
   .planned-chip {
-    font-size: 0.65rem;
+    font-family: var(--font-display);
+    font-size: 0.68rem;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
-    padding: 0 var(--sp-1);
-    border-radius: var(--radius-sm);
-    background: var(--success-bg);
-    color: var(--success);
-    border: 1px solid var(--success-border);
+    letter-spacing: 0.07em;
+    padding: 0 var(--sp-2);
+    border-radius: 999px;
+    background: var(--planned-bg);
+    color: var(--planned);
+    border: 1px solid var(--planned-border);
   }
 
   a.planned-link {
@@ -397,8 +430,8 @@
 
   a.planned-link:hover {
     text-decoration: underline;
-    border-color: var(--success);
-    color: var(--success);
+    border-color: var(--planned);
+    color: var(--planned);
   }
 
   .unplan {
@@ -420,22 +453,24 @@
     cursor: default;
   }
 
-  .plan-block {
-    background: var(--info-bg);
-    border-color: var(--border-subtle);
-  }
-
   .plan-title {
     color: var(--info);
   }
 
-  .builds-block {
-    background: var(--success-bg);
-    border-color: var(--success-border);
+  .plan-title::before {
+    background: var(--info);
   }
 
   .builds-title {
     color: var(--success);
+  }
+
+  .builds-title::before {
+    background: var(--success);
+  }
+
+  .activity-block .block-title::before {
+    background: var(--primary);
   }
 
   /* Mockup grid on wide screens: attention spans full width above; Plan &
@@ -455,10 +490,22 @@
 
   .forecast-line {
     color: var(--text-secondary);
+    margin-top: var(--sp-1);
+    padding-top: var(--sp-2);
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .forecast-line strong {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 1.05rem;
+    color: var(--text);
   }
 
   .activity-date {
-    font-weight: 600;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.78rem;
     color: var(--text);
   }
 

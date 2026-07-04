@@ -65,8 +65,8 @@
   main {
     flex: 1;
     min-width: 0;
-    max-width: 1080px;
-    padding: var(--sp-6) var(--sp-5) var(--sp-12);
+    max-width: 1100px;
+    padding: var(--sp-8) var(--sp-6) var(--sp-12);
     margin: 0 auto;
   }
 
