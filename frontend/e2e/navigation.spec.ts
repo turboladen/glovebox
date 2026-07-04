@@ -63,7 +63,7 @@ test.describe('Navigation', () => {
     ).toBeVisible()
   })
 
-  test('sidebar collapses to a slim handle and the state persists', async ({ page }) => {
+  test('sidebar collapses to a slim rail and the state persists', async ({ page }) => {
     await page.goto('/')
     const sidebar = page.getByTestId('sidebar')
     await expect(sidebar).toBeVisible()
@@ -76,9 +76,23 @@ test.describe('Navigation', () => {
     await page.reload()
     await expect(page.getByTestId('sidebar')).not.toBeVisible()
 
-    // The slim handle reopens it.
+    // Search stays reachable while collapsed: the rail's ⌕ reopens the
+    // sidebar and lands focus in the search box.
+    await page.getByRole('button', { name: 'Search' }).click()
+    await expect(page.getByTestId('sidebar')).toBeVisible()
+    await expect(page.getByRole('searchbox', { name: 'Search' })).toBeFocused()
+
+    // The rail's open button works too.
+    await page.getByRole('button', { name: 'Toggle sidebar' }).click()
     await page.getByRole('button', { name: 'Open sidebar' }).click()
     await expect(page.getByTestId('sidebar')).toBeVisible()
+  })
+
+  test('sidebar foot links: Shops navigates to the shops page', async ({ page }) => {
+    await page.goto('/')
+    await page.getByTestId('sidebar').getByRole('link', { name: 'Shops' }).click()
+    await expect(page).toHaveURL(/\/shops$/)
+    await expect(page.getByRole('heading', { name: 'Shops' })).toBeVisible()
   })
 
   test('global search finds a vehicle and deep-links to it', async ({ browser, page }) => {

@@ -1,8 +1,18 @@
 <script lang="ts">
+  // The sidebar IS the app chrome (2hea round 2): identity (logo), global
+  // search, the garage list, and the nav verbs (Shops, + Add vehicle) all
+  // live here — there is no top bar. The panel-left glyph collapses it;
+  // App.svelte's slim rail carries reopen + search while collapsed.
   import { onMount } from 'svelte'
   import { link, location, push } from '@keenmate/svelte-spa-router'
   import { garageDashboard, refreshDashboard } from '../lib/stores'
   import type { VehicleSummary } from '../lib/types'
+  import GlobalSearch from './GlobalSearch.svelte'
+
+  let { onToggle, searchSignal = 0 }: {
+    onToggle: () => void
+    searchSignal?: number
+  } = $props()
 
   let showArchived = $state(false)
 
@@ -29,6 +39,27 @@
 </script>
 
 <aside class="sidebar" data-testid="sidebar">
+  <div class="sidebar-head">
+    <a href="/" use:link class="logo">
+      <span class="logo-icon" aria-hidden="true">⬡</span>
+      Glovebox
+    </a>
+    <button
+      class="panel-toggle"
+      onclick={onToggle}
+      aria-label="Toggle sidebar"
+      title="Collapse sidebar"
+    >
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+        <rect x="3" y="4" width="18" height="16" rx="2" />
+        <path d="M9.5 4v16" />
+        <path d="M16 10l-2.5 2 2.5 2" />
+      </svg>
+    </button>
+  </div>
+
+  <GlobalSearch {searchSignal} />
+
   <div class="sidebar-label">Garage</div>
 
   <a href="/" use:link class="entry all-vehicles" class:active={path === '/'}>
@@ -97,7 +128,22 @@
     {/if}
   {/if}
 
-  <a href="/vehicles/new" use:link class="add-vehicle">+ Add vehicle</a>
+  <!-- Nav verbs, grouped at the bottom (no more top-right island). -->
+  <div class="sidebar-foot">
+    <a href="/shops" use:link class="foot-link" class:active={path === '/shops'}>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M3 21h18"/>
+        <path d="M5 21V7l8-4v18"/>
+        <path d="M19 21V11l-6-4"/>
+        <path d="M9 9v.01"/>
+        <path d="M9 12v.01"/>
+        <path d="M9 15v.01"/>
+        <path d="M9 18v.01"/>
+      </svg>
+      Shops
+    </a>
+    <a href="/vehicles/new" use:link class="add-vehicle">+ Add vehicle</a>
+  </div>
 </aside>
 
 <style>
@@ -105,12 +151,70 @@
     display: flex;
     flex-direction: column;
     gap: var(--sp-2);
-    width: 230px;
+    width: 236px;
     flex-shrink: 0;
-    padding: var(--sp-4) var(--sp-3);
+    padding: var(--sp-3);
     border-right: 1px solid var(--border-subtle);
     background: var(--bg-raised);
     min-height: 100%;
+  }
+
+  /* --- Head: identity + the panel toggle, adjacent to what it controls --- */
+  .sidebar-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--sp-2);
+    padding: 0 var(--sp-1) var(--sp-1);
+  }
+
+  .logo {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-2);
+    font-family: var(--font-display);
+    font-size: 1.15rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--text);
+    text-decoration: none;
+    transition: color var(--duration-fast) var(--ease-out);
+    white-space: nowrap;
+  }
+
+  .logo:hover {
+    color: var(--primary);
+  }
+
+  .logo-icon {
+    font-size: 1.35rem;
+    line-height: 1;
+    color: var(--primary);
+    transition: transform var(--duration-base) var(--ease-out);
+  }
+
+  .logo:hover .logo-icon {
+    transform: rotate(30deg);
+  }
+
+  .panel-toggle {
+    display: inline-flex;
+    align-items: center;
+    padding: var(--sp-1);
+    background: none;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition:
+      color var(--duration-fast) var(--ease-out),
+      background var(--duration-fast) var(--ease-out);
+  }
+
+  .panel-toggle:hover {
+    color: var(--primary);
+    background: var(--surface);
   }
 
   .sidebar-label {
@@ -120,7 +224,7 @@
     text-transform: uppercase;
     letter-spacing: 0.16em;
     color: var(--text-muted);
-    padding: 0 var(--sp-2) var(--sp-1);
+    padding: var(--sp-2) var(--sp-2) var(--sp-1);
     display: flex;
     align-items: center;
     gap: var(--sp-2);
@@ -205,7 +309,7 @@
   .hint-mileage {
     font-size: 0.7rem;
     color: var(--text-secondary);
-    font-family: var(--font-mono);
+    font-family: var(--font-numeral);
     font-variant-numeric: tabular-nums;
   }
 
@@ -281,8 +385,40 @@
     opacity: 0.6;
   }
 
-  .add-vehicle {
+  /* --- Foot: the occasional nav verbs --- */
+  .sidebar-foot {
     margin-top: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+    padding-top: var(--sp-3);
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .foot-link {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-2);
+    padding: var(--sp-1) var(--sp-2);
+    border-radius: var(--radius-md);
+    font-family: var(--font-display);
+    font-size: 0.85rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    color: var(--text-secondary);
+    text-decoration: none;
+    transition:
+      color var(--duration-fast) var(--ease-out),
+      background var(--duration-fast) var(--ease-out);
+  }
+
+  .foot-link:hover,
+  .foot-link.active {
+    color: var(--primary);
+    background: var(--surface);
+  }
+
+  .add-vehicle {
     padding: var(--sp-2) var(--sp-3);
     font-size: 0.82rem;
     font-weight: 500;
