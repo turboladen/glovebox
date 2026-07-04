@@ -199,19 +199,53 @@ pub async fn store(
     let vid_dir = input
         .vehicle_id
         .map_or_else(|| "general".into(), |v| v.to_string());
-    let type_dir = sanitize_filename(input.doc_type.as_deref().unwrap_or("other"));
+    let mut type_dir = sanitize_filename(input.doc_type.as_deref().unwrap_or("other"));
+    // Same emptiness rule as file_name: a dot/underscore-only doc_type would
+    // produce an un-servable /files path (it can't escape files_dir, but the
+    // row would point at a path the static server refuses).
+    if type_dir.trim_matches(['_', '.']).is_empty() {
+        type_dir = "other".into();
+    }
     let dir: PathBuf = [files_dir, &vid_dir, &type_dir].iter().collect();
     tokio::fs::create_dir_all(&dir)
         .await
         .map_err(|e| DomainError::Internal(format!("failed to create files dir: {e}")))?;
 
-    // Timestamp prefix avoids collisions between same-named uploads.
+    // Timestamp prefix namespaces same-named uploads, but its 1-second
+    // resolution is beatable by a bulk-import loop (an LLM attaching several
+    // invoices in one second) — so create with O_EXCL and retry with a
+    // counter suffix instead of silently overwriting another row's bytes.
     let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S");
-    let stored_name = format!("{timestamp}_{safe_name}");
-    let full_path = dir.join(&stored_name);
-    tokio::fs::write(&full_path, &input.bytes)
-        .await
-        .map_err(|e| DomainError::Internal(format!("failed to write file: {e}")))?;
+    let mut stored_name = format!("{timestamp}_{safe_name}");
+    let mut full_path = dir.join(&stored_name);
+    for counter in 1..=100 {
+        match tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&full_path)
+            .await
+        {
+            Ok(mut file) => {
+                use tokio::io::AsyncWriteExt;
+                file.write_all(&input.bytes)
+                    .await
+                    .map_err(|e| DomainError::Internal(format!("failed to write file: {e}")))?;
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                if counter == 100 {
+                    return Err(DomainError::Internal(
+                        "failed to find a free filename after 100 attempts".into(),
+                    ));
+                }
+                stored_name = format!("{timestamp}_{counter}_{safe_name}");
+                full_path = dir.join(&stored_name);
+            }
+            Err(e) => {
+                return Err(DomainError::Internal(format!("failed to create file: {e}")));
+            }
+        }
+    }
 
     // Stored relative to the files_dir root (how /files serves it back).
     let relative_path = format!("{vid_dir}/{type_dir}/{stored_name}");
@@ -535,6 +569,91 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[tokio::test]
+    async fn store_wrong_vehicle_part_and_incident_links_are_byte_identical() {
+        use crate::entities::{incident, part};
+        let db = test_db().await;
+        let owner = seed_vehicle(&db).await;
+        let other = seed_vehicle(&db).await;
+        let foreign_part = part::ActiveModel {
+            vehicle_id: Set(other),
+            name: Set("Filter".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap()
+        .id;
+        let foreign_incident = incident::ActiveModel {
+            vehicle_id: Set(other),
+            category: Set("noise".into()),
+            title: Set("Rattle".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap()
+        .id;
+        let files = tempfile::tempdir().unwrap();
+
+        // Per-link wrong-parent regression (house rule): part and incident
+        // vocabularies read exactly like nonexistent ids too.
+        for (etype, noun, foreign_id) in [
+            ("part", "Part", foreign_part),
+            ("incident", "Incident", foreign_incident),
+        ] {
+            let link = |eid: i32| StoreDocument {
+                linked_entity_type: Some(etype.into()),
+                linked_entity_id: Some(eid),
+                ..store_input(Some(owner), "invoice.pdf")
+            };
+            let wrong_parent = store(&db, files.path().to_str().unwrap(), link(foreign_id))
+                .await
+                .unwrap_err();
+            let nonexistent = store(&db, files.path().to_str().unwrap(), link(99_999))
+                .await
+                .unwrap_err();
+            assert_eq!(
+                wrong_parent.to_string(),
+                format!("{noun} {foreign_id} not found")
+            );
+            assert_eq!(
+                nonexistent
+                    .to_string()
+                    .replace("99999", &foreign_id.to_string()),
+                wrong_parent.to_string()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn store_same_second_same_name_never_overwrites() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let files = tempfile::tempdir().unwrap();
+
+        // Bulk-import case: several same-named attaches inside one timestamp
+        // second must land as distinct files (O_EXCL + counter suffix), each
+        // row pointing at its own bytes.
+        let mut paths = std::collections::HashSet::new();
+        for i in 0..3 {
+            let mut input = store_input(Some(vid), "invoice.pdf");
+            input.bytes = format!("payload {i}").into_bytes();
+            let doc = store(&db, files.path().to_str().unwrap(), input)
+                .await
+                .unwrap();
+            let on_disk = tokio::fs::read(files.path().join(&doc.file_path))
+                .await
+                .unwrap();
+            assert_eq!(on_disk, format!("payload {i}").into_bytes());
+            assert!(
+                paths.insert(doc.file_path.clone()),
+                "path reused: {}",
+                doc.file_path
+            );
+        }
     }
 
     #[tokio::test]
