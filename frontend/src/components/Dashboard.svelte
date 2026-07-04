@@ -184,7 +184,12 @@
 {:else}
   <div class="dashboard" data-testid="dashboard">
     {#if garageScope}
-      <h1 class="dash-title">Garage</h1>
+      <!-- Adding a vehicle is a page-level action where the garage lives
+           (round-3 feedback #3) — not a nav verb in the sidebar foot. -->
+      <div class="dash-head">
+        <h1 class="dash-title">Garage</h1>
+        <a href="/vehicles/new" use:link class="add-vehicle">+ Add vehicle</a>
+      </div>
     {/if}
 
     {#if attention.length > 0}
@@ -312,10 +317,42 @@
 {/if}
 
 <style>
-  .dash-title {
+  .dash-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--sp-4);
     margin-bottom: var(--sp-5);
     padding-bottom: var(--sp-3);
     border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .dash-title {
+    margin: 0;
+  }
+
+  /* The dashed bay: same "open slot" affordance the sidebar foot used to
+     carry, now adjacent to the garage it adds to. */
+  .add-vehicle {
+    flex-shrink: 0;
+    padding: 0.3rem var(--sp-3);
+    font-family: var(--font-display);
+    font-size: 0.85rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    text-decoration: none;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-md);
+    transition:
+      color var(--duration-fast) var(--ease-out),
+      border-color var(--duration-fast) var(--ease-out);
+  }
+
+  .add-vehicle:hover {
+    color: var(--primary);
+    border-color: var(--primary);
   }
 
   .dashboard {
@@ -588,14 +625,12 @@
   }
 
   .forecast-line strong {
-    font-family: var(--font-numeral);
     font-variant-numeric: tabular-nums;
     font-size: 1.05rem;
     color: var(--text);
   }
 
   .activity-date {
-    font-family: var(--font-numeral);
     font-variant-numeric: tabular-nums;
     font-size: 0.78rem;
     color: var(--text);

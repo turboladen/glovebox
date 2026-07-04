@@ -14,7 +14,9 @@ test.describe('Vehicle Detail', () => {
     await expect(page.getByRole('heading', { name: 'Detail Test Car' })).toBeVisible()
     // The context strip's breadcrumb replaced the old back-link (the
     // sidebar covers "All vehicles"; the strip stays slim).
-    await expect(page.getByRole('link', { name: 'Garage' })).toBeVisible()
+    // Scoped to main: the sidebar's "Garage" section header is a second,
+    // equivalent link to `/` (round 3), so the bare locator is ambiguous.
+    await expect(page.getByRole('main').getByRole('link', { name: 'Garage' })).toBeVisible()
     // Two everyday verbs at equal weight…
     await expect(page.getByRole('button', { name: 'Update mileage' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Record service' })).toBeVisible()
@@ -92,7 +94,15 @@ test.describe('Vehicle Detail', () => {
 
   test('breadcrumb returns to the dashboard', async ({ page }) => {
     await page.goto(vehicleUrl)
-    await page.getByRole('link', { name: 'Garage' }).click()
+    await page.getByRole('main').getByRole('link', { name: 'Garage' }).click()
+    await expect(page).toHaveURL('/')
+  })
+
+  test('sidebar "Garage" section header links to the dashboard', async ({ page }) => {
+    // Round-3 feedback #2: the section header is a real control, not a
+    // dead label sitting next to a logo that navigates.
+    await page.goto(vehicleUrl)
+    await page.getByTestId('sidebar').getByRole('link', { name: 'Garage' }).click()
     await expect(page).toHaveURL('/')
   })
 })

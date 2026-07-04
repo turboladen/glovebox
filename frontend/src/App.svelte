@@ -109,7 +109,8 @@
     margin: 0 auto;
   }
 
-  /* Slim rail when the sidebar is collapsed: reopen + search stay reachable. */
+  /* Slim rail when the sidebar is collapsed: reopen + search stay reachable.
+     Same viewport-pinned posture as the open sidebar. */
   .rail {
     display: flex;
     flex-direction: column;
@@ -120,6 +121,10 @@
     padding: var(--sp-3) 0;
     background: var(--bg-raised);
     border-right: 1px solid var(--border-subtle);
+    position: sticky;
+    top: 0;
+    align-self: flex-start;
+    height: 100vh;
   }
 
   .rail-logo {
