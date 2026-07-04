@@ -92,7 +92,9 @@ test.describe('Navigation', () => {
     await page.goto('/')
     await page.getByTestId('sidebar').getByRole('link', { name: 'Shops' }).click()
     await expect(page).toHaveURL(/\/shops$/)
-    await expect(page.getByRole('heading', { name: 'Shops' })).toBeVisible()
+    // exact: "Shops" is a substring of the "Manage Shops" heading, which
+    // renders data-dependently — without exact this flakes by worker order.
+    await expect(page.getByRole('heading', { name: 'Shops', exact: true })).toBeVisible()
   })
 
   test('global search finds a vehicle and deep-links to it', async ({ browser, page }) => {
