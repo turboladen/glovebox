@@ -60,8 +60,16 @@
     }
   })
 
+  // Deep links carry `?hl=` so the target view scrolls to and flashes the
+  // exact row (see lib/highlight.ts for the convention).
+  function hlKind(kind: AttentionItem['kind']): string {
+    if (kind === 'recall') return 'finding'
+    if (kind === 'incident') return 'incident'
+    return 'schedule_item'
+  }
+
   function attentionTarget(a: AttentionItem): string {
-    return `/vehicles/${a.vehicle_id}/${a.deep_link_hint}`
+    return `/vehicles/${a.vehicle_id}/${a.deep_link_hint}?hl=${hlKind(a.kind)}:${a.entity_id}`
   }
 
   // "Plan it" quick action: put the attention row on the to-do list with
@@ -88,6 +96,21 @@
         schedule_item_id: a.kind === 'recall' ? undefined : a.entity_id,
         research_finding_id: a.kind === 'recall' ? a.entity_id : undefined,
       })
+      await refreshDashboard()
+    } catch (e: any) {
+      error = e.message
+    } finally {
+      planningKey = null
+    }
+  }
+
+  // Un-plan: delete the linking work item and the row reverts to "plan it".
+  // Confirm-free — it's cheaply reversible (plan it again).
+  async function unplanIt(a: AttentionItem) {
+    if (a.planned_work_item_id == null) return
+    planningKey = rowKey(a)
+    try {
+      await workItemsApi.delete(a.vehicle_id, a.planned_work_item_id)
       await refreshDashboard()
     } catch (e: any) {
       error = e.message
@@ -133,7 +156,7 @@
         </div>
         <div class="setup-step disabled">
           <span class="step-indicator"></span>
-          <span class="step-label">Log your first service</span>
+          <span class="step-label">Record your first service</span>
         </div>
       </div>
     </div>
@@ -155,7 +178,26 @@
                 {a.label}
               </a>
               {#if canPlan(a)}
-                {#if a.planned}
+                {#if a.planned_work_item_id != null}
+                  <!-- The state display IS the link to its source. -->
+                  <a
+                    class="planned-chip planned-link"
+                    href="/vehicles/{a.vehicle_id}/plan/todo?hl=work_item:{a.planned_work_item_id}"
+                    use:link
+                    title="View the planned work item"
+                  >
+                    planned
+                  </a>
+                  <button
+                    class="unplan"
+                    title="Un-plan"
+                    aria-label="Un-plan"
+                    onclick={() => unplanIt(a)}
+                    disabled={planningKey === rowKey(a)}
+                  >
+                    ✕
+                  </button>
+                {:else if a.planned}
                   <span class="planned-chip">planned</span>
                 {:else}
                   <button
@@ -217,26 +259,26 @@
           </div>
         </section>
       {/if}
-    </div>
 
-    <section class="block activity-block" data-testid="activity-block">
-      <h3 class="block-title">Recent activity</h3>
-      <div class="block-rows">
-        {#each activity as item (item.kind + '-' + item.id)}
-          <div class="row">
-            <a href="/vehicles/{item.vehicle_id}/timeline" use:link class="row-link">
-              <span class="activity-date">{formatDate(item.date)}</span>
-              {#if garageScope}· <span class="row-vehicle">{item.vehicle_name}</span>{/if}
-              · {item.summary}
-              {#if item.total_cost_cents}· {formatCents(item.total_cost_cents)}{/if}
-            </a>
-          </div>
-        {/each}
-        {#if activity.length === 0}
-          <p class="row muted">No activity yet.</p>
-        {/if}
-      </div>
-    </section>
+      <section class="block activity-block" data-testid="activity-block">
+        <h3 class="block-title">Recent activity</h3>
+        <div class="block-rows">
+          {#each activity as item (item.kind + '-' + item.id)}
+            <div class="row">
+              <a href="/vehicles/{item.vehicle_id}/timeline?hl={item.kind}:{item.id}" use:link class="row-link">
+                <span class="activity-date">{formatDate(item.date)}</span>
+                {#if garageScope}· <span class="row-vehicle">{item.vehicle_name}</span>{/if}
+                · {item.summary}
+                {#if item.total_cost_cents}· {formatCents(item.total_cost_cents)}{/if}
+              </a>
+            </div>
+          {/each}
+          {#if activity.length === 0}
+            <p class="row muted">No activity yet.</p>
+          {/if}
+        </div>
+      </section>
+    </div>
   </div>
 {/if}
 
@@ -343,6 +385,36 @@
     border: 1px solid var(--success-border);
   }
 
+  a.planned-link {
+    text-decoration: none;
+    cursor: pointer;
+  }
+
+  a.planned-link:hover {
+    text-decoration: underline;
+    border-color: var(--success);
+    color: var(--success);
+  }
+
+  .unplan {
+    padding: 0 var(--sp-1);
+    border: none;
+    background: none;
+    font-size: 0.7rem;
+    line-height: 1;
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+
+  .unplan:hover {
+    color: var(--danger);
+  }
+
+  .unplan:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
   .plan-block {
     background: var(--info-bg);
     border-color: var(--border-subtle);
@@ -361,13 +433,18 @@
     color: var(--success);
   }
 
+  /* Mockup grid on wide screens: attention spans full width above; Plan &
+     budget + Builds sit side-by-side with activity below — and when there
+     is no Builds block, activity pairs with Plan & budget instead so the
+     page never degenerates into a full-width stack. */
   .block-pair {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: var(--sp-4);
+    align-items: start;
   }
 
-  .block-pair > .block:only-child {
+  .block-pair > .builds-block + .activity-block {
     grid-column: 1 / -1;
   }
 

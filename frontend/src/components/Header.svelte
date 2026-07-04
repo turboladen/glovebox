@@ -47,7 +47,9 @@
       case 'vehicle':
         return `/vehicles/${hit.id}`
       case 'service':
+        return `/vehicles/${v}/timeline?hl=service:${hit.id}`
       case 'incident':
+        return `/vehicles/${v}/timeline?hl=incident:${hit.id}`
       case 'incident_followup':
         return `/vehicles/${v}/timeline`
       case 'build':
@@ -55,7 +57,7 @@
       case 'document':
         return `/vehicles/${v}/records/documents`
       case 'research_finding':
-        return `/vehicles/${v}/records/research`
+        return `/vehicles/${v}/plan/research?hl=finding:${hit.id}`
       default:
         return `/vehicles/${v}`
     }

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { link, location } from '@keenmate/svelte-spa-router'
+  import { link, location, push } from '@keenmate/svelte-spa-router'
   import { garageDashboard, refreshDashboard } from '../lib/stores'
   import type { VehicleSummary } from '../lib/types'
 
@@ -51,7 +51,20 @@
           <span class="hint-mileage">{formatMileage(s.estimated_mileage)} mi</span>
         {/if}
         {#if s.overdue_count > 0}
-          <span class="hint hint-due">{s.overdue_count} due</span>
+          <!-- Hypermedia affordance: the count links to what's due, it
+               doesn't just report it. stopPropagation keeps the card's
+               own navigation for the rest of the entry. -->
+          <button
+            class="hint hint-due hint-link"
+            title="View due maintenance"
+            onclick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              push(`/vehicles/${s.vehicle.id}/plan/due`)
+            }}
+          >
+            {s.overdue_count} due
+          </button>
         {:else if s.due_soon_count > 0}
           <span class="hint hint-soon">{s.due_soon_count} soon</span>
         {/if}
@@ -178,6 +191,19 @@
     background: var(--danger-bg);
     color: var(--danger);
     border: 1px solid var(--danger-border);
+  }
+
+  .hint-link {
+    font-family: inherit;
+    cursor: pointer;
+    transition:
+      border-color var(--duration-fast) var(--ease-out),
+      text-decoration-color var(--duration-fast) var(--ease-out);
+  }
+
+  .hint-link:hover {
+    text-decoration: underline;
+    border-color: var(--danger);
   }
 
   .hint-soon {

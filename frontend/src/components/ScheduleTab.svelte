@@ -1,15 +1,18 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { link } from '@keenmate/svelte-spa-router'
   import { services as servicesApi, schedules as schedulesApi } from '../lib/api'
   import type { RemindersResponse, ReminderStatus, ServiceRecordWithLinks } from '../lib/types'
   import { formatDate } from '../lib/dates'
+  import { anchorId, flashHighlightFromQuery } from '../lib/highlight'
 
-  let { reminderData, vehicleId, onScheduleChanged, plannedScheduleIds, onPlanIt }: {
+  let { reminderData, vehicleId, onScheduleChanged, plannedWorkItems, onPlanIt }: {
     reminderData: RemindersResponse | null
     vehicleId: number
     onScheduleChanged?: () => Promise<void> | void
-    // Schedule items already linked by an open work item (Plan tab wiring).
-    plannedScheduleIds?: Set<number>
+    // schedule_item_id → the open work item already linking it (Plan tab
+    // wiring) — the "planned" chip links to that work item.
+    plannedWorkItems?: Map<number, number>
     onPlanIt?: (reminder: ReminderStatus) => Promise<void> | void
   } = $props()
 
@@ -33,6 +36,16 @@
   }
 
   onMount(loadOwnData)
+
+  // Deep-link highlight (?hl=schedule_item:N from dashboard attention
+  // rows / to-do source badges) once the reminder cards have rendered.
+  let flashedHighlight = false
+  $effect(() => {
+    if (reminderData && !flashedHighlight) {
+      flashedHighlight = true
+      flashHighlightFromQuery('schedule_item')
+    }
+  })
 
   async function refresh() {
     await loadOwnData()
@@ -111,8 +124,16 @@
 {#snippet reminderActions(reminder: ReminderStatus)}
   <div class="reminder-actions">
     {#if onPlanIt}
-      {#if plannedScheduleIds?.has(reminder.schedule_item.id)}
-        <span class="planned-chip">planned</span>
+      {#if plannedWorkItems?.has(reminder.schedule_item.id)}
+        <!-- Hypermedia: the state display links to the work item itself. -->
+        <a
+          class="planned-chip"
+          href="/vehicles/{vehicleId}/plan/todo?hl=work_item:{plannedWorkItems.get(reminder.schedule_item.id)}"
+          use:link
+          title="View the planned work item"
+        >
+          planned
+        </a>
       {:else}
         <button class="action-link" onclick={() => onPlanIt(reminder)}>Plan it</button>
       {/if}
@@ -165,7 +186,7 @@
     <section class="reminder-group">
       <h3 class="group-label overdue-label">Overdue</h3>
       {#each groups.overdue as reminder (reminder.schedule_item.id)}
-        <div class="reminder-card overdue">
+        <div class="reminder-card overdue" id={anchorId('schedule_item', reminder.schedule_item.id)}>
           <div class="reminder-header">
             <strong>{reminder.schedule_item.name}</strong>
             <span class="trigger">{reminder.trigger}</span>
@@ -222,7 +243,7 @@
     <section class="reminder-group">
       <h3 class="group-label upcoming-label">Upcoming</h3>
       {#each groups.upcoming as reminder (reminder.schedule_item.id)}
-        <div class="reminder-card upcoming">
+        <div class="reminder-card upcoming" id={anchorId('schedule_item', reminder.schedule_item.id)}>
           <div class="reminder-header">
             <strong>{reminder.schedule_item.name}</strong>
           </div>
@@ -281,7 +302,7 @@
     <section class="reminder-group">
       <h3 class="group-label ok-label">OK (not yet due)</h3>
       {#each groups.ok as reminder (reminder.schedule_item.id)}
-        <div class="reminder-card ok">
+        <div class="reminder-card ok" id={anchorId('schedule_item', reminder.schedule_item.id)}>
           <div class="reminder-header">
             <strong>{reminder.schedule_item.name}</strong>
           </div>
@@ -459,6 +480,13 @@
     color: var(--success);
     border: 1px solid var(--success-border);
     align-self: center;
+    text-decoration: none;
+  }
+
+  a.planned-chip:hover {
+    text-decoration: underline;
+    border-color: var(--success);
+    color: var(--success);
   }
 
   .action-error {
