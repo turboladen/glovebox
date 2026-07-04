@@ -8,12 +8,15 @@
 //! Harness mirrors fewd's `mcp_diet_tags_test.rs`, minus auth (glovebox's
 //! `/mcp` is unauthenticated by design — LAN posture, see crate docs).
 
+use std::sync::Arc;
+
 use axum::{
     Router,
     body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
 use glovebox_shared::{
+    config::AppConfig,
     inputs::{
         build::NewBuild, schedule::NewScheduleItem, service_record::NewServiceRecord,
         vehicle::NewVehicle,
@@ -24,9 +27,17 @@ use glovebox_shared::{
 use sea_orm::DatabaseConnection;
 use tower::ServiceExt;
 
-async fn setup() -> (Router, DatabaseConnection) {
+/// Router + DB + the temp files dir backing `attach_document` (keep the
+/// `TempDir` alive for the test's duration; dropping it deletes the dir).
+async fn setup() -> (Router, DatabaseConnection, tempfile::TempDir) {
     let db = test_db().await;
-    (glovebox_mcp::router(db.clone()), db)
+    let files = tempfile::tempdir().expect("temp files dir");
+    let config = Arc::new(AppConfig {
+        db_path: String::new(),
+        listen: String::new(),
+        files_dir: files.path().to_string_lossy().into_owned(),
+    });
+    (glovebox_mcp::router(db.clone(), config), db, files)
 }
 
 fn new_vehicle(name: &str) -> NewVehicle {
@@ -213,7 +224,7 @@ fn extract_json(body: &str) -> serde_json::Value {
 
 #[tokio::test]
 async fn tools_list_advertises_the_full_verb_set() {
-    let (app, _db) = setup().await;
+    let (app, _db, _files) = setup().await;
     let session = handshake(&app).await;
     let body = post_rpc(
         &app,
@@ -245,6 +256,8 @@ async fn tools_list_advertises_the_full_verb_set() {
         "schedule_visit",
         "complete_visit",
         "cancel_visit",
+        "attach_document",
+        "link_service_to_maintenance",
     ] {
         assert!(
             body.contains(&format!("\"{tool}\"")),
@@ -259,7 +272,7 @@ async fn tools_list_advertises_the_full_verb_set() {
     let tools = parsed["result"]["tools"]
         .as_array()
         .unwrap_or_else(|| panic!("tools/list result must carry a tools array; got: {body}"));
-    assert_eq!(tools.len(), 23, "expected exactly 23 tools; got: {body}");
+    assert_eq!(tools.len(), 25, "expected exactly 25 tools; got: {body}");
     for tool in tools {
         let name = tool["name"].as_str().expect("tool name");
         if name == "list_vehicles" {
@@ -277,7 +290,7 @@ async fn tools_list_advertises_the_full_verb_set() {
 
 #[tokio::test]
 async fn rejects_unknown_host_header() {
-    let (app, _db) = setup().await;
+    let (app, _db, _files) = setup().await;
     // DNS-rebinding defense: a Host outside the allowlist must be refused
     // before any JSON-RPC processing happens.
     let resp = app
@@ -305,7 +318,7 @@ async fn rejects_unknown_host_header() {
 
 #[tokio::test]
 async fn list_vehicles_empty_then_after_seed() {
-    let (app, db) = setup().await;
+    let (app, db, _files) = setup().await;
     let session = handshake(&app).await;
 
     let body = post_rpc(
@@ -333,7 +346,7 @@ async fn list_vehicles_empty_then_after_seed() {
 
 #[tokio::test]
 async fn record_service_then_summarize_recent_activity_round_trip() {
-    let (app, db) = setup().await;
+    let (app, db, _files) = setup().await;
     let session = handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
 
@@ -430,7 +443,7 @@ async fn reminder_status(app: &Router, session: &str, vehicle_id: i32, name: &st
 
 #[tokio::test]
 async fn record_service_schedule_item_ids_clears_the_overdue_reminder() {
-    let (app, db) = setup().await;
+    let (app, db, _files) = setup().await;
     let session = handshake(&app).await;
     let v = vehicle::create(
         &db,
@@ -502,7 +515,7 @@ async fn record_service_schedule_item_ids_clears_the_overdue_reminder() {
 
 #[tokio::test]
 async fn dismiss_schedule_item_hides_it_and_rejects_wrong_vehicle() {
-    let (app, db) = setup().await;
+    let (app, db, _files) = setup().await;
     let session = handshake(&app).await;
     let v = vehicle::create(
         &db,
@@ -585,7 +598,7 @@ async fn dismiss_schedule_item_hides_it_and_rejects_wrong_vehicle() {
 
 #[tokio::test]
 async fn log_incident_and_mileage_write_through() {
-    let (app, db) = setup().await;
+    let (app, db, _files) = setup().await;
     let session = handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
 
@@ -629,7 +642,7 @@ async fn log_incident_and_mileage_write_through() {
 
 #[tokio::test]
 async fn log_incident_rejects_unknown_category_and_wrong_links() {
-    let (app, db) = setup().await;
+    let (app, db, _files) = setup().await;
     let session = handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
     let other = vehicle::create(&db, new_vehicle("Other")).await.unwrap();
@@ -719,7 +732,7 @@ async fn log_incident_rejects_unknown_category_and_wrong_links() {
 
 #[tokio::test]
 async fn save_note_is_searchable_via_search_records() {
-    let (app, db) = setup().await;
+    let (app, db, _files) = setup().await;
     let session = handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
 
@@ -772,7 +785,7 @@ async fn save_note_is_searchable_via_search_records() {
 
 #[tokio::test]
 async fn search_records_builds_scope_finds_seeded_build() {
-    let (app, db) = setup().await;
+    let (app, db, _files) = setup().await;
     let session = handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Project")).await.unwrap();
     build_svc::create(
@@ -823,7 +836,7 @@ async fn search_records_builds_scope_finds_seeded_build() {
 
 #[tokio::test]
 async fn record_part_round_trips_and_rejects_bad_links() {
-    let (app, db) = setup().await;
+    let (app, db, _files) = setup().await;
     let session = handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
     let other = vehicle::create(&db, new_vehicle("Other")).await.unwrap();
@@ -903,7 +916,7 @@ async fn record_part_round_trips_and_rejects_bad_links() {
 
 #[tokio::test]
 async fn find_documents_finds_seeded_extracted_text() {
-    let (app, db) = setup().await;
+    let (app, db, _files) = setup().await;
     let session = handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
     {
@@ -940,7 +953,7 @@ async fn find_documents_finds_seeded_extracted_text() {
 
 #[tokio::test]
 async fn search_records_scopes_and_rejects_bad_scope() {
-    let (app, db) = setup().await;
+    let (app, db, _files) = setup().await;
     let session = handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
     svc_svc::create(
@@ -981,7 +994,7 @@ async fn search_records_scopes_and_rejects_bad_scope() {
 
 #[tokio::test]
 async fn check_due_maintenance_returns_without_error() {
-    let (app, db) = setup().await;
+    let (app, db, _files) = setup().await;
     let session = handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
 
@@ -1003,7 +1016,7 @@ async fn check_due_maintenance_returns_without_error() {
 
 #[tokio::test]
 async fn cost_summary_reports_integer_cents() {
-    let (app, db) = setup().await;
+    let (app, db, _files) = setup().await;
     let session = handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
     svc_svc::create(&db, v.id, minimal_service("2026-05-01", "Brakes", None))
@@ -1026,7 +1039,7 @@ async fn cost_summary_reports_integer_cents() {
 
 #[tokio::test]
 async fn record_service_payer_flows_into_cost_summary_split() {
-    let (app, db) = setup().await;
+    let (app, db, _files) = setup().await;
     let session = handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
 
@@ -1113,7 +1126,7 @@ async fn record_service_payer_flows_into_cost_summary_split() {
 
 #[tokio::test]
 async fn build_progress_and_status_update_round_trip() {
-    let (app, db) = setup().await;
+    let (app, db, _files) = setup().await;
     let session = handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Project")).await.unwrap();
     let b = build_svc::create(
@@ -1178,7 +1191,7 @@ async fn build_progress_and_status_update_round_trip() {
 
 #[tokio::test]
 async fn file_research_finding_persists_and_is_readable() {
-    let (app, db) = setup().await;
+    let (app, db, _files) = setup().await;
     let session = handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
 
@@ -1218,7 +1231,7 @@ async fn file_research_finding_persists_and_is_readable() {
 /// clears, the payer-aware service record exists, and the items are done.
 #[tokio::test]
 async fn recall_plan_schedule_complete_loop_over_the_protocol() {
-    let (app, db) = setup().await;
+    let (app, db, _files) = setup().await;
     let session = handshake(&app).await;
     let v = vehicle::create(
         &db,
@@ -1441,7 +1454,7 @@ async fn recall_plan_schedule_complete_loop_over_the_protocol() {
 /// errors.
 #[tokio::test]
 async fn cancel_visit_returns_items_to_the_todo_list() {
-    let (app, db) = setup().await;
+    let (app, db, _files) = setup().await;
     let session = handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
 
@@ -1575,7 +1588,7 @@ async fn cancel_visit_returns_items_to_the_todo_list() {
 
 #[tokio::test]
 async fn planning_tools_reject_wrong_vehicle_and_malformed_args() {
-    let (app, db) = setup().await;
+    let (app, db, _files) = setup().await;
     let session = handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Mine")).await.unwrap();
     let other = vehicle::create(&db, new_vehicle("Other")).await.unwrap();
@@ -1701,7 +1714,7 @@ async fn planning_tools_reject_wrong_vehicle_and_malformed_args() {
 
 #[tokio::test]
 async fn wrong_vehicle_ids_are_clean_tool_errors() {
-    let (app, db) = setup().await;
+    let (app, db, _files) = setup().await;
     let session = handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Mine")).await.unwrap();
     let other = vehicle::create(&db, new_vehicle("Other")).await.unwrap();
@@ -1757,7 +1770,7 @@ async fn wrong_vehicle_ids_are_clean_tool_errors() {
 
 #[tokio::test]
 async fn malformed_arguments_are_schema_errors_not_protocol_failures() {
-    let (app, _db) = setup().await;
+    let (app, _db, _files) = setup().await;
     let session = handshake(&app).await;
 
     // Wrong type.
@@ -1790,11 +1803,389 @@ async fn malformed_arguments_are_schema_errors_not_protocol_failures() {
     );
 }
 
+// ─── attach_document (unit: import reconciliation) ──────────────
+
+fn b64(bytes: &[u8]) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+#[tokio::test]
+async fn attach_document_stores_file_and_indexes_extracted_text() {
+    let (app, db, files) = setup().await;
+    let session = handshake(&app).await;
+    let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
+    let record = svc_svc::create(&db, v.id, minimal_service("2026-06-01", "Clutch job", None))
+        .await
+        .unwrap();
+
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "attach_document",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "file_name": "fcp-invoice.pdf",
+                "content_base64": b64(b"fake pdf bytes"),
+                "title": "FCP Euro invoice",
+                "extracted_text": "Sachs SRE clutch kit, flywheel bolts, total $899.00",
+                "linked_entity_type": "service",
+                "linked_entity_id": record.record.id
+            }),
+        ),
+    )
+    .await;
+    assert_success(&body);
+    let doc = tool_payload(&body);
+    assert_eq!(doc["title"], "FCP Euro invoice");
+    assert_eq!(doc["file_name"], "fcp-invoice.pdf");
+    assert_eq!(doc["mime_type"], "application/pdf");
+    assert_eq!(doc["linked_entity_type"], "service");
+    assert_eq!(doc["linked_entity_id"], record.record.id);
+
+    // The bytes really landed on disk under the configured files_dir.
+    let rel_path = doc["file_path"].as_str().expect("file_path");
+    let on_disk = std::fs::read(files.path().join(rel_path)).expect("stored file must exist");
+    assert_eq!(on_disk, b"fake pdf bytes");
+
+    // The LLM's extraction is FTS-indexed: find_documents matches content
+    // that appears nowhere in the title or file name.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "find_documents",
+            serde_json::json!({ "vehicle_id": v.id, "query": "flywheel bolts" }),
+        ),
+    )
+    .await;
+    assert_success(&body);
+    assert!(
+        body.contains("FCP Euro invoice"),
+        "extracted_text must be searchable; got: {body}"
+    );
+}
+
+#[tokio::test]
+async fn attach_document_rejects_malformed_base64() {
+    let (app, db, files) = setup().await;
+    let session = handshake(&app).await;
+    let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
+
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "attach_document",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "file_name": "broken.pdf",
+                "content_base64": "this is !!! not base64 %%%"
+            }),
+        ),
+    )
+    .await;
+    assert_tool_error(&body);
+    assert!(
+        body.contains("base64"),
+        "the error must name the encoding problem; got: {body}"
+    );
+    // Nothing persisted, on disk or in the DB.
+    assert!(
+        std::fs::read_dir(files.path()).unwrap().next().is_none(),
+        "no file may be written for a rejected upload"
+    );
+}
+
+#[tokio::test]
+async fn attach_document_rejects_files_over_the_10_mib_cap() {
+    let (app, db, files) = setup().await;
+    let session = handshake(&app).await;
+    let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
+
+    let oversize = vec![0u8; glovebox_shared::services::document::MAX_FILE_BYTES + 1];
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "attach_document",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "file_name": "huge.bin",
+                "content_base64": b64(&oversize)
+            }),
+        ),
+    )
+    .await;
+    assert_tool_error(&body);
+    assert!(
+        body.contains("10 MiB"),
+        "the error must name the cap; got: {body}"
+    );
+    assert!(std::fs::read_dir(files.path()).unwrap().next().is_none());
+}
+
+#[tokio::test]
+async fn attach_document_neutralizes_traversal_file_names() {
+    let (app, db, files) = setup().await;
+    let session = handshake(&app).await;
+    let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
+
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "attach_document",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "file_name": "../../../etc/passwd",
+                "content_base64": b64(b"innocent bytes")
+            }),
+        ),
+    )
+    .await;
+    assert_success(&body);
+    let doc = tool_payload(&body);
+    let rel_path = doc["file_path"].as_str().expect("file_path");
+    // Separators were neutralized: no `..` path component survives, and the
+    // stored file canonicalizes to INSIDE the files dir.
+    assert!(rel_path.split('/').all(|c| c != ".." && !c.is_empty()));
+    let full = files.path().join(rel_path).canonicalize().unwrap();
+    assert!(full.starts_with(files.path().canonicalize().unwrap()));
+}
+
+#[tokio::test]
+async fn attach_document_wrong_vehicle_link_reads_as_missing() {
+    let (app, db, _files) = setup().await;
+    let session = handshake(&app).await;
+    let v = vehicle::create(&db, new_vehicle("Mine")).await.unwrap();
+    let other = vehicle::create(&db, new_vehicle("Other")).await.unwrap();
+    let foreign = svc_svc::create(&db, other.id, minimal_service("2026-06-01", "Theirs", None))
+        .await
+        .unwrap();
+
+    // Another vehicle's service record and a nonexistent one must be the
+    // same clean not-found tool error (no ownership oracle).
+    for eid in [foreign.record.id, 99_999] {
+        let body = post_rpc(
+            &app,
+            &session,
+            call_tool(
+                "attach_document",
+                serde_json::json!({
+                    "vehicle_id": v.id,
+                    "file_name": "invoice.pdf",
+                    "content_base64": b64(b"bytes"),
+                    "linked_entity_type": "service",
+                    "linked_entity_id": eid
+                }),
+            ),
+        )
+        .await;
+        assert_tool_error(&body);
+        assert!(
+            body.contains(&format!("Service record {eid} not found")),
+            "wrong-parent must read exactly like missing; got: {body}"
+        );
+    }
+}
+
+// ─── link_service_to_maintenance ────────────────────────────────
+
+#[tokio::test]
+async fn link_service_to_maintenance_add_defaults_and_replace_overwrites() {
+    let (app, db, _files) = setup().await;
+    let session = handshake(&app).await;
+    let v = vehicle::create(
+        &db,
+        NewVehicle {
+            purchase_date: Some("2020-01-01".into()),
+            ..new_vehicle("Daily")
+        },
+    )
+    .await
+    .unwrap();
+    let oil = schedule_svc::create(&db, schedule_item_every_12_months(v.id, "Oil change"))
+        .await
+        .unwrap();
+    let brake = schedule_svc::create(&db, schedule_item_every_12_months(v.id, "Brake fluid"))
+        .await
+        .unwrap();
+
+    // An imported record, created WITHOUT links — the oil reminder is
+    // still overdue.
+    let imported = svc_svc::create(
+        &db,
+        v.id,
+        minimal_service("2026-06-01", "Oil + brake fluid service", None),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        reminder_status(&app, &session, v.id, "Oil change").await,
+        "overdue"
+    );
+
+    // Default mode is add: link the oil item…
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "link_service_to_maintenance",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "service_record_id": imported.record.id,
+                "schedule_item_ids": [oil.id]
+            }),
+        ),
+    )
+    .await;
+    assert_success(&body);
+    // …then the brake item in a second pass; the first link survives.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "link_service_to_maintenance",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "service_record_id": imported.record.id,
+                "schedule_item_ids": [brake.id],
+                "mode": "add"
+            }),
+        ),
+    )
+    .await;
+    assert_success(&body);
+    let payload = tool_payload(&body);
+    let mut ids: Vec<i64> = payload["schedule_item_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x.as_i64().unwrap())
+        .collect();
+    ids.sort_unstable();
+    assert_eq!(ids, vec![i64::from(oil.id), i64::from(brake.id)]);
+
+    // Linking cleared the reminder — the reconciliation loop closes.
+    assert_eq!(
+        reminder_status(&app, &session, v.id, "Oil change").await,
+        "ok"
+    );
+
+    // Replace mode overwrites the set.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "link_service_to_maintenance",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "service_record_id": imported.record.id,
+                "schedule_item_ids": [brake.id],
+                "mode": "replace"
+            }),
+        ),
+    )
+    .await;
+    assert_success(&body);
+    let payload = tool_payload(&body);
+    assert_eq!(
+        payload["schedule_item_ids"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(payload["schedule_item_ids"][0], brake.id);
+
+    // An unknown mode is an actionable tool error.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "link_service_to_maintenance",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "service_record_id": imported.record.id,
+                "schedule_item_ids": [oil.id],
+                "mode": "merge"
+            }),
+        ),
+    )
+    .await;
+    assert_tool_error(&body);
+    assert!(body.contains("add, replace"), "got: {body}");
+}
+
+#[tokio::test]
+async fn link_service_to_maintenance_wrong_parent_both_ways() {
+    let (app, db, _files) = setup().await;
+    let session = handshake(&app).await;
+    let v = vehicle::create(&db, new_vehicle("Mine")).await.unwrap();
+    let other = vehicle::create(&db, new_vehicle("Other")).await.unwrap();
+    let mine_item = schedule_svc::create(&db, schedule_item_every_12_months(v.id, "Oil"))
+        .await
+        .unwrap();
+    let mine_svc = svc_svc::create(&db, v.id, minimal_service("2026-06-01", "Mine", None))
+        .await
+        .unwrap();
+    let foreign_item = schedule_svc::create(&db, schedule_item_every_12_months(other.id, "Oil"))
+        .await
+        .unwrap();
+    let foreign_svc = svc_svc::create(&db, other.id, minimal_service("2026-06-01", "Theirs", None))
+        .await
+        .unwrap();
+
+    // Another vehicle's service record reads as missing.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "link_service_to_maintenance",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "service_record_id": foreign_svc.record.id,
+                "schedule_item_ids": [mine_item.id]
+            }),
+        ),
+    )
+    .await;
+    assert_tool_error(&body);
+    assert!(
+        body.contains(&format!(
+            "Service record {} not found",
+            foreign_svc.record.id
+        )),
+        "got: {body}"
+    );
+
+    // Another vehicle's schedule item reads as missing; nothing was linked.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "link_service_to_maintenance",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "service_record_id": mine_svc.record.id,
+                "schedule_item_ids": [foreign_item.id]
+            }),
+        ),
+    )
+    .await;
+    assert_tool_error(&body);
+    assert!(
+        body.contains(&format!("Schedule item {} not found", foreign_item.id)),
+        "got: {body}"
+    );
+    let fetched = svc_svc::get(&db, v.id, mine_svc.record.id).await.unwrap();
+    assert!(fetched.schedule_item_ids.is_empty());
+}
+
 // ─── Resources ──────────────────────────────────────────────────
 
 #[tokio::test]
 async fn resources_list_and_read_cover_all_uri_forms() {
-    let (app, db) = setup().await;
+    let (app, db, _files) = setup().await;
     let session = handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
     let b = build_svc::create(
@@ -1869,7 +2260,7 @@ async fn resources_list_and_read_cover_all_uri_forms() {
 
 #[tokio::test]
 async fn read_resource_unknown_uri_and_missing_record_are_clean_errors() {
-    let (app, _db) = setup().await;
+    let (app, _db, _files) = setup().await;
     let session = handshake(&app).await;
 
     // Unknown shape → invalid_params (-32602) naming the known forms.

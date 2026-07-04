@@ -211,7 +211,7 @@ async fn upload_photo(
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
     let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S");
-    let safe_name = super::documents::sanitize_filename(&file_name);
+    let safe_name = glovebox_shared::services::document::sanitize_filename(&file_name);
     let stored_name = format!("{timestamp}_{safe_name}");
     let full_path = dir.join(&stored_name);
 

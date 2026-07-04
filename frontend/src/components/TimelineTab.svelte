@@ -7,13 +7,14 @@
   // lives here too: Record service (existing ServiceForm) and Log
   // incident (IncidentForm).
   import { onMount } from 'svelte'
-  import { querystring, replace } from '@keenmate/svelte-spa-router'
+  import { link, querystring, replace } from '@keenmate/svelte-spa-router'
   import {
     services as servicesApi,
     incidents as incidentsApi,
     parts as partsApi,
     shops as shopsApi,
     mileage as mileageApi,
+    schedules as schedulesApi,
   } from '../lib/api'
   import { anchorId, flashHighlightFromQuery } from '../lib/highlight'
   import type {
@@ -21,6 +22,7 @@
     IncidentWithDetails,
     MileageEntry,
     Part,
+    ResolvedScheduleItem,
     ServicePrefill,
     Shop,
   } from '../lib/types'
@@ -48,6 +50,7 @@
   let mileageLogs: MileageEntry[] = $state([])
   let allParts: Part[] = $state([])
   let shopList: Shop[] = $state([])
+  let scheduleItems: ResolvedScheduleItem[] = $state([])
   let loading = $state(true)
   let filter = $state<'all' | 'services' | 'incidents' | 'mileage'>('all')
   // Second-level filter, shown only when the kind filter is Incidents
@@ -87,15 +90,17 @@
 
   async function loadData() {
     try {
-      const [svcList, incidentList, mileageList, partsList, shops] = await Promise.all([
+      const [svcList, incidentList, mileageList, partsList, shops, schedule] = await Promise.all([
         servicesApi.list(vehicleId),
         incidentsApi.list(vehicleId),
         mileageApi.list(vehicleId),
         partsApi.list(vehicleId),
         shopsApi.list(),
+        schedulesApi.resolve(vehicleId),
       ])
       services = svcList
       incidents = incidentList
+      scheduleItems = schedule
       // Service-created logs are excluded: the service row already shows
       // that odometer reading (same rule as the backend activity feed).
       mileageLogs = mileageList.filter((m) => m.service_record_id == null)
@@ -204,6 +209,40 @@
     return incidents.filter((i) => i.service_record_ids.includes(serviceId))
   }
 
+  // --- Maintenance-item linking from the record side (mirror of the Due
+  // tab's "Link existing service…" picker, pointed the other way). ---
+
+  function scheduleItemName(itemId: number): string {
+    return (
+      scheduleItems.find((s) => s.effective_item.id === itemId)?.effective_item.name ??
+      `Item #${itemId}`
+    )
+  }
+
+  let showMaintenancePicker = $state(false)
+  let linkingItemId: number | null = $state(null)
+  let linkError = $state('')
+
+  async function linkMaintenanceItem(record: ServiceRecordWithLinks, itemId: number) {
+    linkError = ''
+    linkingItemId = itemId
+    try {
+      if (!record.schedule_item_ids.includes(itemId)) {
+        // Union write — same semantics as the Due-side picker (the PUT
+        // replaces links wholesale, so send existing + the new one).
+        await servicesApi.update(vehicleId, record.id, {
+          schedule_item_ids: [...record.schedule_item_ids, itemId],
+        })
+      }
+      showMaintenancePicker = false
+      await refresh()
+    } catch (e: any) {
+      linkError = e.message
+    } finally {
+      linkingItemId = null
+    }
+  }
+
   function formatCents(cents: number | null): string {
     if (cents == null) return ''
     return formatCentsShared(cents)
@@ -225,6 +264,8 @@
     expandedId = expandedId === key ? null : key
     editing = false
     confirmDelete = false
+    showMaintenancePicker = false
+    linkError = ''
   }
 
   function startEditIncident(inc: IncidentWithDetails) {
@@ -506,9 +547,66 @@
                       {/each}
                     </div>
                   {/if}
+                  {#if record.schedule_item_ids.length > 0}
+                    <div class="linked-items">
+                      <span class="linked-label">Maintenance:</span>
+                      {#each record.schedule_item_ids as itemId (itemId)}
+                        <!-- Hypermedia: the linked item deep-links to its Due
+                             row (?hl= flashes it). -->
+                        <a
+                          class="linked-chip sched-chip"
+                          href="/vehicles/{vehicleId}/plan/due?hl=schedule_item:{itemId}"
+                          use:link
+                          title="View this maintenance item under Plan → Due"
+                        >
+                          {scheduleItemName(itemId)}
+                        </a>
+                      {/each}
+                    </div>
+                  {/if}
+                  {#if linkError}
+                    <p class="link-error">{linkError}</p>
+                  {/if}
+                  {#if showMaintenancePicker}
+                    <!-- Compact picker mirroring the Due tab's link picker:
+                         the vehicle's schedule items; choosing one links this
+                         record to it (union write) and the reminder clears. -->
+                    <div class="link-picker" data-testid="maintenance-picker">
+                      <div class="picker-label">Link “{record.description || 'this service'}” to a maintenance item</div>
+                      {#if scheduleItems.length === 0}
+                        <p class="picker-empty">No maintenance schedule on this vehicle yet.</p>
+                      {:else}
+                        <div class="picker-rows">
+                          {#each scheduleItems as item (item.effective_item.id)}
+                            {@const alreadyLinked = record.schedule_item_ids.includes(item.effective_item.id)}
+                            <button
+                              class="picker-row"
+                              disabled={alreadyLinked || linkingItemId != null}
+                              onclick={() => linkMaintenanceItem(record, item.effective_item.id)}
+                            >
+                              <span class="picker-desc">{item.effective_item.name}</span>
+                              <span class="picker-interval">
+                                {#if item.effective_item.interval_miles}{item.effective_item.interval_miles.toLocaleString()} mi{/if}
+                                {#if item.effective_item.interval_miles && item.effective_item.interval_months}&nbsp;/&nbsp;{/if}
+                                {#if item.effective_item.interval_months}{item.effective_item.interval_months} mo{/if}
+                              </span>
+                              {#if alreadyLinked}
+                                <span class="picker-linked">linked</span>
+                              {:else if linkingItemId === item.effective_item.id}
+                                <span class="picker-linking">linking…</span>
+                              {/if}
+                            </button>
+                          {/each}
+                        </div>
+                      {/if}
+                    </div>
+                  {/if}
                 </div>
                 <div class="expand-actions">
                   <button class="btn btn-secondary btn-sm" onclick={() => startEdit(record)}>Edit</button>
+                  <button class="btn btn-secondary btn-sm" onclick={() => { showMaintenancePicker = !showMaintenancePicker; linkError = '' }}>
+                    {showMaintenancePicker ? 'Close picker' : 'Link to maintenance item…'}
+                  </button>
                   {#if confirmDelete}
                     <span class="confirm-text">Delete this record?</span>
                     <button class="btn btn-danger btn-sm" onclick={() => deleteService(record.id)} disabled={deleting}>
@@ -740,6 +838,114 @@
 
   .part-chip { background: var(--success-bg); color: var(--success); border: 1px solid var(--success-border); }
   .obs-chip { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning-border); }
+  .sched-chip {
+    background: var(--info-bg); color: var(--info); border: 1px solid var(--info-border);
+    text-decoration: none;
+  }
+  .sched-chip:hover { text-decoration: underline; }
+
+  /* Compact link-to-maintenance picker — mirrors the Due tab's link-existing
+     picker (name | interval instead of date | description | miles). */
+  .link-picker {
+    margin-top: var(--sp-2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--bg);
+    overflow: hidden;
+    animation: fade-in-down var(--duration-base) var(--ease-out) both;
+  }
+
+  .picker-label {
+    font-family: var(--font-display);
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+    padding: var(--sp-2) var(--sp-3) var(--sp-1);
+  }
+
+  .picker-rows {
+    display: flex;
+    flex-direction: column;
+    max-height: 220px;
+    overflow-y: auto;
+  }
+
+  .picker-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) max-content max-content;
+    column-gap: var(--sp-3);
+    align-items: baseline;
+    width: 100%;
+    padding: var(--sp-1) var(--sp-3);
+    border: none;
+    border-top: 1px dotted var(--border-subtle);
+    background: none;
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    text-align: left;
+    cursor: pointer;
+    transition:
+      background var(--duration-fast) var(--ease-out),
+      color var(--duration-fast) var(--ease-out);
+  }
+
+  .picker-row:hover:not(:disabled) {
+    background: var(--surface);
+    color: var(--text);
+  }
+
+  .picker-row:disabled {
+    cursor: default;
+    opacity: 0.55;
+  }
+
+  .picker-desc {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .picker-interval {
+    white-space: nowrap;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+  }
+
+  .picker-linked,
+  .picker-linking {
+    font-family: var(--font-display);
+    font-size: 0.66rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    padding: 0 var(--sp-2);
+    border-radius: 999px;
+    background: var(--success-bg);
+    color: var(--success);
+    border: 1px solid var(--success-border);
+  }
+
+  .picker-linking {
+    background: var(--surface);
+    color: var(--text-muted);
+    border-color: var(--border-subtle);
+  }
+
+  .picker-empty {
+    margin: 0;
+    padding: var(--sp-2) var(--sp-3) var(--sp-3);
+    font-size: 0.82rem;
+    color: var(--text-muted);
+  }
+
+  .link-error {
+    color: var(--danger);
+    font-size: 0.82rem;
+    margin: var(--sp-1) 0 0;
+  }
 
   /* Expanded panel (service rows): a borderless bottom half of the
      wrapping .service-entry, separated by a hairline. */

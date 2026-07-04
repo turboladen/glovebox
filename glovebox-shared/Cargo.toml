@@ -27,3 +27,6 @@ rusty-money.workspace = true
 async-trait.workspace = true
 sqlx.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use axum::{
     Json,
     extract::{Multipart, Path, Query, State},
@@ -9,7 +7,7 @@ use serde::Deserialize;
 use crate::AppState;
 use glovebox_shared::{
     entities::document,
-    inputs::document::{DocumentFilter, NewDocument},
+    inputs::document::{DocumentFilter, StoreDocument},
     services::document as svc,
 };
 
@@ -163,55 +161,22 @@ pub async fn upload(
 ) -> Result<Json<document::Model>> {
     let parsed = parse_multipart(multipart).await?;
 
-    let original_name = parsed.file_name.unwrap_or_else(|| "unnamed".into());
-    let title = parsed.title.unwrap_or_else(|| original_name.clone());
-
-    // Validate vehicle exists if provided
-    if let Some(vid) = parsed.vehicle_id {
-        glovebox_shared::services::vehicle::require(&state.db, vid).await?;
-    }
-
-    // Build storage path: {files_dir}/{vehicle_id or "general"}/{doc_type or "other"}/
-    let vid_dir = parsed
-        .vehicle_id
-        .map_or_else(|| "general".into(), |v| v.to_string());
-    let type_dir = sanitize_filename(parsed.doc_type.as_deref().unwrap_or("other"));
-    let dir: PathBuf = [&state.config.files_dir, &vid_dir, &type_dir]
-        .iter()
-        .collect();
-    tokio::fs::create_dir_all(&dir)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-
-    // Use timestamp + original name to avoid collisions
-    let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S");
-    let safe_name = sanitize_filename(&original_name);
-    let stored_name = format!("{timestamp}_{safe_name}");
-    let full_path = dir.join(&stored_name);
-
-    tokio::fs::write(&full_path, &parsed.file_data)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-
-    // Store relative path (from files_dir root)
-    let relative_path = format!("{vid_dir}/{type_dir}/{stored_name}");
-
-    let file_size_bytes = i32::try_from(parsed.file_data.len())
-        .map_err(|_| ApiError::BadRequest("File too large (max ~2GB)".into()))?;
-
-    let result = svc::create(
+    // Validation, disk placement, and the DB row all live in the shared
+    // service (the MCP attach_document tool shares the same path).
+    let result = svc::store(
         &state.db,
-        NewDocument {
+        &state.config.files_dir,
+        StoreDocument {
             vehicle_id: parsed.vehicle_id,
-            title,
-            file_path: relative_path,
-            file_name: original_name,
+            title: parsed.title,
+            file_name: parsed.file_name.unwrap_or_else(|| "unnamed".into()),
+            bytes: parsed.file_data,
             mime_type: parsed.mime_type,
-            file_size_bytes: Some(file_size_bytes),
             doc_type: parsed.doc_type,
             linked_entity_type: parsed.linked_entity_type,
             linked_entity_id: parsed.linked_entity_id,
             notes: parsed.notes,
+            extracted_text: None,
         },
     )
     .await?;
@@ -243,16 +208,4 @@ pub async fn delete(
 
     svc::delete(&state.db, id).await?;
     Ok(Json(serde_json::json!({ "deleted": id })))
-}
-
-pub(super) fn sanitize_filename(name: &str) -> String {
-    name.chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
 }

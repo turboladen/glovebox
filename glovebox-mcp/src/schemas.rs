@@ -5,9 +5,12 @@
 //! input maps 1:1 onto a `glovebox_shared::inputs` struct (fields the MCP
 //! surface doesn't expose are filled with `None`) — no business logic here.
 
+use base64::Engine as _;
 use glovebox_shared::{
     entities::vehicle,
+    error::{DomainError, DomainResult},
     inputs::{
+        document::StoreDocument,
         incident::NewIncident,
         mileage::NewMileageEntry,
         part::NewPart,
@@ -500,6 +503,74 @@ impl FileResearchFindingInput {
             },
         )
     }
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct AttachDocumentInput {
+    /// Vehicle id, from `list_vehicles`.
+    pub vehicle_id: i32,
+    /// Original file name with extension, e.g. "fcp-invoice-2026-06.pdf".
+    /// Used for the stored name and MIME detection; unsafe characters are
+    /// normalized.
+    pub file_name: String,
+    /// The file's bytes, base64-encoded (standard alphabet, with padding).
+    /// Decoded size cap: 10 MiB.
+    pub content_base64: String,
+    /// Display title, e.g. "FCP Euro invoice — clutch kit". Defaults to
+    /// `file_name`.
+    pub title: Option<String>,
+    /// The text YOU extracted from the document (read/OCR it yourself and
+    /// pass it here). Full-text indexed — without it, `find_documents` can
+    /// only match the title and file name.
+    pub extracted_text: Option<String>,
+    /// Link target kind: `service` (a service record — the usual case for
+    /// invoices), `part`, or `incident`. Pair with `linked_entity_id`.
+    pub linked_entity_type: Option<String>,
+    /// Id of the linked record (must belong to the same vehicle), e.g. the
+    /// id returned by `record_service`. Pair with `linked_entity_type`.
+    pub linked_entity_id: Option<i32>,
+}
+
+impl AttachDocumentInput {
+    /// Decode the base64 payload into the shared store input. A malformed
+    /// payload is an LLM-recoverable `BadRequest`, not a protocol failure.
+    pub fn into_domain(self) -> DomainResult<StoreDocument> {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(self.content_base64.trim())
+            .map_err(|e| {
+                DomainError::BadRequest(format!(
+                    "content_base64 is not valid base64 ({e}). Send the file bytes encoded with \
+                     the standard base64 alphabet."
+                ))
+            })?;
+        Ok(StoreDocument {
+            vehicle_id: Some(self.vehicle_id),
+            title: self.title,
+            file_name: self.file_name,
+            bytes,
+            mime_type: None,
+            doc_type: None,
+            linked_entity_type: self.linked_entity_type,
+            linked_entity_id: self.linked_entity_id,
+            notes: None,
+            extracted_text: self.extracted_text,
+        })
+    }
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct LinkServiceToMaintenanceInput {
+    /// Vehicle id, from `list_vehicles`.
+    pub vehicle_id: i32,
+    /// The existing service record to link, e.g. an id returned by
+    /// `record_service` or found via `summarize_recent_activity`.
+    pub service_record_id: i32,
+    /// Schedule item ids (from `check_due_maintenance`) this service
+    /// satisfies — linking clears their reminders.
+    pub schedule_item_ids: Vec<i32>,
+    /// `add` (default) keeps the record's existing links and adds these;
+    /// `replace` overwrites them with exactly this list.
+    pub mode: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
