@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { createVehicle } from './helpers'
+import { createVehicle, seedOverdueItem, vehicleIdFrom } from './helpers'
 
 // TP-06 + TP-14: Timeline — the merged stream subsuming History + Incidents
 test.describe('Timeline', () => {
@@ -252,5 +252,41 @@ test.describe('Timeline', () => {
     await chips.getByRole('button', { name: 'All' }).click()
     await expect(list.getByText('Category noise row')).toBeVisible()
     await expect(list.getByText('Category leak row')).toBeVisible()
+  })
+
+  // Import reconciliation from the record side: an existing service row can
+  // be linked to a maintenance item from the Timeline; the linked name
+  // deep-links to Plan → Due, where the reminder now shows Last done.
+  test('link a service to a maintenance item from the Timeline', async ({ browser, page }) => {
+    const url = await createVehicle(browser, 'Timeline Link Car')
+    const vehicleId = vehicleIdFrom(url)
+    await seedOverdueItem(page, vehicleId, 'Coolant flush')
+
+    // An import-style record: created without any schedule link.
+    const res = await page.request.post(`/api/vehicles/${vehicleId}/services`, {
+      data: { service_date: '2026-06-01', description: 'Coolant drain and fill' },
+    })
+    expect(res.ok()).toBe(true)
+
+    // Expand the row; the picker lists the vehicle's schedule items.
+    await page.goto(`${url}/timeline`)
+    await page.getByText('Coolant drain and fill').click()
+    await page.getByRole('button', { name: 'Link to maintenance item…' }).click()
+    const picker = page.getByTestId('maintenance-picker')
+    await expect(picker).toBeVisible()
+    await picker.getByRole('button', { name: 'Coolant flush' }).click()
+
+    // The linked item renders as a chip that deep-links to Plan → Due…
+    const chip = page.getByRole('link', { name: 'Coolant flush' })
+    await expect(chip).toBeVisible()
+    await chip.click()
+
+    // …where the reminder state updated: no longer overdue, Last done set
+    // (and pointing back at the record we linked).
+    await expect(page).toHaveURL(new RegExp(`/vehicles/${vehicleId}/plan/due`))
+    await expect(page.getByRole('heading', { name: 'OK (not yet due)' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Overdue' })).toHaveCount(0)
+    await expect(page.getByText(/Last done/)).toBeVisible()
+    await expect(page.getByText('Coolant drain and fill')).toBeVisible()
   })
 })

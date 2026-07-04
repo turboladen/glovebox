@@ -114,6 +114,7 @@ manual odometer readings. Creation actions live here.
 | 4 | "Log incident" | Incident form (category/date/odometer/title/details); category `accident` reveals the accident fieldset (other party, claim, adjuster); category `obd_code` reveals the codes input |
 | 5 | Service rows | Green "Service" badge; date, cost, mileage, shop; preview shows notes + linked Parts/Incidents chips |
 | 6 | Expand a service row | Detail panel: parts/labor costs, payer, chips; **Edit** (all fields incl. Paid By; clearing a field saves null) and **Delete** (confirm). The row and its panel read as ONE contiguous card (border on the wrapper, hairline separator between the halves — no split-box seam) |
+| 6a | Maintenance links on an expanded service row | Linked schedule items render as "Maintenance:" chips deep-linking to `plan/due?hl=schedule_item:{id}`; **Link to maintenance item…** opens a compact picker of the vehicle's schedule items (already-linked rows disabled); choosing one union-writes the record's `schedule_item_ids` (same PUT semantics as the Due tab's "Link existing service…") and the reminder clears |
 | 7 | Incident rows | Amber "Incident" badge; expanding shows the full detail: description, recurrence, odometer, OBD chips, accident grid, linked-services chips, followups |
 | 8 | Incident detail actions | Edit (opens the form pre-filled; accident financial fields are edit-only), Mark Resolved (with optional service link picker), Reopen |
 | 9 | Add followup | Date/method/contact/summary; entry appears in the followup timeline |
@@ -370,9 +371,9 @@ frontend/e2e/
   navigation.spec.ts     # TP-01, TP-10 (shell: sidebar, search, routing)     (12)
   dashboard.spec.ts      # TP-00, TP-04 (garage + scoped Overview, plan-it)    (7)
   vehicle-new.spec.ts    # TP-02, TP-03                                        (6)
-  vehicle-detail.spec.ts # TP-04, TP-05 (shell, edit, mileage, tab fallbacks) (15)
-  timeline.spec.ts       # TP-06 (stream, service + incident flows, filters)  (12)
-  plan.spec.ts           # TP-07, TP-26 (due, to-do, visits, research, config)(13)
+  vehicle-detail.spec.ts # TP-04, TP-05 (shell, edit, mileage, tab fallbacks) (16)
+  timeline.spec.ts       # TP-06 (stream, service + incident flows, filters)  (13)
+  plan.spec.ts           # TP-07, TP-26 (due, to-do, visits, research, config)(15)
   builds.spec.ts         # TP-08                                               (3)
   records.spec.ts        # TP-15, TP-18, TP-19 smoke                          (10)
 ```
@@ -397,6 +398,11 @@ chip-link → highlight → un-plan round trip (dashboard), the legacy
 `records/research` redirect (plan), the header Record-service routing, and the
 one-verb no-"Log Service" regression (both vehicle-detail) — bringing the
 suite to **74 tests**.
+
+Later units (design pass, dashboard/plan refinements) grew the suite to **81**
+(vehicle-detail 16, plan 15, and the counts above). The import-reconciliation
+unit added TP-06 §6a's Timeline → Due link-affordance round trip
+(timeline.spec) — the suite now stands at **82 tests**.
 
 Run: `just test-e2e` (needs `just dev` running) or `just test-e2e-ci` (self-contained).
 
