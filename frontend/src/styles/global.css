@@ -11,20 +11,18 @@
      info    = cluster blue (neutral status)
      planned = violet      (intent, not yet done)
 
-   Type:
-     Barlow            — interface voice (road-signage heritage)
-     Barlow Condensed  — display: headings, tabs, gauge labels
-     B612              — numerals: odometer, money, dates
-                         (the typeface Airbus designed for cockpits).
-                         Deliberately the PROPORTIONAL cut: B612 Mono
-                         gave commas/periods a full character cell,
-                         which rendered "57,016" as "57, 016". B612's
-                         digits are uniform-width + tabular-nums, so
-                         ledger columns still line up.
+   Type — ONE family (round-3 feedback #1):
+     Barlow            — the only typeface (road-signage heritage);
+                         Barlow Condensed is its display cut, not a
+                         second voice: headings, tabs, gauge labels.
+     Numerals (odometer, money, dates) are Barlow with
+     `font-variant-numeric: tabular-nums` so ledger columns align —
+     no numeral-only family. The instrument-panel character comes
+     from weight, case, and letter-spacing, never from font count.
    ═══════════════════════════════════════════════════════════ */
 
 /* --- Fonts ----------------------------------- */
-@import url('https://fonts.googleapis.com/css2?family=Barlow:ital,wght@0,400;0,500;0,600;1,400&family=Barlow+Condensed:wght@500;600;700&family=B612:wght@400;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Barlow:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Barlow+Condensed:wght@500;600;700&display=swap');
 
 /* --- Design Tokens --------------------------- */
 :root {
@@ -71,7 +69,6 @@
   /* — Typography — */
   --font-body:      'Barlow', system-ui, -apple-system, sans-serif;
   --font-display:   'Barlow Condensed', var(--font-body);
-  --font-numeral:   'B612', 'Barlow', 'SF Mono', monospace;
 
   /* — Spacing scale (4px base) — */
   --sp-1:  0.25rem;   /*  4px */
@@ -200,9 +197,9 @@ small, .text-sm { font-size: 0.8rem; }
 .text-muted { color: var(--text-muted); }
 .text-secondary { color: var(--text-secondary); }
 
-/* Cockpit numerals — mileage, money, dates */
+/* Cockpit numerals — mileage, money, dates. Same Barlow as everything
+   else; tabular figures keep ledger columns aligned. */
 .num {
-  font-family: var(--font-numeral);
   font-variant-numeric: tabular-nums;
 }
 
@@ -426,7 +423,7 @@ input, select, textarea {
 
 input[type='number'],
 input[type='date'] {
-  font-family: var(--font-numeral);
+  font-variant-numeric: tabular-nums;
   font-size: 0.85rem;
 }
 

@@ -432,7 +432,6 @@ ${data.installed_parts.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.manufact
 
   /* The odometer: the number a car person actually reads. */
   .est-mileage {
-    font-family: var(--font-numeral);
     font-variant-numeric: tabular-nums;
     font-weight: 700;
     font-size: 1.15rem;

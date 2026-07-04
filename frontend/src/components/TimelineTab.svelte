@@ -706,14 +706,12 @@
   .resolved-badge { font-size: 0.75rem; color: var(--success); }
 
   .date {
-    font-family: var(--font-numeral);
     font-variant-numeric: tabular-nums;
     font-size: 0.82rem;
     color: var(--text-secondary);
   }
   .cost {
     margin-left: auto;
-    font-family: var(--font-numeral);
     font-variant-numeric: tabular-nums;
     font-size: 0.9rem;
     font-weight: 700;
