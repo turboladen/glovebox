@@ -184,9 +184,9 @@ test.describe('Timeline', () => {
 
     // The row stayed expanded; the detail grid shows the amounts.
     await expect(page.getByText('Repair Cost')).toBeVisible()
-    await expect(page.getByText('$2500.00')).toBeVisible()
+    await expect(page.getByText('$2,500.00')).toBeVisible()
     await expect(page.getByText('$500.00')).toBeVisible()
-    await expect(page.getByText('$2000.00')).toBeVisible()
+    await expect(page.getByText('$2,000.00')).toBeVisible()
   })
 
   test('filter chips narrow the stream by kind', async ({ browser, page }) => {
