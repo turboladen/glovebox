@@ -442,7 +442,7 @@
     {:else if openItems.length === 0 && (!includeDone || doneItems.length === 0)}
       <p class="empty">Nothing on the to-do list. Plan work from the Due view, a recall, or an incident — or add one here.</p>
     {:else}
-      <div class="item-list" data-testid="todo-list">
+      <div class="item-list ledger" data-testid="todo-list">
         {#each openItems as item (item.id)}
           <div class="work-card" id={anchorId('work_item', item.id)}>
             <div class="work-main">
@@ -564,7 +564,7 @@
     {:else if visitList.length === 0}
       <p class="empty">No visits planned. Group to-do items into a shop trip or DIY session.</p>
     {:else}
-      <div class="item-list" data-testid="visit-list">
+      <div class="item-list ledger" data-testid="visit-list">
         {#each visitList as v (v.id)}
           <div class="visit-card" class:closed={v.status === 'completed' || v.status === 'canceled'}>
             <div class="work-main">
@@ -734,19 +734,23 @@
     width: auto;
   }
 
+  /* Ledger rows (round-2 feedback #5): same grammar as attention/Due/
+     Timeline — one card, hairline-ruled entries, mono figures right. */
   .item-list {
     display: flex;
     flex-direction: column;
-    gap: var(--sp-2);
   }
 
   .work-card,
   .visit-card {
     padding: var(--sp-3) var(--sp-4);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-lg);
-    background: var(--bg-raised);
-    box-shadow: inset 0 1px 0 var(--edge-highlight);
+    border-left: 3px solid transparent;
+    transition: background var(--duration-fast) var(--ease-out);
+  }
+
+  .work-card:hover,
+  .visit-card:hover {
+    background: var(--surface);
   }
 
   .work-card.finished,
@@ -766,10 +770,11 @@
   }
 
   .work-cost {
-    font-family: var(--font-mono);
+    font-family: var(--font-numeral);
     font-variant-numeric: tabular-nums;
     font-size: 0.8rem;
     color: var(--text-secondary);
+    text-align: right;
   }
 
   .work-notes {

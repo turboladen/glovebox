@@ -129,6 +129,24 @@
     if (cents == null) return ''
     return formatCentsShared(cents)
   }
+
+  // Ledger columns (round-2 feedback #4): split the backend's display
+  // label ("Name — overdue by N mi") into a name cell and a status cell
+  // so overdue-by amounts line up as a mono column instead of prose.
+  function attentionName(a: AttentionItem): string {
+    return a.schedule_item_name ?? a.label
+  }
+
+  function attentionStatus(a: AttentionItem): string {
+    if (a.kind === 'recall') return 'recall'
+    if (a.kind === 'incident') return 'unresolved'
+    const dash = a.label.indexOf(' — ')
+    const status =
+      dash >= 0 ? a.label.slice(dash + 3) : a.kind === 'overdue' ? 'overdue' : 'due soon'
+    // The backend label carries raw figures ("36976 mi"); a ledger column
+    // gets thousands separators.
+    return status.replace(/\d{4,}/g, (n) => Number(n).toLocaleString())
+  }
 </script>
 
 {#if loading}
@@ -172,47 +190,54 @@
     {#if attention.length > 0}
       <section class="block attention-block" data-testid="attention-block">
         <h3 class="block-title attention-title">⚠ Needs attention ({attention.length})</h3>
-        <div class="block-rows">
+        <!-- Ledger grid (feedback #4): item | overdue-by (mono, right) |
+             action — hairline-ruled rows, not free-floating prose. -->
+        <div class="attention-ledger">
           {#each attention as a (rowKey(a))}
-            <div class="row attention-row">
-              <a href={attentionTarget(a)} use:link class="row-link">
-                {#if garageScope}<span class="row-vehicle">{a.vehicle_name}</span> ·{/if}
-                {a.label}
+            <div class="attention-row">
+              <a href={attentionTarget(a)} use:link class="row-link attention-item">
+                {#if garageScope}<span class="row-vehicle">{a.vehicle_name}</span><span class="cell-sep">·</span>{/if}
+                {attentionName(a)}
               </a>
-              {#if canPlan(a)}
-                {#if a.planned_work_item_id != null}
-                  <!-- The state display IS the link to its source. -->
-                  <a
-                    class="planned-chip planned-link"
-                    href="/vehicles/{a.vehicle_id}/plan/todo?hl=work_item:{a.planned_work_item_id}"
-                    use:link
-                    title="View the planned work item"
-                  >
-                    planned
-                  </a>
-                  {#if !a.planned_item_in_visit}
+              <span class="attention-status num status-{a.kind}">{attentionStatus(a)}</span>
+              <span class="attention-action">
+                {#if canPlan(a)}
+                  {#if a.planned_work_item_id != null}
+                    <!-- The state display IS the link to its source. -->
+                    <a
+                      class="planned-chip planned-link"
+                      href="/vehicles/{a.vehicle_id}/plan/todo?hl=work_item:{a.planned_work_item_id}"
+                      use:link
+                      title="View the planned work item"
+                    >
+                      planned
+                    </a>
+                    {#if !a.planned_item_in_visit}
+                      <!-- Explicit labeled control (feedback #6): the bare ✕
+                           read as "delete this row". -->
+                      <button
+                        class="unplan"
+                        title="Un-plan (removes the to-do item)"
+                        aria-label="Un-plan"
+                        onclick={() => unplanIt(a)}
+                        disabled={planningKey === rowKey(a)}
+                      >
+                        <span aria-hidden="true">⊖</span> unplan
+                      </button>
+                    {/if}
+                  {:else if a.planned}
+                    <span class="planned-chip">planned</span>
+                  {:else}
                     <button
-                      class="unplan"
-                      title="Un-plan"
-                      aria-label="Un-plan"
-                      onclick={() => unplanIt(a)}
+                      class="plan-it"
+                      onclick={() => planIt(a)}
                       disabled={planningKey === rowKey(a)}
                     >
-                      ✕
+                      {planningKey === rowKey(a) ? 'planning…' : 'plan it'}
                     </button>
                   {/if}
-                {:else if a.planned}
-                  <span class="planned-chip">planned</span>
-                {:else}
-                  <button
-                    class="plan-it"
-                    onclick={() => planIt(a)}
-                    disabled={planningKey === rowKey(a)}
-                  >
-                    {planningKey === rowKey(a) ? 'planning…' : 'plan it'}
-                  </button>
                 {/if}
-              {/if}
+              </span>
             </div>
           {/each}
         </div>
@@ -338,12 +363,17 @@
   .block-rows {
     display: flex;
     flex-direction: column;
-    gap: var(--sp-2);
   }
 
   .row {
     font-size: 0.88rem;
     margin: 0;
+    padding: var(--sp-2) 0;
+  }
+
+  /* Same ledger rules as the attention grid — one row language. */
+  .row + .row {
+    border-top: 1px dotted var(--border-subtle);
   }
 
   .row-link {
@@ -387,10 +417,62 @@
     background: var(--danger);
   }
 
+  /* Ledger grid: name | status (mono, right) | action. */
+  .attention-ledger {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) max-content minmax(88px, max-content);
+    column-gap: var(--sp-4);
+  }
+
   .attention-row {
+    display: grid;
+    grid-template-columns: subgrid;
+    grid-column: 1 / -1;
+    align-items: baseline;
+    padding: var(--sp-2) 0;
+  }
+
+  .attention-row + .attention-row {
+    border-top: 1px dotted var(--border);
+  }
+
+  .attention-item {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .cell-sep {
+    color: var(--text-muted);
+    margin: 0 var(--sp-1);
+  }
+
+  .attention-status {
+    font-size: 0.8rem;
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .status-overdue,
+  .status-recall {
+    color: var(--danger);
+  }
+
+  .status-due_soon {
+    color: var(--warning);
+  }
+
+  .status-incident {
+    color: var(--info);
+  }
+
+  .attention-action {
     display: flex;
     align-items: baseline;
+    justify-content: flex-end;
     gap: var(--sp-2);
+    white-space: nowrap;
   }
 
   .plan-it {
@@ -434,18 +516,22 @@
     color: var(--planned);
   }
 
+  /* "⊖ unplan": clarity over minimalism — a bare ✕ read as row-delete. */
   .unplan {
-    padding: 0 var(--sp-1);
+    padding: 0;
     border: none;
     background: none;
-    font-size: 0.7rem;
-    line-height: 1;
+    font-size: 0.74rem;
+    font-weight: 500;
+    line-height: 1.4;
     color: var(--text-muted);
     cursor: pointer;
+    white-space: nowrap;
   }
 
   .unplan:hover {
     color: var(--danger);
+    text-decoration: underline;
   }
 
   .unplan:disabled {
@@ -488,22 +574,28 @@
     grid-column: 1 / -1;
   }
 
-  .forecast-line {
+  /* The total line: a solid rule and a right-aligned figure — ledger
+     semantics (entries dotted, totals ruled). */
+  .row.forecast-line,
+  .row + .row.forecast-line {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: var(--sp-3);
     color: var(--text-secondary);
     margin-top: var(--sp-1);
-    padding-top: var(--sp-2);
-    border-top: 1px solid var(--border-subtle);
+    border-top: 1px solid var(--border);
   }
 
   .forecast-line strong {
-    font-family: var(--font-mono);
+    font-family: var(--font-numeral);
     font-variant-numeric: tabular-nums;
     font-size: 1.05rem;
     color: var(--text);
   }
 
   .activity-date {
-    font-family: var(--font-mono);
+    font-family: var(--font-numeral);
     font-variant-numeric: tabular-nums;
     font-size: 0.78rem;
     color: var(--text);
