@@ -537,6 +537,93 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     })
 }
 
+/// How [`link_schedule_items`] treats the record's existing schedule links.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinkMode {
+    /// Union the given items with the existing links (safe for incremental
+    /// reconciliation loops — nothing already linked is clobbered).
+    Add,
+    /// Overwrite: the given items become the record's only links.
+    Replace,
+}
+
+impl LinkMode {
+    pub fn parse(mode: &str) -> DomainResult<Self> {
+        match mode {
+            "add" => Ok(Self::Add),
+            "replace" => Ok(Self::Replace),
+            other => Err(DomainError::BadRequest(format!(
+                "Invalid mode '{other}'. Must be one of: add, replace"
+            ))),
+        }
+    }
+}
+
+/// Link a service record to maintenance-schedule items without touching the
+/// rest of the record. Self-guarded: the record must belong to `vehicle_id`,
+/// and every item must be in the vehicle's schedule scope
+/// ([`require_schedule_items_in_scope`]) — wrong-parent ids read as missing.
+/// Linking is what clears the corresponding reminders.
+pub async fn link_schedule_items<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    id: i32,
+    item_ids: &[i32],
+    mode: LinkMode,
+) -> DomainResult<ServiceRecordWithLinks> {
+    let existing = service_record::Entity::find_by_id(id)
+        .filter(service_record::Column::VehicleId.eq(vehicle_id))
+        .one(db)
+        .await?
+        .ok_or_else(|| DomainError::NotFound(format!("Service record {id} not found")))?;
+
+    let txn = db.begin().await?;
+    require_schedule_items_in_scope(&txn, vehicle_id, item_ids).await?;
+
+    let already_linked: std::collections::HashSet<i32> = match mode {
+        LinkMode::Replace => {
+            service_schedule_link::Entity::delete_many()
+                .filter(service_schedule_link::Column::ServiceRecordId.eq(existing.id))
+                .exec(&txn)
+                .await?;
+            std::collections::HashSet::new()
+        }
+        LinkMode::Add => service_schedule_link::Entity::find()
+            .filter(service_schedule_link::Column::ServiceRecordId.eq(existing.id))
+            .all(&txn)
+            .await?
+            .into_iter()
+            .map(|l| l.schedule_item_id)
+            .collect(),
+    };
+
+    let mut inserted = already_linked;
+    for item_id in item_ids {
+        if inserted.insert(*item_id) {
+            service_schedule_link::ActiveModel {
+                service_record_id: Set(existing.id),
+                schedule_item_id: Set(*item_id),
+            }
+            .insert(&txn)
+            .await?;
+        }
+    }
+
+    // Linking changes what the record accounts for — stamp it like update().
+    let mut active: service_record::ActiveModel = existing.into();
+    active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
+    let record = active.update(&txn).await?;
+    txn.commit().await?;
+
+    let (schedule_item_ids, part_ids, line_items) = load_service_links(db, record.id).await?;
+    Ok(ServiceRecordWithLinks {
+        record,
+        schedule_item_ids,
+        part_ids,
+        line_items,
+    })
+}
+
 pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -1208,6 +1295,99 @@ mod tests {
         // Existing links survive the rejected update (transaction rolled back).
         let fetched = get(&db, owner, created.record.id).await.unwrap();
         assert_eq!(fetched.schedule_item_ids, vec![own_item]);
+    }
+
+    #[tokio::test]
+    async fn link_schedule_items_add_unions_and_dedups() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let item_a = seed_schedule_item(&db, vid, "Oil change").await;
+        let item_b = seed_schedule_item(&db, vid, "Tire rotation").await;
+        let created = create(&db, vid, minimal_record(Some(vec![item_a])))
+            .await
+            .unwrap();
+
+        // Add mode unions with the existing link; re-sending item_a is a no-op.
+        let linked = link_schedule_items(
+            &db,
+            vid,
+            created.record.id,
+            &[item_a, item_b],
+            LinkMode::Add,
+        )
+        .await
+        .unwrap();
+        let mut ids = linked.schedule_item_ids.clone();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![item_a, item_b]);
+
+        // No duplicate link rows were written.
+        let links = service_schedule_link::Entity::find()
+            .filter(service_schedule_link::Column::ServiceRecordId.eq(created.record.id))
+            .all(&db)
+            .await
+            .unwrap();
+        assert_eq!(links.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn link_schedule_items_replace_overwrites() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let item_a = seed_schedule_item(&db, vid, "Oil change").await;
+        let item_b = seed_schedule_item(&db, vid, "Tire rotation").await;
+        let created = create(&db, vid, minimal_record(Some(vec![item_a])))
+            .await
+            .unwrap();
+
+        let linked = link_schedule_items(&db, vid, created.record.id, &[item_b], LinkMode::Replace)
+            .await
+            .unwrap();
+        assert_eq!(linked.schedule_item_ids, vec![item_b]);
+    }
+
+    #[tokio::test]
+    async fn link_schedule_items_wrong_parent_is_byte_identical_not_found() {
+        let db = test_db().await;
+        let owner = seed_vehicle(&db).await;
+        let other = seed_vehicle(&db).await;
+        let own_item = seed_schedule_item(&db, owner, "Mine").await;
+        let foreign_item = seed_schedule_item(&db, other, "Foreign").await;
+        let mine = create(&db, owner, minimal_record(None)).await.unwrap();
+        let theirs = create(&db, other, minimal_record(None)).await.unwrap();
+
+        // Another vehicle's service record must read exactly like a
+        // nonexistent one.
+        let wrong_parent =
+            link_schedule_items(&db, owner, theirs.record.id, &[own_item], LinkMode::Add)
+                .await
+                .unwrap_err();
+        assert_eq!(
+            wrong_parent.to_string(),
+            format!("Service record {} not found", theirs.record.id)
+        );
+
+        // Another vehicle's schedule item likewise; nothing was linked.
+        let wrong_item =
+            link_schedule_items(&db, owner, mine.record.id, &[foreign_item], LinkMode::Add)
+                .await
+                .unwrap_err();
+        assert_eq!(
+            wrong_item.to_string(),
+            format!("Schedule item {foreign_item} not found")
+        );
+        let fetched = get(&db, owner, mine.record.id).await.unwrap();
+        assert!(fetched.schedule_item_ids.is_empty());
+    }
+
+    #[test]
+    fn link_mode_parses_and_rejects() {
+        assert_eq!(LinkMode::parse("add").unwrap(), LinkMode::Add);
+        assert_eq!(LinkMode::parse("replace").unwrap(), LinkMode::Replace);
+        assert!(matches!(
+            LinkMode::parse("merge").unwrap_err(),
+            DomainError::BadRequest(_)
+        ));
     }
 
     #[tokio::test]
