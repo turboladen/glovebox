@@ -92,13 +92,14 @@
     push(`/vehicles/${vehicleId}/plan${id === 'due' ? '' : `/${id}`}`)
   }
 
-  // schedule_item_id → linking work item id (first participating item
-  // wins), so Due's "planned" chip can LINK to the work item.
+  // schedule_item_id → the linking work item (first participating item
+  // wins), so Due's "planned" chip can LINK to the work item; inVisit
+  // lets Due hide ⊖ unplan for items already grouped into a visit.
   let plannedWorkItems = $derived.by(() => {
-    const map = new Map<number, number>()
+    const map = new Map<number, { id: number; inVisit: boolean }>()
     for (const i of items) {
       if ((i.status === 'planned' || i.status === 'scheduled') && i.schedule_item_id != null && !map.has(i.schedule_item_id)) {
-        map.set(i.schedule_item_id, i.id)
+        map.set(i.schedule_item_id, { id: i.id, inVisit: i.visit_id != null })
       }
     }
     return map
@@ -109,6 +110,13 @@
       title: reminder.schedule_item.name,
       schedule_item_id: reminder.schedule_item.id,
     })
+    await refresh()
+  }
+
+  // Un-plan from Due (round-3 feedback #5): the same DELETE the dashboard
+  // uses — the work item vanishes, the row reverts to "Plan it".
+  async function unplanIt(workItemId: number) {
+    await workItemsApi.delete(vehicleId, workItemId)
     await refresh()
   }
 
@@ -387,6 +395,7 @@
       onScheduleChanged={refresh}
       {plannedWorkItems}
       onPlanIt={planIt}
+      onUnplanIt={unplanIt}
     />
   {:else if activeSub === 'research'}
     <ResearchTab {vehicleId} />
@@ -770,7 +779,6 @@
   }
 
   .work-cost {
-    font-family: var(--font-numeral);
     font-variant-numeric: tabular-nums;
     font-size: 0.8rem;
     color: var(--text-secondary);

@@ -102,6 +102,68 @@ test.describe('Plan: Due actions', () => {
     await expect(row).toBeVisible()
     await expect(row.getByRole('button', { name: 'schedule' })).toBeVisible()
   })
+
+  test('⊖ unplan on a Due row deletes the to-do item and reverts to Plan it', async ({ page }) => {
+    await seedOverdueItem(page, vehicleId, 'Unplannable item')
+    await page.goto(`${vehicleUrl}/plan`)
+    const card = page.locator('.reminder-card.overdue', { hasText: 'Unplannable item' })
+    await expect(card).toBeVisible()
+    await card.getByRole('button', { name: 'Plan it' }).click()
+    await expect(card.getByRole('link', { name: 'planned' })).toBeVisible()
+
+    // Same labeled affordance as the dashboard's attention rows (round 3):
+    // confirm-free, the row reverts to "Plan it".
+    await card.getByRole('button', { name: 'Un-plan' }).click()
+    await expect(card.getByRole('button', { name: 'Plan it' })).toBeVisible()
+    await expect(card.getByRole('link', { name: 'planned' })).toHaveCount(0)
+
+    // The work item is really gone from the backlog.
+    await page.getByRole('button', { name: 'To-do' }).click()
+    await expect(
+      page.getByTestId('todo-list').locator('.work-card', { hasText: 'Unplannable item' }),
+    ).toHaveCount(0)
+  })
+
+  test('link existing service reconciles a Due item retroactively', async ({ page }) => {
+    await seedOverdueItem(page, vehicleId, 'Linkable rotation')
+    // A real record from two months ago that references no schedule item —
+    // the work happened, the reminder just doesn't know.
+    const past = new Date()
+    past.setMonth(past.getMonth() - 2)
+    const res = await page.request.post(`/api/vehicles/${vehicleId}/services`, {
+      data: {
+        service_date: past.toISOString().slice(0, 10),
+        description: 'Rotated tires at home',
+        mileage: 61234,
+      },
+    })
+    expect(res.ok()).toBe(true)
+
+    await page.goto(`${vehicleUrl}/plan`)
+    const card = page.locator('.reminder-card.overdue', { hasText: 'Linkable rotation' })
+    await expect(card).toBeVisible()
+    await expect(card.getByText('No service recorded')).toBeVisible()
+
+    // Pick the record from the compact picker (date · description · miles).
+    await card.getByRole('button', { name: 'Link existing service…' }).click()
+    const picker = card.getByTestId('link-picker')
+    await expect(picker).toBeVisible()
+    await picker.getByRole('button', { name: /Rotated tires at home/ }).click()
+
+    // The reminder clears (2 months into a 12-month interval)…
+    const okCard = page.locator('.reminder-card.ok', { hasText: 'Linkable rotation' })
+    await expect(okCard).toBeVisible()
+
+    // …and the linked record replaces "No service recorded" as a
+    // hypermedia "Last done" reference that deep-links to the Timeline.
+    const lastDone = okCard.getByRole('link', { name: /Last done .*Rotated tires at home/ })
+    await expect(lastDone).toBeVisible()
+    await lastDone.click()
+    await expect(page).toHaveURL(new RegExp(`${vehicleUrl}/timeline\\?hl=service:\\d+`))
+    const svcRow = page.locator('.service-entry', { hasText: 'Rotated tires at home' })
+    await expect(svcRow).toBeVisible()
+    await expect(svcRow).toHaveClass(/hl-flash/)
+  })
 })
 
 test.describe('Plan: To-do CRUD', () => {
