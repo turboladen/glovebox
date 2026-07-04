@@ -35,6 +35,21 @@ test.describe('Vehicle Detail', () => {
     await expect(page.getByRole('button', { name: 'Timeline' })).toHaveClass(/active/)
   })
 
+  test('unknown tab and sub-tab URLs fall back instead of a blank pane', async ({ page }) => {
+    // Bogus :tab → Overview renders and its tab reads active.
+    await page.goto(`${vehicleUrl}/bogus`)
+    await expect(page.getByRole('button', { name: 'Overview' })).toHaveClass(/active/)
+    await expect(page.getByTestId('plan-budget-block')).toBeVisible()
+
+    // Bogus Plan :sub → Due renders and its chip reads active.
+    await page.goto(`${vehicleUrl}/plan/bogus`)
+    await expect(page.getByRole('button', { name: 'Due', exact: true })).toHaveClass(/active/)
+
+    // Bogus Records :sub → Parts renders and its chip reads active.
+    await page.goto(`${vehicleUrl}/records/bogus`)
+    await expect(page.getByRole('button', { name: 'Parts', exact: true })).toHaveClass(/active/)
+  })
+
   test('back link returns to the dashboard', async ({ page }) => {
     await page.goto(vehicleUrl)
     await page.getByText('← All vehicles').click()

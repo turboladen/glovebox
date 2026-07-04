@@ -178,6 +178,31 @@ test.describe('Plan: Visits', () => {
     await expect(svcCard.getByText('$612.50')).toBeVisible()
   })
 
+  test('a selected shop is authoritative over the free-text name', async ({ page }) => {
+    // Two saved shops to pick between.
+    for (const name of ['Authoritative Motors', 'Replacement Garage']) {
+      const res = await page.request.post('/api/shops', { data: { name } })
+      expect(res.ok()).toBe(true)
+    }
+
+    await page.goto(`${vehicleUrl}/plan/visits`)
+    await page.getByRole('button', { name: '+ Schedule visit' }).click()
+    await page.getByLabel('Shop', { exact: true }).selectOption({ label: 'Authoritative Motors' })
+    // With a shop selected, the free-text field is inert (disabled) — the
+    // select wins even if it held a stale name.
+    await expect(page.getByLabel('Shop name (free text)')).toBeDisabled()
+    await page.getByRole('button', { name: 'Schedule visit', exact: true }).click()
+    const card = page.locator('.visit-card', { hasText: 'Authoritative Motors' })
+    await expect(card).toBeVisible()
+
+    // Editing and selecting a different shop replaces the stored name.
+    await card.getByRole('button', { name: 'Edit / attach items' }).click()
+    await page.getByLabel('Shop', { exact: true }).selectOption({ label: 'Replacement Garage' })
+    await page.getByRole('button', { name: 'Update visit' }).click()
+    await expect(page.locator('.visit-card', { hasText: 'Replacement Garage' })).toBeVisible()
+    await expect(page.locator('.visit-card', { hasText: 'Authoritative Motors' })).toHaveCount(0)
+  })
+
   test('cancel returns the items to the to-do list', async ({ page }) => {
     await page.goto(`${vehicleUrl}/plan/todo`)
     await page.getByRole('button', { name: '+ Add work item' }).click()

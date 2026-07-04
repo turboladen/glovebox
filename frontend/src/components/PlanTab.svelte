@@ -37,6 +37,9 @@
     { id: 'schedule', label: 'Schedule ⚙' },
   ]
 
+  // Unknown :sub params fall back to Due instead of a blank pane.
+  let activeSub = $derived(subTabs.some((t) => t.id === sub) ? sub : 'due')
+
   let items: WorkItem[] = $state([])
   let visitList: VisitWithItems[] = $state([])
   let shopList: Shop[] = $state([])
@@ -212,7 +215,10 @@
     editingVisit = v
     visitDate = v.planned_date ?? ''
     visitShopId = v.shop_id ?? ''
-    visitShopName = v.shop_name ?? ''
+    // When a saved shop is selected, the select is authoritative — the
+    // free-text field only holds a custom name (no saved shop). Selecting
+    // a different shop on save replaces the stored name with that shop's.
+    visitShopName = v.shop_id != null ? '' : (v.shop_name ?? '')
     visitNotes = v.notes ?? ''
     visitItemIds = v.items.filter((i) => participates(i)).map((i) => i.id)
     showVisitForm = true
@@ -242,13 +248,16 @@
     visitSaving = true
     error = ''
     try {
+      // A selected shop is authoritative: its name is stored as the
+      // visit's shop_name. Free text applies only with no shop selected.
       const shop = shopList.find((s) => s.id === visitShopId)
+      const shopName = shop ? shop.name : visitShopName.trim() || null
       if (editingVisit) {
         // Edit clears send explicit null; work_item_ids is replace-all.
         await visitsApi.update(vehicleId, editingVisit.id, {
           planned_date: visitDate || null,
           shop_id: visitShopId === '' ? null : visitShopId,
-          shop_name: visitShopName.trim() || shop?.name || null,
+          shop_name: shopName,
           notes: visitNotes || null,
           work_item_ids: visitItemIds,
         })
@@ -256,7 +265,7 @@
         await visitsApi.create(vehicleId, {
           planned_date: visitDate || null,
           shop_id: visitShopId === '' ? null : visitShopId,
-          shop_name: visitShopName.trim() || shop?.name || null,
+          shop_name: shopName,
           notes: visitNotes || null,
           work_item_ids: visitItemIds,
         })
@@ -342,7 +351,7 @@
 <div class="plan-tab">
   <div class="sub-nav">
     {#each subTabs as t (t.id)}
-      <button class="sub-btn" class:active={sub === t.id} onclick={() => openSub(t.id)}>
+      <button class="sub-btn" class:active={activeSub === t.id} onclick={() => openSub(t.id)}>
         {t.label}
       </button>
     {/each}
@@ -352,7 +361,7 @@
     <p class="error">{error}</p>
   {/if}
 
-  {#if sub === 'due'}
+  {#if activeSub === 'due'}
     <ScheduleTab
       {reminderData}
       {vehicleId}
@@ -360,9 +369,9 @@
       {plannedScheduleIds}
       onPlanIt={planIt}
     />
-  {:else if sub === 'schedule'}
+  {:else if activeSub === 'schedule'}
     <ScheduleConfig {vehicleId} onChanged={refresh} />
-  {:else if sub === 'todo'}
+  {:else if activeSub === 'todo'}
     <div class="section-header">
       <h3>To-do</h3>
       <div class="header-actions">
@@ -455,7 +464,7 @@
         {/if}
       </div>
     {/if}
-  {:else if sub === 'visits'}
+  {:else if activeSub === 'visits'}
     <div class="section-header">
       <h3>Visits</h3>
       <div class="header-actions">
@@ -492,7 +501,7 @@
             </div>
             <div class="field">
               <label for="v-shop-name">Shop name (free text)</label>
-              <input id="v-shop-name" type="text" bind:value={visitShopName} placeholder="overrides the list pick" />
+              <input id="v-shop-name" type="text" bind:value={visitShopName} placeholder="used when no shop is selected" disabled={visitShopId !== ''} />
             </div>
           </div>
           {#if attachableItems.length > 0}

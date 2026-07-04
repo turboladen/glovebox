@@ -20,6 +20,19 @@ test.describe('Dashboard', () => {
     ).toBeVisible()
   })
 
+  test('add-vehicle affordance navigates to /vehicles/new', async ({ page }) => {
+    await page.goto('/')
+    // Shared-DB suite: either the sidebar's "+ Add vehicle" (populated
+    // garage) or the welcome CTA (empty garage) — both must click through.
+    await page
+      .getByTestId('sidebar')
+      .getByText('+ Add vehicle')
+      .or(page.getByRole('link', { name: 'Add Your First Vehicle' }))
+      .first()
+      .click()
+    await expect(page).toHaveURL(/\/vehicles\/new$/)
+  })
+
   test('attention + plan & budget + activity blocks render garage-wide data', async ({ browser, page }) => {
     const url = await createVehicle(browser, 'Dash Attention Car')
     const vehicleId = vehicleIdFrom(url)

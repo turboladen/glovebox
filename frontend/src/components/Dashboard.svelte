@@ -79,8 +79,10 @@
   async function planIt(a: AttentionItem) {
     planningKey = rowKey(a)
     try {
-      // Labels are built as "Name — status detail"; the name is the title.
-      const title = a.label.split(' — ')[0]
+      // The backend sends the raw schedule item name for reminder rows;
+      // fall back to splitting the "Name — status detail" label only if
+      // the field is absent (defensive, e.g. a stale cached snapshot).
+      const title = a.schedule_item_name ?? a.label.split(' — ')[0]
       await workItemsApi.create(a.vehicle_id, {
         title,
         schedule_item_id: a.kind === 'recall' ? undefined : a.entity_id,

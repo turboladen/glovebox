@@ -46,6 +46,13 @@
   let shopList: Shop[] = $state([])
   let loading = $state(true)
   let filter = $state<'all' | 'services' | 'incidents' | 'mileage'>('all')
+  // Second-level filter, shown only when the kind filter is Incidents
+  // (same category whitelist as IncidentForm).
+  const incidentCategories = [
+    'general', 'noise', 'leak', 'warning_light', 'cosmetic',
+    'performance', 'obd_code', 'damage', 'accident', 'note',
+  ]
+  let incidentCategory = $state('all')
   let limit = $state(PAGE)
 
   // Creation forms
@@ -117,7 +124,9 @@
       ? entries
       : entries.filter((e) =>
           filter === 'services' ? e.type === 'service'
-          : filter === 'incidents' ? e.type === 'incident'
+          : filter === 'incidents'
+            ? e.type === 'incident' &&
+              (incidentCategory === 'all' || e.data.category === incidentCategory)
           : e.type === 'mileage'),
   )
 
@@ -232,7 +241,7 @@
     <div class="filter-bar">
       <button class="filter-btn" class:active={filter === 'all'} onclick={() => (filter = 'all')}>All</button>
       <button class="filter-btn" class:active={filter === 'services'} onclick={() => (filter = 'services')}>Services</button>
-      <button class="filter-btn" class:active={filter === 'incidents'} onclick={() => (filter = 'incidents')}>Incidents</button>
+      <button class="filter-btn" class:active={filter === 'incidents'} onclick={() => { filter = 'incidents'; incidentCategory = 'all' }}>Incidents</button>
       <button class="filter-btn" class:active={filter === 'mileage'} onclick={() => (filter = 'mileage')}>Mileage</button>
     </div>
     <div class="create-actions">
@@ -250,6 +259,17 @@
       </button>
     </div>
   </div>
+
+  {#if filter === 'incidents'}
+    <div class="filter-bar category-bar" data-testid="category-filter">
+      <button class="filter-btn" class:active={incidentCategory === 'all'} onclick={() => (incidentCategory = 'all')}>All</button>
+      {#each incidentCategories as c (c)}
+        <button class="filter-btn" class:active={incidentCategory === c} onclick={() => (incidentCategory = c)}>
+          {incidentLabel(c)}
+        </button>
+      {/each}
+    </div>
+  {/if}
 
   {#if showServiceForm}
     <ServiceForm
@@ -519,6 +539,16 @@
 
   .filter-btn.active {
     background: var(--primary); color: var(--primary-text);
+  }
+
+  .category-bar {
+    margin-bottom: var(--sp-4);
+    flex-wrap: wrap;
+  }
+
+  .category-bar .filter-btn {
+    font-size: 0.78rem;
+    text-transform: capitalize;
   }
 
   .history-list { display: flex; flex-direction: column; gap: var(--sp-2); }

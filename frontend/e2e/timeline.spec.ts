@@ -16,6 +16,20 @@ test.describe('Timeline', () => {
     await expect(page.getByRole('button', { name: 'Log incident' })).toBeVisible()
   })
 
+  test('Record service toggles to Cancel and closes without saving', async ({ page }) => {
+    await page.goto(`${vehicleUrl}/timeline`)
+    const toggle = page.locator('.create-actions').getByRole('button', { name: 'Record service' })
+    await toggle.click()
+    // The toggle button flips to Cancel while the form is open…
+    const cancel = page.locator('.create-actions').getByRole('button', { name: 'Cancel' })
+    await expect(cancel).toBeVisible()
+    await expect(page.getByLabel('Description')).toBeVisible()
+    // …and clicking it closes the form without creating anything.
+    await cancel.click()
+    await expect(page.getByLabel('Description')).not.toBeVisible()
+    await expect(page.locator('.create-actions').getByRole('button', { name: 'Record service' })).toBeVisible()
+  })
+
   test('record a service from the Timeline', async ({ page }) => {
     await page.goto(`${vehicleUrl}/timeline`)
     await page.getByRole('button', { name: 'Record service' }).click()
@@ -202,5 +216,39 @@ test.describe('Timeline', () => {
     await page.getByRole('button', { name: 'Mileage', exact: true }).click()
     await expect(list.getByText('61,000 mi')).toBeVisible()
     await expect(list.getByText('Filter incident row')).not.toBeVisible()
+  })
+
+  test('Incidents filter reveals category chips that narrow by category', async ({ browser, page }) => {
+    const url = await createVehicle(browser, 'Timeline Category Car')
+    const vehicleId = parseInt(url.split('/').pop()!, 10)
+    for (const [category, title] of [
+      ['noise', 'Category noise row'],
+      ['leak', 'Category leak row'],
+    ] as const) {
+      const res = await page.request.post(`/api/vehicles/${vehicleId}/incidents`, {
+        data: { category, title },
+      })
+      expect(res.ok()).toBe(true)
+    }
+
+    await page.goto(`${url}/timeline`)
+    const list = page.locator('.history-list')
+    // No category chips until the kind filter is Incidents.
+    await expect(page.getByTestId('category-filter')).not.toBeVisible()
+    await page.getByRole('button', { name: 'Incidents', exact: true }).click()
+    const chips = page.getByTestId('category-filter')
+    await expect(chips).toBeVisible()
+
+    await chips.getByRole('button', { name: 'noise' }).click()
+    await expect(list.getByText('Category noise row')).toBeVisible()
+    await expect(list.getByText('Category leak row')).not.toBeVisible()
+
+    await chips.getByRole('button', { name: 'leak' }).click()
+    await expect(list.getByText('Category leak row')).toBeVisible()
+    await expect(list.getByText('Category noise row')).not.toBeVisible()
+
+    await chips.getByRole('button', { name: 'All' }).click()
+    await expect(list.getByText('Category noise row')).toBeVisible()
+    await expect(list.getByText('Category leak row')).toBeVisible()
   })
 })

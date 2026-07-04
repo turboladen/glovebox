@@ -711,6 +711,9 @@ export interface AttentionItem {
   vehicle_name: string
   kind: 'overdue' | 'due_soon' | 'recall' | 'incident'
   label: string
+  // Raw schedule item name for overdue/due_soon rows (null otherwise) —
+  // "plan it" titles the work item from this, not by re-splitting label.
+  schedule_item_name: string | null
   entity_id: number
   deep_link_hint: string
   // A participating work item already links this source.

@@ -67,6 +67,10 @@ pub struct AttentionItem {
     /// `overdue`, `due_soon`, `recall`, or `incident`.
     pub kind: String,
     pub label: String,
+    /// The reminder's schedule item name, set for `overdue`/`due_soon`
+    /// rows — so quick actions ("plan it") can title the work item
+    /// without re-parsing the display label.
+    pub schedule_item_name: Option<String>,
     pub entity_id: i32,
     pub deep_link_hint: String,
     /// True when a participating work item already links this source —
@@ -163,6 +167,7 @@ pub async fn garage(db: &DatabaseConnection) -> DomainResult<GarageDashboard> {
                         vehicle_name: v.name.clone(),
                         kind: "overdue".into(),
                         label: overdue_label(r),
+                        schedule_item_name: Some(r.schedule_item.name.clone()),
                         entity_id: r.schedule_item.id,
                         deep_link_hint: "plan/due".into(),
                         planned: planned_schedule.contains(&r.schedule_item.id),
@@ -175,6 +180,7 @@ pub async fn garage(db: &DatabaseConnection) -> DomainResult<GarageDashboard> {
                         vehicle_name: v.name.clone(),
                         kind: "due_soon".into(),
                         label: due_soon_label(r),
+                        schedule_item_name: Some(r.schedule_item.name.clone()),
                         entity_id: r.schedule_item.id,
                         deep_link_hint: "plan/due".into(),
                         planned: planned_schedule.contains(&r.schedule_item.id),
@@ -196,6 +202,7 @@ pub async fn garage(db: &DatabaseConnection) -> DomainResult<GarageDashboard> {
                 vehicle_name: v.name.clone(),
                 kind: "recall".into(),
                 label: f.title.clone(),
+                schedule_item_name: None,
                 entity_id: f.id,
                 deep_link_hint: "records/research".into(),
                 planned: planned_findings.contains(&f.id),
@@ -215,6 +222,7 @@ pub async fn garage(db: &DatabaseConnection) -> DomainResult<GarageDashboard> {
                 vehicle_name: v.name.clone(),
                 kind: "incident".into(),
                 label: i.incident.title.clone(),
+                schedule_item_name: None,
                 entity_id: i.incident.id,
                 deep_link_hint: "timeline".into(),
                 planned: planned_incidents.contains(&i.incident.id),
@@ -532,6 +540,16 @@ mod tests {
             ]
         );
         assert!(d.attention[0].label.contains("Brake fluid flush"));
+        // Reminder rows carry the raw schedule item name (review fix: the
+        // frontend titles "plan it" work items from this, not by
+        // re-splitting the display label); other kinds carry None.
+        assert_eq!(
+            d.attention
+                .iter()
+                .map(|a| a.schedule_item_name.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("Brake fluid flush"), None, None]
+        );
         assert!(d.attention.iter().all(|a| a.vehicle_name == "Golf"));
         // Only the incident has a linked open work item → planned.
         assert_eq!(

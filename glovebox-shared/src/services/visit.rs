@@ -21,7 +21,7 @@ use sea_orm::*;
 use serde::Serialize;
 
 use crate::{
-    entities::{incident_service_link, research_finding, visit, work_item},
+    entities::{incident_service_link, research_finding, shop, visit, work_item},
     error::{DomainError, DomainResult},
     inputs::{
         service_record::NewServiceRecord,
@@ -44,6 +44,15 @@ pub(crate) fn is_open(status: &str) -> bool {
 
 fn now_stamp() -> String {
     chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
+/// Existence-check a `shop_id` before storing it. Shops are global (not
+/// vehicle-scoped) and `visits.shop_id` carries no FK, so a blind write
+/// (e.g. MCP `schedule_visit`) would otherwise surface only as an opaque
+/// FK 500 when [`complete`] copies the id into the service record.
+async fn require_shop(db: &impl ConnectionTrait, shop_id: i32) -> DomainResult<()> {
+    crate::services::shop::get(db, shop_id).await?;
+    Ok(())
 }
 
 /// A visit with its attached work items and their estimated-cost rollup.
@@ -250,6 +259,9 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     input: NewVisit,
 ) -> DomainResult<VisitWithItems> {
     crate::services::vehicle::require(db, vehicle_id).await?;
+    if let Some(shop_id) = input.shop_id {
+        require_shop(db, shop_id).await?;
+    }
 
     let txn = db.begin().await?;
 
@@ -304,6 +316,10 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
                 VALID_STATUSES.join(", ")
             )));
         }
+    }
+
+    if let Some(Some(shop_id)) = input.shop_id {
+        require_shop(db, shop_id).await?;
     }
 
     let txn = db.begin().await?;
@@ -469,6 +485,14 @@ pub async fn complete<C: ConnectionTrait + TransactionTrait>(
         .into_iter()
         .collect();
 
+    // Defensive re-check: shops are deletable and the visit's `shop_id`
+    // carries no FK, so a since-deleted shop degrades to None here instead
+    // of failing the whole loop-closer on the service record's FK.
+    let shop_id = match existing.shop_id {
+        Some(id) => shop::Entity::find_by_id(id).one(&txn).await?.map(|s| s.id),
+        None => None,
+    };
+
     let record = service_record::create(
         &txn,
         vehicle_id,
@@ -483,7 +507,7 @@ pub async fn complete<C: ConnectionTrait + TransactionTrait>(
             total_cost_cents: input.total_cost_cents,
             total_cost_currency: None,
             shop_name: existing.shop_name.clone(),
-            shop_id: existing.shop_id,
+            shop_id,
             notes: input.notes,
             build_id: None,
             paid_by: input.paid_by,
@@ -720,6 +744,76 @@ mod tests {
         let untouched = work_item_svc::get(&db, other, foreign.id).await.unwrap();
         assert_eq!(untouched.status, "planned");
         assert_eq!(untouched.visit_id, None);
+    }
+
+    /// Review fix: `shop_id` is existence-checked at write time (create AND
+    /// update) — a bogus id from a blind-write path (MCP `schedule_visit`)
+    /// must be a NotFound now, not an opaque FK 500 at complete time.
+    #[tokio::test]
+    async fn create_and_update_reject_bogus_shop() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+
+        let err = create(
+            &db,
+            vid,
+            NewVisit {
+                shop_id: Some(999),
+                ..new_visit(None)
+            },
+        )
+        .await
+        .unwrap_err();
+        match err {
+            DomainError::NotFound(msg) => assert!(msg.contains("Shop 999 not found"), "{msg}"),
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+        assert!(
+            list(&db, vid, true).await.unwrap().is_empty(),
+            "no visit row left behind"
+        );
+
+        let v = create(&db, vid, new_visit(None)).await.unwrap();
+        let err = update(
+            &db,
+            vid,
+            v.visit.id,
+            UpdateVisit {
+                shop_id: Some(Some(999)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::NotFound(_)));
+        assert_eq!(get(&db, vid, v.visit.id).await.unwrap().visit.shop_id, None);
+
+        // A real shop passes both paths.
+        let s = crate::services::shop::create(
+            &db,
+            crate::inputs::shop::NewShop {
+                name: "Real Shop".into(),
+                address: None,
+                phone: None,
+                website: None,
+                specialty: None,
+                notes: None,
+            },
+        )
+        .await
+        .unwrap();
+        let updated = update(
+            &db,
+            vid,
+            v.visit.id,
+            UpdateVisit {
+                shop_id: Some(Some(s.id)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.visit.shop_id, Some(s.id));
     }
 
     // --- update: attach/detach + status whitelist ----------------------------
@@ -1047,6 +1141,54 @@ mod tests {
             .unwrap();
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].mileage, 60_000);
+    }
+
+    /// Review fix: shops can be deleted between scheduling and completing
+    /// a visit (no FK on `visits.shop_id`). The loop-closer must degrade
+    /// the stale id to None on the service record, not fail.
+    #[tokio::test]
+    async fn complete_with_deleted_shop_degrades_to_none() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let s = crate::services::shop::create(
+            &db,
+            crate::inputs::shop::NewShop {
+                name: "Doomed Shop".into(),
+                address: None,
+                phone: None,
+                website: None,
+                specialty: None,
+                notes: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let v = create(
+            &db,
+            vid,
+            NewVisit {
+                shop_id: Some(s.id),
+                ..new_visit(None)
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(v.visit.shop_id, Some(s.id));
+
+        crate::services::shop::delete(&db, s.id).await.unwrap();
+
+        let done = complete(&db, vid, v.visit.id, actuals()).await.unwrap();
+        assert_eq!(done.visit.status, "completed");
+        assert_eq!(
+            done.service_record.record.shop_id, None,
+            "stale shop id must not be copied into the record"
+        );
+        // The free-text shop name snapshot is still carried over.
+        assert_eq!(
+            done.service_record.record.shop_name.as_deref(),
+            Some("Joe's Garage")
+        );
     }
 
     #[tokio::test]

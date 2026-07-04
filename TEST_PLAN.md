@@ -81,6 +81,7 @@ dashboard scoped as an **Overview** tab, and the vehicle tabs are intent-shaped:
 | 2 | Default tab | **Overview** active: the SAME dashboard blocks scoped to this vehicle (rows not vehicle-labeled; other cars' items absent) |
 | 3 | Tab bar | Overview · Timeline · Plan · Builds · Records · Costs |
 | 4 | Tabs are URL-driven | Clicking a tab pushes `/vehicles/:id/<tab>`; direct URLs (`/timeline`, `/plan/visits`, `/records/research`) land on that view |
+| 4b | Unknown `:tab` / `:sub` URLs | Fall back instead of a blank pane: bogus tab → Overview (rendered AND marked active); bogus Plan sub → Due; bogus Records sub → Parts |
 | 4a | "Edit" button | Toggles vehicle edit form; name/subtitle/sold-badge behavior as before (clearing sold fields sends explicit null and removes the badge) |
 | 5 | Status bar mileage | "mi est." with as-of date when estimated; plain "mi" after a same-day reading |
 | 6 | Click "← All vehicles" | Returns to `/` |
@@ -103,6 +104,7 @@ manual odometer readings. Creation actions live here.
 |---|------|----------|
 | 1 | Empty vehicle | "No history yet." + "Record service" / "Log incident" buttons |
 | 2 | Filter chips | All / Services / Incidents / Mileage narrow the stream by kind |
+| 2a | Incidents filter active | A second chip row appears (All + the 10 incident categories) narrowing the incident rows by category; hidden for other kind filters |
 | 3 | "Record service" | The service form (date defaults today, odometer/description/cost/shop/notes, schedule-item checkboxes, Paid By with payer note); saved record appears in the stream with cost |
 | 4 | "Log incident" | Incident form (category/date/odometer/title/details); category `accident` reveals the accident fieldset (other party, claim, adjuster); category `obd_code` reveals the codes input |
 | 5 | Service rows | Green "Service" badge; date, cost, mileage, shop; preview shows notes + linked Parts/Incidents chips |
@@ -144,7 +146,7 @@ URL-driven sub-nav: `/vehicles/:id/plan[/todo|/visits|/schedule]`.
 
 | # | Step | Expected |
 |---|------|----------|
-| 1 | "+ Schedule visit" | Form: planned date, shop **select from the shops list** or free-text name, notes, checkbox list of open work items |
+| 1 | "+ Schedule visit" | Form: planned date, shop **select from the shops list** or free-text name, notes, checkbox list of open work items. A SELECTED shop is authoritative — its name is stored as the visit's shop name (the free-text field is inert while a shop is selected; editing and picking a different shop replaces the name) |
 | 2 | Created visit card | Status badge, date · shop, attached item list, est rollup (Σ item estimates) |
 | 3 | Edit / attach items | Replace-all attach semantics; detached items return to the backlog |
 | 4 | "Complete…" | Actuals form (date/odometer/total/parts/labor/paid-by + payer note); completing creates the service record, clears satisfied reminders, closes linked recalls/incidents, marks items done — visit leaves the open list |
@@ -221,7 +223,7 @@ URL-driven sub-nav: `/vehicles/:id/plan[/todo|/visits|/schedule]`.
 
 | # | Step | Expected |
 |---|------|----------|
-| 1 | `GET /api/dashboard` | Per-vehicle summaries (counts, forecast total, active build), attention items (kind/label/entity_id/deep_link_hint/planned), upcoming visits, summed budget, active-build snapshots |
+| 1 | `GET /api/dashboard` | Per-vehicle summaries (counts, forecast total, active build), attention items (kind/label/schedule_item_name/entity_id/deep_link_hint/planned — `schedule_item_name` set for overdue/due-soon rows so "plan it" titles the work item without label-splitting), upcoming visits, summed budget, active-build snapshots |
 | 2 | Archived vehicles | Listed with zeroed counts; contribute nothing to attention/budget |
 | 3 | `GET /api/dashboard/activity?limit=N` | Garage-wide merged feed, vehicle-labeled, newest first, capped at N |
 | 4 | `GET /api/vehicles/:id/activity?limit=N` | Per-vehicle feed (Timeline's stream); service-created mileage logs excluded |
@@ -254,9 +256,9 @@ URL-driven sub-nav: `/vehicles/:id/plan[/todo|/visits|/schedule]`.
 |---|------|----------|
 | 1 | `GET/POST /api/vehicles/:id/work-items` (`?include_done`) | List/create; source links vehicle-scoped (cross-vehicle 404s) |
 | 2 | `PUT/DELETE /api/vehicles/:id/work-items/:id` | Double-option updates (explicit null clears); status whitelist |
-| 3 | `GET/POST /api/vehicles/:id/visits` (`?include_closed`) | List with items + est rollups; create with attach |
-| 4 | `PUT /api/vehicles/:id/visits/:id` | Replace-all item attach; closed visits immutable (400) |
-| 5 | `POST …/visits/:id/complete` | One transaction: service record, reminder clears, recalls/incidents close, items done |
+| 3 | `GET/POST /api/vehicles/:id/visits` (`?include_closed`) | List with items + est rollups; create with attach; a nonexistent `shop_id` is a 404 ("Shop N not found") at write time, not a deferred FK error |
+| 4 | `PUT /api/vehicles/:id/visits/:id` | Replace-all item attach; closed visits immutable (400); `shop_id` existence-checked like create |
+| 5 | `POST …/visits/:id/complete` | One transaction: service record, reminder clears, recalls/incidents close, items done. A since-deleted shop degrades to `shop_id: null` on the record (shop name snapshot kept) instead of failing the close |
 | 6 | `POST …/visits/:id/cancel` | Status canceled; items back to the backlog |
 | 7 | `DELETE …/visits/:id` | Open visits only; completed/canceled are frozen history (400) |
 
@@ -355,15 +357,28 @@ Tests live in `frontend/e2e/` and mirror this plan:
 ```
 frontend/e2e/
   helpers.ts             # createVehicle / seedOverdueItem
-  navigation.spec.ts     # TP-01, TP-10 (shell: sidebar, search, routing)
-  dashboard.spec.ts      # TP-00, TP-04 (garage + scoped Overview, plan-it)
-  vehicle-new.spec.ts    # TP-02, TP-03
-  vehicle-detail.spec.ts # TP-04, TP-05 (shell, edit, mileage)
-  timeline.spec.ts       # TP-06 (stream, service + incident flows, filters)
-  plan.spec.ts           # TP-07 (due actions, to-do CRUD, visit round-trip, config)
-  builds.spec.ts         # TP-08
-  records.spec.ts        # TP-15, TP-18, TP-19 smoke, TP-26 (parts/documents/research)
+  navigation.spec.ts     # TP-01, TP-10 (shell: sidebar, search, routing)      (7)
+  dashboard.spec.ts      # TP-00, TP-04 (garage + scoped Overview, plan-it)    (6)
+  vehicle-new.spec.ts    # TP-02, TP-03                                        (6)
+  vehicle-detail.spec.ts # TP-04, TP-05 (shell, edit, mileage, tab fallbacks) (13)
+  timeline.spec.ts       # TP-06 (stream, service + incident flows, filters)  (12)
+  plan.spec.ts           # TP-07 (due, to-do CRUD, visit round-trip, config)   (9)
+  builds.spec.ts         # TP-08                                               (3)
+  records.spec.ts        # TP-15, TP-18, TP-19 smoke, TP-26                   (13)
 ```
+
+**Count reconciliation (shell rewrite, kept honest):** the pre-shell suite was
+51 tests in 8 files (garage 3, navigation 3, vehicle-new 6, vehicle-detail 18,
+incidents 8, parts 7, documents 3, research 3). The shell rewrite landed at 64:
+flows that survived were ported (incidents/parts/documents/research under their
+new homes; vehicle-detail's tab assertions rewritten for the intent tabs),
+`garage.spec.ts` was retired with the garage-cards view, and dashboard/plan/
+builds specs are new. Two old assertions were dropped in that port and have
+since been restored: the add-vehicle affordance CLICK-THROUGH to
+`/vehicles/new` (now in dashboard.spec) and the service-form cancel/toggle path
+(now in timeline.spec). With those two restored plus three review-fix
+regression tests (incident category chips, shop-select-authoritative visit
+form, unknown tab/sub fallback), the suite is **69 tests**.
 
 Run: `just test-e2e` (needs `just dev` running) or `just test-e2e-ci` (self-contained).
 

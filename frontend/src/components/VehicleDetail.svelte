@@ -27,8 +27,12 @@
 
   // Tabs are URL-driven (/vehicles/:id/:tab[/:sub]) so dashboard rows,
   // sidebar entries, and search hits can deep-link into a view.
+  // Unknown :tab params fall back to Overview instead of a blank pane.
+  const knownTabs = ['overview', 'timeline', 'plan', 'builds', 'records', 'costs']
   let vehicleId = $derived(parseInt(routeParams.id))
-  let activeTab = $derived(routeParams.tab ?? 'overview')
+  let activeTab = $derived(
+    routeParams.tab && knownTabs.includes(routeParams.tab) ? routeParams.tab : 'overview',
+  )
 
   function openTab(tab: string) {
     push(`/vehicles/${vehicleId}${tab === 'overview' ? '' : `/${tab}`}`)
@@ -65,9 +69,7 @@
 
   async function onMileageAdded() {
     showMileageForm = false
-    if (vehicle) {
-      reminderData = await remindersApi.get(vehicle.id)
-    }
+    await refreshReminders()
   }
 
   async function onServiceAdded() {
@@ -79,6 +81,9 @@
     if (vehicle) {
       reminderData = await remindersApi.get(vehicle.id)
     }
+    // Mileage/service/timeline mutations also feed the shared dashboard
+    // snapshot (sidebar hints + Overview blocks) — keep it fresh.
+    refreshDashboard().catch(() => {})
   }
 
   function onVehicleUpdated(updated: Vehicle) {

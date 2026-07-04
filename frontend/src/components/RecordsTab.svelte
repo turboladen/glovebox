@@ -14,6 +14,9 @@
     { id: 'research', label: 'Research' },
   ]
 
+  // Unknown :sub params fall back to Parts instead of a blank pane.
+  let activeSub = $derived(subTabs.some((t) => t.id === sub) ? sub : 'parts')
+
   function openSub(id: string) {
     push(`/vehicles/${vehicleId}/records${id === 'parts' ? '' : `/${id}`}`)
   }
@@ -22,15 +25,15 @@
 <div class="records-tab">
   <div class="sub-nav">
     {#each subTabs as t (t.id)}
-      <button class="sub-btn" class:active={sub === t.id} onclick={() => openSub(t.id)}>
+      <button class="sub-btn" class:active={activeSub === t.id} onclick={() => openSub(t.id)}>
         {t.label}
       </button>
     {/each}
   </div>
 
-  {#if sub === 'documents'}
+  {#if activeSub === 'documents'}
     <DocumentsTab {vehicleId} />
-  {:else if sub === 'research'}
+  {:else if activeSub === 'research'}
     <ResearchTab {vehicleId} />
   {:else}
     <PartsTab {vehicleId} />
