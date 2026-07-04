@@ -26,6 +26,12 @@ pub struct ActivityItem {
     /// `service`, `incident`, or `mileage`.
     pub kind: String,
     pub id: i32,
+    /// Owning vehicle — lets garage-wide consumers ([`recent_all`]) label
+    /// rows without a second lookup. Additive fields: existing consumers
+    /// (MCP `summarize_recent_activity` + the activity resource) simply
+    /// gain them.
+    pub vehicle_id: i32,
+    pub vehicle_name: String,
     pub date: String,
     pub summary: String,
     /// Odometer reading attached to the record, when present.
@@ -49,7 +55,8 @@ pub async fn recent(
     vehicle_id: i32,
     limit: usize,
 ) -> DomainResult<Vec<ActivityItem>> {
-    super::vehicle::require(db, vehicle_id).await?;
+    let vehicle = super::vehicle::require(db, vehicle_id).await?;
+    let vehicle_name = vehicle.name;
     let limit_u64 = limit as u64;
 
     let services = service_record::Entity::find()
@@ -80,6 +87,8 @@ pub async fn recent(
         items.push(ActivityItem {
             kind: "service".into(),
             id: s.id,
+            vehicle_id,
+            vehicle_name: vehicle_name.clone(),
             summary: s
                 .description
                 .clone()
@@ -93,6 +102,8 @@ pub async fn recent(
         items.push(ActivityItem {
             kind: "incident".into(),
             id: i.id,
+            vehicle_id,
+            vehicle_name: vehicle_name.clone(),
             date: i.occurred_at,
             summary: i.title,
             mileage: i.odometer,
@@ -103,6 +114,8 @@ pub async fn recent(
         items.push(ActivityItem {
             kind: "mileage".into(),
             id: m.id,
+            vehicle_id,
+            vehicle_name: vehicle_name.clone(),
             date: m.recorded_at,
             summary: m
                 .notes
@@ -113,15 +126,38 @@ pub async fn recent(
         });
     }
 
-    // Newest first; kind/id tiebreakers keep equal-date ordering deterministic.
+    sort_newest_first(&mut items);
+    items.truncate(limit);
+    Ok(items)
+}
+
+/// The garage-wide merged feed: [`recent`] for every vehicle (per-vehicle
+/// loop — this is a personal app with FEW vehicles), merged and re-sorted
+/// newest-first, capped at `limit`. Archived vehicles' history is included:
+/// the feed is "what happened in the garage", and archived cars' records
+/// are still records.
+pub async fn recent_all(
+    db: &impl ConnectionTrait,
+    limit: usize,
+) -> DomainResult<Vec<ActivityItem>> {
+    let vehicles = super::vehicle::list(db).await?;
+    let mut items: Vec<ActivityItem> = Vec::new();
+    for v in vehicles {
+        items.extend(recent(db, v.id, limit).await?);
+    }
+    sort_newest_first(&mut items);
+    items.truncate(limit);
+    Ok(items)
+}
+
+/// Newest first; kind/id tiebreakers keep equal-date ordering deterministic.
+fn sort_newest_first(items: &mut [ActivityItem]) {
     items.sort_by(|a, b| {
         sort_key(&b.date)
             .cmp(&sort_key(&a.date))
             .then_with(|| a.kind.cmp(&b.kind))
             .then_with(|| b.id.cmp(&a.id))
     });
-    items.truncate(limit);
-    Ok(items)
 }
 
 /// Normalize mixed-granularity dates into one sortable key. Date-only values
@@ -339,5 +375,67 @@ mod tests {
             recent(&db, 999, DEFAULT_LIMIT).await.unwrap_err(),
             DomainError::NotFound(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn items_carry_vehicle_id_and_name() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        svc_svc::create(&db, vid, service("2026-01-10", "Oil change", None))
+            .await
+            .unwrap();
+
+        let items = recent(&db, vid, DEFAULT_LIMIT).await.unwrap();
+        assert_eq!(items[0].vehicle_id, vid);
+        assert_eq!(items[0].vehicle_name, "Car");
+    }
+
+    #[tokio::test]
+    async fn recent_all_merges_across_vehicles_newest_first_with_names() {
+        let db = test_db().await;
+        use crate::entities::vehicle;
+        let a = vehicle::ActiveModel {
+            name: Set("Golf".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap()
+        .id;
+        let b = vehicle::ActiveModel {
+            name: Set("Vanagon".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap()
+        .id;
+        svc_svc::create(&db, a, service("2026-01-10", "Brakes", None))
+            .await
+            .unwrap();
+        incident_svc::create(&db, b, incident("Squeak", "2026-02-20 08:00:00"))
+            .await
+            .unwrap();
+
+        let items = recent_all(&db, DEFAULT_LIMIT).await.unwrap();
+        assert_eq!(
+            items
+                .iter()
+                .map(|i| (i.kind.as_str(), i.vehicle_name.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("incident", "Vanagon"), ("service", "Golf")],
+        );
+        assert_eq!(items[1].vehicle_id, a);
+
+        // The cap applies to the MERGED feed, not per vehicle.
+        let capped = recent_all(&db, 1).await.unwrap();
+        assert_eq!(capped.len(), 1);
+        assert_eq!(capped[0].kind, "incident");
+    }
+
+    #[tokio::test]
+    async fn recent_all_on_empty_garage_is_empty() {
+        let db = test_db().await;
+        assert!(recent_all(&db, DEFAULT_LIMIT).await.unwrap().is_empty());
     }
 }

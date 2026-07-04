@@ -1,17 +1,20 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { costs as costsApi } from '../lib/api'
-  import type { CostSummary } from '../lib/types'
+  import { costs as costsApi, budget as budgetApi } from '../lib/api'
+  import type { BudgetForecast, CostSummary } from '../lib/types'
   import { formatMonth } from '../lib/dates'
 
   let { vehicleId }: { vehicleId: number } = $props()
 
   let data: CostSummary | null = $state(null)
+  let forecast: BudgetForecast | null = $state(null)
   let loading = $state(true)
 
   onMount(async () => {
     try {
-      data = await costsApi.get(vehicleId)
+      const [c, f] = await Promise.all([costsApi.get(vehicleId), budgetApi.get(vehicleId)])
+      data = c
+      forecast = f
     } catch (e) {
       console.error(e)
     } finally {
@@ -104,6 +107,31 @@
         </tbody>
       </table>
     {/if}
+  {/if}
+
+  <!-- The 12-month forecast renders independently of spend history: a
+       fresh car with a schedule has a forecast before its first invoice. -->
+  {#if !loading && forecast && forecast.total_cents > 0}
+    <h4>Next {forecast.horizon_months} Months (forecast)</h4>
+    <div class="summary-grid" data-testid="forecast-buckets">
+      <div class="summary-card">
+        <span class="card-label">Projected Maintenance</span>
+        <span class="card-value">{fmt(forecast.projected_maintenance_cents)}</span>
+        <span class="card-sub">from the schedule</span>
+      </div>
+      <div class="summary-card">
+        <span class="card-label">Planned Visits</span>
+        <span class="card-value">{fmt(forecast.planned_visits_cents)}</span>
+      </div>
+      <div class="summary-card">
+        <span class="card-label">To-do Backlog</span>
+        <span class="card-value">{fmt(forecast.planned_work_cents)}</span>
+      </div>
+      <div class="summary-card">
+        <span class="card-label">Forecast Total</span>
+        <span class="card-value">{fmt(forecast.total_cents)}</span>
+      </div>
+    </div>
   {/if}
 </div>
 

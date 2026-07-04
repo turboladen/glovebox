@@ -1,141 +1,102 @@
 <script lang="ts">
-  import { Router, link } from '@keenmate/svelte-spa-router'
-  import Garage from './components/Garage.svelte'
+  import { Router } from '@keenmate/svelte-spa-router'
+  import Header from './components/Header.svelte'
+  import Sidebar from './components/Sidebar.svelte'
+  import Dashboard from './components/Dashboard.svelte'
   import VehicleDetail from './components/VehicleDetail.svelte'
   import VehicleNew from './components/VehicleNew.svelte'
   import Shops from './components/Shops.svelte'
   import NotFound from './components/NotFound.svelte'
 
   const routes = {
-    '/': Garage,
+    '/': Dashboard,
     '/shops': Shops,
     '/vehicles/new': VehicleNew,
     '/vehicles/:id': VehicleDetail,
-    '/vehicles/:id/*': VehicleDetail,
+    '/vehicles/:id/:tab': VehicleDetail,
+    '/vehicles/:id/:tab/:sub': VehicleDetail,
     '*': NotFound,
+  }
+
+  const SIDEBAR_KEY = 'glovebox.sidebar'
+
+  let sidebarOpen = $state(localStorage.getItem(SIDEBAR_KEY) !== 'collapsed')
+
+  function toggleSidebar() {
+    sidebarOpen = !sidebarOpen
+    localStorage.setItem(SIDEBAR_KEY, sidebarOpen ? 'open' : 'collapsed')
   }
 </script>
 
 <div class="app">
-  <header>
-    <a href="/" use:link class="logo">
-      <span class="logo-icon" aria-hidden="true">⬡</span>
-      Glovebox
-    </a>
-    <nav class="header-nav">
-      <a href="/shops" use:link class="nav-link" title="Shops">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M3 21h18"/>
-          <path d="M5 21V7l8-4v18"/>
-          <path d="M19 21V11l-6-4"/>
-          <path d="M9 9v.01"/>
-          <path d="M9 12v.01"/>
-          <path d="M9 15v.01"/>
-          <path d="M9 18v.01"/>
-        </svg>
-      </a>
-    </nav>
-  </header>
-  <main>
-    <Router {routes} />
-  </main>
+  <Header onToggleSidebar={toggleSidebar} />
+  <div class="body">
+    {#if sidebarOpen}
+      <Sidebar />
+    {:else}
+      <button
+        class="sidebar-handle"
+        onclick={toggleSidebar}
+        aria-label="Open sidebar"
+        title="Open sidebar"
+      >
+        <span class="handle-glyph">›</span>
+      </button>
+    {/if}
+    <main>
+      <Router {routes} />
+    </main>
+  </div>
 </div>
 
 <style>
   .app {
-    max-width: 960px;
-    margin: 0 auto;
-    padding: 0 var(--sp-4);
-  }
-
-  header {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: var(--sp-4) 0;
-    border-bottom: 1px solid var(--border-subtle);
-    margin-bottom: var(--sp-6);
+    flex-direction: column;
+    min-height: 100vh;
   }
 
-  .header-nav {
+  .body {
     display: flex;
-    align-items: center;
-    gap: var(--sp-3);
-  }
-
-  .nav-link {
-    display: flex;
-    align-items: center;
-    color: var(--text-muted);
-    transition: color var(--duration-fast) var(--ease-out);
-  }
-
-  .nav-link:hover {
-    color: var(--primary);
-  }
-
-  /* Guards Red accent line along top of page */
-  header::before {
-    content: '';
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 2px;
-    background: linear-gradient(
-      90deg,
-      transparent 0%,
-      var(--primary) 20%,
-      var(--primary) 80%,
-      transparent 100%
-    );
-    z-index: 100;
-    opacity: 0.7;
-  }
-
-  .logo {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--sp-2);
-    font-family: var(--font-display);
-    font-size: 1.2rem;
-    font-weight: 700;
-    letter-spacing: -0.02em;
-    color: var(--text);
-    text-decoration: none;
-    transition: color var(--duration-fast) var(--ease-out);
-  }
-
-  .logo:hover {
-    color: var(--primary);
-  }
-
-  .logo-icon {
-    font-size: 1.1rem;
-    color: var(--primary);
-    transition: transform var(--duration-base) var(--ease-out);
-  }
-
-  .logo:hover .logo-icon {
-    transform: rotate(30deg);
+    flex: 1;
+    align-items: stretch;
   }
 
   main {
-    padding-bottom: var(--sp-12);
+    flex: 1;
+    min-width: 0;
+    max-width: 1080px;
+    padding: var(--sp-6) var(--sp-5) var(--sp-12);
+    margin: 0 auto;
+  }
+
+  /* Slim reopen handle when the sidebar is fully hidden */
+  .sidebar-handle {
+    flex-shrink: 0;
+    width: 14px;
+    background: var(--bg-raised);
+    border: none;
+    border-right: 1px solid var(--border-subtle);
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0;
+    transition:
+      color var(--duration-fast) var(--ease-out),
+      background var(--duration-fast) var(--ease-out);
+  }
+
+  .sidebar-handle:hover {
+    color: var(--primary);
+    background: var(--surface);
+  }
+
+  .handle-glyph {
+    font-size: 0.9rem;
   }
 
   @media (max-width: 640px) {
-    .app {
-      padding: 0 var(--sp-3);
-    }
-
-    header {
-      padding: var(--sp-3) 0;
-      margin-bottom: var(--sp-4);
-    }
-
-    .logo {
-      font-size: 1.05rem;
+    main {
+      padding: var(--sp-4) var(--sp-3) var(--sp-8);
     }
   }
 </style>

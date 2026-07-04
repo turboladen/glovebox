@@ -21,7 +21,7 @@ use sea_orm::*;
 use serde::Serialize;
 
 use crate::{
-    entities::{incident_service_link, research_finding, visit, work_item},
+    entities::{incident_service_link, research_finding, shop, visit, work_item},
     error::{DomainError, DomainResult},
     inputs::{
         service_record::NewServiceRecord,
@@ -44,6 +44,15 @@ pub(crate) fn is_open(status: &str) -> bool {
 
 fn now_stamp() -> String {
     chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
+/// Existence-check a `shop_id` before storing it. Shops are global (not
+/// vehicle-scoped) and `visits.shop_id` carries no FK, so a blind write
+/// (e.g. MCP `schedule_visit`) would otherwise surface only as an opaque
+/// FK 500 when [`complete`] copies the id into the service record.
+async fn require_shop(db: &impl ConnectionTrait, shop_id: i32) -> DomainResult<()> {
+    crate::services::shop::get(db, shop_id).await?;
+    Ok(())
 }
 
 /// A visit with its attached work items and their estimated-cost rollup.
@@ -250,6 +259,9 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     input: NewVisit,
 ) -> DomainResult<VisitWithItems> {
     crate::services::vehicle::require(db, vehicle_id).await?;
+    if let Some(shop_id) = input.shop_id {
+        require_shop(db, shop_id).await?;
+    }
 
     let txn = db.begin().await?;
 
@@ -306,6 +318,10 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         }
     }
 
+    if let Some(Some(shop_id)) = input.shop_id {
+        require_shop(db, shop_id).await?;
+    }
+
     let txn = db.begin().await?;
 
     let mut active: visit::ActiveModel = existing.into();
@@ -352,14 +368,43 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     Ok(with_items(v, items))
 }
 
+/// Cancel a visit that won't happen: status `canceled`, attached items back
+/// to the backlog. Thin wrapper over [`update`] so the open-visit guard and
+/// the cancel-detaches semantics stay in one place.
+pub async fn cancel<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    id: i32,
+) -> DomainResult<VisitWithItems> {
+    update(
+        db,
+        vehicle_id,
+        id,
+        UpdateVisit {
+            status: Some("canceled".to_string()),
+            ..Default::default()
+        },
+    )
+    .await
+}
+
 /// Delete a visit: detach its items first (they return to the backlog as
-/// `planned`), then remove the visit — one transaction.
+/// `planned`), then remove the visit — one transaction. Only OPEN visits
+/// delete: a completed visit's item attachments are service history (its
+/// `service_record_id` link would be orphaned), and a canceled visit is
+/// immutable history like `update` treats it.
 pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
     id: i32,
 ) -> DomainResult<()> {
     let existing = require_visit(db, vehicle_id, id).await?;
+    if !is_open(&existing.status) {
+        return Err(DomainError::BadRequest(format!(
+            "Visit {id} is already {} and cannot be deleted",
+            existing.status
+        )));
+    }
 
     let txn = db.begin().await?;
     let items = load_items(&txn, existing.id).await?;
@@ -440,6 +485,14 @@ pub async fn complete<C: ConnectionTrait + TransactionTrait>(
         .into_iter()
         .collect();
 
+    // Defensive re-check: shops are deletable and the visit's `shop_id`
+    // carries no FK, so a since-deleted shop degrades to None here instead
+    // of failing the whole loop-closer on the service record's FK.
+    let shop_id = match existing.shop_id {
+        Some(id) => shop::Entity::find_by_id(id).one(&txn).await?.map(|s| s.id),
+        None => None,
+    };
+
     let record = service_record::create(
         &txn,
         vehicle_id,
@@ -454,7 +507,7 @@ pub async fn complete<C: ConnectionTrait + TransactionTrait>(
             total_cost_cents: input.total_cost_cents,
             total_cost_currency: None,
             shop_name: existing.shop_name.clone(),
-            shop_id: existing.shop_id,
+            shop_id,
             notes: input.notes,
             build_id: None,
             paid_by: input.paid_by,
@@ -693,6 +746,76 @@ mod tests {
         assert_eq!(untouched.visit_id, None);
     }
 
+    /// Review fix: `shop_id` is existence-checked at write time (create AND
+    /// update) — a bogus id from a blind-write path (MCP `schedule_visit`)
+    /// must be a NotFound now, not an opaque FK 500 at complete time.
+    #[tokio::test]
+    async fn create_and_update_reject_bogus_shop() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+
+        let err = create(
+            &db,
+            vid,
+            NewVisit {
+                shop_id: Some(999),
+                ..new_visit(None)
+            },
+        )
+        .await
+        .unwrap_err();
+        match err {
+            DomainError::NotFound(msg) => assert!(msg.contains("Shop 999 not found"), "{msg}"),
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+        assert!(
+            list(&db, vid, true).await.unwrap().is_empty(),
+            "no visit row left behind"
+        );
+
+        let v = create(&db, vid, new_visit(None)).await.unwrap();
+        let err = update(
+            &db,
+            vid,
+            v.visit.id,
+            UpdateVisit {
+                shop_id: Some(Some(999)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::NotFound(_)));
+        assert_eq!(get(&db, vid, v.visit.id).await.unwrap().visit.shop_id, None);
+
+        // A real shop passes both paths.
+        let s = crate::services::shop::create(
+            &db,
+            crate::inputs::shop::NewShop {
+                name: "Real Shop".into(),
+                address: None,
+                phone: None,
+                website: None,
+                specialty: None,
+                notes: None,
+            },
+        )
+        .await
+        .unwrap();
+        let updated = update(
+            &db,
+            vid,
+            v.visit.id,
+            UpdateVisit {
+                shop_id: Some(Some(s.id)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.visit.shop_id, Some(s.id));
+    }
+
     // --- update: attach/detach + status whitelist ----------------------------
 
     #[tokio::test]
@@ -801,6 +924,86 @@ mod tests {
         let survivor = work_item_svc::get(&db, vid, a.id).await.unwrap();
         assert_eq!(survivor.visit_id, None);
         assert_eq!(survivor.status, "planned");
+    }
+
+    /// Unit-F carry-in: closed visits are immutable history for `delete`
+    /// too — deleting a completed visit would orphan its
+    /// `service_record_id` link, and a canceled one is frozen like
+    /// `update` treats it. Same message shape as the update guard.
+    #[tokio::test]
+    async fn delete_rejected_once_closed() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+
+        let completed = create(&db, vid, new_visit(None)).await.unwrap();
+        complete(&db, vid, completed.visit.id, actuals())
+            .await
+            .unwrap();
+        let err = delete(&db, vid, completed.visit.id).await.unwrap_err();
+        match err {
+            DomainError::BadRequest(msg) => {
+                assert!(msg.contains("already completed"), "{msg}");
+            }
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
+        // Still there, still linked.
+        let kept = get(&db, vid, completed.visit.id).await.unwrap();
+        assert_eq!(kept.visit.status, "completed");
+        assert!(kept.visit.service_record_id.is_some());
+
+        let canceled = create(&db, vid, new_visit(None)).await.unwrap();
+        cancel(&db, vid, canceled.visit.id).await.unwrap();
+        let err = delete(&db, vid, canceled.visit.id).await.unwrap_err();
+        match err {
+            DomainError::BadRequest(msg) => {
+                assert!(msg.contains("already canceled"), "{msg}");
+            }
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
+        assert_eq!(
+            get(&db, vid, canceled.visit.id).await.unwrap().visit.status,
+            "canceled"
+        );
+    }
+
+    /// The `cancel` convenience is `update`-to-canceled: items detach back
+    /// to the backlog, and the open-visit guards apply (no canceling a
+    /// completed visit, no double cancel).
+    #[tokio::test]
+    async fn cancel_verb_detaches_and_guards() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let a = work_item_svc::create(&db, vid, work("A")).await.unwrap();
+        let v = create(&db, vid, new_visit(Some(vec![a.id]))).await.unwrap();
+
+        let canceled = cancel(&db, vid, v.visit.id).await.unwrap();
+        assert_eq!(canceled.visit.status, "canceled");
+        assert!(canceled.items.is_empty());
+        let freed = work_item_svc::get(&db, vid, a.id).await.unwrap();
+        assert_eq!(freed.visit_id, None);
+        assert_eq!(freed.status, "planned");
+
+        // Double cancel is rejected with the closed-visit message shape.
+        assert!(matches!(
+            cancel(&db, vid, v.visit.id).await.unwrap_err(),
+            DomainError::BadRequest(_)
+        ));
+
+        // Completed visits can't be canceled either.
+        let done = create(&db, vid, new_visit(None)).await.unwrap();
+        complete(&db, vid, done.visit.id, actuals()).await.unwrap();
+        assert!(matches!(
+            cancel(&db, vid, done.visit.id).await.unwrap_err(),
+            DomainError::BadRequest(_)
+        ));
+
+        // Wrong vehicle reads as missing.
+        let other = seed_vehicle(&db).await;
+        let v2 = create(&db, vid, new_visit(None)).await.unwrap();
+        assert!(matches!(
+            cancel(&db, other, v2.visit.id).await.unwrap_err(),
+            DomainError::NotFound(_)
+        ));
     }
 
     // --- list filtering ---------------------------------------------------------
@@ -938,6 +1141,54 @@ mod tests {
             .unwrap();
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].mileage, 60_000);
+    }
+
+    /// Review fix: shops can be deleted between scheduling and completing
+    /// a visit (no FK on `visits.shop_id`). The loop-closer must degrade
+    /// the stale id to None on the service record, not fail.
+    #[tokio::test]
+    async fn complete_with_deleted_shop_degrades_to_none() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let s = crate::services::shop::create(
+            &db,
+            crate::inputs::shop::NewShop {
+                name: "Doomed Shop".into(),
+                address: None,
+                phone: None,
+                website: None,
+                specialty: None,
+                notes: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let v = create(
+            &db,
+            vid,
+            NewVisit {
+                shop_id: Some(s.id),
+                ..new_visit(None)
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(v.visit.shop_id, Some(s.id));
+
+        crate::services::shop::delete(&db, s.id).await.unwrap();
+
+        let done = complete(&db, vid, v.visit.id, actuals()).await.unwrap();
+        assert_eq!(done.visit.status, "completed");
+        assert_eq!(
+            done.service_record.record.shop_id, None,
+            "stale shop id must not be copied into the record"
+        );
+        // The free-text shop name snapshot is still carried over.
+        assert_eq!(
+            done.service_record.record.shop_name.as_deref(),
+            Some("Joe's Garage")
+        );
     }
 
     #[tokio::test]

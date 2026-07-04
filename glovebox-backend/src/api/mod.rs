@@ -1,6 +1,7 @@
 pub mod budget;
 pub mod builds;
 pub mod costs;
+pub mod dashboard;
 pub mod documents;
 pub mod error;
 pub mod export;
@@ -9,6 +10,7 @@ pub mod incidents;
 pub mod mileage;
 pub mod model_templates;
 pub mod parts;
+pub mod plan;
 pub mod platforms;
 pub mod reminders;
 pub mod research;

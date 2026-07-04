@@ -1,17 +1,19 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { services as servicesApi, schedules as schedulesApi } from '../lib/api'
-  import type { RemindersResponse, ReminderStatus, ScheduleItem, ServiceRecordWithLinks } from '../lib/types'
+  import type { RemindersResponse, ReminderStatus, ServiceRecordWithLinks } from '../lib/types'
   import { formatDate } from '../lib/dates'
 
-  let { reminderData, vehicleId, onScheduleChanged }: {
+  let { reminderData, vehicleId, onScheduleChanged, plannedScheduleIds, onPlanIt }: {
     reminderData: RemindersResponse | null
     vehicleId: number
     onScheduleChanged?: () => Promise<void> | void
+    // Schedule items already linked by an open work item (Plan tab wiring).
+    plannedScheduleIds?: Set<number>
+    onPlanIt?: (reminder: ReminderStatus) => Promise<void> | void
   } = $props()
 
   let allServices: ServiceRecordWithLinks[] = $state([])
-  let dismissedItems: ScheduleItem[] = $state([])
   let expandedItemId: number | null = $state(null)
   let actionError = $state('')
 
@@ -24,14 +26,7 @@
 
   async function loadOwnData() {
     try {
-      const [services, vehicleItems] = await Promise.all([
-        servicesApi.list(vehicleId),
-        schedulesApi.list({ vehicle_id: vehicleId }),
-      ])
-      allServices = services
-      // Vehicle-level enabled=false overrides — dismissed items (in-place or
-      // shadows of inherited items).
-      dismissedItems = vehicleItems.filter((i) => !i.enabled)
+      allServices = await servicesApi.list(vehicleId)
     } catch (e) {
       console.error(e)
     }
@@ -88,16 +83,6 @@
     }
   }
 
-  async function reenableItem(item: ScheduleItem) {
-    actionError = ''
-    try {
-      await schedulesApi.undismiss(vehicleId, item.id)
-      await refresh()
-    } catch (e: any) {
-      actionError = e.message
-    }
-  }
-
   function groupByStatus(reminders: ReminderStatus[]) {
     return {
       overdue: reminders.filter((r) => r.status === 'overdue'),
@@ -125,6 +110,13 @@
 
 {#snippet reminderActions(reminder: ReminderStatus)}
   <div class="reminder-actions">
+    {#if onPlanIt}
+      {#if plannedScheduleIds?.has(reminder.schedule_item.id)}
+        <span class="planned-chip">planned</span>
+      {:else}
+        <button class="action-link" onclick={() => onPlanIt(reminder)}>Plan it</button>
+      {/if}
+    {/if}
     <button class="action-link" onclick={() => openRecordForm(reminder, false)}>Record service…</button>
     <button class="action-link" onclick={() => openRecordForm(reminder, true)}>Mark done previously</button>
     <button class="action-link dismiss" onclick={() => dismissItem(reminder)}>Dismiss for this vehicle</button>
@@ -324,25 +316,6 @@
     </section>
   {/if}
 
-  {#if dismissedItems.length > 0}
-    <section class="reminder-group">
-      <h3 class="group-label dismissed-label">Dismissed</h3>
-      {#each dismissedItems as item (item.id)}
-        <div class="reminder-card dismissed">
-          <div class="reminder-header">
-            <strong>{item.name}</strong>
-            <span class="overridden-badge">overridden</span>
-          </div>
-          {#if item.notes}
-            <div class="reminder-details">{item.notes}</div>
-          {/if}
-          <div class="reminder-actions">
-            <button class="action-link" onclick={() => reenableItem(item)}>Re-enable</button>
-          </div>
-        </div>
-      {/each}
-    </section>
-  {/if}
 {/if}
 
 <style>
@@ -451,26 +424,6 @@
     font-style: italic;
   }
 
-  .dismissed-label {
-    color: var(--text-muted);
-  }
-
-  .reminder-card.dismissed {
-    border-left-color: var(--border);
-    opacity: 0.6;
-  }
-
-  .overridden-badge {
-    font-size: 0.7rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text-muted);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 1px var(--sp-2);
-  }
-
   .reminder-actions {
     display: flex;
     gap: var(--sp-3);
@@ -493,6 +446,19 @@
 
   .action-link.dismiss {
     color: var(--text-muted);
+  }
+
+  .planned-chip {
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0 var(--sp-1);
+    border-radius: var(--radius-sm);
+    background: var(--success-bg);
+    color: var(--success);
+    border: 1px solid var(--success-border);
+    align-self: center;
   }
 
   .action-error {

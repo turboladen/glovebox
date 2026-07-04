@@ -244,6 +244,7 @@ async fn tools_list_advertises_the_full_verb_set() {
         "list_planned_work",
         "schedule_visit",
         "complete_visit",
+        "cancel_visit",
     ] {
         assert!(
             body.contains(&format!("\"{tool}\"")),
@@ -258,7 +259,7 @@ async fn tools_list_advertises_the_full_verb_set() {
     let tools = parsed["result"]["tools"]
         .as_array()
         .unwrap_or_else(|| panic!("tools/list result must carry a tools array; got: {body}"));
-    assert_eq!(tools.len(), 22, "expected exactly 22 tools; got: {body}");
+    assert_eq!(tools.len(), 23, "expected exactly 23 tools; got: {body}");
     for tool in tools {
         let name = tool["name"].as_str().expect("tool name");
         if name == "list_vehicles" {
@@ -1381,12 +1382,27 @@ async fn recall_plan_schedule_complete_loop_over_the_protocol() {
         reminder_status(&app, &session, v.id, "Water pump replacement").await,
         "ok"
     );
+    // The completed record's id, taken from the PROTOCOL payload, must be
+    // what the finding back-links (unit-G reviewer carry-in: assert the
+    // linked_entity pair, not just the status flip).
+    let record_id = done["service_record"]["id"]
+        .as_i64()
+        .expect("completed payload carries the record id");
     let findings =
         glovebox_shared::services::research::list_findings(&db, v.id, Some("completed".into()))
             .await
             .unwrap();
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0].id, i32::try_from(finding_id).unwrap());
+    assert_eq!(
+        findings[0].linked_entity_type.as_deref(),
+        Some("service"),
+        "finding must back-link the service record"
+    );
+    assert_eq!(
+        findings[0].linked_entity_id,
+        Some(i32::try_from(record_id).unwrap())
+    );
     let records = svc_svc::list(&db, v.id).await.unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].record.paid_by, "insurance");
@@ -1417,6 +1433,144 @@ async fn recall_plan_schedule_complete_loop_over_the_protocol() {
     let planned = tool_payload(&body);
     assert_eq!(planned["items"].as_array().map(Vec::len), Some(2));
     assert_eq!(planned["visits"].as_array().map(Vec::len), Some(1));
+}
+
+/// Unit-F carry-in: `cancel_visit` round-trip over the protocol — the
+/// forecast drops the visit's bucket, the items return to the to-do list,
+/// and the cancel guards (double cancel, wrong vehicle) are clean tool
+/// errors.
+#[tokio::test]
+async fn cancel_visit_returns_items_to_the_todo_list() {
+    let (app, db) = setup().await;
+    let session = handshake(&app).await;
+    let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
+
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "plan_work",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "title": "Wipers",
+                "est_cost_cents": 6_500
+            }),
+        ),
+    )
+    .await;
+    assert_success(&body);
+    let item_id = tool_payload(&body)["id"].as_i64().expect("item id");
+
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "schedule_visit",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "planned_date": "2026-07-20",
+                "shop_name": "Joe's Garage",
+                "work_item_ids": [item_id]
+            }),
+        ),
+    )
+    .await;
+    assert_success(&body);
+    let visit_id = tool_payload(&body)["id"].as_i64().expect("visit id");
+
+    // While scheduled: the estimate sits in the visits bucket.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "check_due_maintenance",
+            serde_json::json!({ "vehicle_id": v.id }),
+        ),
+    )
+    .await;
+    let due = tool_payload(&body);
+    assert_eq!(due["budget"]["planned_visits_cents"], 6_500);
+    assert_eq!(due["budget"]["planned_work_cents"], 0);
+
+    // Cancel: the visit closes, the item detaches back to `planned`.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "cancel_visit",
+            serde_json::json!({ "vehicle_id": v.id, "visit_id": visit_id }),
+        ),
+    )
+    .await;
+    assert_success(&body);
+    let canceled = tool_payload(&body);
+    assert_eq!(canceled["status"], "canceled");
+    assert_eq!(canceled["items"].as_array().map(Vec::len), Some(0));
+
+    // Forecast: the visit bucket is gone; the estimate moved to the
+    // backlog bucket.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "check_due_maintenance",
+            serde_json::json!({ "vehicle_id": v.id }),
+        ),
+    )
+    .await;
+    let due = tool_payload(&body);
+    assert_eq!(due["budget"]["planned_visits_cents"], 0);
+    assert_eq!(due["budget"]["planned_work_cents"], 6_500);
+
+    // list_planned_work: no open visit, the item is planned and unattached.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "list_planned_work",
+            serde_json::json!({ "vehicle_id": v.id }),
+        ),
+    )
+    .await;
+    let planned = tool_payload(&body);
+    assert_eq!(planned["visits"].as_array().map(Vec::len), Some(0));
+    let items = planned["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["status"], "planned");
+    assert!(items[0]["visit_id"].is_null());
+
+    // Double cancel and wrong-vehicle cancel are clean tool errors.
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "cancel_visit",
+            serde_json::json!({ "vehicle_id": v.id, "visit_id": visit_id }),
+        ),
+    )
+    .await;
+    assert_tool_error(&body);
+    assert!(body.contains("already canceled"), "got: {body}");
+
+    let other = vehicle::create(&db, new_vehicle("Other")).await.unwrap();
+    let v2 = post_rpc(
+        &app,
+        &session,
+        call_tool("schedule_visit", serde_json::json!({ "vehicle_id": v.id })),
+    )
+    .await;
+    let v2_id = tool_payload(&v2)["id"].as_i64().unwrap();
+    let body = post_rpc(
+        &app,
+        &session,
+        call_tool(
+            "cancel_visit",
+            serde_json::json!({ "vehicle_id": other.id, "visit_id": v2_id }),
+        ),
+    )
+    .await;
+    assert_tool_error(&body);
+    assert!(body.contains("not found"), "got: {body}");
 }
 
 #[tokio::test]

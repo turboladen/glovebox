@@ -1,5 +1,6 @@
 <script lang="ts">
   import { push } from '@keenmate/svelte-spa-router'
+  import { refreshDashboard } from '../lib/stores'
   import { vehicles as vehiclesApi, vin as vinApi, modelTemplates as mtApi } from '../lib/api'
   import type { ModelTemplate, VinDecodeResponse } from '../lib/types'
   import { onMount } from 'svelte'
@@ -82,6 +83,7 @@
         purchase_mileage: purchaseMileage ?? null,
         model_template_id: modelTemplateId ?? null,
       })
+      refreshDashboard().catch(() => {})
       push(`/vehicles/${vehicle.id}`)
     } catch (e: any) {
       error = e.message

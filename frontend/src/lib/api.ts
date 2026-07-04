@@ -185,6 +185,69 @@ export const research = {
     request<ResearchFinding[]>(`/vehicles/${vehicleId}/research/findings${status ? `?status=${status}` : ''}`),
 }
 
+// Garage-wide dashboard + activity feeds
+export const dashboard = {
+  get: () => request<GarageDashboard>('/dashboard'),
+  activity: (limit?: number) =>
+    request<ActivityItem[]>(`/dashboard/activity${limit ? `?limit=${limit}` : ''}`),
+  vehicleActivity: (vehicleId: number, limit?: number) =>
+    request<ActivityItem[]>(`/vehicles/${vehicleId}/activity${limit ? `?limit=${limit}` : ''}`),
+}
+
+// Planning: work items + visits
+export const workItems = {
+  list: (vehicleId: number, includeDone = false) =>
+    request<WorkItem[]>(`/vehicles/${vehicleId}/work-items${includeDone ? '?include_done=true' : ''}`),
+  create: (vehicleId: number, data: CreateWorkItem) =>
+    request<WorkItem>(`/vehicles/${vehicleId}/work-items`, { method: 'POST', body: JSON.stringify(data) }),
+  update: (vehicleId: number, id: number, data: UpdateWorkItem) =>
+    request<WorkItem>(`/vehicles/${vehicleId}/work-items/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  delete: (vehicleId: number, id: number) =>
+    request<{ deleted: number }>(`/vehicles/${vehicleId}/work-items/${id}`, { method: 'DELETE' }),
+}
+
+export const visits = {
+  list: (vehicleId: number, includeClosed = false) =>
+    request<VisitWithItems[]>(`/vehicles/${vehicleId}/visits${includeClosed ? '?include_closed=true' : ''}`),
+  create: (vehicleId: number, data: CreateVisit) =>
+    request<VisitWithItems>(`/vehicles/${vehicleId}/visits`, { method: 'POST', body: JSON.stringify(data) }),
+  update: (vehicleId: number, id: number, data: UpdateVisit) =>
+    request<VisitWithItems>(`/vehicles/${vehicleId}/visits/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  complete: (vehicleId: number, id: number, data: CompleteVisitPayload) =>
+    request<CompletedVisit>(`/vehicles/${vehicleId}/visits/${id}/complete`, { method: 'POST', body: JSON.stringify(data) }),
+  cancel: (vehicleId: number, id: number) =>
+    request<VisitWithItems>(`/vehicles/${vehicleId}/visits/${id}/cancel`, { method: 'POST' }),
+  delete: (vehicleId: number, id: number) =>
+    request<{ deleted: number }>(`/vehicles/${vehicleId}/visits/${id}`, { method: 'DELETE' }),
+}
+
+// Builds
+export const builds = {
+  list: (vehicleId: number) => request<Build[]>(`/vehicles/${vehicleId}/builds`),
+  get: (vehicleId: number, id: number) => request<BuildProgress>(`/vehicles/${vehicleId}/builds/${id}`),
+  create: (vehicleId: number, data: { name: string; description?: string | null; target_date?: string | null }) =>
+    request<Build>(`/vehicles/${vehicleId}/builds`, { method: 'POST', body: JSON.stringify(data) }),
+  update: (vehicleId: number, id: number, data: { name?: string; description?: string | null; target_date?: string | null; status?: string }) =>
+    request<Build>(`/vehicles/${vehicleId}/builds/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  delete: (vehicleId: number, id: number) =>
+    request<{ deleted: number }>(`/vehicles/${vehicleId}/builds/${id}`, { method: 'DELETE' }),
+}
+
+// Budget forecast
+export const budget = {
+  get: (vehicleId: number) => request<BudgetForecast>(`/vehicles/${vehicleId}/budget`),
+}
+
+// Full-text search
+export const search = {
+  query: (q: string, opts?: { scope?: string; vehicle_id?: number }) => {
+    const qs = new URLSearchParams({ q })
+    if (opts?.scope) qs.set('scope', opts.scope)
+    if (opts?.vehicle_id) qs.set('vehicle_id', String(opts.vehicle_id))
+    return request<SearchHit[]>(`/search?${qs}`)
+  },
+}
+
 // Re-export types for convenience
 import type {
   Vehicle, CreateVehicle, Platform, ModelTemplate,
@@ -197,4 +260,8 @@ import type {
   Part, CreatePart,
   CostSummary, VehicleExport,
   RecallCheckResult, ResearchReport, ReportWithFindings, ResearchFinding,
+  WorkItem, CreateWorkItem, UpdateWorkItem,
+  VisitWithItems, CreateVisit, UpdateVisit, CompleteVisitPayload, CompletedVisit,
+  Build, BuildProgress, BudgetForecast,
+  ActivityItem, GarageDashboard, SearchHit,
 } from './types'
