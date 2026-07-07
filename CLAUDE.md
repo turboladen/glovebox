@@ -59,7 +59,7 @@ All optional (defaults in `glovebox-shared/src/config.rs`):
   domain library: semantic domain-verb tools (`record_service`, `check_due_maintenance`, …)
   and read-only `glovebox://` resources. As thin as the HTTP handlers: every tool body is
   arg-struct → shared-service call → serialize, with one `DomainError → MCP` mapping helper.
-  May import axum (it exposes `router(db) -> axum::Router`); only `glovebox-shared` is
+  May import axum (it exposes `router(db, config) -> axum::Router`); only `glovebox-shared` is
   axum-free. Unauthenticated by design (LAN posture) — see the crate docs in `src/lib.rs`
   before exposing `/mcp` beyond the LAN.
 - `scripts/check-layering.sh` (run by CI and `just ci`) enforces the shared/backend boundary.
@@ -91,7 +91,7 @@ All optional (defaults in `glovebox-shared/src/config.rs`):
 **Connect a client:** Streamable HTTP at `http://<host>:3003/mcp` (e.g. Claude Desktop/Code custom
 connector; non-localhost hosts need `GLOVEBOX_MCP_ALLOWED_HOSTS`).
 
-**Mount** (`lib.rs`): `router(db) -> axum::Router` wraps rmcp's `StreamableHttpService` (+ `LocalSessionManager`, 7-day session keep-alive); the backend nests it at `/mcp`. LAN hostnames must be allowlisted via `GLOVEBOX_MCP_ALLOWED_HOSTS` (rmcp's DNS-rebinding defense 403s unknown `Host` headers).
+**Mount** (`lib.rs`): `router(db, config) -> axum::Router` wraps rmcp's `StreamableHttpService` in **stateless mode** (`stateful_mode: false`, plain-JSON responses) — no session table, so backend restarts never strand connected clients (stateful sessions 404'd every `mcp-remote` bridge tool call after a recompile; regression-tested by `tool_calls_survive_a_server_restart`). The backend nests it at `/mcp`. LAN hostnames must be allowlisted via `GLOVEBOX_MCP_ALLOWED_HOSTS` (rmcp's DNS-rebinding defense 403s unknown `Host` headers).
 
 **Tools** (`handler.rs`): 23 domain verbs, named as things a person would say (`record_service`, not `create_service_record`). Inputs are schemars-derived structs in `schemas.rs` (doc comments become the LLM-visible field descriptions). `LenientParameters<T>` defers deserialize errors so malformed args come back as actionable tool errors, not bare JSON-RPC `-32602`s — pair it with an explicit `input_schema = schema_for_type::<T>()` on every `#[tool]`.
 

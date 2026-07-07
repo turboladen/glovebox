@@ -89,8 +89,9 @@ fn minimal_service(date: &str, description: &str, build_id: Option<i32>) -> NewS
     }
 }
 
-/// Run `initialize` + `notifications/initialized`; return the session id.
-async fn handshake(app: &Router) -> String {
+/// Run `initialize` + `notifications/initialized`. Stateless mode: the
+/// server must NOT issue a session id, and later requests need none.
+async fn handshake(app: &Router) {
     let init_body = r#"{
         "jsonrpc": "2.0",
         "method": "initialize",
@@ -116,13 +117,11 @@ async fn handshake(app: &Router) -> String {
         .await
         .expect("init request");
     assert_eq!(init_resp.status(), StatusCode::OK, "initialize must 200");
-    let session_id = init_resp
-        .headers()
-        .get("mcp-session-id")
-        .expect("rmcp sets mcp-session-id on initialize response")
-        .to_str()
-        .expect("session id is ASCII")
-        .to_string();
+    assert!(
+        init_resp.headers().get("mcp-session-id").is_none(),
+        "stateless mode must not issue a session id (a session id would strand clients across \
+         backend restarts — the glovebox-9k0x bug)"
+    );
     drop(to_bytes(init_resp.into_body(), 64 * 1024).await.unwrap());
 
     let notif_resp = app
@@ -132,7 +131,6 @@ async fn handshake(app: &Router) -> String {
                 .method("POST")
                 .uri("/")
                 .header("host", "localhost")
-                .header("mcp-session-id", &session_id)
                 .header("content-type", "application/json")
                 .header("accept", "application/json, text/event-stream")
                 .body(Body::from(
@@ -148,11 +146,9 @@ async fn handshake(app: &Router) -> String {
         notif_resp.status()
     );
     drop(to_bytes(notif_resp.into_body(), 64 * 1024).await.unwrap());
-
-    session_id
 }
 
-async fn post_rpc(app: &Router, session_id: &str, body: String) -> String {
+async fn post_rpc(app: &Router, body: String) -> String {
     let resp = app
         .clone()
         .oneshot(
@@ -160,7 +156,6 @@ async fn post_rpc(app: &Router, session_id: &str, body: String) -> String {
                 .method("POST")
                 .uri("/")
                 .header("host", "localhost")
-                .header("mcp-session-id", session_id)
                 .header("content-type", "application/json")
                 .header("accept", "application/json, text/event-stream")
                 .body(Body::from(body))
@@ -222,13 +217,42 @@ fn extract_json(body: &str) -> serde_json::Value {
 
 // ─── Tools ──────────────────────────────────────────────────────
 
+/// The glovebox-9k0x regression: a client whose handshake happened against a
+/// PREVIOUS server process (backend restart mid-conversation) must still get
+/// working tool calls from the new one — no "Session not found" 404s. We
+/// simulate the restart by handshaking on one router and calling tools on a
+/// freshly-built second router over the same DB.
+#[tokio::test]
+async fn tool_calls_survive_a_server_restart() {
+    let db = test_db().await;
+    let files = tempfile::tempdir().expect("temp files dir");
+    let config = Arc::new(AppConfig {
+        db_path: String::new(),
+        listen: String::new(),
+        files_dir: files.path().to_string_lossy().into_owned(),
+    });
+    let first = glovebox_mcp::router(db.clone(), config.clone());
+    handshake(&first).await;
+    vehicle::create(&db, new_vehicle("Restart Survivor"))
+        .await
+        .unwrap();
+
+    // "Restart": a brand-new service instance, no handshake sent to it.
+    let second = glovebox_mcp::router(db.clone(), config);
+    let body = post_rpc(&second, call_tool("list_vehicles", serde_json::json!({}))).await;
+    assert_success(&body);
+    assert!(
+        body.contains("Restart Survivor"),
+        "post-restart tools/call must work without re-initializing; got: {body}"
+    );
+}
+
 #[tokio::test]
 async fn tools_list_advertises_the_full_verb_set() {
     let (app, _db, _files) = setup().await;
-    let session = handshake(&app).await;
+    handshake(&app).await;
     let body = post_rpc(
         &app,
-        &session,
         r#"{"jsonrpc":"2.0","method":"tools/list","id":2}"#.to_string(),
     )
     .await;
@@ -319,14 +343,9 @@ async fn rejects_unknown_host_header() {
 #[tokio::test]
 async fn list_vehicles_empty_then_after_seed() {
     let (app, db, _files) = setup().await;
-    let session = handshake(&app).await;
+    handshake(&app).await;
 
-    let body = post_rpc(
-        &app,
-        &session,
-        call_tool("list_vehicles", serde_json::json!({})),
-    )
-    .await;
+    let body = post_rpc(&app, call_tool("list_vehicles", serde_json::json!({}))).await;
     assert_success(&body);
     assert!(
         body.contains("[]"),
@@ -334,12 +353,7 @@ async fn list_vehicles_empty_then_after_seed() {
     );
 
     vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
-    let body = post_rpc(
-        &app,
-        &session,
-        call_tool("list_vehicles", serde_json::json!({})),
-    )
-    .await;
+    let body = post_rpc(&app, call_tool("list_vehicles", serde_json::json!({}))).await;
     assert_success(&body);
     assert!(body.contains("Daily") && body.contains("Volkswagen"));
 }
@@ -347,12 +361,11 @@ async fn list_vehicles_empty_then_after_seed() {
 #[tokio::test]
 async fn record_service_then_summarize_recent_activity_round_trip() {
     let (app, db, _files) = setup().await;
-    let session = handshake(&app).await;
+    handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
 
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "record_service",
             serde_json::json!({
@@ -373,7 +386,6 @@ async fn record_service_then_summarize_recent_activity_round_trip() {
 
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "summarize_recent_activity",
             serde_json::json!({ "vehicle_id": v.id }),
@@ -419,10 +431,9 @@ fn schedule_item_every_12_months(vehicle_id: i32, name: &str) -> NewScheduleItem
 }
 
 /// Status of one named reminder out of a `check_due_maintenance` call.
-async fn reminder_status(app: &Router, session: &str, vehicle_id: i32, name: &str) -> String {
+async fn reminder_status(app: &Router, vehicle_id: i32, name: &str) -> String {
     let body = post_rpc(
         app,
-        session,
         call_tool(
             "check_due_maintenance",
             serde_json::json!({ "vehicle_id": vehicle_id }),
@@ -444,7 +455,7 @@ async fn reminder_status(app: &Router, session: &str, vehicle_id: i32, name: &st
 #[tokio::test]
 async fn record_service_schedule_item_ids_clears_the_overdue_reminder() {
     let (app, db, _files) = setup().await;
-    let session = handshake(&app).await;
+    handshake(&app).await;
     let v = vehicle::create(
         &db,
         NewVehicle {
@@ -463,7 +474,7 @@ async fn record_service_schedule_item_ids_clears_the_overdue_reminder() {
 
     // Never serviced since a 2020 purchase → the 12-month item is overdue.
     assert_eq!(
-        reminder_status(&app, &session, v.id, "Brake fluid flush").await,
+        reminder_status(&app, v.id, "Brake fluid flush").await,
         "overdue"
     );
 
@@ -471,7 +482,6 @@ async fn record_service_schedule_item_ids_clears_the_overdue_reminder() {
     // linking via schedule_item_ids does.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "record_service",
             serde_json::json!({
@@ -484,17 +494,13 @@ async fn record_service_schedule_item_ids_clears_the_overdue_reminder() {
     )
     .await;
     assert_success(&body);
-    assert_eq!(
-        reminder_status(&app, &session, v.id, "Brake fluid flush").await,
-        "ok"
-    );
+    assert_eq!(reminder_status(&app, v.id, "Brake fluid flush").await, "ok");
 
     // Wrong-vehicle probe: linking another vehicle's schedule item is a clean
     // not-found tool error, and nothing is recorded.
     let other = vehicle::create(&db, new_vehicle("Other")).await.unwrap();
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "record_service",
             serde_json::json!({
@@ -516,7 +522,7 @@ async fn record_service_schedule_item_ids_clears_the_overdue_reminder() {
 #[tokio::test]
 async fn dismiss_schedule_item_hides_it_and_rejects_wrong_vehicle() {
     let (app, db, _files) = setup().await;
-    let session = handshake(&app).await;
+    handshake(&app).await;
     let v = vehicle::create(
         &db,
         NewVehicle {
@@ -536,7 +542,6 @@ async fn dismiss_schedule_item_hides_it_and_rejects_wrong_vehicle() {
 
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "dismiss_schedule_item",
             serde_json::json!({
@@ -561,7 +566,6 @@ async fn dismiss_schedule_item_hides_it_and_rejects_wrong_vehicle() {
     assert!(schedule_svc::resolve(&db, v.id).await.unwrap().is_empty());
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "check_due_maintenance",
             serde_json::json!({ "vehicle_id": v.id }),
@@ -581,7 +585,6 @@ async fn dismiss_schedule_item_hides_it_and_rejects_wrong_vehicle() {
     for schedule_item_id in [item.id, 9999] {
         let body = post_rpc(
             &app,
-            &session,
             call_tool(
                 "dismiss_schedule_item",
                 serde_json::json!({
@@ -599,12 +602,11 @@ async fn dismiss_schedule_item_hides_it_and_rejects_wrong_vehicle() {
 #[tokio::test]
 async fn log_incident_and_mileage_write_through() {
     let (app, db, _files) = setup().await;
-    let session = handshake(&app).await;
+    handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
 
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "log_incident",
             serde_json::json!({
@@ -619,7 +621,6 @@ async fn log_incident_and_mileage_write_through() {
 
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "log_mileage",
             serde_json::json!({ "vehicle_id": v.id, "mileage": 48_250 }),
@@ -630,7 +631,6 @@ async fn log_incident_and_mileage_write_through() {
 
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "summarize_recent_activity",
             serde_json::json!({ "vehicle_id": v.id }),
@@ -643,14 +643,13 @@ async fn log_incident_and_mileage_write_through() {
 #[tokio::test]
 async fn log_incident_rejects_unknown_category_and_wrong_links() {
     let (app, db, _files) = setup().await;
-    let session = handshake(&app).await;
+    handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
     let other = vehicle::create(&db, new_vehicle("Other")).await.unwrap();
 
     // Unknown category -> tool-level error listing the whitelist.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "log_incident",
             serde_json::json!({
@@ -670,7 +669,6 @@ async fn log_incident_rejects_unknown_category_and_wrong_links() {
     // Accident-category incident round-trips.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "log_incident",
             serde_json::json!({
@@ -694,7 +692,6 @@ async fn log_incident_rejects_unknown_category_and_wrong_links() {
     // indistinguishable from a nonexistent one.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "log_incident",
             serde_json::json!({
@@ -714,7 +711,6 @@ async fn log_incident_rejects_unknown_category_and_wrong_links() {
     // Same-vehicle recurrence works.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "log_incident",
             serde_json::json!({
@@ -733,12 +729,11 @@ async fn log_incident_rejects_unknown_category_and_wrong_links() {
 #[tokio::test]
 async fn save_note_is_searchable_via_search_records() {
     let (app, db, _files) = setup().await;
-    let session = handshake(&app).await;
+    handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
 
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "save_note",
             serde_json::json!({
@@ -757,7 +752,6 @@ async fn save_note_is_searchable_via_search_records() {
     // The FTS trigger on incidents must make the note findable immediately.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "search_records",
             serde_json::json!({ "query": "Liqui Moly", "scope": "incidents" }),
@@ -773,7 +767,6 @@ async fn save_note_is_searchable_via_search_records() {
     // Nonexistent vehicle -> clean tool error.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "save_note",
             serde_json::json!({ "vehicle_id": 999, "note": "orphan" }),
@@ -786,7 +779,7 @@ async fn save_note_is_searchable_via_search_records() {
 #[tokio::test]
 async fn search_records_builds_scope_finds_seeded_build() {
     let (app, db, _files) = setup().await;
-    let session = handshake(&app).await;
+    handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Project")).await.unwrap();
     build_svc::create(
         &db,
@@ -802,7 +795,6 @@ async fn search_records_builds_scope_finds_seeded_build() {
 
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "search_records",
             serde_json::json!({ "query": "kilonewton", "scope": "builds" }),
@@ -819,7 +811,6 @@ async fn search_records_builds_scope_finds_seeded_build() {
     for retired in ["observations", "accidents"] {
         let body = post_rpc(
             &app,
-            &session,
             call_tool(
                 "search_records",
                 serde_json::json!({ "query": "anything", "scope": retired }),
@@ -837,7 +828,7 @@ async fn search_records_builds_scope_finds_seeded_build() {
 #[tokio::test]
 async fn record_part_round_trips_and_rejects_bad_links() {
     let (app, db, _files) = setup().await;
-    let session = handshake(&app).await;
+    handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
     let other = vehicle::create(&db, new_vehicle("Other")).await.unwrap();
     let foreign_build = build_svc::create(
@@ -856,7 +847,6 @@ async fn record_part_round_trips_and_rejects_bad_links() {
     // part record itself.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "record_part",
             serde_json::json!({
@@ -884,7 +874,6 @@ async fn record_part_round_trips_and_rejects_bad_links() {
     // Nonexistent vehicle -> clean tool error.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "record_part",
             serde_json::json!({ "vehicle_id": 999, "name": "Oil filter" }),
@@ -896,7 +885,6 @@ async fn record_part_round_trips_and_rejects_bad_links() {
     // Cross-vehicle build must be indistinguishable from a missing one.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "record_part",
             serde_json::json!({
@@ -917,7 +905,7 @@ async fn record_part_round_trips_and_rejects_bad_links() {
 #[tokio::test]
 async fn find_documents_finds_seeded_extracted_text() {
     let (app, db, _files) = setup().await;
-    let session = handshake(&app).await;
+    handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
     {
         use glovebox_shared::entities::document;
@@ -937,7 +925,6 @@ async fn find_documents_finds_seeded_extracted_text() {
 
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "find_documents",
             serde_json::json!({ "vehicle_id": v.id, "query": "clutch flywheel" }),
@@ -954,7 +941,7 @@ async fn find_documents_finds_seeded_extracted_text() {
 #[tokio::test]
 async fn search_records_scopes_and_rejects_bad_scope() {
     let (app, db, _files) = setup().await;
-    let session = handshake(&app).await;
+    handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
     svc_svc::create(
         &db,
@@ -966,7 +953,6 @@ async fn search_records_scopes_and_rejects_bad_scope() {
 
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "search_records",
             serde_json::json!({ "query": "brake", "scope": "services" }),
@@ -978,7 +964,6 @@ async fn search_records_scopes_and_rejects_bad_scope() {
 
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "search_records",
             serde_json::json!({ "query": "brake", "scope": "nonsense" }),
@@ -995,12 +980,11 @@ async fn search_records_scopes_and_rejects_bad_scope() {
 #[tokio::test]
 async fn check_due_maintenance_returns_without_error() {
     let (app, db, _files) = setup().await;
-    let session = handshake(&app).await;
+    handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
 
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "check_due_maintenance",
             serde_json::json!({ "vehicle_id": v.id }),
@@ -1017,7 +1001,7 @@ async fn check_due_maintenance_returns_without_error() {
 #[tokio::test]
 async fn cost_summary_reports_integer_cents() {
     let (app, db, _files) = setup().await;
-    let session = handshake(&app).await;
+    handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
     svc_svc::create(&db, v.id, minimal_service("2026-05-01", "Brakes", None))
         .await
@@ -1025,7 +1009,6 @@ async fn cost_summary_reports_integer_cents() {
 
     let body = post_rpc(
         &app,
-        &session,
         call_tool("cost_summary", serde_json::json!({ "vehicle_id": v.id })),
     )
     .await;
@@ -1040,13 +1023,12 @@ async fn cost_summary_reports_integer_cents() {
 #[tokio::test]
 async fn record_service_payer_flows_into_cost_summary_split() {
     let (app, db, _files) = setup().await;
-    let session = handshake(&app).await;
+    handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
 
     // A $100 self-paid service (payer omitted -> defaults to self)…
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "record_service",
             serde_json::json!({
@@ -1063,7 +1045,6 @@ async fn record_service_payer_flows_into_cost_summary_split() {
     // …and a $150 insurance-paid repair.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "record_service",
             serde_json::json!({
@@ -1085,7 +1066,6 @@ async fn record_service_payer_flows_into_cost_summary_split() {
 
     let body = post_rpc(
         &app,
-        &session,
         call_tool("cost_summary", serde_json::json!({ "vehicle_id": v.id })),
     )
     .await;
@@ -1105,7 +1085,6 @@ async fn record_service_payer_flows_into_cost_summary_split() {
     // An unknown payer is a tool-level error, not a protocol failure.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "record_service",
             serde_json::json!({
@@ -1127,7 +1106,7 @@ async fn record_service_payer_flows_into_cost_summary_split() {
 #[tokio::test]
 async fn build_progress_and_status_update_round_trip() {
     let (app, db, _files) = setup().await;
-    let session = handshake(&app).await;
+    handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Project")).await.unwrap();
     let b = build_svc::create(
         &db,
@@ -1150,7 +1129,6 @@ async fn build_progress_and_status_update_round_trip() {
 
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "get_build_progress",
             serde_json::json!({ "vehicle_id": v.id, "build_id": b.id }),
@@ -1165,7 +1143,6 @@ async fn build_progress_and_status_update_round_trip() {
 
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "update_build_status",
             serde_json::json!({ "vehicle_id": v.id, "build_id": b.id, "status": "active" }),
@@ -1178,7 +1155,6 @@ async fn build_progress_and_status_update_round_trip() {
     // Invalid lifecycle status is an LLM-recoverable tool error.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "update_build_status",
             serde_json::json!({ "vehicle_id": v.id, "build_id": b.id, "status": "bogus" }),
@@ -1192,12 +1168,11 @@ async fn build_progress_and_status_update_round_trip() {
 #[tokio::test]
 async fn file_research_finding_persists_and_is_readable() {
     let (app, db, _files) = setup().await;
-    let session = handshake(&app).await;
+    handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
 
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "file_research_finding",
             serde_json::json!({
@@ -1215,7 +1190,6 @@ async fn file_research_finding_persists_and_is_readable() {
     // Wrong vehicle -> clean tool error
     let err = post_rpc(
         &app,
-        &session,
         call_tool(
             "file_research_finding",
             serde_json::json!({"vehicle_id": 999, "category": "x", "title": "y"}),
@@ -1232,7 +1206,7 @@ async fn file_research_finding_persists_and_is_readable() {
 #[tokio::test]
 async fn recall_plan_schedule_complete_loop_over_the_protocol() {
     let (app, db, _files) = setup().await;
-    let session = handshake(&app).await;
+    handshake(&app).await;
     let v = vehicle::create(
         &db,
         NewVehicle {
@@ -1249,14 +1223,13 @@ async fn recall_plan_schedule_complete_loop_over_the_protocol() {
     .await
     .unwrap();
     assert_eq!(
-        reminder_status(&app, &session, v.id, "Water pump replacement").await,
+        reminder_status(&app, v.id, "Water pump replacement").await,
         "overdue"
     );
 
     // A recall finding, filed over the protocol.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "file_research_finding",
             serde_json::json!({
@@ -1274,7 +1247,6 @@ async fn recall_plan_schedule_complete_loop_over_the_protocol() {
     // Plan both pieces of work, each linked to its source.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "plan_work",
             serde_json::json!({
@@ -1291,7 +1263,6 @@ async fn recall_plan_schedule_complete_loop_over_the_protocol() {
 
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "plan_work",
             serde_json::json!({
@@ -1309,7 +1280,6 @@ async fn recall_plan_schedule_complete_loop_over_the_protocol() {
     // Group them into a visit; the rollup carries the estimates.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "schedule_visit",
             serde_json::json!({
@@ -1330,7 +1300,6 @@ async fn recall_plan_schedule_complete_loop_over_the_protocol() {
     // list_planned_work shows the scheduled items and the open visit.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "list_planned_work",
             serde_json::json!({ "vehicle_id": v.id }),
@@ -1345,7 +1314,6 @@ async fn recall_plan_schedule_complete_loop_over_the_protocol() {
     // The budget forecast in check_due_maintenance counts the open visit.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "check_due_maintenance",
             serde_json::json!({ "vehicle_id": v.id }),
@@ -1359,7 +1327,6 @@ async fn recall_plan_schedule_complete_loop_over_the_protocol() {
     // Complete the visit with the actuals.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "complete_visit",
             serde_json::json!({
@@ -1392,7 +1359,7 @@ async fn recall_plan_schedule_complete_loop_over_the_protocol() {
 
     // Every loop closed: reminder ok, finding completed, record persisted.
     assert_eq!(
-        reminder_status(&app, &session, v.id, "Water pump replacement").await,
+        reminder_status(&app, v.id, "Water pump replacement").await,
         "ok"
     );
     // The completed record's id, taken from the PROTOCOL payload, must be
@@ -1424,7 +1391,6 @@ async fn recall_plan_schedule_complete_loop_over_the_protocol() {
     // The open-work list is empty again (include_done still shows history).
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "list_planned_work",
             serde_json::json!({ "vehicle_id": v.id }),
@@ -1436,7 +1402,6 @@ async fn recall_plan_schedule_complete_loop_over_the_protocol() {
     assert_eq!(planned["visits"].as_array().map(Vec::len), Some(0));
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "list_planned_work",
             serde_json::json!({ "vehicle_id": v.id, "include_done": true }),
@@ -1455,12 +1420,11 @@ async fn recall_plan_schedule_complete_loop_over_the_protocol() {
 #[tokio::test]
 async fn cancel_visit_returns_items_to_the_todo_list() {
     let (app, db, _files) = setup().await;
-    let session = handshake(&app).await;
+    handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
 
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "plan_work",
             serde_json::json!({
@@ -1476,7 +1440,6 @@ async fn cancel_visit_returns_items_to_the_todo_list() {
 
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "schedule_visit",
             serde_json::json!({
@@ -1494,7 +1457,6 @@ async fn cancel_visit_returns_items_to_the_todo_list() {
     // While scheduled: the estimate sits in the visits bucket.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "check_due_maintenance",
             serde_json::json!({ "vehicle_id": v.id }),
@@ -1508,7 +1470,6 @@ async fn cancel_visit_returns_items_to_the_todo_list() {
     // Cancel: the visit closes, the item detaches back to `planned`.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "cancel_visit",
             serde_json::json!({ "vehicle_id": v.id, "visit_id": visit_id }),
@@ -1524,7 +1485,6 @@ async fn cancel_visit_returns_items_to_the_todo_list() {
     // backlog bucket.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "check_due_maintenance",
             serde_json::json!({ "vehicle_id": v.id }),
@@ -1538,7 +1498,6 @@ async fn cancel_visit_returns_items_to_the_todo_list() {
     // list_planned_work: no open visit, the item is planned and unattached.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "list_planned_work",
             serde_json::json!({ "vehicle_id": v.id }),
@@ -1555,7 +1514,6 @@ async fn cancel_visit_returns_items_to_the_todo_list() {
     // Double cancel and wrong-vehicle cancel are clean tool errors.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "cancel_visit",
             serde_json::json!({ "vehicle_id": v.id, "visit_id": visit_id }),
@@ -1568,14 +1526,12 @@ async fn cancel_visit_returns_items_to_the_todo_list() {
     let other = vehicle::create(&db, new_vehicle("Other")).await.unwrap();
     let v2 = post_rpc(
         &app,
-        &session,
         call_tool("schedule_visit", serde_json::json!({ "vehicle_id": v.id })),
     )
     .await;
     let v2_id = tool_payload(&v2)["id"].as_i64().unwrap();
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "cancel_visit",
             serde_json::json!({ "vehicle_id": other.id, "visit_id": v2_id }),
@@ -1589,7 +1545,7 @@ async fn cancel_visit_returns_items_to_the_todo_list() {
 #[tokio::test]
 async fn planning_tools_reject_wrong_vehicle_and_malformed_args() {
     let (app, db, _files) = setup().await;
-    let session = handshake(&app).await;
+    handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Mine")).await.unwrap();
     let other = vehicle::create(&db, new_vehicle("Other")).await.unwrap();
     let foreign_item = schedule_svc::create(&db, schedule_item_every_12_months(v.id, "Oil"))
@@ -1600,7 +1556,6 @@ async fn planning_tools_reject_wrong_vehicle_and_malformed_args() {
     // is created.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "plan_work",
             serde_json::json!({
@@ -1617,7 +1572,6 @@ async fn planning_tools_reject_wrong_vehicle_and_malformed_args() {
     // schedule_visit: another vehicle's work item reads as missing.
     let mine = post_rpc(
         &app,
-        &session,
         call_tool(
             "plan_work",
             serde_json::json!({ "vehicle_id": v.id, "title": "Mine" }),
@@ -1627,7 +1581,6 @@ async fn planning_tools_reject_wrong_vehicle_and_malformed_args() {
     let mine_id = tool_payload(&mine)["id"].as_i64().unwrap();
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "schedule_visit",
             serde_json::json!({ "vehicle_id": other.id, "work_item_ids": [mine_id] }),
@@ -1640,7 +1593,6 @@ async fn planning_tools_reject_wrong_vehicle_and_malformed_args() {
     // complete_visit: another vehicle's visit reads as missing.
     let visit = post_rpc(
         &app,
-        &session,
         call_tool(
             "schedule_visit",
             serde_json::json!({ "vehicle_id": v.id, "work_item_ids": [mine_id] }),
@@ -1650,7 +1602,6 @@ async fn planning_tools_reject_wrong_vehicle_and_malformed_args() {
     let visit_id = tool_payload(&visit)["id"].as_i64().unwrap();
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "complete_visit",
             serde_json::json!({
@@ -1667,7 +1618,6 @@ async fn planning_tools_reject_wrong_vehicle_and_malformed_args() {
     // list_planned_work: nonexistent vehicle is a clean tool error.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "list_planned_work",
             serde_json::json!({ "vehicle_id": 999 }),
@@ -1679,7 +1629,6 @@ async fn planning_tools_reject_wrong_vehicle_and_malformed_args() {
     // Malformed args: missing required title points at the schema.
     let body = post_rpc(
         &app,
-        &session,
         call_tool("plan_work", serde_json::json!({ "vehicle_id": v.id })),
     )
     .await;
@@ -1692,7 +1641,6 @@ async fn planning_tools_reject_wrong_vehicle_and_malformed_args() {
     // The bad-payer rollback reaches the LLM as an actionable tool error.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "complete_visit",
             serde_json::json!({
@@ -1715,7 +1663,7 @@ async fn planning_tools_reject_wrong_vehicle_and_malformed_args() {
 #[tokio::test]
 async fn wrong_vehicle_ids_are_clean_tool_errors() {
     let (app, db, _files) = setup().await;
-    let session = handshake(&app).await;
+    handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Mine")).await.unwrap();
     let other = vehicle::create(&db, new_vehicle("Other")).await.unwrap();
     let b = build_svc::create(
@@ -1733,7 +1681,6 @@ async fn wrong_vehicle_ids_are_clean_tool_errors() {
     // Nonexistent vehicle.
     let body = post_rpc(
         &app,
-        &session,
         call_tool("get_vehicle", serde_json::json!({ "vehicle_id": 999 })),
     )
     .await;
@@ -1746,7 +1693,6 @@ async fn wrong_vehicle_ids_are_clean_tool_errors() {
     // Write against a nonexistent vehicle.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "record_service",
             serde_json::json!({ "vehicle_id": 999, "service_date": "2026-06-01" }),
@@ -1758,7 +1704,6 @@ async fn wrong_vehicle_ids_are_clean_tool_errors() {
     // Cross-vehicle build must be indistinguishable from a missing one.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "get_build_progress",
             serde_json::json!({ "vehicle_id": other.id, "build_id": b.id }),
@@ -1771,12 +1716,11 @@ async fn wrong_vehicle_ids_are_clean_tool_errors() {
 #[tokio::test]
 async fn malformed_arguments_are_schema_errors_not_protocol_failures() {
     let (app, _db, _files) = setup().await;
-    let session = handshake(&app).await;
+    handshake(&app).await;
 
     // Wrong type.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "record_service",
             serde_json::json!({ "vehicle_id": "not-a-number", "service_date": "2026-06-01" }),
@@ -1790,12 +1734,7 @@ async fn malformed_arguments_are_schema_errors_not_protocol_failures() {
     );
 
     // Missing required field.
-    let body = post_rpc(
-        &app,
-        &session,
-        call_tool("get_vehicle", serde_json::json!({})),
-    )
-    .await;
+    let body = post_rpc(&app, call_tool("get_vehicle", serde_json::json!({}))).await;
     assert_tool_error(&body);
     assert!(
         body.contains("vehicle_id"),
@@ -1813,7 +1752,7 @@ fn b64(bytes: &[u8]) -> String {
 #[tokio::test]
 async fn attach_document_stores_file_and_indexes_extracted_text() {
     let (app, db, files) = setup().await;
-    let session = handshake(&app).await;
+    handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
     let record = svc_svc::create(&db, v.id, minimal_service("2026-06-01", "Clutch job", None))
         .await
@@ -1821,7 +1760,6 @@ async fn attach_document_stores_file_and_indexes_extracted_text() {
 
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "attach_document",
             serde_json::json!({
@@ -1853,7 +1791,6 @@ async fn attach_document_stores_file_and_indexes_extracted_text() {
     // that appears nowhere in the title or file name.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "find_documents",
             serde_json::json!({ "vehicle_id": v.id, "query": "flywheel bolts" }),
@@ -1870,12 +1807,11 @@ async fn attach_document_stores_file_and_indexes_extracted_text() {
 #[tokio::test]
 async fn attach_document_rejects_malformed_base64() {
     let (app, db, files) = setup().await;
-    let session = handshake(&app).await;
+    handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
 
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "attach_document",
             serde_json::json!({
@@ -1901,13 +1837,12 @@ async fn attach_document_rejects_malformed_base64() {
 #[tokio::test]
 async fn attach_document_rejects_files_over_the_10_mib_cap() {
     let (app, db, files) = setup().await;
-    let session = handshake(&app).await;
+    handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
 
     let oversize = vec![0u8; glovebox_shared::services::document::MAX_FILE_BYTES + 1];
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "attach_document",
             serde_json::json!({
@@ -1929,12 +1864,11 @@ async fn attach_document_rejects_files_over_the_10_mib_cap() {
 #[tokio::test]
 async fn attach_document_neutralizes_traversal_file_names() {
     let (app, db, files) = setup().await;
-    let session = handshake(&app).await;
+    handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
 
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "attach_document",
             serde_json::json!({
@@ -1958,7 +1892,7 @@ async fn attach_document_neutralizes_traversal_file_names() {
 #[tokio::test]
 async fn attach_document_wrong_vehicle_link_reads_as_missing() {
     let (app, db, _files) = setup().await;
-    let session = handshake(&app).await;
+    handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Mine")).await.unwrap();
     let other = vehicle::create(&db, new_vehicle("Other")).await.unwrap();
     let foreign = svc_svc::create(&db, other.id, minimal_service("2026-06-01", "Theirs", None))
@@ -1970,7 +1904,6 @@ async fn attach_document_wrong_vehicle_link_reads_as_missing() {
     for eid in [foreign.record.id, 99_999] {
         let body = post_rpc(
             &app,
-            &session,
             call_tool(
                 "attach_document",
                 serde_json::json!({
@@ -1996,7 +1929,7 @@ async fn attach_document_wrong_vehicle_link_reads_as_missing() {
 #[tokio::test]
 async fn link_service_to_maintenance_add_defaults_and_replace_overwrites() {
     let (app, db, _files) = setup().await;
-    let session = handshake(&app).await;
+    handshake(&app).await;
     let v = vehicle::create(
         &db,
         NewVehicle {
@@ -2022,15 +1955,11 @@ async fn link_service_to_maintenance_add_defaults_and_replace_overwrites() {
     )
     .await
     .unwrap();
-    assert_eq!(
-        reminder_status(&app, &session, v.id, "Oil change").await,
-        "overdue"
-    );
+    assert_eq!(reminder_status(&app, v.id, "Oil change").await, "overdue");
 
     // Default mode is add: link the oil item…
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "link_service_to_maintenance",
             serde_json::json!({
@@ -2045,7 +1974,6 @@ async fn link_service_to_maintenance_add_defaults_and_replace_overwrites() {
     // …then the brake item in a second pass; the first link survives.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "link_service_to_maintenance",
             serde_json::json!({
@@ -2069,15 +1997,11 @@ async fn link_service_to_maintenance_add_defaults_and_replace_overwrites() {
     assert_eq!(ids, vec![i64::from(oil.id), i64::from(brake.id)]);
 
     // Linking cleared the reminder — the reconciliation loop closes.
-    assert_eq!(
-        reminder_status(&app, &session, v.id, "Oil change").await,
-        "ok"
-    );
+    assert_eq!(reminder_status(&app, v.id, "Oil change").await, "ok");
 
     // Replace mode overwrites the set.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "link_service_to_maintenance",
             serde_json::json!({
@@ -2100,7 +2024,6 @@ async fn link_service_to_maintenance_add_defaults_and_replace_overwrites() {
     // An unknown mode is an actionable tool error.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "link_service_to_maintenance",
             serde_json::json!({
@@ -2119,7 +2042,7 @@ async fn link_service_to_maintenance_add_defaults_and_replace_overwrites() {
 #[tokio::test]
 async fn link_service_to_maintenance_wrong_parent_both_ways() {
     let (app, db, _files) = setup().await;
-    let session = handshake(&app).await;
+    handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Mine")).await.unwrap();
     let other = vehicle::create(&db, new_vehicle("Other")).await.unwrap();
     let mine_item = schedule_svc::create(&db, schedule_item_every_12_months(v.id, "Oil"))
@@ -2138,7 +2061,6 @@ async fn link_service_to_maintenance_wrong_parent_both_ways() {
     // Another vehicle's service record reads as missing.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "link_service_to_maintenance",
             serde_json::json!({
@@ -2161,7 +2083,6 @@ async fn link_service_to_maintenance_wrong_parent_both_ways() {
     // Another vehicle's schedule item reads as missing; nothing was linked.
     let body = post_rpc(
         &app,
-        &session,
         call_tool(
             "link_service_to_maintenance",
             serde_json::json!({
@@ -2186,7 +2107,7 @@ async fn link_service_to_maintenance_wrong_parent_both_ways() {
 #[tokio::test]
 async fn resources_list_and_read_cover_all_uri_forms() {
     let (app, db, _files) = setup().await;
-    let session = handshake(&app).await;
+    handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
     let b = build_svc::create(
         &db,
@@ -2205,7 +2126,6 @@ async fn resources_list_and_read_cover_all_uri_forms() {
 
     let body = post_rpc(
         &app,
-        &session,
         r#"{"jsonrpc":"2.0","method":"resources/list","id":2}"#.to_string(),
     )
     .await;
@@ -2221,12 +2141,11 @@ async fn resources_list_and_read_cover_all_uri_forms() {
         );
     }
 
-    let body = post_rpc(&app, &session, read_resource("glovebox://vehicles")).await;
+    let body = post_rpc(&app, read_resource("glovebox://vehicles")).await;
     assert!(body.contains("Daily"), "vehicle list resource; got: {body}");
 
     let body = post_rpc(
         &app,
-        &session,
         read_resource(&format!("glovebox://vehicles/{}", v.id)),
     )
     .await;
@@ -2237,7 +2156,6 @@ async fn resources_list_and_read_cover_all_uri_forms() {
 
     let body = post_rpc(
         &app,
-        &session,
         read_resource(&format!("glovebox://vehicles/{}/activity", v.id)),
     )
     .await;
@@ -2248,7 +2166,6 @@ async fn resources_list_and_read_cover_all_uri_forms() {
 
     let body = post_rpc(
         &app,
-        &session,
         read_resource(&format!("glovebox://vehicles/{}/builds/{}", v.id, b.id)),
     )
     .await;
@@ -2261,17 +2178,17 @@ async fn resources_list_and_read_cover_all_uri_forms() {
 #[tokio::test]
 async fn read_resource_unknown_uri_and_missing_record_are_clean_errors() {
     let (app, _db, _files) = setup().await;
-    let session = handshake(&app).await;
+    handshake(&app).await;
 
     // Unknown shape → invalid_params (-32602) naming the known forms.
-    let body = post_rpc(&app, &session, read_resource("glovebox://garage")).await;
+    let body = post_rpc(&app, read_resource("glovebox://garage")).await;
     assert!(
         body.contains("-32602") && body.contains("resources/list"),
         "unknown uri must be invalid_params with a recovery hint; got: {body}"
     );
 
     // Well-formed but nonexistent → resource_not_found (-32002), not a 500.
-    let body = post_rpc(&app, &session, read_resource("glovebox://vehicles/999")).await;
+    let body = post_rpc(&app, read_resource("glovebox://vehicles/999")).await;
     assert!(
         body.contains("\"error\"") && body.contains("not found"),
         "missing vehicle must be a clean resource error; got: {body}"
