@@ -43,6 +43,7 @@ cd frontend && bun run check  # svelte-check + TypeScript check
 
 All optional (defaults in `glovebox-shared/src/config.rs`):
 - `GLOVEBOX_DB_PATH` (default `data/glovebox.db`) · `GLOVEBOX_LISTEN` (default `0.0.0.0:3003`) · `GLOVEBOX_FILES_DIR` (default `data/files`)
+- `GLOVEBOX_INBOX_DIR` (default `data/inbox`) — the MCP `attach_document` inbox: LLM clients save real files here with their own file tools and pass an inbox-relative `source_path`, so file bytes never travel through model context. Anything in this dir is LAN-exposable via attach + `/files` — use a DEDICATED hand-off subdirectory (e.g. `~/Claude/glovebox-inbox`), never a broad dir like `~/Claude` itself
 - `GLOVEBOX_MCP_ALLOWED_HOSTS` — extra Host-header allowlist entries for `/mcp` (defaults: localhost/127.0.0.1/::1)
 
 ## Architecture

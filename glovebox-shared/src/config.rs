@@ -14,4 +14,10 @@ pub struct AppConfig {
     /// Directory for uploaded files
     #[arg(long, default_value = "data/files", env = "GLOVEBOX_FILES_DIR")]
     pub files_dir: String,
+
+    /// Inbox directory the MCP `attach_document` tool reads `source_path`
+    /// files from (LLM clients save files here with their own file tools
+    /// instead of passing bytes through model context)
+    #[arg(long, default_value = "data/inbox", env = "GLOVEBOX_INBOX_DIR")]
+    pub inbox_dir: String,
 }

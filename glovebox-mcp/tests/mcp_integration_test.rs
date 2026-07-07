@@ -29,6 +29,8 @@ use tower::ServiceExt;
 
 /// Router + DB + the temp files dir backing `attach_document` (keep the
 /// `TempDir` alive for the test's duration; dropping it deletes the dir).
+/// The inbox is pointed at a nonexistent path — tests that exercise
+/// `source_path` use [`setup_with_inbox`].
 async fn setup() -> (Router, DatabaseConnection, tempfile::TempDir) {
     let db = test_db().await;
     let files = tempfile::tempdir().expect("temp files dir");
@@ -36,8 +38,29 @@ async fn setup() -> (Router, DatabaseConnection, tempfile::TempDir) {
         db_path: String::new(),
         listen: String::new(),
         files_dir: files.path().to_string_lossy().into_owned(),
+        inbox_dir: files.path().join("inbox").to_string_lossy().into_owned(),
     });
     (glovebox_mcp::router(db.clone(), config), db, files)
+}
+
+/// Like [`setup`], plus a real temp inbox dir wired into the config for
+/// `attach_document` `source_path` tests.
+async fn setup_with_inbox() -> (
+    Router,
+    DatabaseConnection,
+    tempfile::TempDir,
+    tempfile::TempDir,
+) {
+    let db = test_db().await;
+    let files = tempfile::tempdir().expect("temp files dir");
+    let inbox = tempfile::tempdir().expect("temp inbox dir");
+    let config = Arc::new(AppConfig {
+        db_path: String::new(),
+        listen: String::new(),
+        files_dir: files.path().to_string_lossy().into_owned(),
+        inbox_dir: inbox.path().to_string_lossy().into_owned(),
+    });
+    (glovebox_mcp::router(db.clone(), config), db, files, inbox)
 }
 
 fn new_vehicle(name: &str) -> NewVehicle {
@@ -230,6 +253,7 @@ async fn tool_calls_survive_a_server_restart() {
         db_path: String::new(),
         listen: String::new(),
         files_dir: files.path().to_string_lossy().into_owned(),
+        inbox_dir: files.path().join("inbox").to_string_lossy().into_owned(),
     });
     let first = glovebox_mcp::router(db.clone(), config.clone());
     handshake(&first).await;
@@ -1922,6 +1946,123 @@ async fn attach_document_wrong_vehicle_link_reads_as_missing() {
             "wrong-parent must read exactly like missing; got: {body}"
         );
     }
+}
+
+// ─── attach_document via source_path (the inbox — files must not
+//     travel through model context) ─────────────────────────────
+
+#[tokio::test]
+async fn attach_document_source_path_copies_from_the_inbox() {
+    let (app, db, files, inbox) = setup_with_inbox().await;
+    handshake(&app).await;
+    let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
+    let record = svc_svc::create(&db, v.id, minimal_service("2026-06-01", "Clutch job", None))
+        .await
+        .unwrap();
+    std::fs::write(inbox.path().join("fcp-invoice.pdf"), b"real scanned bytes").unwrap();
+
+    let body = post_rpc(
+        &app,
+        call_tool(
+            "attach_document",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "source_path": "fcp-invoice.pdf",
+                "title": "FCP Euro invoice",
+                "extracted_text": "Sachs SRE clutch kit, total $899.00",
+                "linked_entity_type": "service",
+                "linked_entity_id": record.record.id
+            }),
+        ),
+    )
+    .await;
+    assert_success(&body);
+    let doc = tool_payload(&body);
+    // file_name defaulted to the inbox file's basename.
+    assert_eq!(doc["file_name"], "fcp-invoice.pdf");
+    assert_eq!(doc["mime_type"], "application/pdf");
+    assert_eq!(doc["linked_entity_id"], record.record.id);
+
+    // The bytes were COPIED into files_dir…
+    let rel_path = doc["file_path"].as_str().expect("file_path");
+    let stored = std::fs::read(files.path().join(rel_path)).expect("stored file must exist");
+    assert_eq!(stored, b"real scanned bytes");
+    // …and the inbox original is still there, intact (the LLM may retry,
+    // the user may want it).
+    assert_eq!(
+        std::fs::read(inbox.path().join("fcp-invoice.pdf")).unwrap(),
+        b"real scanned bytes"
+    );
+}
+
+#[tokio::test]
+async fn attach_document_requires_exactly_one_source() {
+    let (app, db, files, inbox) = setup_with_inbox().await;
+    handshake(&app).await;
+    let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
+    std::fs::write(inbox.path().join("a.pdf"), b"bytes").unwrap();
+
+    // Both set…
+    let body = post_rpc(
+        &app,
+        call_tool(
+            "attach_document",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "source_path": "a.pdf",
+                "content_base64": b64(b"bytes")
+            }),
+        ),
+    )
+    .await;
+    assert_tool_error(&body);
+    assert!(
+        body.contains("exactly one"),
+        "must state the exactly-one rule; got: {body}"
+    );
+
+    // …and neither set are both actionable tool errors that steer to
+    // source_path.
+    let body = post_rpc(
+        &app,
+        call_tool(
+            "attach_document",
+            serde_json::json!({ "vehicle_id": v.id, "file_name": "a.pdf" }),
+        ),
+    )
+    .await;
+    assert_tool_error(&body);
+    assert!(
+        body.contains("source_path"),
+        "must steer toward source_path; got: {body}"
+    );
+    // Nothing was written to files_dir by either rejected call.
+    assert!(std::fs::read_dir(files.path()).unwrap().next().is_none());
+}
+
+#[tokio::test]
+async fn attach_document_source_path_escape_attempts_are_rejected() {
+    let (app, db, files, inbox) = setup_with_inbox().await;
+    handshake(&app).await;
+    let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
+    std::fs::write(inbox.path().join("legit.pdf"), b"bytes").unwrap();
+
+    for escape in ["../outside.pdf", "/etc/passwd", "scans/../../outside.pdf"] {
+        let body = post_rpc(
+            &app,
+            call_tool(
+                "attach_document",
+                serde_json::json!({ "vehicle_id": v.id, "source_path": escape }),
+            ),
+        )
+        .await;
+        assert_tool_error(&body);
+        assert!(
+            body.contains("source_path"),
+            "{escape}: the error must name the field; got: {body}"
+        );
+    }
+    assert!(std::fs::read_dir(files.path()).unwrap().next().is_none());
 }
 
 // ─── link_service_to_maintenance ────────────────────────────────
