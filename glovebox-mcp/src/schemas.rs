@@ -10,7 +10,7 @@ use glovebox_shared::{
     entities::vehicle,
     error::{DomainError, DomainResult},
     inputs::{
-        document::StoreDocument,
+        document::{DocumentSource, StoreDocument},
         incident::NewIncident,
         mileage::NewMileageEntry,
         part::NewPart,
@@ -509,13 +509,26 @@ impl FileResearchFindingInput {
 pub struct AttachDocumentInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
+    /// THE way to attach a real file: save the file into the glovebox inbox
+    /// directory with your file tools, then pass its path RELATIVE to that
+    /// directory here (e.g. "fcp-invoice-2026-06.pdf"). Do NOT read a file
+    /// and re-emit it as base64 — the server reads the bytes from the inbox
+    /// itself (byte-perfect, no tokens spent) and COPIES them into its
+    /// document store; the inbox original is left in place. Exactly one of
+    /// `source_path` or `content_base64` must be set.
+    pub source_path: Option<String>,
+    /// Inline file bytes, base64-encoded (standard alphabet, with padding)
+    /// — ONLY for trivially small payloads (under ~100 KB) you produced
+    /// yourself, e.g. a short text note. Never regenerate an existing
+    /// file's bytes as base64 (lossy, corruption-prone, token-expensive) —
+    /// save it into the inbox and use `source_path` instead. Decoded size
+    /// cap: 10 MiB.
+    pub content_base64: Option<String>,
     /// Original file name with extension, e.g. "fcp-invoice-2026-06.pdf".
     /// Used for the stored name and MIME detection; unsafe characters are
-    /// normalized.
-    pub file_name: String,
-    /// The file's bytes, base64-encoded (standard alphabet, with padding).
-    /// Decoded size cap: 10 MiB.
-    pub content_base64: String,
+    /// normalized. Optional with `source_path` (defaults to the inbox
+    /// file's name); required with `content_base64`.
+    pub file_name: Option<String>,
     /// Display title, e.g. "FCP Euro invoice — clutch kit". Defaults to
     /// `file_name`.
     pub title: Option<String>,
@@ -532,22 +545,46 @@ pub struct AttachDocumentInput {
 }
 
 impl AttachDocumentInput {
-    /// Decode the base64 payload into the shared store input. A malformed
-    /// payload is an LLM-recoverable `BadRequest`, not a protocol failure.
+    /// Resolve the file source into the shared store input: exactly one of
+    /// `source_path` (inbox reference — the real-file path) or
+    /// `content_base64` (inline small payload) must be set. Violations and
+    /// malformed base64 are LLM-recoverable `BadRequest`s, not protocol
+    /// failures.
     pub fn into_domain(self) -> DomainResult<StoreDocument> {
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(self.content_base64.trim())
-            .map_err(|e| {
-                DomainError::BadRequest(format!(
-                    "content_base64 is not valid base64 ({e}). Send the file bytes encoded with \
-                     the standard base64 alphabet."
-                ))
-            })?;
+        let source = match (self.source_path, self.content_base64) {
+            (Some(path), None) => DocumentSource::InboxPath(path),
+            (None, Some(b64)) => DocumentSource::Bytes(
+                base64::engine::general_purpose::STANDARD
+                    .decode(b64.trim())
+                    .map_err(|e| {
+                        DomainError::BadRequest(format!(
+                            "content_base64 is not valid base64 ({e}). For a real file, prefer \
+                             source_path: save the file into the glovebox inbox directory with \
+                             your file tools and pass its inbox-relative path."
+                        ))
+                    })?,
+            ),
+            (Some(_), Some(_)) => {
+                return Err(DomainError::BadRequest(
+                    "Pass exactly one of source_path or content_base64, not both — they are \
+                     alternative sources for the same file (prefer source_path)."
+                        .into(),
+                ));
+            }
+            (None, None) => {
+                return Err(DomainError::BadRequest(
+                    "Pass exactly one of source_path or content_base64. For a real file, save it \
+                     into the glovebox inbox directory with your file tools and pass its \
+                     inbox-relative path as source_path — do not re-emit the bytes as base64."
+                        .into(),
+                ));
+            }
+        };
         Ok(StoreDocument {
             vehicle_id: Some(self.vehicle_id),
             title: self.title,
             file_name: self.file_name,
-            bytes,
+            source,
             mime_type: None,
             doc_type: None,
             linked_entity_type: self.linked_entity_type,

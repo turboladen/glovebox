@@ -48,7 +48,9 @@ mod schemas;
 
 /// Build the Axum router for the MCP endpoint. The backend mounts this at
 /// `/mcp` via `.nest_service("/mcp", glovebox_mcp::router(db, config))`.
-/// The config supplies `files_dir` for `attach_document`'s file storage.
+/// The config supplies `files_dir` for `attach_document`'s file storage and
+/// `inbox_dir` for its `source_path` inbox (where LLM clients drop real
+/// files so the bytes never travel through model context).
 pub fn router(db: DatabaseConnection, config: Arc<AppConfig>) -> Router {
     let default_config = StreamableHttpServerConfig::default();
     let allowed_hosts = merge_allowed_hosts(

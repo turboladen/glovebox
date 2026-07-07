@@ -514,7 +514,7 @@ impl GloveboxMcp {
 
     #[tool(
         name = "attach_document",
-        description = "Store a file (scanned invoice, receipt, manual page, photo) against a vehicle: the bytes land on disk and a document record is created. Pass the file as base64 in `content_base64` (max 10 MiB decoded). ALWAYS pass `extracted_text` with the text you read out of the document — that is what makes it findable later via `find_documents`. Link it to the record it belongs to (e.g. the service record you just created from the invoice) via `linked_entity_type` + `linked_entity_id`.",
+        description = "Store a file (scanned invoice, receipt, manual page, photo) against a vehicle: the bytes land on disk and a document record is created. To attach a real file, save it into the glovebox inbox directory with your file tools, then pass its inbox-relative path as `source_path` — do NOT read a file and re-emit it as base64 (lossy, corruption-prone, token-expensive); the server reads the inbox file itself and copies it into its store, leaving the original in place. `content_base64` exists only for trivially small payloads (under ~100 KB) you produced yourself. Max 10 MiB either way. ALWAYS pass `extracted_text` with the text you read out of the document — that is what makes it findable later via `find_documents`. Link it to the record it belongs to (e.g. the service record you just created from the invoice) via `linked_entity_type` + `linked_entity_id`.",
         input_schema = rmcp::handler::server::common::schema_for_type::<AttachDocumentInput>()
     )]
     async fn attach_document(
@@ -529,7 +529,7 @@ impl GloveboxMcp {
             Ok(v) => v,
             Err(e) => return domain_error(e),
         };
-        domain_result(document::store(&*self.db, &self.config.files_dir, input).await)
+        domain_result(document::store(&*self.db, &self.config, input).await)
     }
 
     #[tool(
@@ -573,7 +573,7 @@ impl ServerHandler for GloveboxMcp {
                 "glovebox-mcp",
                 env!("CARGO_PKG_VERSION"),
             ))
-            .with_instructions(
+            .with_instructions(format!(
                 "glovebox MCP: car maintenance tracking. Canonical workflow: (1) ORIENT — \
                  `list_vehicles` for ids, then `summarize_recent_activity` for the vehicle's \
                  recent history. (2) ANSWER \"what does it need?\" — `check_due_maintenance` \
@@ -592,13 +592,18 @@ impl ServerHandler for GloveboxMcp {
                  completed work, `record_part` for parts bought or installed, `log_incident` for \
                  symptoms/damage/accidents, `save_note` for facts worth remembering, \
                  `log_mileage` whenever the user mentions an odometer reading, `attach_document` \
-                 for scanned invoices/receipts (pass your extraction as `extracted_text` and link \
-                 the service record so one conversation yields record + document). (5) LOOK \
-                 THINGS UP — `find_documents` for receipts/manuals, `search_records` for anything \
-                 else, `cost_summary` for spend. (6) PROJECTS — `list_builds` / \
-                 `get_build_progress` / `update_build_status` for upgrade or restoration builds. \
-                 All money is integer cents; all dates are YYYY-MM-DD.",
-            )
+                 for scanned invoices/receipts — to attach a real file, save it into the glovebox \
+                 inbox directory (this server reads it from `{inbox_dir}`) with your file tools \
+                 and pass its inbox-relative path as `source_path`; NEVER re-emit file bytes as \
+                 base64 (`content_base64` is only for trivially small payloads you produced \
+                 yourself). Pass your extraction as `extracted_text` and link the service record \
+                 so one conversation yields record + document. (5) LOOK THINGS UP — \
+                 `find_documents` for receipts/manuals, `search_records` for anything else, \
+                 `cost_summary` for spend. (6) PROJECTS — `list_builds` / `get_build_progress` / \
+                 `update_build_status` for upgrade or restoration builds. All money is integer \
+                 cents; all dates are YYYY-MM-DD.",
+                inbox_dir = self.config.inbox_dir,
+            ))
     }
 
     async fn list_resources(
