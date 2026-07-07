@@ -7,7 +7,7 @@ use serde::Deserialize;
 use crate::AppState;
 use glovebox_shared::{
     entities::document,
-    inputs::document::{DocumentFilter, StoreDocument},
+    inputs::document::{DocumentFilter, DocumentSource, StoreDocument},
     services::document as svc,
 };
 
@@ -165,12 +165,12 @@ pub async fn upload(
     // service (the MCP attach_document tool shares the same path).
     let result = svc::store(
         &state.db,
-        &state.config.files_dir,
+        &state.config,
         StoreDocument {
             vehicle_id: parsed.vehicle_id,
             title: parsed.title,
-            file_name: parsed.file_name.unwrap_or_else(|| "unnamed".into()),
-            bytes: parsed.file_data,
+            file_name: Some(parsed.file_name.unwrap_or_else(|| "unnamed".into())),
+            source: DocumentSource::Bytes(parsed.file_data),
             mime_type: parsed.mime_type,
             doc_type: parsed.doc_type,
             linked_entity_type: parsed.linked_entity_type,

@@ -3,9 +3,10 @@ use std::path::PathBuf;
 use sea_orm::*;
 
 use crate::{
+    config::AppConfig,
     entities::{document, incident, part, service_record},
     error::{DomainError, DomainResult},
-    inputs::document::{DocumentFilter, NewDocument, StoreDocument},
+    inputs::document::{DocumentFilter, DocumentSource, NewDocument, StoreDocument},
 };
 
 /// Decoded-size cap for stored files: 10 MiB.
@@ -101,6 +102,53 @@ fn mime_from_extension(file_name: &str) -> Option<String> {
     Some(mime.to_string())
 }
 
+/// Resolve and read a [`DocumentSource::InboxPath`] file from `inbox_dir`.
+///
+/// The path must be relative and contain only plain components (no `..`,
+/// no root) — violations are actionable `Invalid` errors. Containment is
+/// then enforced by canonicalizing BOTH the inbox root and the joined path
+/// and requiring prefix containment, so a symlink inside the inbox that
+/// points outside it is rejected. To avoid an existence oracle for paths
+/// outside the inbox, every resolution failure — missing file, missing
+/// inbox dir, unreadable file, or symlink escape — is the same `NotFound`
+/// naming only the inbox-relative path (never the server's absolute path).
+async fn read_inbox_file(inbox_dir: &str, source_path: &str) -> DomainResult<Vec<u8>> {
+    use std::path::{Component, Path};
+
+    let rel = Path::new(source_path);
+    if rel.is_absolute() {
+        return Err(DomainError::Invalid {
+            field: "source_path".into(),
+            message: "must be a path relative to the inbox directory, not absolute".into(),
+        });
+    }
+    if rel.components().any(|c| !matches!(c, Component::Normal(_))) {
+        return Err(DomainError::Invalid {
+            field: "source_path".into(),
+            message: "must not contain '..' or other non-plain path components".into(),
+        });
+    }
+
+    let not_found = || {
+        DomainError::NotFound(format!(
+            "No file named '{source_path}' in the inbox. Save the file into the inbox directory \
+             first, then pass its inbox-relative path as source_path."
+        ))
+    };
+    let root = tokio::fs::canonicalize(inbox_dir)
+        .await
+        .map_err(|_| not_found())?;
+    let resolved = tokio::fs::canonicalize(root.join(rel))
+        .await
+        .map_err(|_| not_found())?;
+    if !resolved.starts_with(&root) {
+        // Symlink escape: byte-identical to the missing-file error above so
+        // the response never reveals whether the outside target exists.
+        return Err(not_found());
+    }
+    tokio::fs::read(&resolved).await.map_err(|_| not_found())
+}
+
 /// Cross-reference guard for `linked_entity_type`/`linked_entity_id`: the
 /// target must exist AND belong to `vehicle_id`. A wrong-vehicle target is
 /// byte-identical `NotFound` to a nonexistent one (no ownership oracle).
@@ -153,25 +201,47 @@ async fn require_linked_entity(
     Ok(())
 }
 
-/// Validate, write the file under `files_dir`, and insert the document row.
+/// Validate, write the file under `config.files_dir`, and insert the
+/// document row.
 ///
 /// The single storage path shared by the HTTP upload handler and the MCP
 /// `attach_document` tool: size cap, filename sanitizing (traversal-proof),
-/// vehicle self-guard, and the linked-entity cross-reference guard all live
-/// here so neither surface can skip them. Layout on disk:
+/// inbox path containment, vehicle self-guard, and the linked-entity
+/// cross-reference guard all live here so neither surface can skip them.
+/// A [`DocumentSource::InboxPath`] file is COPIED out of `config.inbox_dir`
+/// — the inbox original is deliberately left in place (the LLM may retry,
+/// and the user may still want the original). Layout on disk:
 /// `{files_dir}/{vehicle_id or "general"}/{doc_type or "other"}/{timestamp}_{name}`.
+#[allow(clippy::too_many_lines)] // one linear validate-then-write pipeline
 pub async fn store(
     db: &impl ConnectionTrait,
-    files_dir: &str,
+    config: &AppConfig,
     input: StoreDocument,
 ) -> DomainResult<document::Model> {
-    if input.bytes.len() > MAX_FILE_BYTES {
+    let (bytes, source_basename) = match input.source {
+        DocumentSource::Bytes(bytes) => (bytes, None),
+        DocumentSource::InboxPath(ref path) => {
+            let bytes = read_inbox_file(&config.inbox_dir, path).await?;
+            let basename = std::path::Path::new(path)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned());
+            (bytes, basename)
+        }
+    };
+    // The size cap applies AFTER read, whatever the source.
+    if bytes.len() > MAX_FILE_BYTES {
         return Err(DomainError::BadRequest(format!(
             "File is {} bytes; the maximum is 10 MiB ({MAX_FILE_BYTES} bytes)",
-            input.bytes.len()
+            bytes.len()
         )));
     }
-    let safe_name = sanitize_filename(&input.file_name);
+    let Some(file_name) = input.file_name.or(source_basename) else {
+        return Err(DomainError::Invalid {
+            field: "file_name".into(),
+            message: "required when the file is passed as bytes".into(),
+        });
+    };
+    let safe_name = sanitize_filename(&file_name);
     if safe_name.trim_matches(['_', '.']).is_empty() {
         return Err(DomainError::Invalid {
             field: "file_name".into(),
@@ -206,7 +276,9 @@ pub async fn store(
     if type_dir.trim_matches(['_', '.']).is_empty() {
         type_dir = "other".into();
     }
-    let dir: PathBuf = [files_dir, &vid_dir, &type_dir].iter().collect();
+    let dir: PathBuf = [config.files_dir.as_str(), &vid_dir, &type_dir]
+        .iter()
+        .collect();
     tokio::fs::create_dir_all(&dir)
         .await
         .map_err(|e| DomainError::Internal(format!("failed to create files dir: {e}")))?;
@@ -227,7 +299,7 @@ pub async fn store(
         {
             Ok(mut file) => {
                 use tokio::io::AsyncWriteExt;
-                file.write_all(&input.bytes)
+                file.write_all(&bytes)
                     .await
                     .map_err(|e| DomainError::Internal(format!("failed to write file: {e}")))?;
                 break;
@@ -250,16 +322,16 @@ pub async fn store(
     // Stored relative to the files_dir root (how /files serves it back).
     let relative_path = format!("{vid_dir}/{type_dir}/{stored_name}");
     // MAX_FILE_BYTES (10 MiB) fits i32 comfortably.
-    let file_size_bytes = i32::try_from(input.bytes.len())
-        .map_err(|_| DomainError::BadRequest("File too large".into()))?;
+    let file_size_bytes =
+        i32::try_from(bytes.len()).map_err(|_| DomainError::BadRequest("File too large".into()))?;
 
     create(
         db,
         NewDocument {
             vehicle_id: input.vehicle_id,
-            title: input.title.unwrap_or_else(|| input.file_name.clone()),
+            title: input.title.unwrap_or_else(|| file_name.clone()),
             file_path: relative_path,
-            file_name: input.file_name,
+            file_name,
             mime_type: input.mime_type.or_else(|| mime_from_extension(&safe_name)),
             file_size_bytes: Some(file_size_bytes),
             doc_type: input.doc_type,
@@ -385,8 +457,8 @@ mod tests {
         StoreDocument {
             vehicle_id,
             title: None,
-            file_name: file_name.into(),
-            bytes: b"fake pdf bytes".to_vec(),
+            file_name: Some(file_name.into()),
+            source: DocumentSource::Bytes(b"fake pdf bytes".to_vec()),
             mime_type: None,
             doc_type: None,
             linked_entity_type: None,
@@ -394,6 +466,21 @@ mod tests {
             notes: None,
             extracted_text: None,
         }
+    }
+
+    fn cfg(files_dir: &std::path::Path, inbox_dir: &std::path::Path) -> AppConfig {
+        AppConfig {
+            db_path: String::new(),
+            listen: String::new(),
+            files_dir: files_dir.to_string_lossy().into_owned(),
+            inbox_dir: inbox_dir.to_string_lossy().into_owned(),
+        }
+    }
+
+    /// Config for tests that only exercise the bytes path: files under the
+    /// tempdir, inbox pointed at a nonexistent sibling.
+    fn files_cfg(files: &tempfile::TempDir) -> AppConfig {
+        cfg(files.path(), &files.path().join("inbox"))
     }
 
     #[tokio::test]
@@ -405,7 +492,7 @@ mod tests {
 
         let doc = store(
             &db,
-            files.path().to_str().unwrap(),
+            &files_cfg(&files),
             StoreDocument {
                 title: Some("FCP invoice".into()),
                 extracted_text: Some("Sachs clutch kit $899".into()),
@@ -437,7 +524,7 @@ mod tests {
         let files = tempfile::tempdir().unwrap();
         let doc = store(
             &db,
-            files.path().to_str().unwrap(),
+            &files_cfg(&files),
             store_input(Some(vid), "receipt.png"),
         )
         .await
@@ -453,9 +540,9 @@ mod tests {
         let files = tempfile::tempdir().unwrap();
         let err = store(
             &db,
-            files.path().to_str().unwrap(),
+            &files_cfg(&files),
             StoreDocument {
-                bytes: vec![0u8; MAX_FILE_BYTES + 1],
+                source: DocumentSource::Bytes(vec![0u8; MAX_FILE_BYTES + 1]),
                 ..store_input(Some(vid), "huge.bin")
             },
         )
@@ -482,7 +569,7 @@ mod tests {
         let files = tempfile::tempdir().unwrap();
         let doc = store(
             &db,
-            files.path().to_str().unwrap(),
+            &files_cfg(&files),
             store_input(Some(vid), "../../etc/passwd"),
         )
         .await
@@ -503,13 +590,9 @@ mod tests {
         let files = tempfile::tempdir().unwrap();
         for bad in ["", "../..", "///"] {
             assert!(matches!(
-                store(
-                    &db,
-                    files.path().to_str().unwrap(),
-                    store_input(Some(vid), bad)
-                )
-                .await
-                .unwrap_err(),
+                store(&db, &files_cfg(&files), store_input(Some(vid), bad))
+                    .await
+                    .unwrap_err(),
                 DomainError::Invalid { .. }
             ));
         }
@@ -520,13 +603,9 @@ mod tests {
         let db = test_db().await;
         let files = tempfile::tempdir().unwrap();
         assert!(matches!(
-            store(
-                &db,
-                files.path().to_str().unwrap(),
-                store_input(Some(999), "a.pdf")
-            )
-            .await
-            .unwrap_err(),
+            store(&db, &files_cfg(&files), store_input(Some(999), "a.pdf"))
+                .await
+                .unwrap_err(),
             DomainError::NotFound(_)
         ));
     }
@@ -547,10 +626,10 @@ mod tests {
 
         // Wrong-parent regression: another vehicle's record must read exactly
         // like a nonexistent one (no ownership oracle) — and nothing persists.
-        let wrong_parent = store(&db, files.path().to_str().unwrap(), link(foreign_svc))
+        let wrong_parent = store(&db, &files_cfg(&files), link(foreign_svc))
             .await
             .unwrap_err();
-        let nonexistent = store(&db, files.path().to_str().unwrap(), link(99_999))
+        let nonexistent = store(&db, &files_cfg(&files), link(99_999))
             .await
             .unwrap_err();
         assert_eq!(
@@ -609,10 +688,10 @@ mod tests {
                 linked_entity_id: Some(eid),
                 ..store_input(Some(owner), "invoice.pdf")
             };
-            let wrong_parent = store(&db, files.path().to_str().unwrap(), link(foreign_id))
+            let wrong_parent = store(&db, &files_cfg(&files), link(foreign_id))
                 .await
                 .unwrap_err();
-            let nonexistent = store(&db, files.path().to_str().unwrap(), link(99_999))
+            let nonexistent = store(&db, &files_cfg(&files), link(99_999))
                 .await
                 .unwrap_err();
             assert_eq!(
@@ -640,10 +719,8 @@ mod tests {
         let mut paths = std::collections::HashSet::new();
         for i in 0..3 {
             let mut input = store_input(Some(vid), "invoice.pdf");
-            input.bytes = format!("payload {i}").into_bytes();
-            let doc = store(&db, files.path().to_str().unwrap(), input)
-                .await
-                .unwrap();
+            input.source = DocumentSource::Bytes(format!("payload {i}").into_bytes());
+            let doc = store(&db, &files_cfg(&files), input).await.unwrap();
             let on_disk = tokio::fs::read(files.path().join(&doc.file_path))
                 .await
                 .unwrap();
@@ -664,7 +741,7 @@ mod tests {
 
         let err = store(
             &db,
-            files.path().to_str().unwrap(),
+            &files_cfg(&files),
             StoreDocument {
                 linked_entity_type: Some("build".into()),
                 linked_entity_id: Some(1),
@@ -684,7 +761,7 @@ mod tests {
         assert!(matches!(
             store(
                 &db,
-                files.path().to_str().unwrap(),
+                &files_cfg(&files),
                 StoreDocument {
                     linked_entity_type: Some("service".into()),
                     ..store_input(Some(vid), "a.pdf")
@@ -697,7 +774,7 @@ mod tests {
         assert!(matches!(
             store(
                 &db,
-                files.path().to_str().unwrap(),
+                &files_cfg(&files),
                 StoreDocument {
                     linked_entity_id: Some(1),
                     ..store_input(Some(vid), "a.pdf")
@@ -718,7 +795,7 @@ mod tests {
         assert!(matches!(
             store(
                 &db,
-                files.path().to_str().unwrap(),
+                &files_cfg(&files),
                 StoreDocument {
                     linked_entity_type: Some("service".into()),
                     linked_entity_id: Some(svc_id),
@@ -728,6 +805,244 @@ mod tests {
             .await
             .unwrap_err(),
             DomainError::BadRequest(_)
+        ));
+    }
+
+    // ─── store(): inbox source (`DocumentSource::InboxPath`) ────────────
+
+    fn inbox_input(vehicle_id: Option<i32>, source_path: &str) -> StoreDocument {
+        StoreDocument {
+            file_name: None,
+            source: DocumentSource::InboxPath(source_path.into()),
+            ..store_input(vehicle_id, "ignored")
+        }
+    }
+
+    #[tokio::test]
+    async fn store_inbox_copies_file_and_keeps_the_original() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let files = tempfile::tempdir().unwrap();
+        let inbox = tempfile::tempdir().unwrap();
+        std::fs::write(inbox.path().join("invoice.pdf"), b"real invoice bytes").unwrap();
+
+        let doc = store(
+            &db,
+            &cfg(files.path(), inbox.path()),
+            inbox_input(Some(vid), "invoice.pdf"),
+        )
+        .await
+        .unwrap();
+
+        // file_name defaults to the inbox file's basename.
+        assert_eq!(doc.file_name, "invoice.pdf");
+        assert_eq!(doc.title, "invoice.pdf");
+        assert_eq!(doc.mime_type.as_deref(), Some("application/pdf"));
+        assert_eq!(doc.file_size_bytes, Some(18));
+        let on_disk = std::fs::read(files.path().join(&doc.file_path)).unwrap();
+        assert_eq!(on_disk, b"real invoice bytes");
+        // COPY semantics: the inbox original must still be there, intact.
+        assert_eq!(
+            std::fs::read(inbox.path().join("invoice.pdf")).unwrap(),
+            b"real invoice bytes"
+        );
+    }
+
+    #[tokio::test]
+    async fn store_inbox_accepts_subdirectory_paths() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let files = tempfile::tempdir().unwrap();
+        let inbox = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(inbox.path().join("scans/june")).unwrap();
+        std::fs::write(inbox.path().join("scans/june/invoice.pdf"), b"scan").unwrap();
+
+        let doc = store(
+            &db,
+            &cfg(files.path(), inbox.path()),
+            inbox_input(Some(vid), "scans/june/invoice.pdf"),
+        )
+        .await
+        .unwrap();
+        // Basename only — the inbox subdirectories don't leak into the name.
+        assert_eq!(doc.file_name, "invoice.pdf");
+        assert_eq!(
+            std::fs::read(files.path().join(&doc.file_path)).unwrap(),
+            b"scan"
+        );
+    }
+
+    #[tokio::test]
+    async fn store_inbox_explicit_file_name_overrides_basename() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let files = tempfile::tempdir().unwrap();
+        let inbox = tempfile::tempdir().unwrap();
+        std::fs::write(inbox.path().join("upload_tmp_8341"), b"bytes").unwrap();
+
+        let doc = store(
+            &db,
+            &cfg(files.path(), inbox.path()),
+            StoreDocument {
+                file_name: Some("fcp-invoice.pdf".into()),
+                ..inbox_input(Some(vid), "upload_tmp_8341")
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(doc.file_name, "fcp-invoice.pdf");
+        assert_eq!(doc.mime_type.as_deref(), Some("application/pdf"));
+    }
+
+    #[tokio::test]
+    async fn store_inbox_rejects_absolute_paths() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let files = tempfile::tempdir().unwrap();
+        let inbox = tempfile::tempdir().unwrap();
+
+        let err = store(
+            &db,
+            &cfg(files.path(), inbox.path()),
+            inbox_input(Some(vid), "/etc/passwd"),
+        )
+        .await
+        .unwrap_err();
+        match err {
+            DomainError::Invalid { field, message } => {
+                assert_eq!(field, "source_path");
+                assert!(message.contains("relative"), "{message}");
+            }
+            other => panic!("expected Invalid, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn store_inbox_rejects_parent_dir_components() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let files = tempfile::tempdir().unwrap();
+        let inbox = tempfile::tempdir().unwrap();
+
+        for bad in ["../outside.pdf", "scans/../../outside.pdf", "./invoice.pdf"] {
+            let err = store(
+                &db,
+                &cfg(files.path(), inbox.path()),
+                inbox_input(Some(vid), bad),
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                matches!(&err, DomainError::Invalid { field, .. } if field == "source_path"),
+                "{bad} must be Invalid(source_path), got {err:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn store_inbox_missing_file_names_the_relative_path_only() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let files = tempfile::tempdir().unwrap();
+        let inbox = tempfile::tempdir().unwrap();
+
+        let err = store(
+            &db,
+            &cfg(files.path(), inbox.path()),
+            inbox_input(Some(vid), "no-such.pdf"),
+        )
+        .await
+        .unwrap_err();
+        match err {
+            DomainError::NotFound(msg) => {
+                assert!(msg.contains("'no-such.pdf'"), "{msg}");
+                // The server's absolute inbox path must not leak.
+                assert!(
+                    !msg.contains(inbox.path().to_str().unwrap()),
+                    "absolute server path leaked: {msg}"
+                );
+            }
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn store_inbox_symlink_escape_reads_exactly_like_missing() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let files = tempfile::tempdir().unwrap();
+        let inbox = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), b"secret").unwrap();
+        std::os::unix::fs::symlink(
+            outside.path().join("secret.txt"),
+            inbox.path().join("link.pdf"),
+        )
+        .unwrap();
+
+        let config = cfg(files.path(), inbox.path());
+        // A symlink escaping the inbox and a plain missing file must produce
+        // byte-identical NotFound errors (modulo the requested name) — no
+        // oracle for whether the outside target exists.
+        let escape = store(&db, &config, inbox_input(Some(vid), "link.pdf"))
+            .await
+            .unwrap_err();
+        let missing = store(&db, &config, inbox_input(Some(vid), "missing.pdf"))
+            .await
+            .unwrap_err();
+        assert!(matches!(escape, DomainError::NotFound(_)), "{escape:?}");
+        assert_eq!(
+            escape.to_string().replace("link.pdf", "missing.pdf"),
+            missing.to_string()
+        );
+        // Nothing persisted, on disk or in the DB.
+        assert!(
+            list(&db, DocumentFilter::default())
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn store_inbox_rejects_over_cap_files() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let files = tempfile::tempdir().unwrap();
+        let inbox = tempfile::tempdir().unwrap();
+        std::fs::write(inbox.path().join("huge.bin"), vec![0u8; MAX_FILE_BYTES + 1]).unwrap();
+
+        let err = store(
+            &db,
+            &cfg(files.path(), inbox.path()),
+            inbox_input(Some(vid), "huge.bin"),
+        )
+        .await
+        .unwrap_err();
+        match err {
+            DomainError::BadRequest(msg) => assert!(msg.contains("10 MiB"), "{msg}"),
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn store_bytes_without_file_name_is_invalid() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let files = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            store(
+                &db,
+                &files_cfg(&files),
+                StoreDocument {
+                    file_name: None,
+                    ..store_input(Some(vid), "ignored")
+                },
+            )
+            .await
+            .unwrap_err(),
+            DomainError::Invalid { .. }
         ));
     }
 
