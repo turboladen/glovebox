@@ -30,6 +30,13 @@
 //!    (e.g. `garage-pi.local:3003`) must opt in via the
 //!    `GLOVEBOX_MCP_ALLOWED_HOSTS` env var — comma-separated, an entry
 //!    without a port matches any port.
+//! 3. **Everything under `GLOVEBOX_INBOX_DIR` is exposable to the LAN.**
+//!    `attach_document`'s `source_path` lets any LAN peer ingest any file
+//!    inside the inbox into the document store and read it back over
+//!    `/files` (containment prevents reaching *outside* the inbox, symlinks
+//!    included). Point the inbox at a DEDICATED directory used only for
+//!    glovebox hand-offs — never a broad directory like a home folder or an
+//!    AI client's general working dir.
 
 use std::sync::Arc;
 
