@@ -24,6 +24,7 @@ sea-orm.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
+if-addrs = "0.15"
 
 [dev-dependencies]
 glovebox-shared = { path = "../glovebox-shared", features = ["test-support"] }
