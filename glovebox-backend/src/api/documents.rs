@@ -52,9 +52,18 @@ struct ParsedUpload {
     linked_entity_type: Option<String>,
     linked_entity_id: Option<i32>,
     notes: Option<String>,
+    extracted_text: Option<String>,
     file_name: Option<String>,
     file_data: Vec<u8>,
     mime_type: Option<String>,
+}
+
+/// Read a multipart part as text, mapping read errors to 400s.
+async fn text_part(field: axum::extract::multipart::Field<'_>) -> Result<String> {
+    field
+        .text()
+        .await
+        .map_err(|e| ApiError::BadRequest(e.to_string()))
 }
 
 async fn parse_multipart(mut multipart: Multipart) -> Result<ParsedUpload> {
@@ -64,6 +73,7 @@ async fn parse_multipart(mut multipart: Multipart) -> Result<ParsedUpload> {
     let mut linked_entity_type: Option<String> = None;
     let mut linked_entity_id: Option<i32> = None;
     let mut notes: Option<String> = None;
+    let mut extracted_text: Option<String> = None;
     let mut file_name: Option<String> = None;
     let mut file_data: Option<Vec<u8>> = None;
     let mut mime_type: Option<String> = None;
@@ -76,57 +86,26 @@ async fn parse_multipart(mut multipart: Multipart) -> Result<ParsedUpload> {
         let name = field.name().unwrap_or("").to_string();
         match name.as_str() {
             "vehicle_id" => {
-                let text = field
-                    .text()
-                    .await
-                    .map_err(|e| ApiError::BadRequest(e.to_string()))?;
                 vehicle_id = Some(
-                    text.parse()
+                    text_part(field)
+                        .await?
+                        .parse()
                         .map_err(|_| ApiError::BadRequest("Invalid vehicle_id".into()))?,
                 );
             }
-            "title" => {
-                title = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|e| ApiError::BadRequest(e.to_string()))?,
-                );
-            }
-            "doc_type" => {
-                doc_type = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|e| ApiError::BadRequest(e.to_string()))?,
-                );
-            }
-            "linked_entity_type" => {
-                linked_entity_type = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|e| ApiError::BadRequest(e.to_string()))?,
-                );
-            }
+            "title" => title = Some(text_part(field).await?),
+            "doc_type" => doc_type = Some(text_part(field).await?),
+            "linked_entity_type" => linked_entity_type = Some(text_part(field).await?),
             "linked_entity_id" => {
-                let text = field
-                    .text()
-                    .await
-                    .map_err(|e| ApiError::BadRequest(e.to_string()))?;
                 linked_entity_id = Some(
-                    text.parse()
+                    text_part(field)
+                        .await?
+                        .parse()
                         .map_err(|_| ApiError::BadRequest("Invalid linked_entity_id".into()))?,
                 );
             }
-            "notes" => {
-                notes = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|e| ApiError::BadRequest(e.to_string()))?,
-                );
-            }
+            "notes" => notes = Some(text_part(field).await?),
+            "extracted_text" => extracted_text = Some(text_part(field).await?),
             "file" => {
                 file_name = field.file_name().map(std::string::ToString::to_string);
                 mime_type = field.content_type().map(std::string::ToString::to_string);
@@ -149,6 +128,7 @@ async fn parse_multipart(mut multipart: Multipart) -> Result<ParsedUpload> {
         linked_entity_type,
         linked_entity_id,
         notes,
+        extracted_text,
         file_name,
         file_data: file_data.ok_or_else(|| ApiError::BadRequest("No file provided".into()))?,
         mime_type,
@@ -176,7 +156,7 @@ pub async fn upload(
             linked_entity_type: parsed.linked_entity_type,
             linked_entity_id: parsed.linked_entity_id,
             notes: parsed.notes,
-            extracted_text: None,
+            extracted_text: parsed.extracted_text,
         },
     )
     .await?;

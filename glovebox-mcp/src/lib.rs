@@ -59,6 +59,9 @@ mod schemas;
 /// `inbox_dir` for its `source_path` inbox (where LLM clients drop real
 /// files so the bytes never travel through model context).
 pub fn router(db: DatabaseConnection, config: Arc<AppConfig>) -> Router {
+    // Enumerated once at mount time: the interface set only changes on
+    // network reconfiguration, which in practice comes with a restart.
+    let base_urls: Arc<str> = candidate_base_urls(&config.listen).join(", ").into();
     let default_config = StreamableHttpServerConfig::default();
     let allowed_hosts = merge_allowed_hosts(
         default_config.allowed_hosts.clone(),
@@ -71,13 +74,48 @@ pub fn router(db: DatabaseConnection, config: Arc<AppConfig>) -> Router {
     http_config.json_response = true;
 
     let streamable = StreamableHttpService::new(
-        move || Ok(GloveboxMcp::new(db.clone(), config.clone())),
+        move || {
+            Ok(GloveboxMcp::new(
+                db.clone(),
+                config.clone(),
+                base_urls.clone(),
+            ))
+        },
         // Required by the constructor; unused when stateful_mode is false.
         Arc::new(LocalSessionManager::default()),
         http_config,
     );
 
     Router::new().fallback_service(streamable)
+}
+
+/// Candidate HTTP base URLs for the multipart upload route, advertised in the
+/// server instructions so a sandboxed-but-networked client (e.g. Claude
+/// Desktop's VM, which cannot see the host inbox) knows where to aim `curl`:
+/// the machine's non-loopback, non-link-local IPv4 addresses first (a VM
+/// reaches the host by LAN IP, not the host's loopback), then localhost.
+/// The port comes from `listen` (`GLOVEBOX_LISTEN`), falling back to 3003
+/// when unparseable; interface-enumeration failure degrades gracefully to
+/// localhost only.
+fn candidate_base_urls(listen: &str) -> Vec<String> {
+    let port = listen
+        .rsplit(':')
+        .next()
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(3003);
+    let mut urls: Vec<String> = if_addrs::get_if_addrs()
+        .map(|ifaces| {
+            ifaces
+                .iter()
+                .filter(|i| !i.is_loopback() && !i.is_link_local() && i.ip().is_ipv4())
+                .map(|i| format!("http://{}:{port}", i.ip()))
+                .collect()
+        })
+        .unwrap_or_default();
+    urls.sort();
+    urls.dedup();
+    urls.push(format!("http://localhost:{port}"));
+    urls
 }
 
 /// Build the MCP host allowlist by appending operator-supplied hostnames from
@@ -101,7 +139,7 @@ fn merge_allowed_hosts(defaults: Vec<String>, env_value: Option<&str>) -> Vec<St
 
 #[cfg(test)]
 mod tests {
-    use super::merge_allowed_hosts;
+    use super::{candidate_base_urls, merge_allowed_hosts};
     use rmcp::transport::streamable_http_server::tower::StreamableHttpServerConfig;
 
     fn fake_defaults() -> Vec<String> {
@@ -125,6 +163,25 @@ mod tests {
             ),
             expected,
         );
+    }
+
+    #[test]
+    fn base_urls_derive_port_from_listen_and_end_with_localhost() {
+        let urls = candidate_base_urls("0.0.0.0:9999");
+        assert_eq!(urls.last().unwrap(), "http://localhost:9999");
+        assert!(urls.iter().all(|u| u.ends_with(":9999")));
+        assert!(
+            !urls.iter().any(|u| u.contains("127.0.0.1")),
+            "loopback interfaces must be excluded (localhost entry covers them): {urls:?}"
+        );
+    }
+
+    /// Unparseable listen (e.g. the empty string test configs use) must not
+    /// lose the route — fall back to the default port, localhost included.
+    #[test]
+    fn base_urls_degrade_gracefully_on_unparseable_listen() {
+        let urls = candidate_base_urls("");
+        assert_eq!(urls.last().unwrap(), "http://localhost:3003");
     }
 
     /// Confirms the call site reads rmcp's defaults instead of hardcoding

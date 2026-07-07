@@ -509,13 +509,16 @@ impl FileResearchFindingInput {
 pub struct AttachDocumentInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
-    /// THE way to attach a real file: save the file into the glovebox inbox
-    /// directory with your file tools, then pass its path RELATIVE to that
-    /// directory here (e.g. "fcp-invoice-2026-06.pdf"). Do NOT read a file
-    /// and re-emit it as base64 — the server reads the bytes from the inbox
-    /// itself (byte-perfect, no tokens spent) and COPIES them into its
-    /// document store; the inbox original is left in place. Exactly one of
-    /// `source_path` or `content_base64` must be set.
+    /// THE way to attach a real file when your file tools share this
+    /// server's filesystem: save the file into the glovebox inbox directory,
+    /// then pass its path RELATIVE to that directory here (e.g.
+    /// "fcp-invoice-2026-06.pdf"). Do NOT read a file and re-emit it as
+    /// base64 — the server reads the bytes from the inbox itself
+    /// (byte-perfect, no tokens spent) and COPIES them into its document
+    /// store; the inbox original is left in place. If your shell is
+    /// sandboxed and cannot see the server's disk, use the HTTP multipart
+    /// route from the server instructions instead of this tool. Exactly one
+    /// of `source_path` or `content_base64` must be set.
     pub source_path: Option<String>,
     /// Inline file bytes, base64-encoded (standard alphabet, with padding)
     /// — ONLY for trivially small payloads (under ~100 KB) you produced

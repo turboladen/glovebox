@@ -48,14 +48,21 @@ pub const VEHICLES_URI: &str = "glovebox://vehicles";
 pub struct GloveboxMcp {
     db: Arc<DatabaseConnection>,
     config: Arc<AppConfig>,
+    /// Comma-joined candidate base URLs for the HTTP multipart upload route
+    /// (non-loopback IPv4 addresses + localhost, port from `config.listen`),
+    /// baked
+    /// into the served instructions so sandboxed-but-networked clients can
+    /// reach `/api/documents` directly. Built once in [`crate::router`].
+    base_urls: Arc<str>,
 }
 
 #[tool_router]
 impl GloveboxMcp {
-    pub fn new(db: DatabaseConnection, config: Arc<AppConfig>) -> Self {
+    pub fn new(db: DatabaseConnection, config: Arc<AppConfig>, base_urls: Arc<str>) -> Self {
         Self {
             db: Arc::new(db),
             config,
+            base_urls,
         }
     }
 
@@ -514,7 +521,7 @@ impl GloveboxMcp {
 
     #[tool(
         name = "attach_document",
-        description = "Store a file (scanned invoice, receipt, manual page, photo) against a vehicle: the bytes land on disk and a document record is created. To attach a real file, save it into the glovebox inbox directory with your file tools, then pass its inbox-relative path as `source_path` — do NOT read a file and re-emit it as base64 (lossy, corruption-prone, token-expensive); the server reads the inbox file itself and copies it into its store, leaving the original in place. `content_base64` exists only for trivially small payloads (under ~100 KB) you produced yourself. Max 10 MiB either way. ALWAYS pass `extracted_text` with the text you read out of the document — that is what makes it findable later via `find_documents`. Link it to the record it belongs to (e.g. the service record you just created from the invoice) via `linked_entity_type` + `linked_entity_id`.",
+        description = "Store a file (scanned invoice, receipt, manual page, photo) against a vehicle: the bytes land on disk and a document record is created. Getting real file bytes in — take the FIRST route that works: (a) your file tools share this server's filesystem → save the file into the glovebox inbox directory, then pass its inbox-relative path as `source_path` (the server reads it itself, byte-perfect, leaving the original in place); (b) your shell is sandboxed but has network → skip this tool for the bytes and `curl -F` the file as multipart to the server's `POST /api/documents` endpoint instead (same fields incl. `extracted_text`; candidate base URLs are in the server instructions); (c) neither → ask the USER to drop the file into the inbox directory and re-call with `source_path`. `content_base64` is strictly last-resort for trivially small payloads (under ~100 KB) you produced yourself — NEVER re-emit an existing file's bytes as base64 (lossy, corruption-prone, token-expensive). Max 10 MiB either way. ALWAYS pass `extracted_text` with the text you read out of the document — that is what makes it findable later via `find_documents`. Link it to the record it belongs to (e.g. the service record you just created from the invoice) via `linked_entity_type` + `linked_entity_id`.",
         input_schema = rmcp::handler::server::common::schema_for_type::<AttachDocumentInput>()
     )]
     async fn attach_document(
@@ -592,17 +599,27 @@ impl ServerHandler for GloveboxMcp {
                  completed work, `record_part` for parts bought or installed, `log_incident` for \
                  symptoms/damage/accidents, `save_note` for facts worth remembering, \
                  `log_mileage` whenever the user mentions an odometer reading, `attach_document` \
-                 for scanned invoices/receipts — to attach a real file, save it into the glovebox \
-                 inbox directory (this server reads it from `{inbox_dir}`) with your file tools \
-                 and pass its inbox-relative path as `source_path`; NEVER re-emit file bytes as \
-                 base64 (`content_base64` is only for trivially small payloads you produced \
-                 yourself). Pass your extraction as `extracted_text` and link the service record \
-                 so one conversation yields record + document. (5) LOOK THINGS UP — \
+                 for scanned invoices/receipts. ATTACHING A REAL FILE — take the FIRST route that \
+                 works: (a) your file tools see this server's filesystem → save the file into the \
+                 inbox dir `{inbox_dir}` and pass its inbox-relative path as `source_path`; (b) \
+                 your shell is sandboxed but has network → upload the bytes over HTTP instead: \
+                 `curl -sS -F \"file=@<path>\" -F \"vehicle_id=<id>\" -F \"title=<title>\" -F \
+                 \"doc_type=<type>\" -F \"extracted_text=<text>\" -F \
+                 \"linked_entity_type=service\" -F \"linked_entity_id=<id>\" \
+                 <BASE>/api/documents` — byte-perfect, no tokens; the JSON reply is the document \
+                 row (use its `id`). Candidate <BASE> values (try in order; the first where `curl \
+                 -sS -m 3 <BASE>/api/health` answers wins): {base_urls}; (c) neither → ask the \
+                 USER to drop the file into `{inbox_dir}` and re-call with `source_path`. \
+                 `content_base64` is strictly last-resort for tiny payloads you produced yourself \
+                 — NEVER re-emit an existing file's bytes as base64. Whichever route, pass the \
+                 text you read out of the document as `extracted_text` and link the service \
+                 record so one conversation yields record + document. (5) LOOK THINGS UP — \
                  `find_documents` for receipts/manuals, `search_records` for anything else, \
                  `cost_summary` for spend. (6) PROJECTS — `list_builds` / `get_build_progress` / \
                  `update_build_status` for upgrade or restoration builds. All money is integer \
                  cents; all dates are YYYY-MM-DD.",
                 inbox_dir = self.config.inbox_dir,
+                base_urls = self.base_urls,
             ))
     }
 

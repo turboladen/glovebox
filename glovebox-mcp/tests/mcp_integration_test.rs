@@ -238,6 +238,50 @@ fn extract_json(body: &str) -> serde_json::Value {
     serde_json::from_str(raw).unwrap_or_else(|e| panic!("unparseable rpc body ({e}): {body}"))
 }
 
+/// glovebox-zeeh: sandboxed clients (e.g. Claude Desktop's VM) cannot see
+/// the host inbox, so the served instructions must teach the full
+/// file-attachment decision tree — the inbox path (shared filesystem), the
+/// HTTP multipart route with its health probe and at least the localhost
+/// base URL (sandboxed-but-networked shells), and the ask-the-user +
+/// `content_base64` last resorts.
+#[tokio::test]
+async fn instructions_teach_the_file_attachment_decision_tree() {
+    let (app, _db, _files, inbox) = setup_with_inbox().await;
+    let init = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "initialize",
+        "id": 1,
+        "params": {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": { "name": "glovebox-mcp-test", "version": "0" }
+        }
+    })
+    .to_string();
+    let body = post_rpc(&app, init).await;
+    let instructions = extract_json(&body)["result"]["instructions"]
+        .as_str()
+        .expect("initialize result must carry instructions")
+        .to_owned();
+
+    let inbox_dir = inbox.path().to_string_lossy().into_owned();
+    for marker in [
+        inbox_dir.as_str(), // route (a): shared-filesystem inbox
+        "source_path",
+        "/api/documents", // route (b): HTTP multipart upload
+        "curl",
+        "extracted_text",
+        "/api/health",           // reachability probe for the base URLs
+        "http://localhost:3003", // always-present base (test listen is empty → default port)
+        "content_base64",        // last resort
+    ] {
+        assert!(
+            instructions.contains(marker),
+            "instructions must contain {marker:?}; got: {instructions}"
+        );
+    }
+}
+
 // ─── Tools ──────────────────────────────────────────────────────
 
 /// The glovebox-9k0x regression: a client whose handshake happened against a
