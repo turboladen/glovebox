@@ -302,6 +302,13 @@ pub async fn store(
                 file.write_all(&bytes)
                     .await
                     .map_err(|e| DomainError::Internal(format!("failed to write file: {e}")))?;
+                // `tokio::fs::File` buffers; dropping it without an explicit
+                // flush can drop the pending write (races through under load —
+                // it stored an empty file intermittently on CI). Flush before
+                // the handle drops so the bytes are guaranteed on disk.
+                file.flush()
+                    .await
+                    .map_err(|e| DomainError::Internal(format!("failed to flush file: {e}")))?;
                 break;
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {

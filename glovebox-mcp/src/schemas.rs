@@ -509,23 +509,25 @@ impl FileResearchFindingInput {
 pub struct AttachDocumentInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
-    /// THE way to attach a real file when your file tools share this
-    /// server's filesystem: save the file into the glovebox inbox directory,
-    /// then pass its path RELATIVE to that directory here (e.g.
-    /// "fcp-invoice-2026-06.pdf"). Do NOT read a file and re-emit it as
-    /// base64 — the server reads the bytes from the inbox itself
+    /// THE way to attach a real file. This path is resolved on the SERVER,
+    /// inside its inbox directory — you do NOT need to see, mount, or have
+    /// any access to that directory to use it. If the file is already in
+    /// the inbox (e.g. the user put it there, or told you its name), just
+    /// pass the name verbatim (e.g. "fcp-invoice-2026-06.pdf"). If your
+    /// file tools share the server's filesystem, you can save the file into
+    /// the inbox yourself first. The server reads the bytes from disk
     /// (byte-perfect, no tokens spent) and COPIES them into its document
-    /// store; the inbox original is left in place. If your shell is
-    /// sandboxed and cannot see the server's disk, use the HTTP multipart
-    /// route from the server instructions instead of this tool. Exactly one
-    /// of `source_path` or `content_base64` must be set.
+    /// store; the inbox original is left in place. Exactly one of
+    /// `source_path` or `content_base64` must be set.
     pub source_path: Option<String>,
     /// Inline file bytes, base64-encoded (standard alphabet, with padding)
     /// — ONLY for trivially small payloads (under ~100 KB) you produced
-    /// yourself, e.g. a short text note. Never regenerate an existing
-    /// file's bytes as base64 (lossy, corruption-prone, token-expensive) —
-    /// save it into the inbox and use `source_path` instead. Decoded size
-    /// cap: 10 MiB.
+    /// yourself, e.g. a short text note. NEVER for an existing real file —
+    /// not even a compressed/downsized copy of one; re-emitting bytes as
+    /// base64 is lossy, corruption-prone, and token-expensive. If you
+    /// cannot use `source_path` or the HTTP upload route, STOP and ask the
+    /// user to put the file in the server's inbox and tell you its name —
+    /// then call this tool with `source_path`. Decoded size cap: 10 MiB.
     pub content_base64: Option<String>,
     /// Original file name with extension, e.g. "fcp-invoice-2026-06.pdf".
     /// Used for the stored name and MIME detection; unsafe characters are
