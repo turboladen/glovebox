@@ -238,12 +238,14 @@ fn extract_json(body: &str) -> serde_json::Value {
     serde_json::from_str(raw).unwrap_or_else(|e| panic!("unparseable rpc body ({e}): {body}"))
 }
 
-/// glovebox-zeeh: sandboxed clients (e.g. Claude Desktop's VM) cannot see
-/// the host inbox, so the served instructions must teach the full
-/// file-attachment decision tree — the inbox path (shared filesystem), the
-/// HTTP multipart route with its health probe and at least the localhost
-/// base URL (sandboxed-but-networked shells), and the ask-the-user +
-/// `content_base64` last resorts.
+/// glovebox-zeeh / glovebox-tht1: sandboxed clients (e.g. Claude Desktop's
+/// VM) cannot see the host inbox, so the served instructions must teach the
+/// full file-attachment decision tree — the inbox path (shared filesystem),
+/// the HTTP multipart route with its health probe and at least the localhost
+/// base URL (sandboxed-but-networked shells), and the ask-the-user STOP as
+/// the final route. There is NO base64 escape hatch: the instructions must
+/// not mention `content_base64`/base64 at all (removing it is the behavioral
+/// fix — the model degraded real scans to fit that parameter).
 #[tokio::test]
 async fn instructions_teach_the_file_attachment_decision_tree() {
     let (app, _db, _files, inbox) = setup_with_inbox().await;
@@ -273,11 +275,21 @@ async fn instructions_teach_the_file_attachment_decision_tree() {
         "extracted_text",
         "/api/health",           // reachability probe for the base URLs
         "http://localhost:3003", // always-present base (test listen is empty → default port)
-        "content_base64",        // last resort
+        "Ask the USER",          // route (d): the final STOP-and-ask, no base64 escape
     ] {
         assert!(
             instructions.contains(marker),
             "instructions must contain {marker:?}; got: {instructions}"
+        );
+    }
+    // The base64 escape hatch is GONE — its very presence made the model
+    // degrade real files to fit it (glovebox-tht1). It must not reappear in
+    // the served guidance.
+    for forbidden in ["content_base64", "base64"] {
+        assert!(
+            !instructions.contains(forbidden),
+            "instructions must not mention {forbidden:?} (the escape hatch was removed); got: \
+             {instructions}"
         );
     }
 }
@@ -1810,21 +1822,18 @@ async fn malformed_arguments_are_schema_errors_not_protocol_failures() {
     );
 }
 
-// ─── attach_document (unit: import reconciliation) ──────────────
-
-fn b64(bytes: &[u8]) -> String {
-    use base64::Engine as _;
-    base64::engine::general_purpose::STANDARD.encode(bytes)
-}
+// ─── attach_document via source_path (the inbox — the ONLY way to
+//     attach a file; there is no inline-bytes route) ──────────────
 
 #[tokio::test]
-async fn attach_document_stores_file_and_indexes_extracted_text() {
-    let (app, db, files) = setup().await;
+async fn attach_document_source_path_copies_and_indexes_extracted_text() {
+    let (app, db, files, inbox) = setup_with_inbox().await;
     handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
     let record = svc_svc::create(&db, v.id, minimal_service("2026-06-01", "Clutch job", None))
         .await
         .unwrap();
+    std::fs::write(inbox.path().join("fcp-invoice.pdf"), b"real scanned bytes").unwrap();
 
     let body = post_rpc(
         &app,
@@ -1832,8 +1841,7 @@ async fn attach_document_stores_file_and_indexes_extracted_text() {
             "attach_document",
             serde_json::json!({
                 "vehicle_id": v.id,
-                "file_name": "fcp-invoice.pdf",
-                "content_base64": b64(b"fake pdf bytes"),
+                "source_path": "fcp-invoice.pdf",
                 "title": "FCP Euro invoice",
                 "extracted_text": "Sachs SRE clutch kit, flywheel bolts, total $899.00",
                 "linked_entity_type": "service",
@@ -1844,16 +1852,23 @@ async fn attach_document_stores_file_and_indexes_extracted_text() {
     .await;
     assert_success(&body);
     let doc = tool_payload(&body);
-    assert_eq!(doc["title"], "FCP Euro invoice");
+    // file_name defaulted to the inbox file's basename.
     assert_eq!(doc["file_name"], "fcp-invoice.pdf");
+    assert_eq!(doc["title"], "FCP Euro invoice");
     assert_eq!(doc["mime_type"], "application/pdf");
     assert_eq!(doc["linked_entity_type"], "service");
     assert_eq!(doc["linked_entity_id"], record.record.id);
 
-    // The bytes really landed on disk under the configured files_dir.
+    // The bytes were COPIED into files_dir…
     let rel_path = doc["file_path"].as_str().expect("file_path");
-    let on_disk = std::fs::read(files.path().join(rel_path)).expect("stored file must exist");
-    assert_eq!(on_disk, b"fake pdf bytes");
+    let stored = std::fs::read(files.path().join(rel_path)).expect("stored file must exist");
+    assert_eq!(stored, b"real scanned bytes");
+    // …and the inbox original is still there, intact (the LLM may retry,
+    // the user may want it).
+    assert_eq!(
+        std::fs::read(inbox.path().join("fcp-invoice.pdf")).unwrap(),
+        b"real scanned bytes"
+    );
 
     // The LLM's extraction is FTS-indexed: find_documents matches content
     // that appears nowhere in the title or file name.
@@ -1872,8 +1887,11 @@ async fn attach_document_stores_file_and_indexes_extracted_text() {
     );
 }
 
+/// With the base64 escape hatch removed, `source_path` is the only file
+/// source — a call omitting it must come back as an actionable tool error
+/// (not a bare JSON-RPC -32602) that steers toward source_path.
 #[tokio::test]
-async fn attach_document_rejects_malformed_base64() {
+async fn attach_document_requires_source_path() {
     let (app, db, files) = setup().await;
     handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
@@ -1882,41 +1900,34 @@ async fn attach_document_rejects_malformed_base64() {
         &app,
         call_tool(
             "attach_document",
-            serde_json::json!({
-                "vehicle_id": v.id,
-                "file_name": "broken.pdf",
-                "content_base64": "this is !!! not base64 %%%"
-            }),
+            serde_json::json!({ "vehicle_id": v.id, "file_name": "a.pdf" }),
         ),
     )
     .await;
     assert_tool_error(&body);
     assert!(
-        body.contains("base64"),
-        "the error must name the encoding problem; got: {body}"
+        body.contains("source_path"),
+        "must steer toward source_path; got: {body}"
     );
-    // Nothing persisted, on disk or in the DB.
-    assert!(
-        std::fs::read_dir(files.path()).unwrap().next().is_none(),
-        "no file may be written for a rejected upload"
-    );
+    // Nothing was written to files_dir by the rejected call.
+    assert!(std::fs::read_dir(files.path()).unwrap().next().is_none());
 }
 
 #[tokio::test]
 async fn attach_document_rejects_files_over_the_10_mib_cap() {
-    let (app, db, files) = setup().await;
+    let (app, db, files, inbox) = setup_with_inbox().await;
     handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
 
     let oversize = vec![0u8; glovebox_shared::services::document::MAX_FILE_BYTES + 1];
+    std::fs::write(inbox.path().join("huge.bin"), oversize).unwrap();
     let body = post_rpc(
         &app,
         call_tool(
             "attach_document",
             serde_json::json!({
                 "vehicle_id": v.id,
-                "file_name": "huge.bin",
-                "content_base64": b64(&oversize)
+                "source_path": "huge.bin"
             }),
         ),
     )
@@ -1931,18 +1942,21 @@ async fn attach_document_rejects_files_over_the_10_mib_cap() {
 
 #[tokio::test]
 async fn attach_document_neutralizes_traversal_file_names() {
-    let (app, db, files) = setup().await;
+    let (app, db, files, inbox) = setup_with_inbox().await;
     handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
+    std::fs::write(inbox.path().join("scan.pdf"), b"innocent bytes").unwrap();
 
+    // An explicit file_name carrying traversal must be sanitized, even though
+    // the bytes come from a safe inbox path.
     let body = post_rpc(
         &app,
         call_tool(
             "attach_document",
             serde_json::json!({
                 "vehicle_id": v.id,
-                "file_name": "../../../etc/passwd",
-                "content_base64": b64(b"innocent bytes")
+                "source_path": "scan.pdf",
+                "file_name": "../../../etc/passwd"
             }),
         ),
     )
@@ -1959,13 +1973,14 @@ async fn attach_document_neutralizes_traversal_file_names() {
 
 #[tokio::test]
 async fn attach_document_wrong_vehicle_link_reads_as_missing() {
-    let (app, db, _files) = setup().await;
+    let (app, db, _files, inbox) = setup_with_inbox().await;
     handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Mine")).await.unwrap();
     let other = vehicle::create(&db, new_vehicle("Other")).await.unwrap();
     let foreign = svc_svc::create(&db, other.id, minimal_service("2026-06-01", "Theirs", None))
         .await
         .unwrap();
+    std::fs::write(inbox.path().join("invoice.pdf"), b"bytes").unwrap();
 
     // Another vehicle's service record and a nonexistent one must be the
     // same clean not-found tool error (no ownership oracle).
@@ -1976,8 +1991,7 @@ async fn attach_document_wrong_vehicle_link_reads_as_missing() {
                 "attach_document",
                 serde_json::json!({
                     "vehicle_id": v.id,
-                    "file_name": "invoice.pdf",
-                    "content_base64": b64(b"bytes"),
+                    "source_path": "invoice.pdf",
                     "linked_entity_type": "service",
                     "linked_entity_id": eid
                 }),
@@ -1990,98 +2004,6 @@ async fn attach_document_wrong_vehicle_link_reads_as_missing() {
             "wrong-parent must read exactly like missing; got: {body}"
         );
     }
-}
-
-// ─── attach_document via source_path (the inbox — files must not
-//     travel through model context) ─────────────────────────────
-
-#[tokio::test]
-async fn attach_document_source_path_copies_from_the_inbox() {
-    let (app, db, files, inbox) = setup_with_inbox().await;
-    handshake(&app).await;
-    let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
-    let record = svc_svc::create(&db, v.id, minimal_service("2026-06-01", "Clutch job", None))
-        .await
-        .unwrap();
-    std::fs::write(inbox.path().join("fcp-invoice.pdf"), b"real scanned bytes").unwrap();
-
-    let body = post_rpc(
-        &app,
-        call_tool(
-            "attach_document",
-            serde_json::json!({
-                "vehicle_id": v.id,
-                "source_path": "fcp-invoice.pdf",
-                "title": "FCP Euro invoice",
-                "extracted_text": "Sachs SRE clutch kit, total $899.00",
-                "linked_entity_type": "service",
-                "linked_entity_id": record.record.id
-            }),
-        ),
-    )
-    .await;
-    assert_success(&body);
-    let doc = tool_payload(&body);
-    // file_name defaulted to the inbox file's basename.
-    assert_eq!(doc["file_name"], "fcp-invoice.pdf");
-    assert_eq!(doc["mime_type"], "application/pdf");
-    assert_eq!(doc["linked_entity_id"], record.record.id);
-
-    // The bytes were COPIED into files_dir…
-    let rel_path = doc["file_path"].as_str().expect("file_path");
-    let stored = std::fs::read(files.path().join(rel_path)).expect("stored file must exist");
-    assert_eq!(stored, b"real scanned bytes");
-    // …and the inbox original is still there, intact (the LLM may retry,
-    // the user may want it).
-    assert_eq!(
-        std::fs::read(inbox.path().join("fcp-invoice.pdf")).unwrap(),
-        b"real scanned bytes"
-    );
-}
-
-#[tokio::test]
-async fn attach_document_requires_exactly_one_source() {
-    let (app, db, files, inbox) = setup_with_inbox().await;
-    handshake(&app).await;
-    let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
-    std::fs::write(inbox.path().join("a.pdf"), b"bytes").unwrap();
-
-    // Both set…
-    let body = post_rpc(
-        &app,
-        call_tool(
-            "attach_document",
-            serde_json::json!({
-                "vehicle_id": v.id,
-                "source_path": "a.pdf",
-                "content_base64": b64(b"bytes")
-            }),
-        ),
-    )
-    .await;
-    assert_tool_error(&body);
-    assert!(
-        body.contains("exactly one"),
-        "must state the exactly-one rule; got: {body}"
-    );
-
-    // …and neither set are both actionable tool errors that steer to
-    // source_path.
-    let body = post_rpc(
-        &app,
-        call_tool(
-            "attach_document",
-            serde_json::json!({ "vehicle_id": v.id, "file_name": "a.pdf" }),
-        ),
-    )
-    .await;
-    assert_tool_error(&body);
-    assert!(
-        body.contains("source_path"),
-        "must steer toward source_path; got: {body}"
-    );
-    // Nothing was written to files_dir by either rejected call.
-    assert!(std::fs::read_dir(files.path()).unwrap().next().is_none());
 }
 
 #[tokio::test]
