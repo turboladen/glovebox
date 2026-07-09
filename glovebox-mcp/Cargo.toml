@@ -9,7 +9,6 @@ path = "src/lib.rs"
 
 [dependencies]
 glovebox-shared = { path = "../glovebox-shared" }
-base64 = "0.22"
 # Surface crate: MAY import axum (it exposes an axum::Router for the backend
 # to mount). Only glovebox-shared is axum-free.
 axum = "0.8"

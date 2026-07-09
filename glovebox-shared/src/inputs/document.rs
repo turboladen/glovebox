@@ -27,8 +27,9 @@ pub struct NewDocument {
 
 /// Where [`crate::services::document::store`] gets the file bytes.
 pub enum DocumentSource {
-    /// Raw file bytes already in memory: the HTTP multipart upload, or the
-    /// MCP tool's small-payload `content_base64` arg. Capped at
+    /// Raw file bytes already in memory — the HTTP multipart upload path.
+    /// (The MCP `attach_document` tool has no inline-bytes route; it always
+    /// resolves an [`DocumentSource::InboxPath`].) Capped at
     /// [`crate::services::document::MAX_FILE_BYTES`].
     Bytes(Vec<u8>),
     /// Path **relative to the configured inbox dir**

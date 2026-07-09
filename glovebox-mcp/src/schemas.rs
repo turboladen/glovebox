@@ -5,7 +5,6 @@
 //! input maps 1:1 onto a `glovebox_shared::inputs` struct (fields the MCP
 //! surface doesn't expose are filled with `None`) — no business logic here.
 
-use base64::Engine as _;
 use glovebox_shared::{
     entities::vehicle,
     error::{DomainError, DomainResult},
@@ -509,30 +508,23 @@ impl FileResearchFindingInput {
 pub struct AttachDocumentInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
-    /// THE way to attach a real file. This path is resolved on the SERVER,
-    /// inside its inbox directory — you do NOT need to see, mount, or have
-    /// any access to that directory to use it. If the file is already in
-    /// the inbox (e.g. the user put it there, or told you its name), just
-    /// pass the name verbatim (e.g. "fcp-invoice-2026-06.pdf"). If your
-    /// file tools share the server's filesystem, you can save the file into
-    /// the inbox yourself first. The server reads the bytes from disk
-    /// (byte-perfect, no tokens spent) and COPIES them into its document
-    /// store; the inbox original is left in place. Exactly one of
-    /// `source_path` or `content_base64` must be set.
-    pub source_path: Option<String>,
-    /// Inline file bytes, base64-encoded (standard alphabet, with padding)
-    /// — ONLY for trivially small payloads (under ~100 KB) you produced
-    /// yourself, e.g. a short text note. NEVER for an existing real file —
-    /// not even a compressed/downsized copy of one; re-emitting bytes as
-    /// base64 is lossy, corruption-prone, and token-expensive. If you
-    /// cannot use `source_path` or the HTTP upload route, STOP and ask the
-    /// user to put the file in the server's inbox and tell you its name —
-    /// then call this tool with `source_path`. Decoded size cap: 10 MiB.
-    pub content_base64: Option<String>,
+    /// THE ONLY way to attach a file with this tool — there is no
+    /// inline-bytes option. This path is resolved on the SERVER, inside its
+    /// inbox directory; you do NOT need to see, mount, or have any access to
+    /// that directory to use it. If the file is already in the inbox (the
+    /// user put it there, or told you its name), pass the name verbatim
+    /// (e.g. "fcp-invoice-2026-06.pdf"). If your file tools share the
+    /// server's filesystem, save the file into the inbox yourself first,
+    /// then pass its inbox-relative path. If the file is NOT in the inbox
+    /// and you cannot put it there, use the HTTP multipart route
+    /// (`POST /api/documents`, see the server instructions) or ask the user
+    /// to drop the file in the inbox and tell you its name. The server reads
+    /// the bytes from disk (byte-perfect, no tokens spent) and COPIES them
+    /// into its document store; the inbox original is left in place.
+    pub source_path: String,
     /// Original file name with extension, e.g. "fcp-invoice-2026-06.pdf".
     /// Used for the stored name and MIME detection; unsafe characters are
-    /// normalized. Optional with `source_path` (defaults to the inbox
-    /// file's name); required with `content_base64`.
+    /// normalized. Optional — defaults to the inbox file's name.
     pub file_name: Option<String>,
     /// Display title, e.g. "FCP Euro invoice — clutch kit". Defaults to
     /// `file_name`.
@@ -550,46 +542,27 @@ pub struct AttachDocumentInput {
 }
 
 impl AttachDocumentInput {
-    /// Resolve the file source into the shared store input: exactly one of
-    /// `source_path` (inbox reference — the real-file path) or
-    /// `content_base64` (inline small payload) must be set. Violations and
-    /// malformed base64 are LLM-recoverable `BadRequest`s, not protocol
-    /// failures.
+    /// Resolve the inbox `source_path` into the shared store input. There is
+    /// no inline-bytes alternative, so an absent/empty path is an
+    /// LLM-recoverable `BadRequest` that names the reachable routes — not a
+    /// protocol failure. (An absent field is already surfaced by
+    /// `LenientParameters`; this guards the empty-string case.)
     pub fn into_domain(self) -> DomainResult<StoreDocument> {
-        let source = match (self.source_path, self.content_base64) {
-            (Some(path), None) => DocumentSource::InboxPath(path),
-            (None, Some(b64)) => DocumentSource::Bytes(
-                base64::engine::general_purpose::STANDARD
-                    .decode(b64.trim())
-                    .map_err(|e| {
-                        DomainError::BadRequest(format!(
-                            "content_base64 is not valid base64 ({e}). For a real file, prefer \
-                             source_path: save the file into the glovebox inbox directory with \
-                             your file tools and pass its inbox-relative path."
-                        ))
-                    })?,
-            ),
-            (Some(_), Some(_)) => {
-                return Err(DomainError::BadRequest(
-                    "Pass exactly one of source_path or content_base64, not both — they are \
-                     alternative sources for the same file (prefer source_path)."
-                        .into(),
-                ));
-            }
-            (None, None) => {
-                return Err(DomainError::BadRequest(
-                    "Pass exactly one of source_path or content_base64. For a real file, save it \
-                     into the glovebox inbox directory with your file tools and pass its \
-                     inbox-relative path as source_path — do not re-emit the bytes as base64."
-                        .into(),
-                ));
-            }
-        };
+        let path = self.source_path.trim();
+        if path.is_empty() {
+            return Err(DomainError::BadRequest(
+                "source_path is required: name the file in the server's inbox to attach. There is \
+                 no inline-bytes option — if the file isn't in the inbox and you can't put it \
+                 there, use the HTTP multipart upload route (POST /api/documents) or ask the user \
+                 to drop the file in the inbox and tell you its name."
+                    .into(),
+            ));
+        }
         Ok(StoreDocument {
             vehicle_id: Some(self.vehicle_id),
             title: self.title,
             file_name: self.file_name,
-            source,
+            source: DocumentSource::InboxPath(path.to_string()),
             mime_type: None,
             doc_type: None,
             linked_entity_type: self.linked_entity_type,
