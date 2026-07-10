@@ -20,4 +20,12 @@ pub struct AppConfig {
     /// instead of passing bytes through model context)
     #[arg(long, default_value = "data/inbox", env = "GLOVEBOX_INBOX_DIR")]
     pub inbox_dir: String,
+
+    /// Public base URL of the web app, for user-facing deep links.
+    #[arg(
+        long,
+        default_value = "http://localhost:3003",
+        env = "GLOVEBOX_PUBLIC_URL"
+    )]
+    pub public_url: String,
 }

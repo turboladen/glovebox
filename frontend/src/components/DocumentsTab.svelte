@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { querystring, replace } from '@keenmate/svelte-spa-router'
   import { documents as docsApi, services as servicesApi, parts as partsApi, incidents as incidentsApi } from '../lib/api'
   import type { Document, ServiceRecordWithLinks, Part, IncidentWithDetails } from '../lib/types'
   import { formatDate } from '../lib/dates'
@@ -17,8 +18,20 @@
   let linkedEntityType = $state('')
   let linkedEntityId: number | null = $state(null)
   let fileInput: HTMLInputElement | undefined = $state(undefined)
+  // The file to upload, set by drop OR by the input's change — makes upload()
+  // source-agnostic.
+  let pendingFile: File | null = $state(null)
+  let dragActive = $state(false)
   let uploading = $state(false)
   let error = $state('')
+
+  // Attach-mode (glovebox-alki): MCP's record_service hands the user a deep
+  // link `?attach=service:<id>` so their browser can upload a file the
+  // sandboxed client can't carry. In this mode the entity is pre-selected and
+  // the pickers are hidden — just drop the file.
+  let attachMode = $state(false)
+  let attachServiceId: number | null = $state(null)
+  let attachService: ServiceRecordWithLinks | null = $state(null)
 
   // Linkable entities
   let serviceRecords: ServiceRecordWithLinks[] = $state([])
@@ -28,6 +41,32 @@
   const docTypes = ['invoice', 'receipt', 'photo', 'title', 'warranty', 'manual', 'other']
 
   onMount(loadData)
+
+  // Consume `?attach=service:<id>` (split on ':' like the ?hl= grammar). Guard
+  // on attachServiceId so re-runs (querystring is reactive) are no-ops.
+  $effect(() => {
+    const q = new URLSearchParams(querystring() ?? '')
+    const raw = q.get('attach')
+    const recordId = raw?.startsWith('service:') ? parseInt(raw.slice('service:'.length), 10) : null
+    if (recordId != null && !Number.isNaN(recordId)) {
+      if (attachServiceId !== recordId) {
+        attachServiceId = recordId
+        attachMode = true
+        showUpload = true
+        linkedEntityType = 'service'
+        linkedEntityId = recordId
+        servicesApi
+          .get(vehicleId, recordId)
+          .then((s) => { attachService = s })
+          .catch(() => { attachService = null })
+      }
+    } else if (attachMode) {
+      // Param removed (e.g. consumed after a successful upload).
+      attachMode = false
+      attachServiceId = null
+      attachService = null
+    }
+  })
 
   async function loadData() {
     try {
@@ -44,8 +83,19 @@
     }
   }
 
+  function onDrop(e: DragEvent) {
+    e.preventDefault()
+    dragActive = false
+    const f = e.dataTransfer?.files?.[0]
+    if (f) {
+      pendingFile = f
+      // In attach-mode the entity is already chosen — drop = upload.
+      if (attachMode) upload()
+    }
+  }
+
   async function upload() {
-    const file = fileInput?.files?.[0]
+    const file = pendingFile ?? fileInput?.files?.[0]
     if (!file) { error = 'Select a file'; return }
     uploading = true
     error = ''
@@ -62,7 +112,17 @@
       }
       await docsApi.upload(formData)
       showUpload = false
-      title = ''; notes = ''; linkedEntityType = ''; linkedEntityId = null
+      title = ''; notes = ''; pendingFile = null
+      if (attachMode) {
+        // Consume the ?attach= param (mirrors TimelineTab consuming ?action=).
+        attachMode = false
+        attachServiceId = null
+        attachService = null
+        linkedEntityType = ''; linkedEntityId = null
+        replace(`/vehicles/${vehicleId}/records/documents`)
+      } else {
+        linkedEntityType = ''; linkedEntityId = null
+      }
       await loadData()
     } catch (e: any) {
       error = e.message
@@ -108,17 +168,57 @@
 <div class="documents">
   <div class="docs-header">
     <h3>Documents</h3>
-    <button class="btn btn-primary" onclick={() => (showUpload = !showUpload)}>
-      {showUpload ? 'Cancel' : '+ Upload'}
-    </button>
+    {#if !attachMode}
+      <button class="btn btn-primary" onclick={() => (showUpload = !showUpload)}>
+        {showUpload ? 'Cancel' : '+ Upload'}
+      </button>
+    {/if}
   </div>
+
+  {#if attachMode}
+    <div class="attach-banner" data-testid="attach-banner">
+      <span class="attach-label">Attaching to</span>
+      {#if attachService}
+        <span class="attach-target">Service #{attachService.id} — {formatDate(attachService.service_date)}{attachService.description ? ` · ${attachService.description}` : ''}</span>
+      {:else}
+        <span class="attach-target">Service #{attachServiceId}</span>
+      {/if}
+    </div>
+  {/if}
 
   {#if showUpload}
     <div class="form-card">
       <form onsubmit={(e) => { e.preventDefault(); upload() }}>
         <div class="field">
-          <label for="doc-file">File</label>
-          <input id="doc-file" type="file" bind:this={fileInput} />
+          <span class="field-label" id="doc-file-label">File</span>
+          <!-- Dropzone (net-new): drag a file onto it, or click to browse. The
+               <input> stays as a click fallback (and for setInputFiles). -->
+          <label
+            class="dropzone"
+            class:attach={attachMode}
+            class:active={dragActive}
+            aria-labelledby="doc-file-label"
+            data-testid="dropzone"
+            ondragover={(e) => { e.preventDefault(); dragActive = true }}
+            ondragenter={(e) => { e.preventDefault(); dragActive = true }}
+            ondragleave={() => { dragActive = false }}
+            ondrop={onDrop}
+          >
+            <input
+              id="doc-file"
+              class="dropzone-input"
+              type="file"
+              bind:this={fileInput}
+              onchange={() => { pendingFile = fileInput?.files?.[0] ?? null }}
+            />
+            <span class="dropzone-hint">
+              {#if pendingFile}
+                Selected: <strong>{pendingFile.name}</strong>
+              {:else}
+                Drag a file here, or click to browse
+              {/if}
+            </span>
+          </label>
         </div>
         <div class="form-row">
           <div class="field">
@@ -134,48 +234,50 @@
             </select>
           </div>
         </div>
-        <div class="form-row">
-          <div class="field">
-            <label for="doc-link-type">Link to</label>
-            <select id="doc-link-type" bind:value={linkedEntityType} onchange={() => { linkedEntityId = null }}>
-              <option value="">None</option>
-              <option value="service">Service Record</option>
-              <option value="part">Part</option>
-              <option value="incident">Incident</option>
-            </select>
+        {#if !attachMode}
+          <div class="form-row">
+            <div class="field">
+              <label for="doc-link-type">Link to</label>
+              <select id="doc-link-type" bind:value={linkedEntityType} onchange={() => { linkedEntityId = null }}>
+                <option value="">None</option>
+                <option value="service">Service Record</option>
+                <option value="part">Part</option>
+                <option value="incident">Incident</option>
+              </select>
+            </div>
+            {#if linkedEntityType === 'service'}
+              <div class="field">
+                <label for="doc-link-id">Service</label>
+                <select id="doc-link-id" bind:value={linkedEntityId}>
+                  <option value={null}>-- Select --</option>
+                  {#each serviceRecords as svc (svc.id)}
+                    <option value={svc.id}>{svc.service_date}{svc.description ? ` — ${svc.description}` : ''}</option>
+                  {/each}
+                </select>
+              </div>
+            {:else if linkedEntityType === 'part'}
+              <div class="field">
+                <label for="doc-link-id">Part</label>
+                <select id="doc-link-id" bind:value={linkedEntityId}>
+                  <option value={null}>-- Select --</option>
+                  {#each partsList as p (p.id)}
+                    <option value={p.id}>{p.name}{p.manufacturer ? ` (${p.manufacturer})` : ''}</option>
+                  {/each}
+                </select>
+              </div>
+            {:else if linkedEntityType === 'incident'}
+              <div class="field">
+                <label for="doc-link-id">Incident</label>
+                <select id="doc-link-id" bind:value={linkedEntityId}>
+                  <option value={null}>-- Select --</option>
+                  {#each incidentsList as inc (inc.id)}
+                    <option value={inc.id}>{inc.occurred_at.split('T')[0].split(' ')[0]} — {inc.title.slice(0, 50)}</option>
+                  {/each}
+                </select>
+              </div>
+            {/if}
           </div>
-          {#if linkedEntityType === 'service'}
-            <div class="field">
-              <label for="doc-link-id">Service</label>
-              <select id="doc-link-id" bind:value={linkedEntityId}>
-                <option value={null}>-- Select --</option>
-                {#each serviceRecords as svc (svc.id)}
-                  <option value={svc.id}>{svc.service_date}{svc.description ? ` — ${svc.description}` : ''}</option>
-                {/each}
-              </select>
-            </div>
-          {:else if linkedEntityType === 'part'}
-            <div class="field">
-              <label for="doc-link-id">Part</label>
-              <select id="doc-link-id" bind:value={linkedEntityId}>
-                <option value={null}>-- Select --</option>
-                {#each partsList as p (p.id)}
-                  <option value={p.id}>{p.name}{p.manufacturer ? ` (${p.manufacturer})` : ''}</option>
-                {/each}
-              </select>
-            </div>
-          {:else if linkedEntityType === 'incident'}
-            <div class="field">
-              <label for="doc-link-id">Incident</label>
-              <select id="doc-link-id" bind:value={linkedEntityId}>
-                <option value={null}>-- Select --</option>
-                {#each incidentsList as inc (inc.id)}
-                  <option value={inc.id}>{inc.occurred_at.split('T')[0].split(' ')[0]} — {inc.title.slice(0, 50)}</option>
-                {/each}
-              </select>
-            </div>
-          {/if}
-        </div>
+        {/if}
         <div class="field">
           <label for="doc-notes">Notes</label>
           <input id="doc-notes" type="text" bind:value={notes} />
@@ -245,6 +347,64 @@
   .docs-header h3 { margin: 0; }
 
   .error { color: var(--danger); font-size: 0.85rem; }
+
+  /* Attach-mode banner: the record the dropped file will link to. */
+  .attach-banner {
+    display: flex; align-items: baseline; gap: var(--sp-2); flex-wrap: wrap;
+    padding: var(--sp-2) var(--sp-3); margin-bottom: var(--sp-3);
+    border: 1px solid var(--info-border); border-radius: var(--radius-md);
+    background: var(--info-bg);
+  }
+  .attach-label {
+    font-family: var(--font-display);
+    font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600;
+    color: var(--info);
+  }
+  .attach-target { font-weight: 600; font-size: 0.9rem; }
+
+  .field-label {
+    font-size: 0.75rem; font-weight: 600; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.03em;
+  }
+
+  /* Dropzone — a clear drop target; the file input is visually hidden but
+     still the click/keyboard/setInputFiles surface (label wraps it). */
+  .dropzone {
+    display: flex; align-items: center; justify-content: center;
+    padding: var(--sp-4);
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg);
+    color: var(--text-muted);
+    text-align: center;
+    cursor: pointer;
+    transition: border-color var(--duration-fast) var(--ease-out),
+                background var(--duration-fast) var(--ease-out);
+  }
+  .dropzone:hover { border-color: var(--text-muted); }
+  .dropzone.active {
+    border-color: var(--primary);
+    background: var(--surface);
+    color: var(--text);
+  }
+  /* Prominent in attach-mode: this IS the task. */
+  .dropzone.attach {
+    padding: var(--sp-8) var(--sp-4);
+    border-width: 2px;
+    border-color: var(--info-border);
+  }
+  .dropzone.attach.active { border-color: var(--primary); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .dropzone { transition: none; }
+  }
+
+  .dropzone-input {
+    position: absolute; width: 1px; height: 1px;
+    padding: 0; margin: -1px; overflow: hidden;
+    clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
+  .dropzone-hint { font-size: 0.9rem; }
 
   .docs-list { display: flex; flex-direction: column; gap: var(--sp-2); }
 

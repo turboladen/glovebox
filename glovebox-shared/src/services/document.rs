@@ -481,6 +481,7 @@ mod tests {
             listen: String::new(),
             files_dir: files_dir.to_string_lossy().into_owned(),
             inbox_dir: inbox_dir.to_string_lossy().into_owned(),
+            public_url: String::new(),
         }
     }
 
