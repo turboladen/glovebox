@@ -15,6 +15,7 @@
     shops as shopsApi,
     mileage as mileageApi,
     schedules as schedulesApi,
+    documents as documentsApi,
   } from '../lib/api'
   import { anchorId, flashHighlightFromQuery } from '../lib/highlight'
   import type {
@@ -22,6 +23,7 @@
     IncidentWithDetails,
     MileageEntry,
     Part,
+    Document,
     ResolvedScheduleItem,
     ServicePrefill,
     Shop,
@@ -49,6 +51,9 @@
   let incidents: IncidentWithDetails[] = $state([])
   let mileageLogs: MileageEntry[] = $state([])
   let allParts: Part[] = $state([])
+  // All vehicle documents, batch-loaded once (no N+1) and filtered per service
+  // row by linked_entity — so a freshly-attached invoice is visible here.
+  let allDocs: Document[] = $state([])
   let shopList: Shop[] = $state([])
   let scheduleItems: ResolvedScheduleItem[] = $state([])
   let loading = $state(true)
@@ -90,13 +95,14 @@
 
   async function loadData() {
     try {
-      const [svcList, incidentList, mileageList, partsList, shops, schedule] = await Promise.all([
+      const [svcList, incidentList, mileageList, partsList, shops, schedule, docList] = await Promise.all([
         servicesApi.list(vehicleId),
         incidentsApi.list(vehicleId),
         mileageApi.list(vehicleId),
         partsApi.list(vehicleId),
         shopsApi.list(),
         schedulesApi.resolve(vehicleId),
+        documentsApi.list({ vehicle_id: vehicleId }),
       ])
       services = svcList
       incidents = incidentList
@@ -105,6 +111,7 @@
       // that odometer reading (same rule as the backend activity feed).
       mileageLogs = mileageList.filter((m) => m.service_record_id == null)
       allParts = partsList
+      allDocs = docList
       shopList = shops
     } catch (e) {
       console.error(e)
@@ -207,6 +214,12 @@
 
   function incidentsForService(serviceId: number): IncidentWithDetails[] {
     return incidents.filter((i) => i.service_record_ids.includes(serviceId))
+  }
+
+  function documentsForService(serviceId: number): Document[] {
+    return allDocs.filter(
+      (d) => d.linked_entity_type === 'service' && d.linked_entity_id === serviceId,
+    )
   }
 
   // --- Maintenance-item linking from the record side (mirror of the Due
@@ -564,6 +577,24 @@
                       {/each}
                     </div>
                   {/if}
+                  {#if documentsForService(record.id).length > 0}
+                    <div class="linked-items">
+                      <span class="linked-label">Documents:</span>
+                      {#each documentsForService(record.id) as doc (doc.id)}
+                        <!-- Hypermedia: the chip opens the file (no dead-end
+                             facts). Attached invoices/receipts land here. -->
+                        <a
+                          class="linked-chip doc-chip"
+                          href="/files/{doc.file_path}"
+                          target="_blank"
+                          rel="noopener"
+                          title="Open {doc.title || doc.file_name}"
+                        >
+                          {doc.title || doc.file_name}
+                        </a>
+                      {/each}
+                    </div>
+                  {/if}
                   {#if linkError}
                     <p class="link-error">{linkError}</p>
                   {/if}
@@ -843,6 +874,11 @@
     text-decoration: none;
   }
   .sched-chip:hover { text-decoration: underline; }
+  .doc-chip {
+    background: var(--surface); color: var(--text-secondary); border: 1px solid var(--border);
+    text-decoration: none;
+  }
+  .doc-chip:hover { text-decoration: underline; color: var(--text); }
 
   /* Compact link-to-maintenance picker — mirrors the Due tab's link-existing
      picker (name | interval instead of date | description | miles). */
