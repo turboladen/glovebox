@@ -270,14 +270,15 @@ async fn instructions_teach_the_file_attachment_decision_tree() {
 
     let inbox_dir = inbox.path().to_string_lossy().into_owned();
     for marker in [
-        inbox_dir.as_str(), // route (a): shared-filesystem inbox
+        "browser deep link", // PRIMARY path: hand the record_service link to the user
+        "drop zone",         // ...their browser drag-drops the file
+        inbox_dir.as_str(),  // inbox path for the already-on-server routes
         "source_path",
-        "/api/documents", // route (b): HTTP multipart upload
+        "/api/documents", // HTTP multipart upload route
         "curl",
         "extracted_text",
         "/api/health",           // reachability probe for the base URLs
         "http://localhost:3003", // always-present base (test listen is empty → default port)
-        "Ask the USER",          // route (d): the final STOP-and-ask, no base64 escape
     ] {
         assert!(
             instructions.contains(marker),
@@ -520,9 +521,15 @@ async fn record_service_returns_browser_attach_deep_link() {
     let note = parsed["result"]["content"][1]["text"]
         .as_str()
         .expect("record_service must return a second text block with the link");
+    // Path-mode router: NO `/#/`. A hash URL would make the history router read
+    // the whole thing as `/` and render the dashboard (the bug this guards).
     let expected = format!(
-        "http://glovebox.test/#/vehicles/{}/records/documents?attach=service:{}",
+        "http://glovebox.test/vehicles/{}/records/documents?attach=service:{}",
         v.id, record_id
+    );
+    assert!(
+        !note.contains("/#/"),
+        "deep link must be path-mode (no /#/), got: {note}"
     );
     assert!(
         note.contains(&expected),
