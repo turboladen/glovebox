@@ -123,15 +123,20 @@ impl GloveboxMcp {
                 // Hand the user a browser deep link to attach the original
                 // invoice/receipt file: their (non-sandboxed) browser can
                 // upload the bytes where the model context can't carry them.
+                // Path-mode router (history, not hash) — NO `/#/`; the
+                // backend's SPA fallback serves index.html for this path.
                 let link = format!(
-                    "{}/#/vehicles/{}/records/documents?attach=service:{}",
+                    "{}/vehicles/{}/records/documents?attach=service:{}",
                     self.config.public_url.trim_end_matches('/'),
                     rec.record.vehicle_id,
                     rec.record.id,
                 );
                 let note = format!(
-                    "📎 To attach the original invoice/receipt file, open this link in your \
-                     browser and drag the file onto the drop zone: {link}"
+                    "The service record is filed. The invoice/receipt FILE cannot be attached \
+                     through this chat (its bytes can't cross the sandbox). Give the user this \
+                     link — opening it in their browser lands on a drop zone already scoped to \
+                     this record, where they drag the file in: {link} — do NOT call \
+                     attach_document for a file that is only in this chat."
                 );
                 tool_json_result_with_link(&rec, note)
             }
@@ -539,7 +544,7 @@ impl GloveboxMcp {
 
     #[tool(
         name = "attach_document",
-        description = "Store a file (scanned invoice, receipt, manual page, photo) against a vehicle: the server reads the bytes off disk and creates a document record. There is NO inline-bytes option — files are attached ONLY by `source_path`, which is resolved on the SERVER inside its inbox directory (you never need to see or mount that directory). Take the FIRST route that works: (a) the file is already in the inbox (the user put it there or told you its name) → pass that name verbatim as `source_path`; (b) your file tools share this server's filesystem → save the file into the inbox yourself, then `source_path`; (c) your shell is sandboxed but has network → `curl -F` the file as multipart to the server's `POST /api/documents` endpoint instead (same fields incl. `extracted_text`; candidate base URLs are in the server instructions); (d) none of the above → STOP. Do NOT compress, downsize, or otherwise re-emit an existing file — ask the USER to drop it into the inbox and tell you its name, then use route (a). Max 10 MiB. ALWAYS pass `extracted_text` with the text you read out of the document — that is what makes it findable later via `find_documents`. Link it to the record it belongs to (e.g. the service record you just created from the invoice) via `linked_entity_type` + `linked_entity_id`.",
+        description = "Store a file that is ALREADY on the server's disk against a vehicle: the server reads the bytes off its own inbox and creates a document record. **Do NOT call this tool for a file the user uploaded to THIS CHAT** — that file lives in your sandbox, not the server's inbox, and its bytes cannot cross to the server. In that (common) case, don't attempt an attach at all: `record_service` returns a browser deep link — give that link to the user and they attach the file themselves in one drag. There is NO inline-bytes option; files are attached ONLY by `source_path`, resolved on the SERVER inside its inbox directory. Legitimate uses: (a) the file is already in the inbox (the user put it there or told you its name) → pass that name verbatim as `source_path`; (b) your file tools genuinely share this server's filesystem → save it into the inbox first, then `source_path`; (c) your shell has network to the server → `curl -F` multipart to `POST /api/documents` instead (base URLs in the server instructions). NEVER compress, downsize, or re-emit an existing file to force it through. Max 10 MiB. Pass `extracted_text` (the text you read out) so it's findable via `find_documents`, and link it via `linked_entity_type` + `linked_entity_id`.",
         input_schema = rmcp::handler::server::common::schema_for_type::<AttachDocumentInput>()
     )]
     async fn attach_document(
@@ -617,28 +622,24 @@ impl ServerHandler for GloveboxMcp {
                  completed work, `record_part` for parts bought or installed, `log_incident` for \
                  symptoms/damage/accidents, `save_note` for facts worth remembering, \
                  `log_mileage` whenever the user mentions an odometer reading, `attach_document` \
-                 for scanned invoices/receipts. ATTACHING A REAL FILE — `source_path` is resolved \
-                 on the SERVER inside its inbox `{inbox_dir}`; you never need to see or mount \
-                 that directory. Take the FIRST route that works: (a) the file is ALREADY in the \
-                 inbox (the user put it there or told you its name) → call `attach_document` with \
-                 `source_path` = that name, verbatim; (b) your file tools see this server's \
-                 filesystem → save the file into `{inbox_dir}` yourself, then `source_path`; (c) \
-                 your shell is sandboxed but has network → upload the bytes over HTTP instead: \
-                 `curl -sS -F \"file=@<path>\" -F \"vehicle_id=<id>\" -F \"title=<title>\" -F \
-                 \"doc_type=<type>\" -F \"extracted_text=<text>\" -F \
-                 \"linked_entity_type=service\" -F \"linked_entity_id=<id>\" \
-                 <BASE>/api/documents` — byte-perfect, no tokens; the JSON reply is the document \
-                 row (use its `id`). Candidate <BASE> values (try in order; the first where `curl \
-                 -sS -m 3 <BASE>/api/health` answers wins): {base_urls}; (d) none of the above → \
-                 STOP. There is NO inline-bytes route — do NOT compress, downsize, or otherwise \
-                 re-emit an existing file, not even a smaller copy. Ask the USER to drop the file \
-                 into `{inbox_dir}` and tell you its name, then use route (a). Or (e) — when you \
-                 recorded the work with `record_service`, that reply carries a browser deep link; \
-                 hand it to the user and their (non-sandboxed) browser drag-drops the original \
-                 file, pre-linked to the record, no filesystem or curl needed. Whichever route, \
-                 pass the text you read out of the document as `extracted_text` and link the \
-                 service record so one conversation yields record + document. (5) LOOK THINGS UP \
-                 — `find_documents` for receipts/manuals, `search_records` for anything else, \
+                 for a file ALREADY on the server. ATTACHING A FILE — decide by WHERE the file \
+                 is, in this order: (1) THE COMMON CASE — the user uploaded/attached the file to \
+                 THIS chat. Its bytes live in your sandbox and CANNOT reach the server; do NOT \
+                 try to move them and do NOT call `attach_document`. `record_service` already \
+                 returned a browser deep link — hand THAT link to the user; their (non-sandboxed) \
+                 browser opens a drop zone pre-scoped to the record and they drag the file in. \
+                 This is the primary path — reach for it first. (2) The file is genuinely already \
+                 in the server inbox `{inbox_dir}` (the user put it there or told you its name) → \
+                 `attach_document` with `source_path` = that name. (3) Your file tools truly \
+                 share the server's filesystem → save into `{inbox_dir}`, then `source_path`. (4) \
+                 Your shell has network TO THE SERVER → `curl -sS -F \"file=@<path>\" -F \
+                 \"vehicle_id=<id>\" -F \"linked_entity_type=service\" -F \
+                 \"linked_entity_id=<id>\" -F \"extracted_text=<text>\" <BASE>/api/documents` \
+                 (candidate <BASE>, first whose `/api/health` answers: {base_urls}). NEVER \
+                 compress, downsize, or re-emit a file to force it through — if none of (2)–(4) \
+                 apply, use (1). Whichever route, pass `extracted_text` and link the service \
+                 record so one conversation yields record + document. (5) LOOK THINGS UP — \
+                 `find_documents` for receipts/manuals, `search_records` for anything else, \
                  `cost_summary` for spend. (6) PROJECTS — `list_builds` / `get_build_progress` / \
                  `update_build_status` for upgrade or restoration builds. All money is integer \
                  cents; all dates are YYYY-MM-DD.",
