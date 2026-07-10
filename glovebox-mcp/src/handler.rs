@@ -103,7 +103,7 @@ impl GloveboxMcp {
 
     #[tool(
         name = "record_service",
-        description = "Record maintenance or repair work that was done: what, when, at what mileage, and what it cost (integer cents). Providing `mileage` also logs an odometer reading. Use `line_items` for itemized invoices and `build_id` to link the work to a build project. If the work satisfies due/overdue schedule items from `check_due_maintenance`, pass their ids in `schedule_item_ids` so the reminders clear; for records you already created (e.g. a bulk import), reconcile afterwards with `link_service_to_maintenance` instead of re-recording. When importing a scanned invoice, follow up with `attach_document` (linked to the returned record id) so the original file and its text are kept.",
+        description = "Record maintenance or repair work that was done: what, when, at what mileage, and what it cost (integer cents). Providing `mileage` also logs an odometer reading. Use `line_items` for itemized invoices and `build_id` to link the work to a build project. If the work satisfies due/overdue schedule items from `check_due_maintenance`, pass their ids in `schedule_item_ids` so the reminders clear; for records you already created (e.g. a bulk import), reconcile afterwards with `link_service_to_maintenance` instead of re-recording. When importing a scanned invoice, follow up with `attach_document` (linked to the returned record id) so the original file and its text are kept; if you can't reach the file, hand the user the browser deep link returned alongside this record so they can drag-drop the original from their (non-sandboxed) browser.",
         input_schema = rmcp::handler::server::common::schema_for_type::<RecordServiceInput>()
     )]
     async fn record_service(
@@ -118,7 +118,25 @@ impl GloveboxMcp {
         if let Err(e) = vehicle::require(&*self.db, vehicle_id).await {
             return domain_error(e);
         }
-        domain_result(service_record::create(&*self.db, vehicle_id, input).await)
+        match service_record::create(&*self.db, vehicle_id, input).await {
+            Ok(rec) => {
+                // Hand the user a browser deep link to attach the original
+                // invoice/receipt file: their (non-sandboxed) browser can
+                // upload the bytes where the model context can't carry them.
+                let link = format!(
+                    "{}/#/vehicles/{}/records/documents?attach=service:{}",
+                    self.config.public_url.trim_end_matches('/'),
+                    rec.record.vehicle_id,
+                    rec.record.id,
+                );
+                let note = format!(
+                    "📎 To attach the original invoice/receipt file, open this link in your \
+                     browser and drag the file onto the drop zone: {link}"
+                );
+                tool_json_result_with_link(&rec, note)
+            }
+            Err(e) => domain_error(e),
+        }
     }
 
     #[tool(
@@ -614,7 +632,10 @@ impl ServerHandler for GloveboxMcp {
                  -sS -m 3 <BASE>/api/health` answers wins): {base_urls}; (d) none of the above → \
                  STOP. There is NO inline-bytes route — do NOT compress, downsize, or otherwise \
                  re-emit an existing file, not even a smaller copy. Ask the USER to drop the file \
-                 into `{inbox_dir}` and tell you its name, then use route (a). Whichever route, \
+                 into `{inbox_dir}` and tell you its name, then use route (a). Or (e) — when you \
+                 recorded the work with `record_service`, that reply carries a browser deep link; \
+                 hand it to the user and their (non-sandboxed) browser drag-drops the original \
+                 file, pre-linked to the record, no filesystem or curl needed. Whichever route, \
                  pass the text you read out of the document as `extracted_text` and link the \
                  service record so one conversation yields record + document. (5) LOOK THINGS UP \
                  — `find_documents` for receipts/manuals, `search_records` for anything else, \
@@ -805,6 +826,25 @@ fn tool_json_result<T: Serialize>(value: &T) -> Result<CallToolResult, McpError>
         McpError::internal_error("failed to serialize result", None)
     })?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
+}
+
+/// Like [`tool_json_result`] but appends a SECOND text content block carrying
+/// a human note + deep link. A standalone text block is the surest way most
+/// MCP clients surface the URL as a clickable link (rather than burying it in
+/// the JSON payload) — used by `record_service` to hand the user a browser
+/// upload link their sandboxed client can't reach.
+fn tool_json_result_with_link<T: Serialize>(
+    value: &T,
+    note_and_link: String,
+) -> Result<CallToolResult, McpError> {
+    let json = serde_json::to_string_pretty(value).map_err(|err| {
+        tracing::error!(?err, "MCP tool: failed to serialize result");
+        McpError::internal_error("failed to serialize result", None)
+    })?;
+    Ok(CallToolResult::success(vec![
+        Content::text(json),
+        Content::text(note_and_link),
+    ]))
 }
 
 fn resource_json<T: Serialize>(value: &T) -> Result<String, McpError> {

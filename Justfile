@@ -22,8 +22,9 @@ dev:
         cd frontend && bun install && cd ..
     fi
 
-    # Start backend
-    cargo run -p glovebox-backend &
+    # Start backend (public URL points at the Vite origin so MCP deep links
+    # resolve through the dev proxy)
+    GLOVEBOX_PUBLIC_URL=http://localhost:5373 cargo run -p glovebox-backend &
     BACKEND_PID=$!
 
     # Start frontend dev server
