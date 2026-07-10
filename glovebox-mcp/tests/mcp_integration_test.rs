@@ -39,6 +39,7 @@ async fn setup() -> (Router, DatabaseConnection, tempfile::TempDir) {
         listen: String::new(),
         files_dir: files.path().to_string_lossy().into_owned(),
         inbox_dir: files.path().join("inbox").to_string_lossy().into_owned(),
+        public_url: "http://glovebox.test".into(),
     });
     (glovebox_mcp::router(db.clone(), config), db, files)
 }
@@ -59,6 +60,7 @@ async fn setup_with_inbox() -> (
         listen: String::new(),
         files_dir: files.path().to_string_lossy().into_owned(),
         inbox_dir: inbox.path().to_string_lossy().into_owned(),
+        public_url: "http://glovebox.test".into(),
     });
     (glovebox_mcp::router(db.clone(), config), db, files, inbox)
 }
@@ -310,6 +312,7 @@ async fn tool_calls_survive_a_server_restart() {
         listen: String::new(),
         files_dir: files.path().to_string_lossy().into_owned(),
         inbox_dir: files.path().join("inbox").to_string_lossy().into_owned(),
+        public_url: String::new(),
     });
     let first = glovebox_mcp::router(db.clone(), config.clone());
     handshake(&first).await;
@@ -476,6 +479,54 @@ async fn record_service_then_summarize_recent_activity_round_trip() {
     assert!(
         body.contains("Oil change + filter") && body.contains("48000"),
         "activity feed must include the recorded service; got: {body}"
+    );
+}
+
+/// glovebox-alki: `record_service` hands back a browser deep link (a second
+/// text content block) so a sandboxed client can offload file attachment to
+/// the user's non-sandboxed browser. The link is built from the config's
+/// `public_url` and targets the record-scoped attach page.
+#[tokio::test]
+async fn record_service_returns_browser_attach_deep_link() {
+    let (app, db, _files) = setup().await;
+    handshake(&app).await;
+    let v = vehicle::create(&db, new_vehicle("Link Wagon"))
+        .await
+        .unwrap();
+
+    let body = post_rpc(
+        &app,
+        call_tool(
+            "record_service",
+            serde_json::json!({
+                "vehicle_id": v.id,
+                "service_date": "2026-06-01",
+                "description": "Brake pads",
+                "total_cost_cents": 12_000
+            }),
+        ),
+    )
+    .await;
+    assert_success(&body);
+
+    // The created record id comes off the first (JSON) content block.
+    let record_id = tool_payload(&body)["id"]
+        .as_i64()
+        .expect("service record id in payload");
+
+    // The second content block carries the human note + deep link, built from
+    // setup()'s public_url ("http://glovebox.test").
+    let parsed = extract_json(&body);
+    let note = parsed["result"]["content"][1]["text"]
+        .as_str()
+        .expect("record_service must return a second text block with the link");
+    let expected = format!(
+        "http://glovebox.test/#/vehicles/{}/records/documents?attach=service:{}",
+        v.id, record_id
+    );
+    assert!(
+        note.contains(&expected),
+        "attach deep link must be present; expected {expected} in: {note}"
     );
 }
 

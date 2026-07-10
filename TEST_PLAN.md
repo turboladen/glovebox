@@ -249,6 +249,17 @@ matching row scrolls into view and flashes for ~2s; see
 | 5 | "View" | Opens file via `/files/` path |
 | 6 | "Delete" | Removes document and file |
 
+## TP-40: Records → Documents attach-mode (handoff-link)
+
+MCP's `record_service` returns a browser deep link `{public_url}/#/vehicles/{id}/records/documents?attach=service:{record_id}`; opening it lands on a record-scoped drop zone that uploads a file pre-linked to that service (Claude fills the record, the user's non-sandboxed browser carries the bytes).
+
+| # | Step | Expected |
+|---|------|----------|
+| 1 | Open `…/records/documents?attach=service:<id>` | "Attaching to · Service #N — {date} · {description}" banner + a prominent drop zone; the entity "Link to" picker is hidden (pre-selected) |
+| 2 | Drop a file on the zone (or click to browse) | File staged; drop in attach-mode uploads immediately |
+| 3 | Upload | Doc created linked to the service, param consumed (URL back to `…/records/documents`), doc shows in the list with a "Service: …" link badge |
+| 4 | Timeline → expand the service row | The attached doc appears as a "Documents:" chip linking to `/files/…` |
+
 ## TP-16: Incidents API
 
 | # | Step | Expected |

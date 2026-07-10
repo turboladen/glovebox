@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test'
 import * as path from 'path'
 import * as fs from 'fs'
 import * as os from 'os'
-import { createVehicle } from './helpers'
+import { createVehicle, vehicleIdFrom } from './helpers'
 
 // TP-18: Records → Parts (ported from the retired top-level Parts tab)
 test.describe('Records: Parts', () => {
@@ -135,6 +135,75 @@ test.describe('Records: Documents', () => {
     const countBefore = await deleteButtons.count()
     await deleteButtons.first().click()
     await expect(deleteButtons).toHaveCount(countBefore - 1)
+  })
+})
+
+// TP-40 (glovebox-alki): Handoff-link attach mode. MCP's record_service
+// returns a deep link `?attach=service:<id>`; opening it lands on a
+// record-scoped drop zone that uploads a file pre-linked to that service.
+test.describe('Records: Documents attach-mode', () => {
+  let vehicleUrl: string
+  let vehicleId: number
+  let testFilePath: string
+
+  test.beforeAll(async ({ browser }) => {
+    testFilePath = path.join(os.tmpdir(), 'glovebox-attach-invoice.txt')
+    fs.writeFileSync(testFilePath, 'invoice bytes')
+    vehicleUrl = await createVehicle(browser, 'Attach Test Car')
+    vehicleId = vehicleIdFrom(vehicleUrl)
+  })
+
+  test.afterAll(() => {
+    if (fs.existsSync(testFilePath)) fs.unlinkSync(testFilePath)
+  })
+
+  // Create a service record straight through the API (the same surface MCP's
+  // record_service uses) and return its id.
+  async function createService(page: Page, description: string): Promise<number> {
+    const res = await page.request.post(`/api/vehicles/${vehicleId}/services`, {
+      data: { service_date: '2026-06-01', description },
+    })
+    expect(res.ok()).toBe(true)
+    return (await res.json()).id as number
+  }
+
+  test('attach URL renders the drop zone and record header', async ({ page }) => {
+    const serviceId = await createService(page, 'Timing belt')
+    await page.goto(`${vehicleUrl}/records/documents?attach=service:${serviceId}`)
+
+    await expect(page.getByTestId('attach-banner')).toBeVisible()
+    await expect(page.getByTestId('attach-banner')).toContainText('Attaching to')
+    await expect(page.getByTestId('attach-banner')).toContainText(`Service #${serviceId}`)
+    await expect(page.getByTestId('attach-banner')).toContainText('Timing belt')
+    await expect(page.getByTestId('dropzone')).toBeVisible()
+    // The entity picker is hidden in attach-mode (entity is pre-selected).
+    await expect(page.getByLabel('Link to')).toHaveCount(0)
+  })
+
+  test('uploading in attach-mode links the doc to the record and shows it on the Timeline', async ({ page }) => {
+    const serviceId = await createService(page, 'Clutch replacement')
+    await page.goto(`${vehicleUrl}/records/documents?attach=service:${serviceId}`)
+
+    await expect(page.getByTestId('dropzone')).toBeVisible()
+    // Drop is flaky to simulate in Playwright — drive the click-fallback input.
+    await page.locator('input[type="file"]').setInputFiles(testFilePath)
+    await page.getByLabel('Title').fill('Clutch Invoice')
+    await page.getByRole('button', { name: 'Upload' }).click()
+
+    // Lands back on the plain documents view (param consumed) with the doc
+    // present and linked to the service.
+    await expect(page.getByText('Clutch Invoice')).toBeVisible()
+    await expect(page.locator('.doc-link-badge').filter({ hasText: 'Clutch replacement' })).toBeVisible()
+
+    // Hypermedia completion: the attached invoice is visible on the Timeline
+    // service row as a chip that opens the file.
+    await page.goto(`${vehicleUrl}/timeline`)
+    const serviceCard = page.locator('.service-card').filter({ hasText: 'Clutch replacement' })
+    await expect(serviceCard).toBeVisible()
+    await serviceCard.click()
+    const docChip = page.getByRole('link', { name: 'Clutch Invoice' })
+    await expect(docChip).toBeVisible()
+    await expect(docChip).toHaveAttribute('href', /\/files\//)
   })
 })
 
