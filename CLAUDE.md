@@ -95,13 +95,15 @@ connector; non-localhost hosts need `GLOVEBOX_MCP_ALLOWED_HOSTS`).
 
 **Mount** (`lib.rs`): `router(db, config) -> axum::Router` wraps rmcp's `StreamableHttpService` in **stateless mode** (`stateful_mode: false`, plain-JSON responses) — no session table, so backend restarts never strand connected clients (stateful sessions 404'd every `mcp-remote` bridge tool call after a recompile; regression-tested by `tool_calls_survive_a_server_restart`). The backend nests it at `/mcp`. LAN hostnames must be allowlisted via `GLOVEBOX_MCP_ALLOWED_HOSTS` (rmcp's DNS-rebinding defense 403s unknown `Host` headers).
 
-**Tools** (`handler.rs`): 23 domain verbs, named as things a person would say (`record_service`, not `create_service_record`). Inputs are schemars-derived structs in `schemas.rs` (doc comments become the LLM-visible field descriptions). `LenientParameters<T>` defers deserialize errors so malformed args come back as actionable tool errors, not bare JSON-RPC `-32602`s — pair it with an explicit `input_schema = schema_for_type::<T>()` on every `#[tool]`.
+**Tools** (`handler.rs`): 25 domain verbs, named as things a person would say (`record_service`, not `create_service_record`). Inputs are schemars-derived structs in `schemas.rs` (doc comments become the LLM-visible field descriptions). `LenientParameters<T>` defers deserialize errors so malformed args come back as actionable tool errors, not bare JSON-RPC `-32602`s — pair it with an explicit `input_schema = schema_for_type::<T>()` on every `#[tool]`.
+
+**Attaching files:** MCP tool args flow through the model, so **file bytes cannot ride them** (the model regenerates/corrupts/degrades base64 — `content_base64` was removed for exactly this). Real files reach the server via `attach_document` `source_path` (server-side inbox), the HTTP multipart `POST /api/documents`, or — for a file the user uploaded to the chat (unreachable from the sandbox) — the browser **deep link** `record_service` returns, landing on a record-scoped drop zone (the user's browser isn't sandboxed). Claude Desktop's sandbox is a domain allowlist: it can't `curl` the server local OR deployed.
 
 **Resources**: stable URIs (`glovebox://vehicles`, `…/{id}`, `…/{id}/activity`, `…/{id}/builds/{build_id}`). `list_resources` enumerates concrete URIs from the DB; `read_resource` parses them (rmcp resource templates are not used).
 
 **Error mapping**: one helper (`domain_error`) used by every tool — `NotFound`/`Invalid`/`BadRequest` become tool-level error results (message reaches the LLM); `Db`/`Internal` become opaque JSON-RPC internal errors with detail kept in tracing.
 
-**Tests**: `tests/mcp_integration_test.rs` drives the real router over the Streamable HTTP handshake (initialize → session id → tools/resources).
+**Tests**: `tests/mcp_integration_test.rs` drives the real router over the Streamable HTTP handshake (initialize → tools/resources; stateless mode issues no session id).
 
 ### Frontend (`frontend/`)
 
@@ -140,13 +142,14 @@ Vite dev server proxies `/api` and `/files` to the backend at `:3003`. In produc
 
 - **Issue tracking**: Use `bd` (beads), never markdown TODOs
 - **Testing**: Update `TEST_PLAN.md` and add Playwright tests when changing UI
-- **Router**: `@keenmate/svelte-spa-router` uses `routeParams` (not `params`) in Svelte 5
+- **Router**: `@keenmate/svelte-spa-router` runs in **history/path mode** (NOT hash) — links & deep-links are `/vehicles/:id/:tab/:sub` (a `/#/…` URL resolves to `/` and renders the dashboard); the backend's `frontend/dist` SPA fallback serves these paths. Uses `routeParams` (not `params`) in Svelte 5
 - **Currency**: Stored as cents (`i32`), displayed as dollars in frontend. Use integer division for formatting (not `as f64 / 100.0` which loses precision)
 - **DB datetimes**: `String` type at SeaORM boundary (SQLite TEXT)
 - **Migrations**: `Expr::cust()` for expressions inside builder queries; raw `execute_unprepared` only where no builder form exists (FTS5 DDL, cross-table copies)
 - **Migrations are NOT transactional on SQLite** (sea-orm-migration only wraps Postgres) — write them rerun-safe: `IF NOT EXISTS` DDL, `INSERT OR IGNORE`/`NOT EXISTS`-gated DML, pragma-guarded ALTERs (000019 is the pattern)
 - **SQLite can't `DROP COLUMN` named in an FK clause** — use the table-rebuild pattern (000016). FTS5: copy 000013's canonical external-content trigger trio; aggregating over `bm25()` arms needs a `MATERIALIZED` CTE (query flattening breaks bm25)
 - **Verify data-moving migrations against a populated copy of `data/glovebox.db`** (boot the branch binary against the copy), not just `test_db()`
+- **`tokio::fs::File` buffers** — always `.flush().await` before the handle drops, or a pending write can be silently lost under load (it stored an empty file; raced green locally + 2 CI runs before CI caught it)
 - **Entity field order**: Must match physical DB column order. ALTER TABLE appends columns to the end, so new fields go after `created_at`/`updated_at` in the entity struct
 - **Axum routing**: Vehicle sub-resources use flat routes in `main.rs` (not nested), so `Path((vehicle_id, id))` tuple extraction works correctly
 - **Update DTOs**: Use `Option<Option<T>>` (double-option) to distinguish "not sent" vs "explicitly set to null"
