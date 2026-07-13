@@ -301,6 +301,7 @@
             <div class="row">
               <a href="/vehicles/{item.vehicle_id}/timeline?hl={item.kind}:{item.id}" use:link class="row-link">
                 <span class="activity-date">{formatDate(item.date)}</span>
+                {#if garageScope && formatDate(item.created_at) !== formatDate(item.date)}<span class="activity-added">· added {formatDate(item.created_at)}</span>{/if}
                 {#if garageScope}· <span class="row-vehicle">{item.vehicle_name}</span>{/if}
                 · {item.summary}
                 {#if item.total_cost_cents}· {formatCents(item.total_cost_cents)}{/if}
@@ -634,6 +635,12 @@
     font-variant-numeric: tabular-nums;
     font-size: 0.78rem;
     color: var(--text);
+  }
+
+  .activity-added {
+    font-variant-numeric: tabular-nums;
+    font-size: 0.78rem;
+    color: var(--text-muted);
   }
 
   .error {

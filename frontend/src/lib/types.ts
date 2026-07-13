@@ -687,6 +687,9 @@ export interface ActivityItem {
   vehicle_id: number
   vehicle_name: string
   date: string
+  /** When the record was added (its row's created_at). The garage feed
+   *  orders by this; shown alongside the event date when they differ. */
+  created_at: string
   summary: string
   mileage: number | null
   total_cost_cents: number | null

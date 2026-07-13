@@ -31,7 +31,7 @@ dashboard scoped as an **Overview** tab, and the vehicle tabs are intent-shaped:
 | 3 | "plan it" on an overdue/due-soon/recall row | Creates a source-linked work item; row flips to a "planned" chip that LINKS to the work item (`plan/todo?hl=work_item:{id}`), with a confirm-free ✕ (Un-plan) beside it that deletes the item and restores "plan it" |
 | 4 | Plan & budget block (blue tint) | Upcoming visits with date/shop/est rollup (→ Plan/Visits), unscheduled to-do count, 12-mo forecast total (garage-wide sum) |
 | 5 | Builds block (green tint, conditional) | One row per ACTIVE build: vehicle · name · parts installed/total · spend (→ Builds tab) |
-| 6 | Recent activity block | Cross-vehicle merged feed (services/incidents/mileage), vehicle-labeled, newest first; rows deep-link to the vehicle's Timeline |
+| 6 | Recent activity block | Cross-vehicle merged feed (services/incidents/mileage), vehicle-labeled, ordered by when the record was ADDED (`created_at`) so a just-imported record with an old event date still surfaces; each row shows its event date, and appends "· added <date>" when the added date differs from the event date; rows deep-link to the vehicle's Timeline |
 
 ### With no vehicles (fresh DB — Welcome state)
 
@@ -235,8 +235,8 @@ matching row scrolls into view and flashes for ~2s; see
 |---|------|----------|
 | 1 | `GET /api/dashboard` | Per-vehicle summaries (counts, forecast total, active build), attention items (kind/label/schedule_item_name/entity_id/deep_link_hint/planned/planned_work_item_id — `schedule_item_name` set for overdue/due-soon rows so "plan it" titles the work item without label-splitting; `planned_work_item_id` names the linking open work item so the "planned" chip can link to it and un-plan it), upcoming visits, summed budget, active-build snapshots |
 | 2 | Archived vehicles | Listed with zeroed counts; contribute nothing to attention/budget |
-| 3 | `GET /api/dashboard/activity?limit=N` | Garage-wide merged feed, vehicle-labeled, newest first, capped at N |
-| 4 | `GET /api/vehicles/:id/activity?limit=N` | Per-vehicle feed (Timeline's stream); service-created mileage logs excluded |
+| 3 | `GET /api/dashboard/activity?limit=N` | Garage-wide merged feed, vehicle-labeled, ordered by `created_at` (when added) desc, capped at N; a recently-added old-event record survives the per-vehicle limit; carries `created_at` per item |
+| 4 | `GET /api/vehicles/:id/activity?limit=N` | Per-vehicle feed (Timeline's stream), event-chronological (by domain date), unchanged; service-created mileage logs excluded |
 
 ## TP-15: Records → Documents
 
