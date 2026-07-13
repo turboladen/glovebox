@@ -207,9 +207,11 @@ pub async fn recent_all(
 
 /// Sort newest-first under `order`. `Event` ranks by the domain date (via
 /// [`sort_key`]'s end-of-day normalization for mixed granularity); `Added`
-/// ranks by the uniform-timestamp `created_at`. Both use the same kind/id
-/// tiebreakers so equal-key ordering is deterministic (higher id — the later
-/// insert — wins the id tiebreak, i.e. reads as "more recently added").
+/// ranks by the uniform-timestamp `created_at`. Equal primary keys break by
+/// `kind` first (ids are per-table sequences, so they aren't comparable across
+/// kinds), then by `id` descending *within a kind* — where higher id = later
+/// insert, so same-kind equal-key rows read as "more recently added". This
+/// keeps equal-key ordering deterministic.
 fn sort_by(items: &mut [ActivityItem], order: Order) {
     items.sort_by(|a, b| {
         let primary = match order {
