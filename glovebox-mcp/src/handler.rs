@@ -9,10 +9,9 @@ use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     handler::server::{common::FromContextPart, tool::ToolCallContext},
     model::{
-        AnnotateAble, CallToolResult, Content, Implementation, ListResourcesResult,
-        PaginatedRequestParams, RawResource, ReadResourceRequestParams, ReadResourceResult,
-        Resource, ResourceContents, ResourcesCapability, ServerCapabilities, ServerInfo,
-        ToolsCapability,
+        CallToolResult, ContentBlock, Implementation, ListResourcesResult, PaginatedRequestParams,
+        ReadResourceRequestParams, ReadResourceResult, Resource, ResourceContents,
+        ResourcesCapability, ServerCapabilities, ServerInfo, ToolsCapability,
     },
     service::RequestContext,
     tool, tool_handler, tool_router,
@@ -654,10 +653,9 @@ impl ServerHandler for GloveboxMcp {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, McpError> {
         fn json_resource(uri: String, name: String, description: String) -> Resource {
-            let mut raw = RawResource::new(uri, name);
-            raw.description = Some(description);
-            raw.mime_type = Some("application/json".into());
-            raw.no_annotation()
+            Resource::new(uri, name)
+                .with_description(description)
+                .with_mime_type("application/json")
         }
 
         let vehicles = vehicle::list(&*self.db).await.map_err(resource_error)?;
@@ -826,7 +824,7 @@ fn tool_json_result<T: Serialize>(value: &T) -> Result<CallToolResult, McpError>
         tracing::error!(?err, "MCP tool: failed to serialize result");
         McpError::internal_error("failed to serialize result", None)
     })?;
-    Ok(CallToolResult::success(vec![Content::text(json)]))
+    Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
 }
 
 /// Like [`tool_json_result`] but appends a SECOND text content block carrying
@@ -843,8 +841,8 @@ fn tool_json_result_with_link<T: Serialize>(
         McpError::internal_error("failed to serialize result", None)
     })?;
     Ok(CallToolResult::success(vec![
-        Content::text(json),
-        Content::text(note_and_link),
+        ContentBlock::text(json),
+        ContentBlock::text(note_and_link),
     ]))
 }
 
@@ -873,7 +871,7 @@ fn internal_error(detail: &str) -> McpError {
 /// LLM (protocol-level `Err(McpError)` is rendered by most clients as a
 /// generic "tool failed" with the message dropped).
 fn tool_user_error(message: impl Into<String>) -> CallToolResult {
-    CallToolResult::error(vec![Content::text(message.into())])
+    CallToolResult::error(vec![ContentBlock::text(message.into())])
 }
 
 /// Parameter wrapper that defers deserialize errors to the handler so
