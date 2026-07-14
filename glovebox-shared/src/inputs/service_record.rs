@@ -26,6 +26,10 @@ pub struct NewServiceRecord {
     pub schedule_item_ids: Option<Vec<i32>>,
     pub part_ids: Option<Vec<i32>>,
     pub line_items: Option<Vec<NewLineItem>>,
+    /// Invoice/receipt number. When present, the record is hard-idempotent on
+    /// `(vehicle_id, invoice_ref)`: re-recording the same ref returns the
+    /// existing record instead of creating a duplicate.
+    pub invoice_ref: Option<String>,
 }
 
 #[derive(Default)]

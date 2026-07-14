@@ -75,6 +75,21 @@ pub struct ServiceRecordWithLinks {
     pub schedule_item_ids: Vec<i32>,
     pub part_ids: Vec<i32>,
     pub line_items: Vec<service_record_line_item::Model>,
+    /// Soft advisory: other same-day records on this vehicle, surfaced only
+    /// when a record was created WITHOUT an `invoice_ref` so the caller can
+    /// reconcile a possible duplicate. Never blocks — distinct records
+    /// coexist. Empty (and omitted from JSON) on every other path.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub possible_duplicates: Vec<PossibleDuplicate>,
+}
+
+/// A lightweight same-day peer surfaced in `possible_duplicates`.
+#[derive(Debug, Serialize)]
+pub struct PossibleDuplicate {
+    pub id: i32,
+    pub service_date: String,
+    pub description: Option<String>,
+    pub total_cost_cents: Option<i32>,
 }
 
 /// Load schedule link IDs, part IDs, and line items for a single service record.
@@ -246,6 +261,7 @@ pub async fn list(
                 schedule_item_ids,
                 part_ids,
                 line_items,
+                possible_duplicates: Vec::new(),
             }
         })
         .collect();
@@ -271,9 +287,11 @@ pub async fn get(
         schedule_item_ids,
         part_ids,
         line_items,
+        possible_duplicates: Vec::new(),
     })
 }
 
+#[allow(clippy::too_many_lines)] // linear create + idempotency + advisory
 pub async fn create<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -282,6 +300,40 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     if let Some(paid_by) = &input.paid_by {
         validate_payer(paid_by)?;
     }
+
+    // Normalize a blank invoice_ref to absent. An LLM may send "" (or spaces)
+    // rather than omitting the field; treating that as a real ref would let the
+    // partial unique index reject a SECOND ref-less record as a false
+    // duplicate. Trim so "INV-1 " and "INV-1" are the same identity signal.
+    let invoice_ref = input
+        .invoice_ref
+        .map(|r| r.trim().to_string())
+        .filter(|r| !r.is_empty());
+
+    // Hard-idempotency: an invoice_ref is a deterministic identity signal.
+    // If this vehicle already has a record with the same ref, return it
+    // UNTOUCHED — no new record, no new links/parts/line-items from this call
+    // (reconcile those via `link` if needed). Short-circuits before any guard
+    // or write. The partial unique index is the backstop against a race.
+    if let Some(invoice_ref) = &invoice_ref {
+        let existing = service_record::Entity::find()
+            .filter(service_record::Column::VehicleId.eq(vehicle_id))
+            .filter(service_record::Column::InvoiceRef.eq(invoice_ref.as_str()))
+            .one(db)
+            .await?;
+        if let Some(existing) = existing {
+            let (schedule_item_ids, part_ids, line_items) =
+                load_service_links(db, existing.id).await?;
+            return Ok(ServiceRecordWithLinks {
+                record: existing,
+                schedule_item_ids,
+                part_ids,
+                line_items,
+                possible_duplicates: Vec::new(),
+            });
+        }
+    }
+
     let schedule_item_ids = input.schedule_item_ids.unwrap_or_default();
     require_schedule_items_in_scope(db, vehicle_id, &schedule_item_ids).await?;
     if let Some(build_id) = input.build_id {
@@ -307,6 +359,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
         build_id: Set(input.build_id),
         paid_by: Set(input.paid_by.unwrap_or_else(|| "self".into())),
         payer_note: Set(input.payer_note),
+        invoice_ref: Set(invoice_ref),
         ..Default::default()
     };
     let record = record.insert(&txn).await?;
@@ -358,11 +411,35 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
 
     txn.commit().await?;
 
+    // Soft advisory: with no invoice_ref there is no deterministic identity
+    // signal, so surface other same-day records on this vehicle for the caller
+    // to reconcile. Read-only, never blocks — distinct records coexist.
+    let possible_duplicates = if record.invoice_ref.is_none() {
+        service_record::Entity::find()
+            .filter(service_record::Column::VehicleId.eq(vehicle_id))
+            .filter(service_record::Column::ServiceDate.eq(record.service_date.clone()))
+            .filter(service_record::Column::Id.ne(record.id))
+            .order_by_asc(service_record::Column::Id)
+            .all(db)
+            .await?
+            .into_iter()
+            .map(|r| PossibleDuplicate {
+                id: r.id,
+                service_date: r.service_date,
+                description: r.description,
+                total_cost_cents: r.total_cost_cents,
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     Ok(ServiceRecordWithLinks {
         record,
         schedule_item_ids,
         part_ids,
         line_items,
+        possible_duplicates,
     })
 }
 
@@ -534,6 +611,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         schedule_item_ids,
         part_ids,
         line_items,
+        possible_duplicates: Vec::new(),
     })
 }
 
@@ -621,6 +699,7 @@ pub async fn link_schedule_items<C: ConnectionTrait + TransactionTrait>(
         schedule_item_ids,
         part_ids,
         line_items,
+        possible_duplicates: Vec::new(),
     })
 }
 
@@ -755,6 +834,7 @@ mod tests {
                     unit_cost_cents: Some(1_000),
                     cost_cents: Some(5_000),
                 }]),
+                invoice_ref: None,
             },
         )
         .await
@@ -827,6 +907,7 @@ mod tests {
                     unit_cost_cents: None,
                     cost_cents: Some(100),
                 }]),
+                invoice_ref: None,
             },
         )
         .await
@@ -901,6 +982,7 @@ mod tests {
                 schedule_item_ids: Some(vec![sched_id]),
                 part_ids: Some(vec![part_id]),
                 line_items: None,
+                invoice_ref: None,
             },
         )
         .await
@@ -1108,6 +1190,207 @@ mod tests {
             schedule_item_ids,
             part_ids: None,
             line_items: None,
+            invoice_ref: None,
+        }
+    }
+
+    // ─── invoice_ref idempotency + possible_duplicates advisory (hwaf) ───
+
+    /// Recording the same invoice_ref twice returns the existing record
+    /// UNTOUCHED — no second row, and the second call's extra links/line-items
+    /// (and even a bogus schedule id, which the short-circuit skips guarding)
+    /// are ignored.
+    #[tokio::test]
+    async fn record_same_invoice_ref_is_hard_idempotent_and_untouched() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+
+        let first = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                invoice_ref: Some("INV-42".into()),
+                ..minimal_record(None)
+            },
+        )
+        .await
+        .unwrap();
+        assert!(first.line_items.is_empty());
+
+        let second = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                invoice_ref: Some("INV-42".into()),
+                // These MUST be ignored on the idempotent path — a bogus
+                // schedule id would fail the guard if it ran.
+                schedule_item_ids: Some(vec![9999]),
+                line_items: Some(vec![NewLineItem {
+                    description: "should not be added".into(),
+                    category: None,
+                    quantity: None,
+                    unit_cost_cents: None,
+                    cost_cents: Some(100),
+                }]),
+                ..minimal_record(None)
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(second.record.id, first.record.id, "same ref → same record");
+        assert!(
+            second.line_items.is_empty(),
+            "idempotent return must not add the 2nd call's line items"
+        );
+        assert_eq!(list(&db, vid).await.unwrap().len(), 1, "no duplicate row");
+    }
+
+    /// Distinct invoice_refs are distinct records.
+    #[tokio::test]
+    async fn record_different_invoice_refs_are_distinct() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        for reference in ["A-1", "A-2"] {
+            create(
+                &db,
+                vid,
+                NewServiceRecord {
+                    invoice_ref: Some(reference.into()),
+                    ..minimal_record(None)
+                },
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(list(&db, vid).await.unwrap().len(), 2);
+    }
+
+    /// Regression: two records with the SAME day and SAME cost but NO
+    /// invoice_ref must BOTH persist — resemblance is never a dedup signal.
+    #[tokio::test]
+    async fn record_no_ref_same_day_same_cost_coexist() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        for _ in 0..2 {
+            create(
+                &db,
+                vid,
+                NewServiceRecord {
+                    total_cost_cents: Some(5_000),
+                    ..minimal_record(None)
+                },
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(
+            list(&db, vid).await.unwrap().len(),
+            2,
+            "distinct same-day/same-cost records must coexist"
+        );
+    }
+
+    /// A ref-less create surfaces same-day peers as a soft advisory; the first
+    /// (no peers) is empty, the second sees the first.
+    #[tokio::test]
+    async fn record_no_ref_surfaces_possible_duplicates() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+
+        let first = create(&db, vid, minimal_record(None)).await.unwrap();
+        assert!(
+            first.possible_duplicates.is_empty(),
+            "no prior same-day record → no advisory"
+        );
+
+        let second = create(&db, vid, minimal_record(None)).await.unwrap();
+        assert_eq!(second.possible_duplicates.len(), 1);
+        assert_eq!(second.possible_duplicates[0].id, first.record.id);
+    }
+
+    /// A blank invoice_ref is normalized to absent: two ref-less records sent
+    /// with `Some("")`/whitespace must coexist, not collide on the unique
+    /// index. And a ref with surrounding whitespace is the same identity.
+    #[tokio::test]
+    async fn blank_invoice_ref_is_treated_as_absent() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+
+        for reference in ["", "   "] {
+            create(
+                &db,
+                vid,
+                NewServiceRecord {
+                    invoice_ref: Some(reference.into()),
+                    ..minimal_record(None)
+                },
+            )
+            .await
+            .expect("blank ref must not collide");
+        }
+        assert_eq!(list(&db, vid).await.unwrap().len(), 2, "both must persist");
+
+        // Whitespace around a real ref is trimmed → same identity → idempotent.
+        let a = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                invoice_ref: Some("INV-9".into()),
+                ..minimal_record(None)
+            },
+        )
+        .await
+        .unwrap();
+        let b = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                invoice_ref: Some("  INV-9  ".into()),
+                ..minimal_record(None)
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(b.record.id, a.record.id, "trimmed ref is the same identity");
+    }
+
+    /// The partial unique index is a DB-level backstop: a raw second insert of
+    /// the same (vehicle_id, invoice_ref) — bypassing the service's
+    /// short-circuit — is rejected.
+    #[tokio::test]
+    async fn invoice_ref_partial_unique_index_rejects_raw_duplicate() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+
+        let insert_raw = |reference: &str| {
+            let reference = reference.to_string();
+            service_record::ActiveModel {
+                vehicle_id: Set(vid),
+                service_date: Set("2024-03-01".into()),
+                paid_by: Set("self".into()),
+                invoice_ref: Set(Some(reference)),
+                ..Default::default()
+            }
+        };
+        insert_raw("DUP-1").insert(&db).await.unwrap();
+        let err = insert_raw("DUP-1").insert(&db).await;
+        assert!(
+            err.is_err(),
+            "duplicate (vehicle, invoice_ref) must be rejected"
+        );
+
+        // NULL refs are exempt from the partial index — two coexist.
+        for _ in 0..2 {
+            service_record::ActiveModel {
+                vehicle_id: Set(vid),
+                service_date: Set("2024-03-01".into()),
+                paid_by: Set("self".into()),
+                ..Default::default()
+            }
+            .insert(&db)
+            .await
+            .unwrap();
         }
     }
 

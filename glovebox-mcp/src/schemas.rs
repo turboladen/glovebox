@@ -72,6 +72,11 @@ pub struct RecordServiceInput {
     /// Ids of schedule items (from `check_due_maintenance`) this work
     /// satisfies — linking clears the reminder and restarts its interval.
     pub schedule_item_ids: Option<Vec<i32>>,
+    /// The invoice/receipt number read off the scan (e.g. "FCP-2026-06-1234").
+    /// Pass it to make the import idempotent: re-recording the SAME ref for
+    /// this vehicle returns the existing record instead of creating a
+    /// duplicate. Omit for work with no invoice number.
+    pub invoice_ref: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -122,6 +127,7 @@ impl RecordServiceInput {
                 schedule_item_ids: self.schedule_item_ids,
                 part_ids: None,
                 line_items,
+                invoice_ref: self.invoice_ref,
             },
         )
     }

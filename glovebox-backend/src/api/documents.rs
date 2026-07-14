@@ -160,7 +160,9 @@ pub async fn upload(
         },
     )
     .await?;
-    Ok(Json(result))
+    // The HTTP surface returns the stored document row (stable DTO); the
+    // idempotency signal (`already_present`) is surfaced only over MCP.
+    Ok(Json(result.document))
 }
 
 pub async fn delete(
