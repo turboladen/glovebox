@@ -74,8 +74,13 @@ async fn main() -> anyhow::Result<()> {
     let listen_addr = state.config.listen.clone();
     let files_dir = state.config.files_dir.clone();
 
-    let spa_fallback = ServeDir::new("frontend/dist")
-        .not_found_service(ServeFile::new("frontend/dist/index.html"));
+    // SPA deep-link fallback: unknown paths serve index.html so the client
+    // router can boot. Use `.fallback()` (not `.not_found_service()`, which
+    // re-stamps the fallback's status to 404) so deep links keep ServeFile's
+    // natural 200 — correct for crawlers/monitoring. Real static assets are
+    // still served directly by ServeDir; the fallback only fires on a miss.
+    let spa_fallback =
+        ServeDir::new("frontend/dist").fallback(ServeFile::new("frontend/dist/index.html"));
 
     let app = Router::new()
         .route("/api/health", get(api::health::health_check))

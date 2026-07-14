@@ -91,6 +91,10 @@ test-e2e-ci:
 
     cargo build --workspace --locked
 
+    # Build the SPA into frontend/dist so the backend (:3003) serves its prod
+    # SPA fallback — exercised by e2e/spa-fallback.spec.ts against the backend.
+    ( cd frontend && bun run build )
+
     GLOVEBOX_DB_PATH="$DB" GLOVEBOX_FILES_DIR="$FILES" GLOVEBOX_LISTEN=0.0.0.0:$backend_port \
         ./target/debug/glovebox-backend >/tmp/glovebox-e2e-backend.log 2>&1 &
     backend_pid=$!
