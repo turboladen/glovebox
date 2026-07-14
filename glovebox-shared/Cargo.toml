@@ -23,7 +23,6 @@ thiserror.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 reqwest.workspace = true
-rusty-money.workspace = true
 async-trait.workspace = true
 sqlx.workspace = true
 tracing.workspace = true
