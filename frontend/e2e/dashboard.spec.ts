@@ -129,6 +129,61 @@ test.describe('Dashboard', () => {
     await expect(page.locator('.reminder-card.overdue', { hasText: 'DeepLink coolant flush' })).toBeVisible()
   })
 
+  test('garage Recent activity orders by date-added and annotates · added', async ({ browser, page }) => {
+    const url = await createVehicle(browser, 'x01g Added-Order Car')
+    const vehicleId = vehicleIdFrom(url)
+
+    // Control row: a same-day service (event date == added date) — must show
+    // NO "· added" note. created_at is a UTC datetime the frontend renders in
+    // local tz, while service_date (date-only) renders at local midnight, so
+    // set service_date to created_at's LOCAL calendar day (not "today" — that
+    // flips wrong in the evening for tz's behind UTC).
+    const controlRes = await page.request.post(`/api/vehicles/${vehicleId}/services`, {
+      data: { service_date: '2026-01-01', description: 'x01g same-day control' },
+    })
+    expect(controlRes.ok()).toBe(true)
+    const control = await controlRes.json()
+    const added = new Date(`${control.created_at.replace(' ', 'T')}Z`)
+    const localDay = `${added.getFullYear()}-${String(added.getMonth() + 1).padStart(2, '0')}-${String(added.getDate()).padStart(2, '0')}`
+    const fixRes = await page.request.put(`/api/vehicles/${vehicleId}/services/${control.id}`, {
+      data: { service_date: localDay },
+    })
+    expect(fixRes.ok()).toBe(true)
+
+    // Old-event row: created LAST, so its created_at is the newest in the DB.
+    // Its event date is years old, so under a regression to event-ordering it
+    // would sink BELOW the same-day control — this row-order assertion flips
+    // red on exactly that revert.
+    const oldRes = await page.request.post(`/api/vehicles/${vehicleId}/services`, {
+      data: { service_date: '2020-03-15', description: 'x01g old-event brakes' },
+    })
+    expect(oldRes.ok()).toBe(true)
+
+    await page.goto('/')
+    const block = page.getByTestId('activity-block')
+    const oldRow = block.locator('.row', { hasText: 'x01g old-event brakes' })
+    const controlRow = block.locator('.row', { hasText: 'x01g same-day control' })
+    await expect(oldRow).toBeVisible()
+    await expect(controlRow).toBeVisible()
+
+    // Added-order: the old-event row (added last) sits ABOVE the same-day
+    // control (added first). Compare vertical position — robust to other
+    // specs' rows in the shared-DB, multi-worker feed (no .first()/index).
+    const oldBox = await oldRow.boundingBox()
+    const controlBox = await controlRow.boundingBox()
+    expect(oldBox).not.toBeNull()
+    expect(controlBox).not.toBeNull()
+    expect(oldBox!.y).toBeLessThan(controlBox!.y)
+
+    // The old-event row shows its (old) event date plus the muted "· added" note.
+    // Assert the event YEAR (locale-invariant) rather than the fully formatted
+    // string — formatDate uses toLocaleDateString and the config sets no locale.
+    await expect(oldRow.locator('.activity-date')).toContainText('2020')
+    await expect(oldRow.locator('.activity-added')).toHaveText(/· added/)
+    // The same-day control shows no "· added" note.
+    await expect(controlRow.locator('.activity-added')).toHaveCount(0)
+  })
+
   test('per-car Overview is the same dashboard scoped to the vehicle', async ({ browser, page }) => {
     const url = await createVehicle(browser, 'Dash Scoped Car')
     const vehicleId = vehicleIdFrom(url)
