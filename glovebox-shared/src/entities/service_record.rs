@@ -24,6 +24,9 @@ pub struct Model {
     pub build_id: Option<i32>,
     pub paid_by: String,
     pub payer_note: Option<String>,
+    /// Invoice/receipt number off the scan. Unique per vehicle when present;
+    /// re-recording the same ref is idempotent (returns the existing record).
+    pub invoice_ref: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

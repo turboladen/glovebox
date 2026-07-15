@@ -963,6 +963,7 @@ dependencies = [
  "sea-orm-migration",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "tempfile",
  "thiserror",

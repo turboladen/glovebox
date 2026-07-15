@@ -18,6 +18,9 @@ pub struct Model {
     pub notes: Option<String>,
     pub extracted_text: Option<String>,
     pub created_at: String,
+    /// Hex SHA-256 of the stored file bytes. Content-hash dedup keys on
+    /// `(vehicle_id, content_sha256)`. NULL only for pre-idempotency rows.
+    pub content_sha256: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

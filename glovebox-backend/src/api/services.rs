@@ -141,6 +141,10 @@ pub async fn create(
             line_items: input
                 .line_items
                 .map(|items| items.into_iter().map(Into::into).collect()),
+            // HTTP create DTO does not carry an invoice_ref (idempotency is an
+            // MCP-import concern); records created via the UI are never
+            // dedup-keyed on a ref.
+            invoice_ref: None,
         },
     )
     .await?;

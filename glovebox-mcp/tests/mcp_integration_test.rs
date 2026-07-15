@@ -111,6 +111,7 @@ fn minimal_service(date: &str, description: &str, build_id: Option<i32>) -> NewS
         schedule_item_ids: None,
         part_ids: None,
         line_items: None,
+        invoice_ref: None,
     }
 }
 
@@ -2358,4 +2359,106 @@ async fn read_resource_unknown_uri_and_missing_record_are_clean_errors() {
         body.contains("\"error\"") && body.contains("not found"),
         "missing vehicle must be a clean resource error; got: {body}"
     );
+}
+
+// ─── import idempotency over the wire (glovebox-hwaf) ────────────
+
+/// Re-recording the same invoice_ref returns the SAME record (hard
+/// idempotent), so a retry loop cannot create duplicate service records.
+#[tokio::test]
+async fn record_service_same_invoice_ref_is_idempotent() {
+    let (app, db, _files) = setup().await;
+    handshake(&app).await;
+    let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
+
+    let args = serde_json::json!({
+        "vehicle_id": v.id,
+        "service_date": "2026-06-01",
+        "description": "Oil change",
+        "total_cost_cents": 8_999,
+        "invoice_ref": "FCP-2026-06-1234"
+    });
+
+    let first = post_rpc(&app, call_tool("record_service", args.clone())).await;
+    assert_success(&first);
+    let first_id = tool_payload(&first)["id"].as_i64().expect("record id");
+
+    let second = post_rpc(&app, call_tool("record_service", args)).await;
+    assert_success(&second);
+    let second_id = tool_payload(&second)["id"].as_i64().expect("record id");
+
+    assert_eq!(second_id, first_id, "same invoice_ref → same record");
+    assert_eq!(
+        svc_svc::list(&db, v.id).await.unwrap().len(),
+        1,
+        "no duplicate record was created"
+    );
+}
+
+/// Attaching the identical inbox file twice dedupes on content hash: the
+/// second call returns the existing document (`already_present`) and writes
+/// no second file.
+#[tokio::test]
+async fn attach_document_same_file_twice_dedupes() {
+    let (app, db, files, inbox) = setup_with_inbox().await;
+    handshake(&app).await;
+    let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
+    std::fs::write(inbox.path().join("invoice.pdf"), b"real scanned bytes").unwrap();
+
+    let args = serde_json::json!({
+        "vehicle_id": v.id,
+        "source_path": "invoice.pdf",
+        "title": "FCP invoice"
+    });
+
+    let first = post_rpc(&app, call_tool("attach_document", args.clone())).await;
+    assert_success(&first);
+    let first_doc = tool_payload(&first);
+    assert_eq!(first_doc["already_present"], false);
+    let first_id = first_doc["id"].as_i64().expect("doc id");
+
+    let second = post_rpc(&app, call_tool("attach_document", args)).await;
+    assert_success(&second);
+    let second_doc = tool_payload(&second);
+    assert_eq!(
+        second_doc["already_present"], true,
+        "identical file must dedupe; got: {second}"
+    );
+    assert_eq!(
+        second_doc["id"].as_i64(),
+        Some(first_id),
+        "same document row"
+    );
+
+    // Exactly one row and one file on disk.
+    use glovebox_shared::{inputs::document::DocumentFilter, services::document as doc_svc};
+    assert_eq!(
+        doc_svc::list(&db, DocumentFilter::default())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    let pdfs = walkdir_pdf_count(files.path());
+    assert_eq!(pdfs, 1, "no second file was written");
+}
+
+/// Count `*.pdf` files anywhere under `root`.
+fn walkdir_pdf_count(root: &std::path::Path) -> usize {
+    fn walk(dir: &std::path::Path, acc: &mut usize) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, acc);
+            } else if path.extension().is_some_and(|e| e == "pdf") {
+                *acc += 1;
+            }
+        }
+    }
+    let mut count = 0;
+    walk(root, &mut count);
+    count
 }

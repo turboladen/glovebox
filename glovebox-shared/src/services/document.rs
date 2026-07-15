@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
 use sea_orm::*;
+use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 use crate::{
     config::AppConfig,
@@ -8,6 +10,38 @@ use crate::{
     error::{DomainError, DomainResult},
     inputs::document::{DocumentFilter, DocumentSource, NewDocument, StoreDocument},
 };
+
+/// A stored document plus the idempotency signal: whether an identical file
+/// (same `vehicle_id` + `content_sha256`) already existed and was returned
+/// instead of writing a duplicate. `Deref` to [`document::Model`] so callers
+/// read the document's fields transparently; the flattened serialization
+/// surfaces `already_present` to MCP clients.
+#[derive(Debug, Serialize)]
+pub struct StoredDocument {
+    #[serde(flatten)]
+    pub document: document::Model,
+    pub already_present: bool,
+}
+
+impl std::ops::Deref for StoredDocument {
+    type Target = document::Model;
+
+    fn deref(&self) -> &Self::Target {
+        &self.document
+    }
+}
+
+/// Hex-encoded SHA-256 of `bytes` — the content-hash dedup key.
+fn sha256_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    let digest = Sha256::digest(bytes);
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex
+}
 
 /// Decoded-size cap for stored files: 10 MiB.
 pub const MAX_FILE_BYTES: usize = 10 * 1024 * 1024;
@@ -63,6 +97,7 @@ pub async fn create(
         linked_entity_id: Set(input.linked_entity_id),
         notes: Set(input.notes),
         extracted_text: Set(input.extracted_text),
+        content_sha256: Set(Some(input.content_sha256)),
         ..Default::default()
     };
     Ok(model.insert(db).await?)
@@ -217,7 +252,7 @@ pub async fn store(
     db: &impl ConnectionTrait,
     config: &AppConfig,
     input: StoreDocument,
-) -> DomainResult<document::Model> {
+) -> DomainResult<StoredDocument> {
     let (bytes, source_basename) = match input.source {
         DocumentSource::Bytes(bytes) => (bytes, None),
         DocumentSource::InboxPath(ref path) => {
@@ -235,6 +270,8 @@ pub async fn store(
             bytes.len()
         )));
     }
+    // Content-hash dedup key: computed from the exact bytes we'd write.
+    let content_sha256 = sha256_hex(&bytes);
     let Some(file_name) = input.file_name.or(source_basename) else {
         return Err(DomainError::Invalid {
             field: "file_name".into(),
@@ -264,6 +301,38 @@ pub async fn store(
                 "linked_entity_type and linked_entity_id must be provided together".into(),
             ));
         }
+    }
+
+    // Content-hash idempotency: if an identical file already exists for this
+    // vehicle, return it instead of writing a second file + row. Matches on
+    // `(vehicle_id, content_sha256)` INDEPENDENT of link state — so a retry
+    // loop cannot create N copies of one PDF, and an orphan (unlinked) row can
+    // be ADOPTED by a later call that supplies the link. The guards above have
+    // already validated the incoming link, so adoption is safe here.
+    let mut hash_match =
+        document::Entity::find().filter(document::Column::ContentSha256.eq(content_sha256.clone()));
+    hash_match = match input.vehicle_id {
+        Some(vid) => hash_match.filter(document::Column::VehicleId.eq(vid)),
+        None => hash_match.filter(document::Column::VehicleId.is_null()),
+    };
+    if let Some(existing) = hash_match.one(db).await? {
+        // Adopt the incoming link ONLY when the existing row is a true orphan
+        // (no link at all). A row already linked to ANY entity is left
+        // untouched — never re-point it away from its prior target.
+        let is_orphan =
+            existing.linked_entity_type.is_none() && existing.linked_entity_id.is_none();
+        let document = if is_orphan && input.linked_entity_type.is_some() {
+            let mut active: document::ActiveModel = existing.into();
+            active.linked_entity_type = Set(input.linked_entity_type);
+            active.linked_entity_id = Set(input.linked_entity_id);
+            active.update(db).await?
+        } else {
+            existing
+        };
+        return Ok(StoredDocument {
+            document,
+            already_present: true,
+        });
     }
 
     let vid_dir = input
@@ -332,7 +401,7 @@ pub async fn store(
     let file_size_bytes =
         i32::try_from(bytes.len()).map_err(|_| DomainError::BadRequest("File too large".into()))?;
 
-    create(
+    let document = create(
         db,
         NewDocument {
             vehicle_id: input.vehicle_id,
@@ -346,9 +415,14 @@ pub async fn store(
             linked_entity_id: input.linked_entity_id,
             notes: input.notes,
             extracted_text: input.extracted_text,
+            content_sha256,
         },
     )
-    .await
+    .await?;
+    Ok(StoredDocument {
+        document,
+        already_present: false,
+    })
 }
 
 pub async fn delete(db: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
@@ -377,6 +451,7 @@ mod tests {
             linked_entity_id: None,
             notes: None,
             extracted_text: None,
+            content_sha256: "0".repeat(64),
         }
     }
 
@@ -739,6 +814,197 @@ mod tests {
                 doc.file_path
             );
         }
+    }
+
+    // ─── content-hash idempotency (glovebox-hwaf) ───
+
+    /// Store the same file name with identical bytes on the same vehicle: the
+    /// second store dedupes to the first — same row, no second file — instead
+    /// of writing a duplicate.
+    #[tokio::test]
+    async fn store_identical_bytes_returns_existing_no_second_file() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let files = tempfile::tempdir().unwrap();
+
+        let first = store(
+            &db,
+            &files_cfg(&files),
+            store_input(Some(vid), "invoice.pdf"),
+        )
+        .await
+        .unwrap();
+        assert!(!first.already_present);
+
+        let second = store(
+            &db,
+            &files_cfg(&files),
+            store_input(Some(vid), "invoice.pdf"),
+        )
+        .await
+        .unwrap();
+        assert!(second.already_present, "identical bytes must dedupe");
+        assert_eq!(second.id, first.id, "must return the SAME row");
+
+        // Exactly one row and one file on disk.
+        assert_eq!(list(&db, DocumentFilter::default()).await.unwrap().len(), 1);
+        assert_eq!(pdf_files_under(files.path()), 1);
+    }
+
+    /// Different bytes are distinct documents even with the same name/vehicle.
+    #[tokio::test]
+    async fn store_different_bytes_creates_new_row() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let files = tempfile::tempdir().unwrap();
+
+        store(
+            &db,
+            &files_cfg(&files),
+            store_input(Some(vid), "invoice.pdf"),
+        )
+        .await
+        .unwrap();
+        let second = store(
+            &db,
+            &files_cfg(&files),
+            StoreDocument {
+                source: DocumentSource::Bytes(b"totally different bytes".to_vec()),
+                ..store_input(Some(vid), "invoice.pdf")
+            },
+        )
+        .await
+        .unwrap();
+        assert!(!second.already_present);
+        assert_eq!(list(&db, DocumentFilter::default()).await.unwrap().len(), 2);
+    }
+
+    /// The content-hash key is per-vehicle: identical bytes on two vehicles are
+    /// distinct rows (they belong to different cars).
+    #[tokio::test]
+    async fn store_identical_bytes_different_vehicle_are_distinct() {
+        let db = test_db().await;
+        let v1 = seed_vehicle(&db).await;
+        let v2 = seed_vehicle(&db).await;
+        let files = tempfile::tempdir().unwrap();
+
+        store(
+            &db,
+            &files_cfg(&files),
+            store_input(Some(v1), "invoice.pdf"),
+        )
+        .await
+        .unwrap();
+        let second = store(
+            &db,
+            &files_cfg(&files),
+            store_input(Some(v2), "invoice.pdf"),
+        )
+        .await
+        .unwrap();
+        assert!(!second.already_present, "different vehicle must not dedupe");
+        assert_eq!(list(&db, DocumentFilter::default()).await.unwrap().len(), 2);
+    }
+
+    /// Orphan adoption: a first store with no link, then the same bytes WITH a
+    /// link, dedupes to the same row AND adopts the link (the orphan gets
+    /// relinked) — no second file/row.
+    #[tokio::test]
+    async fn store_orphan_is_adopted_by_later_link() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let svc_id = seed_service(&db, vid).await;
+        let files = tempfile::tempdir().unwrap();
+
+        let orphan = store(
+            &db,
+            &files_cfg(&files),
+            store_input(Some(vid), "invoice.pdf"),
+        )
+        .await
+        .unwrap();
+        assert!(orphan.linked_entity_type.is_none());
+
+        let adopted = store(
+            &db,
+            &files_cfg(&files),
+            StoreDocument {
+                linked_entity_type: Some("service".into()),
+                linked_entity_id: Some(svc_id),
+                ..store_input(Some(vid), "invoice.pdf")
+            },
+        )
+        .await
+        .unwrap();
+        assert!(adopted.already_present);
+        assert_eq!(adopted.id, orphan.id);
+        assert_eq!(adopted.linked_entity_type.as_deref(), Some("service"));
+        assert_eq!(adopted.linked_entity_id, Some(svc_id));
+        assert_eq!(list(&db, DocumentFilter::default()).await.unwrap().len(), 1);
+        assert_eq!(pdf_files_under(files.path()), 1);
+    }
+
+    /// A dedup match that is ALREADY linked to a different entity is never
+    /// re-pointed: the incoming link does not steal it.
+    #[tokio::test]
+    async fn store_dedup_never_steals_an_existing_link() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let svc_a = seed_service(&db, vid).await;
+        let svc_b = seed_service(&db, vid).await;
+        let files = tempfile::tempdir().unwrap();
+
+        let first = store(
+            &db,
+            &files_cfg(&files),
+            StoreDocument {
+                linked_entity_type: Some("service".into()),
+                linked_entity_id: Some(svc_a),
+                ..store_input(Some(vid), "invoice.pdf")
+            },
+        )
+        .await
+        .unwrap();
+
+        let second = store(
+            &db,
+            &files_cfg(&files),
+            StoreDocument {
+                linked_entity_type: Some("service".into()),
+                linked_entity_id: Some(svc_b),
+                ..store_input(Some(vid), "invoice.pdf")
+            },
+        )
+        .await
+        .unwrap();
+        assert!(second.already_present);
+        assert_eq!(second.id, first.id);
+        assert_eq!(
+            second.linked_entity_id,
+            Some(svc_a),
+            "existing link must NOT be stolen by a later attach"
+        );
+        assert_eq!(list(&db, DocumentFilter::default()).await.unwrap().len(), 1);
+    }
+
+    /// Count stored `*.pdf` files anywhere under the files dir.
+    fn pdf_files_under(root: &std::path::Path) -> usize {
+        fn walk(dir: &std::path::Path, acc: &mut usize) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, acc);
+                } else if path.extension().is_some_and(|e| e == "pdf") {
+                    *acc += 1;
+                }
+            }
+        }
+        let mut count = 0;
+        walk(root, &mut count);
+        count
     }
 
     #[tokio::test]

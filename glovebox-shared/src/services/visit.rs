@@ -436,6 +436,7 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
 ///
 /// Any failure (e.g. an invalid `paid_by`) rolls the whole unit back —
 /// nothing is mutated.
+#[allow(clippy::too_many_lines)] // one linear transactional loop-closer
 pub async fn complete<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -515,6 +516,7 @@ pub async fn complete<C: ConnectionTrait + TransactionTrait>(
             schedule_item_ids: Some(schedule_item_ids),
             part_ids: None,
             line_items: None,
+            invoice_ref: None,
         },
     )
     .await?;

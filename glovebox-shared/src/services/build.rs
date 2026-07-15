@@ -352,6 +352,7 @@ mod tests {
             schedule_item_ids: None,
             part_ids: None,
             line_items: None,
+            invoice_ref: None,
         }
     }
 

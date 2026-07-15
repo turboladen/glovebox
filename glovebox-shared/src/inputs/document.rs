@@ -23,6 +23,9 @@ pub struct NewDocument {
     /// Text content extracted from the file (OCR / LLM reading). Indexed by
     /// the documents FTS so search finds the document by its content.
     pub extracted_text: Option<String>,
+    /// Hex SHA-256 of the file bytes, computed by the store path from the
+    /// bytes it wrote. The content-hash dedup key.
+    pub content_sha256: String,
 }
 
 /// Where [`crate::services::document::store`] gets the file bytes.
