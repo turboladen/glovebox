@@ -346,20 +346,15 @@ mod tests {
         entities::{maintenance_schedule_item, research_finding, research_report},
         inputs::{build::NewBuild, incident::NewIncident, visit::NewVisit, work_item::NewWorkItem},
         services::{build as build_svc, incident as incident_svc, work_item as work_item_svc},
-        test_support::test_db,
+        test_support::{VehicleFixture, test_db},
     };
 
     async fn seed_vehicle(db: &impl ConnectionTrait, name: &str) -> i32 {
-        use crate::entities::vehicle;
-        vehicle::ActiveModel {
-            name: Set(name.into()),
-            purchase_date: Set(Some("2020-01-01".into())),
-            ..Default::default()
-        }
-        .insert(db)
-        .await
-        .unwrap()
-        .id
+        VehicleFixture::new()
+            .name(name)
+            .purchase_date("2020-01-01")
+            .insert_id(db)
+            .await
     }
 
     /// 12-month item on a 2020-purchased vehicle, never serviced → overdue.

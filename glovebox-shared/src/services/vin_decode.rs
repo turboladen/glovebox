@@ -178,7 +178,10 @@ pub async fn store_attributes<C: ConnectionTrait + TransactionTrait>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{error::DomainError, test_support::test_db};
+    use crate::{
+        error::DomainError,
+        test_support::{VehicleFixture, test_db},
+    };
 
     fn decoded() -> VinDecodeResult {
         VinDecodeResult {
@@ -213,16 +216,8 @@ mod tests {
 
     #[tokio::test]
     async fn store_attributes_round_trips_for_existing_vehicle() {
-        use crate::entities::vehicle;
         let db = test_db().await;
-        let vid = vehicle::ActiveModel {
-            name: Set("Car".into()),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap()
-        .id;
+        let vid = VehicleFixture::new().insert_id(&db).await;
 
         store_attributes(&db, vid, &decoded()).await.unwrap();
         let attrs = vehicle_attribute::Entity::find().all(&db).await.unwrap();

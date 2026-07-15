@@ -166,18 +166,14 @@ pub async fn summary(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::test_db;
+    use crate::test_support::{VehicleFixture, test_db};
 
     async fn seed_vehicle(db: &impl ConnectionTrait, purchase_mileage: Option<i32>) -> i32 {
-        vehicle::ActiveModel {
-            name: Set("Car".into()),
-            purchase_mileage: Set(purchase_mileage),
-            ..Default::default()
+        let mut fixture = VehicleFixture::new();
+        if let Some(m) = purchase_mileage {
+            fixture = fixture.purchase_mileage(m);
         }
-        .insert(db)
-        .await
-        .unwrap()
-        .id
+        fixture.insert_id(db).await
     }
 
     #[tokio::test]

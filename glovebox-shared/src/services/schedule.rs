@@ -367,18 +367,14 @@ pub async fn undismiss_for_vehicle(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::test_db;
+    use crate::test_support::{VehicleFixture, test_db};
 
     async fn seed_vehicle(db: &impl ConnectionTrait, model_template_id: Option<i32>) -> i32 {
-        vehicle::ActiveModel {
-            name: Set("Car".into()),
-            model_template_id: Set(model_template_id),
-            ..Default::default()
+        let mut fixture = VehicleFixture::new();
+        if let Some(id) = model_template_id {
+            fixture = fixture.model_template_id(id);
         }
-        .insert(db)
-        .await
-        .unwrap()
-        .id
+        fixture.insert_id(db).await
     }
 
     #[tokio::test]

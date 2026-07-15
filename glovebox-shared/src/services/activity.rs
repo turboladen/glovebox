@@ -247,19 +247,11 @@ mod tests {
             incident::NewIncident, mileage::NewMileageEntry, service_record::NewServiceRecord,
         },
         services::{incident as incident_svc, mileage as mileage_svc, service_record as svc_svc},
-        test_support::test_db,
+        test_support::{VehicleFixture, test_db},
     };
 
     async fn seed_vehicle(db: &impl ConnectionTrait) -> i32 {
-        use crate::entities::vehicle;
-        vehicle::ActiveModel {
-            name: Set("Car".into()),
-            ..Default::default()
-        }
-        .insert(db)
-        .await
-        .unwrap()
-        .id
+        VehicleFixture::new().insert_id(db).await
     }
 
     fn service(date: &str, description: &str, mileage: Option<i32>) -> NewServiceRecord {
@@ -458,23 +450,8 @@ mod tests {
     #[tokio::test]
     async fn recent_all_merges_across_vehicles_newest_first_with_names() {
         let db = test_db().await;
-        use crate::entities::vehicle;
-        let a = vehicle::ActiveModel {
-            name: Set("Golf".into()),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap()
-        .id;
-        let b = vehicle::ActiveModel {
-            name: Set("Vanagon".into()),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap()
-        .id;
+        let a = VehicleFixture::new().name("Golf").insert_id(&db).await;
+        let b = VehicleFixture::new().name("Vanagon").insert_id(&db).await;
         svc_svc::create(&db, a, service("2026-01-10", "Brakes", None))
             .await
             .unwrap();

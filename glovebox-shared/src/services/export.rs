@@ -124,21 +124,12 @@ pub async fn vehicle_history(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::test_db;
+    use crate::test_support::{VehicleFixture, test_db};
 
     #[tokio::test]
     async fn export_totals_and_counts() {
         let db = test_db().await;
-        use crate::entities::vehicle;
-        let vid = vehicle::ActiveModel {
-            name: Set("Car".into()),
-            make: Set(Some("Honda".into())),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap()
-        .id;
+        let vid = VehicleFixture::new().make("Honda").insert_id(&db).await;
 
         service_record::ActiveModel {
             vehicle_id: Set(vid),

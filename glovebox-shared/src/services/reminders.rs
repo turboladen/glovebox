@@ -454,23 +454,21 @@ fn days_in_month(year: i32, month: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::test_db;
+    use crate::test_support::{VehicleFixture, test_db};
 
     async fn seed_vehicle(
         db: &impl ConnectionTrait,
         warranty_expires_on: Option<&str>,
         warranty_expires_miles: Option<i32>,
     ) -> i32 {
-        vehicle::ActiveModel {
-            name: Set("Car".into()),
-            warranty_expires_on: Set(warranty_expires_on.map(str::to_string)),
-            warranty_expires_miles: Set(warranty_expires_miles),
-            ..Default::default()
+        let mut fixture = VehicleFixture::new();
+        if let Some(on) = warranty_expires_on {
+            fixture = fixture.warranty_expires_on(on);
         }
-        .insert(db)
-        .await
-        .unwrap()
-        .id
+        if let Some(miles) = warranty_expires_miles {
+            fixture = fixture.warranty_expires_miles(miles);
+        }
+        fixture.insert_id(db).await
     }
 
     #[tokio::test]
