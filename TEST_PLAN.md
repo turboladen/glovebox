@@ -218,6 +218,12 @@ matching row scrolls into view and flashes for ~2s; see
 | 3 | `GET /api/vehicles/99999` | 404 error |
 | 4 | `POST /api/vehicles` with empty body | 400/422 error |
 | 5 | `GET /api/dashboard` with empty DB | 200 with empty arrays and `budget_total_cents: 0` |
+| 6 | `GET /vehicles/1/plan` on the backend (:3003) | 200 with the SPA `index.html` body (deep-link fallback, not 404) |
+| 7 | `GET /` on the backend (:3003) | 200 (served directly by ServeDir, not via the deep-link fallback) |
+
+Rows 6-7 (`spa-fallback.spec.ts`) hit the backend's built `frontend/dist`, so
+they need a prior `cd frontend && bun run build`. `just test-e2e-ci` builds it;
+for local `just test-e2e` (via `just dev`), build the SPA first.
 
 ## TP-13: Shops
 
@@ -387,6 +393,7 @@ frontend/e2e/
   plan.spec.ts           # TP-07, TP-26 (due, to-do, visits, research, config)(15)
   builds.spec.ts         # TP-08                                               (3)
   records.spec.ts        # TP-15, TP-18, TP-19 smoke                          (10)
+  spa-fallback.spec.ts   # TP-12 rows 6-7 (backend SPA deep-link 200)          (2)
 ```
 
 **Count reconciliation (shell rewrite, kept honest):** the pre-shell suite was
@@ -413,7 +420,8 @@ suite to **74 tests**.
 Later units (design pass, dashboard/plan refinements) grew the suite to **81**
 (vehicle-detail 16, plan 15, and the counts above). The import-reconciliation
 unit added TP-06 §6a's Timeline → Due link-affordance round trip
-(timeline.spec) — the suite now stands at **82 tests**.
+(timeline.spec). A later unit added TP-12 rows 6-7's backend SPA deep-link 200
+assertions (spa-fallback.spec) — the suite now stands at **84 tests**.
 
 Run: `just test-e2e` (needs `just dev` running) or `just test-e2e-ci` (self-contained).
 
