@@ -141,7 +141,7 @@ Vite dev server proxies `/api` and `/files` to the backend at `:3003`. In produc
 ### General
 
 - **Issue tracking**: Use `bd` (beads), never markdown TODOs
-- **Testing**: Update `TEST_PLAN.md` and add Playwright tests when changing UI
+- **Testing**: Add Playwright tests and update `TEST_PLAN.md`'s TP-NN behavior rows + spec→TP map when changing UI. Do NOT maintain hand-counted test totals in `TEST_PLAN.md` — `bunx playwright test --list` is the source of truth (manual counts drift and conflict-magnet across parallel PRs)
 - **Router**: `@keenmate/svelte-spa-router` runs in **history/path mode** (NOT hash) — links & deep-links are `/vehicles/:id/:tab/:sub` (a `/#/…` URL resolves to `/` and renders the dashboard); the backend's `frontend/dist` SPA fallback serves these paths. Uses `routeParams` (not `params`) in Svelte 5
 - **Currency**: Stored as cents (`i32`), displayed as dollars in frontend. Use integer division for formatting (not `as f64 / 100.0` which loses precision)
 - **DB datetimes**: `String` type at SeaORM boundary (SQLite TEXT)
