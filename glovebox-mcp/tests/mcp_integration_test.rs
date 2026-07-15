@@ -2307,6 +2307,28 @@ async fn resources_list_and_read_cover_all_uri_forms() {
         );
     }
 
+    // Pin the serialized Resource wire shape so a future rmcp bump that silently
+    // renamed/dropped a field (mimeType→mime_type, description dropped, annotations
+    // emitted) turns from a green `contains` pass into a red test.
+    let v_list = extract_json(&body);
+    let r0 = &v_list["result"]["resources"][0];
+    assert_eq!(
+        r0["uri"], "glovebox://vehicles",
+        "resources[0] must deterministically be the vehicles list resource; got: {body}"
+    );
+    assert_eq!(
+        r0["mimeType"], "application/json",
+        "resources[0] mimeType must serialize camelCase; got: {body}"
+    );
+    assert!(
+        r0["description"].is_string(),
+        "resources[0] must keep a description; got: {body}"
+    );
+    assert!(
+        r0.get("annotations").is_none(),
+        "resources[0] must not emit annotations; got: {body}"
+    );
+
     let body = post_rpc(&app, read_resource("glovebox://vehicles")).await;
     assert!(body.contains("Daily"), "vehicle list resource; got: {body}");
 
