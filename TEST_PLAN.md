@@ -385,43 +385,20 @@ Tests live in `frontend/e2e/` and mirror this plan:
 ```
 frontend/e2e/
   helpers.ts             # createVehicle / seedOverdueItem
-  navigation.spec.ts     # TP-01, TP-10 (shell: sidebar, search, routing)     (12)
-  dashboard.spec.ts      # TP-00, TP-04 (garage + scoped Overview, plan-it)    (7)
-  vehicle-new.spec.ts    # TP-02, TP-03                                        (6)
-  vehicle-detail.spec.ts # TP-04, TP-05 (shell, edit, mileage, tab fallbacks) (16)
-  timeline.spec.ts       # TP-06 (stream, service + incident flows, filters)  (13)
-  plan.spec.ts           # TP-07, TP-26 (due, to-do, visits, research, config)(15)
-  builds.spec.ts         # TP-08                                               (3)
-  records.spec.ts        # TP-15, TP-18, TP-19 smoke                          (10)
-  spa-fallback.spec.ts   # TP-12 rows 6-7 (backend SPA deep-link 200)          (2)
+  navigation.spec.ts     # TP-01, TP-10 (shell: sidebar, search, routing)
+  dashboard.spec.ts      # TP-00, TP-04 (garage + scoped Overview, plan-it)
+  vehicle-new.spec.ts    # TP-02, TP-03
+  vehicle-detail.spec.ts # TP-04, TP-05 (shell, edit, mileage, tab fallbacks)
+  timeline.spec.ts       # TP-06 (stream, service + incident flows, filters)
+  plan.spec.ts           # TP-07, TP-26 (due, to-do, visits, research, config)
+  builds.spec.ts         # TP-08
+  records.spec.ts        # TP-15, TP-18, TP-19 smoke
+  spa-fallback.spec.ts   # TP-12 rows 6-7 (backend SPA deep-link 200)
 ```
 
-**Count reconciliation (shell rewrite, kept honest):** the pre-shell suite was
-51 tests in 8 files (garage 3, navigation 3, vehicle-new 6, vehicle-detail 18,
-incidents 8, parts 7, documents 3, research 3). The shell rewrite landed at 64:
-flows that survived were ported (incidents/parts/documents/research under their
-new homes; vehicle-detail's tab assertions rewritten for the intent tabs),
-`garage.spec.ts` was retired with the garage-cards view, and dashboard/plan/
-builds specs are new. Two old assertions were dropped in that port and have
-since been restored: the add-vehicle affordance CLICK-THROUGH to
-`/vehicles/new` (now in dashboard.spec) and the service-form cancel/toggle path
-(now in timeline.spec). With those two restored plus three review-fix
-regression tests (incident category chips, shop-select-authoritative visit
-form, unknown tab/sub fallback), the suite reached **69 tests**.
-
-**UX quick-wins pass (hypermedia affordances):** the 3 research tests moved
-from records.spec to plan.spec (Research now lives under Plan), and 5 tests
-were added — the sidebar due-badge click-through (navigation), the plan-it →
-chip-link → highlight → un-plan round trip (dashboard), the legacy
-`records/research` redirect (plan), the header Record-service routing, and the
-one-verb no-"Log Service" regression (both vehicle-detail) — bringing the
-suite to **74 tests**.
-
-Later units (design pass, dashboard/plan refinements) grew the suite to **81**
-(vehicle-detail 16, plan 15, and the counts above). The import-reconciliation
-unit added TP-06 §6a's Timeline → Due link-affordance round trip
-(timeline.spec). A later unit added TP-12 rows 6-7's backend SPA deep-link 200
-assertions (spa-fallback.spec) — the suite now stands at **84 tests**.
+The suite is not hand-counted here — run `bunx playwright test --list` for the
+current test count. This plan tracks *what* is covered (the TP-NN behavior rows
+and the spec → TP map above), not a running total.
 
 Run: `just test-e2e` (needs `just dev` running) or `just test-e2e-ci` (self-contained).
 
