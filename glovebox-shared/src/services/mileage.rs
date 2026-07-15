@@ -33,18 +33,10 @@ pub async fn create(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::test_db;
+    use crate::test_support::{VehicleFixture, test_db};
 
     async fn seed_vehicle(db: &impl ConnectionTrait) -> i32 {
-        use crate::entities::vehicle;
-        vehicle::ActiveModel {
-            name: Set("Car".into()),
-            ..Default::default()
-        }
-        .insert(db)
-        .await
-        .unwrap()
-        .id
+        VehicleFixture::new().insert_id(db).await
     }
 
     #[tokio::test]

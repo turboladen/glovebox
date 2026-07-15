@@ -577,20 +577,14 @@ mod tests {
         entities::{mileage_log, research_report, service_record as service_record_entity},
         inputs::work_item::{NewWorkItem, UpdateWorkItem},
         services::reminders,
-        test_support::test_db,
+        test_support::{VehicleFixture, test_db},
     };
 
     async fn seed_vehicle(db: &impl ConnectionTrait) -> i32 {
-        use crate::entities::vehicle;
-        vehicle::ActiveModel {
-            name: Set("Car".into()),
-            purchase_date: Set(Some("2020-01-01".into())),
-            ..Default::default()
-        }
-        .insert(db)
-        .await
-        .unwrap()
-        .id
+        VehicleFixture::new()
+            .purchase_date("2020-01-01")
+            .insert_id(db)
+            .await
     }
 
     /// A 12-month-interval item on a vehicle purchased 2020 — overdue until

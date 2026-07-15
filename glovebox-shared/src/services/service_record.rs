@@ -758,18 +758,10 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::test_db;
+    use crate::test_support::{VehicleFixture, test_db};
 
     async fn seed_vehicle(db: &impl ConnectionTrait) -> i32 {
-        use crate::entities::vehicle;
-        vehicle::ActiveModel {
-            name: Set("Car".into()),
-            ..Default::default()
-        }
-        .insert(db)
-        .await
-        .unwrap()
-        .id
+        VehicleFixture::new().insert_id(db).await
     }
 
     async fn seed_part(db: &impl ConnectionTrait, vehicle_id: i32, name: &str) -> i32 {
@@ -1675,7 +1667,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_allows_inherited_template_and_platform_schedule_items() {
-        use crate::entities::{model_template, platform, vehicle};
+        use crate::entities::{model_template, platform};
         let db = test_db().await;
 
         let platform_id = platform::ActiveModel {
@@ -1694,15 +1686,10 @@ mod tests {
         .await
         .unwrap()
         .id;
-        let vid = vehicle::ActiveModel {
-            name: Set("Car".into()),
-            model_template_id: Set(Some(template_id)),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap()
-        .id;
+        let vid = VehicleFixture::new()
+            .model_template_id(template_id)
+            .insert_id(&db)
+            .await;
 
         let platform_item = maintenance_schedule_item::ActiveModel {
             platform_id: Set(Some(platform_id)),

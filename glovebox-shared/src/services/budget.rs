@@ -213,14 +213,14 @@ pub async fn forecast_from(
 mod tests {
     use super::*;
     use crate::{
-        entities::{mileage_log, service_record, service_schedule_link, vehicle},
+        entities::{mileage_log, service_record, service_schedule_link},
         error::DomainError,
         inputs::{
             visit::{NewVisit, UpdateVisit},
             work_item::NewWorkItem,
         },
         services::work_item as work_item_svc,
-        test_support::test_db,
+        test_support::{VehicleFixture, test_db},
     };
 
     fn days_ago(days: i64) -> String {
@@ -264,14 +264,7 @@ mod tests {
     #[tokio::test]
     async fn empty_schedule_forecasts_zero() {
         let db = test_db().await;
-        let vid = vehicle::ActiveModel {
-            name: Set("Car".into()),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap()
-        .id;
+        let vid = VehicleFixture::new().insert_id(&db).await;
 
         let f = forecast(&db, vid).await.unwrap();
         assert_eq!(f.horizon_months, 12);
@@ -300,16 +293,11 @@ mod tests {
     #[tokio::test]
     async fn pinned_interval_and_rate_scenario() {
         let db = test_db().await;
-        let vid = vehicle::ActiveModel {
-            name: Set("Car".into()),
-            purchase_date: Set(Some(days_ago(730))),
-            purchase_mileage: Set(Some(0)),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap()
-        .id;
+        let vid = VehicleFixture::new()
+            .purchase_date(&days_ago(730))
+            .purchase_mileage(0)
+            .insert_id(&db)
+            .await;
 
         // Pin the mileage rate: 10_000 miles over 100 days, latest today.
         for (age, miles) in [(100, 10_000), (0, 20_000)] {
@@ -449,16 +437,11 @@ mod tests {
     #[tokio::test]
     async fn schedule_item_in_open_visit_skips_first_occurrence() {
         let db = test_db().await;
-        let vid = vehicle::ActiveModel {
-            name: Set("Car".into()),
-            purchase_date: Set(Some(days_ago(730))),
-            purchase_mileage: Set(Some(0)),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap()
-        .id;
+        let vid = VehicleFixture::new()
+            .purchase_date(&days_ago(730))
+            .purchase_mileage(0)
+            .insert_id(&db)
+            .await;
         // Rate pinned at exactly 100 mi/day (as in the pinned scenario).
         for (age, miles) in [(100, 10_000), (0, 20_000)] {
             mileage_log::ActiveModel {
@@ -544,16 +527,11 @@ mod tests {
     #[tokio::test]
     async fn schedule_linked_backlog_item_skips_first_occurrence() {
         let db = test_db().await;
-        let vid = vehicle::ActiveModel {
-            name: Set("Car".into()),
-            purchase_date: Set(Some(days_ago(730))),
-            purchase_mileage: Set(Some(0)),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap()
-        .id;
+        let vid = VehicleFixture::new()
+            .purchase_date(&days_ago(730))
+            .purchase_mileage(0)
+            .insert_id(&db)
+            .await;
         // Rate pinned at exactly 100 mi/day (as in the pinned scenario).
         for (age, miles) in [(100, 10_000), (0, 20_000)] {
             mileage_log::ActiveModel {
@@ -618,15 +596,10 @@ mod tests {
     #[tokio::test]
     async fn forecast_from_matches_forecast() {
         let db = test_db().await;
-        let vid = vehicle::ActiveModel {
-            name: Set("Car".into()),
-            purchase_date: Set(Some(days_ago(730))),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap()
-        .id;
+        let vid = VehicleFixture::new()
+            .purchase_date(&days_ago(730))
+            .insert_id(&db)
+            .await;
         seed_item(&db, vid, "Timing belt check", None, Some(12), Some(5_000)).await;
 
         let via_forecast = forecast(&db, vid).await.unwrap();

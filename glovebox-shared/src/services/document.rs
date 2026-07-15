@@ -436,7 +436,7 @@ pub async fn delete(db: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::test_db;
+    use crate::test_support::{VehicleFixture, test_db};
 
     fn sample(title: &str) -> NewDocument {
         NewDocument {
@@ -511,15 +511,7 @@ mod tests {
     // ─── store(): shared file-writing path (HTTP upload + MCP attach) ───
 
     async fn seed_vehicle(db: &impl ConnectionTrait) -> i32 {
-        use crate::entities::vehicle;
-        vehicle::ActiveModel {
-            name: Set("Car".into()),
-            ..Default::default()
-        }
-        .insert(db)
-        .await
-        .unwrap()
-        .id
+        VehicleFixture::new().insert_id(db).await
     }
 
     async fn seed_service(db: &impl ConnectionTrait, vehicle_id: i32) -> i32 {

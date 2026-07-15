@@ -284,19 +284,11 @@ mod tests {
             service_record::{NewServiceRecord, UpdateServiceRecord},
         },
         services::{incident as incident_svc, part as part_svc, service_record as svc_svc},
-        test_support::test_db,
+        test_support::{VehicleFixture, test_db},
     };
 
     async fn seed_vehicle(db: &impl ConnectionTrait) -> i32 {
-        use crate::entities::vehicle;
-        vehicle::ActiveModel {
-            name: Set("Car".into()),
-            ..Default::default()
-        }
-        .insert(db)
-        .await
-        .unwrap()
-        .id
+        VehicleFixture::new().insert_id(db).await
     }
 
     fn new_build(name: &str) -> NewBuild {

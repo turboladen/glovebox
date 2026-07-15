@@ -310,17 +310,13 @@ pub async fn search(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{entities, test_support::test_db};
+    use crate::{
+        entities,
+        test_support::{VehicleFixture, test_db},
+    };
 
     async fn seed_vehicle(db: &impl ConnectionTrait, name: &str) -> i32 {
-        entities::vehicle::ActiveModel {
-            name: Set(name.into()),
-            ..Default::default()
-        }
-        .insert(db)
-        .await
-        .unwrap()
-        .id
+        VehicleFixture::new().name(name).insert_id(db).await
     }
 
     async fn seed_service(db: &impl ConnectionTrait, vehicle_id: i32, notes: &str) -> i32 {
@@ -709,15 +705,12 @@ mod tests {
         .unwrap();
         let mut vids = Vec::new();
         for name in ["Golf R", "GTI"] {
-            let v = entities::vehicle::ActiveModel {
-                name: Set(name.into()),
-                model_template_id: Set(Some(template.id)),
-                ..Default::default()
-            }
-            .insert(&db)
-            .await
-            .unwrap();
-            vids.push(v.id);
+            let id = VehicleFixture::new()
+                .name(name)
+                .model_template_id(template.id)
+                .insert_id(&db)
+                .await;
+            vids.push(id);
         }
         let item = entities::maintenance_schedule_item::ActiveModel {
             platform_id: Set(Some(platform.id)),
