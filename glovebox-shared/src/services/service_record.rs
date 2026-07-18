@@ -7,7 +7,10 @@ use crate::{
         service_record_line_item, service_schedule_link,
     },
     error::{DomainError, DomainResult},
-    inputs::service_record::{NewLineItem, NewServiceRecord, UpdateServiceRecord},
+    inputs::{
+        document::DocumentDisposition,
+        service_record::{NewLineItem, NewServiceRecord, UpdateServiceRecord},
+    },
 };
 
 /// Payer whitelist for `service_records.paid_by`.
@@ -703,11 +706,16 @@ pub async fn link_schedule_items<C: ConnectionTrait + TransactionTrait>(
     })
 }
 
+/// Delete a service record and its owned rows. Linked documents are handled
+/// per `docs` (unlinked or deleted — see
+/// [`super::document::detach_or_delete_for_entity`]); the returned paths are
+/// files the CALLER must remove after this commits.
 pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
     id: i32,
-) -> DomainResult<()> {
+    docs: DocumentDisposition,
+) -> DomainResult<Vec<String>> {
     let existing = service_record::Entity::find_by_id(id)
         .filter(service_record::Column::VehicleId.eq(vehicle_id))
         .one(db)
@@ -747,12 +755,15 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .exec(&txn)
         .await?;
 
+    // Unlink or delete attached documents (rows only; files are the caller's)
+    let doc_files = super::document::detach_or_delete_for_entity(&txn, "service", id, docs).await?;
+
     // Delete the service record
     existing.delete(&txn).await?;
 
     txn.commit().await?;
 
-    Ok(())
+    Ok(doc_files)
 }
 
 #[cfg(test)]
@@ -980,7 +991,9 @@ mod tests {
         .await
         .unwrap();
 
-        delete(&db, vid, created.record.id).await.unwrap();
+        delete(&db, vid, created.record.id, DocumentDisposition::Keep)
+            .await
+            .unwrap();
 
         // Record gone
         assert!(matches!(
@@ -1057,7 +1070,9 @@ mod tests {
         .await
         .unwrap();
 
-        delete(&db, vid, created.record.id).await.unwrap();
+        delete(&db, vid, created.record.id, DocumentDisposition::Keep)
+            .await
+            .unwrap();
 
         let logs = mileage_log::Entity::find()
             .filter(mileage_log::Column::VehicleId.eq(vid))

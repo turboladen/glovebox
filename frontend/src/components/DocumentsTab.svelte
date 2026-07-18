@@ -136,6 +136,22 @@
     await loadData()
   }
 
+  async function unlinkDoc(id: number) {
+    await docsApi.unlink(id)
+    await loadData()
+  }
+
+  // A linked document whose target no longer exists (pre-feature deletes left
+  // these dangling). Exactly as reliable as the lists this tab already renders
+  // labels from.
+  function isOrphaned(doc: Document): boolean {
+    if (!doc.linked_entity_type || !doc.linked_entity_id) return false
+    if (doc.linked_entity_type === 'service') return !serviceRecords.some(s => s.id === doc.linked_entity_id)
+    if (doc.linked_entity_type === 'part') return !partsList.some(p => p.id === doc.linked_entity_id)
+    if (doc.linked_entity_type === 'incident') return !incidentsList.some(i => i.id === doc.linked_entity_id)
+    return false
+  }
+
   function formatSize(bytes: number | null): string {
     if (bytes == null) return ''
     if (bytes < 1024) return `${bytes} B`
@@ -318,7 +334,12 @@
               <span>{formatDate(doc.created_at)}</span>
             </div>
             {#if doc.linked_entity_type}
-              <div class="doc-link-badge">{linkedEntityLabel(doc)}</div>
+              <div class="doc-link-badge">
+                {linkedEntityLabel(doc)}
+                {#if isOrphaned(doc)}
+                  <span class="orphan-badge" title="The linked record no longer exists">orphaned</span>
+                {/if}
+              </div>
             {/if}
             {#if doc.notes}
               <p class="doc-notes">{doc.notes}</p>
@@ -332,6 +353,9 @@
           </div>
           <div class="doc-actions">
             <a href="/files/{doc.file_path}" target="_blank" class="btn btn-secondary">View</a>
+            {#if doc.linked_entity_type}
+              <button class="btn btn-secondary" onclick={() => unlinkDoc(doc.id)}>Unlink</button>
+            {/if}
             <button class="btn btn-secondary" onclick={() => deleteDoc(doc.id)}>Delete</button>
           </div>
         </div>
@@ -436,6 +460,16 @@
     font-size: 0.75rem;
     color: var(--primary);
     margin-top: var(--sp-1);
+  }
+  .orphan-badge {
+    margin-left: var(--sp-1);
+    padding: 0 var(--sp-1);
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--danger);
+    border: 1px solid var(--danger);
+    border-radius: var(--radius-sm);
   }
   .doc-notes { font-size: 0.85rem; color: var(--text-muted); margin: var(--sp-1) 0 0; }
   .doc-extracted-text { margin-top: var(--sp-2); font-size: 0.8rem; }

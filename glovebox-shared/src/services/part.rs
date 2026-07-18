@@ -3,7 +3,10 @@ use sea_orm::*;
 use crate::{
     entities::{part, service_record},
     error::{DomainError, DomainResult},
-    inputs::part::{NewPart, PartFilter, UpdatePart},
+    inputs::{
+        document::DocumentDisposition,
+        part::{NewPart, PartFilter, UpdatePart},
+    },
 };
 
 /// Verify a referenced service record belongs to the vehicle. A cross-vehicle
@@ -170,10 +173,23 @@ pub async fn update(
     Ok(active.update(db).await?)
 }
 
-pub async fn delete(db: &impl ConnectionTrait, vehicle_id: i32, id: i32) -> DomainResult<()> {
+/// Delete a part. Linked documents are handled per `docs`; the returned paths
+/// are files the CALLER must remove after commit (see
+/// [`super::document::detach_or_delete_for_entity`]).
+pub async fn delete<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    id: i32,
+    docs: DocumentDisposition,
+) -> DomainResult<Vec<String>> {
     let existing = get(db, vehicle_id, id).await?;
-    existing.delete(db).await?;
-    Ok(())
+
+    let txn = db.begin().await?;
+    let doc_files = super::document::detach_or_delete_for_entity(&txn, "part", id, docs).await?;
+    existing.delete(&txn).await?;
+    txn.commit().await?;
+
+    Ok(doc_files)
 }
 
 #[cfg(test)]
@@ -421,5 +437,94 @@ mod tests {
             .len(),
             1
         );
+    }
+
+    // --- delete + linked documents ---------------------------------------
+
+    async fn seed_linked_doc(db: &impl ConnectionTrait, part_id: i32) -> i32 {
+        crate::services::document::create(
+            db,
+            crate::inputs::document::NewDocument {
+                vehicle_id: None,
+                title: "part invoice".into(),
+                file_path: format!("general/other/part-{part_id}.pdf"),
+                file_name: "part.pdf".into(),
+                mime_type: None,
+                file_size_bytes: None,
+                doc_type: None,
+                linked_entity_type: Some("part".into()),
+                linked_entity_id: Some(part_id),
+                notes: None,
+                extracted_text: None,
+                content_sha256: "0".repeat(64),
+            },
+        )
+        .await
+        .unwrap()
+        .id
+    }
+
+    #[tokio::test]
+    async fn delete_keep_unlinks_documents() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let part = create(&db, vid, minimal_part("Doomed", None))
+            .await
+            .unwrap();
+        let doc_id = seed_linked_doc(&db, part.id).await;
+
+        let paths = delete(&db, vid, part.id, DocumentDisposition::Keep)
+            .await
+            .unwrap();
+        assert!(paths.is_empty());
+        assert!(matches!(
+            get(&db, vid, part.id).await.unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+
+        let doc = crate::services::document::get(&db, doc_id).await.unwrap();
+        assert_eq!(doc.linked_entity_type, None);
+        assert!(doc.notes.unwrap().contains("Unlinked from part"));
+    }
+
+    #[tokio::test]
+    async fn delete_cascade_removes_document_rows() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let part = create(&db, vid, minimal_part("Doomed", None))
+            .await
+            .unwrap();
+        let doc_id = seed_linked_doc(&db, part.id).await;
+
+        let paths = delete(&db, vid, part.id, DocumentDisposition::Delete)
+            .await
+            .unwrap();
+        assert_eq!(paths, vec![format!("general/other/part-{}.pdf", part.id)]);
+        assert!(matches!(
+            crate::services::document::get(&db, doc_id)
+                .await
+                .unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn delete_wrong_vehicle_is_byte_identical_to_nonexistent() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let other_vid = seed_vehicle(&db).await;
+        let part = create(&db, vid, minimal_part("Mine", None)).await.unwrap();
+
+        let wrong_parent = delete(&db, other_vid, part.id, DocumentDisposition::Keep)
+            .await
+            .unwrap_err();
+        // Compare against the nonexistent-id message for the SAME id: no
+        // ownership oracle distinguishing "exists elsewhere" from "not at all".
+        let DomainError::NotFound(wrong_parent_msg) = wrong_parent else {
+            panic!("expected NotFound");
+        };
+        assert_eq!(wrong_parent_msg, format!("Part {} not found", part.id));
+        // The part survives a wrong-parent delete attempt.
+        assert!(get(&db, vid, part.id).await.is_ok());
     }
 }

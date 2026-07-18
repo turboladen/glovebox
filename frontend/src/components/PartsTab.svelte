@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { parts as partsApi, services as servicesApi } from '../lib/api'
+  import { documents as documentsApi, parts as partsApi, services as servicesApi } from '../lib/api'
+  import ConfirmDelete from './ConfirmDelete.svelte'
   import { formatCents } from '../lib/money'
   import type { Part, ServiceRecordWithLinks } from '../lib/types'
   import { formatDate } from '../lib/dates'
@@ -169,10 +170,18 @@
     }
   }
 
-  async function deletePart(part: Part) {
-    if (!confirm(`Delete part "${part.name}"?`)) return
+  async function partDocCount(part: Part): Promise<number> {
+    const docs = await documentsApi.list({
+      vehicle_id: vehicleId,
+      linked_entity_type: 'part',
+      linked_entity_id: part.id,
+    })
+    return docs.length
+  }
+
+  async function deletePart(part: Part, documents: 'keep' | 'delete') {
     try {
-      await partsApi.delete(vehicleId, part.id)
+      await partsApi.delete(vehicleId, part.id, documents)
       await loadData()
     } catch (e: any) {
       alert(`Failed to delete part: ${e.message}`)
@@ -374,7 +383,11 @@
           </div>
           <div class="part-actions">
             <button class="btn btn-sm btn-secondary" onclick={() => openPartForm(part)}>Edit</button>
-            <button class="btn btn-sm btn-danger" onclick={() => deletePart(part)}>Delete</button>
+            <ConfirmDelete
+              label={`Delete part "${part.name}"?`}
+              getDocCount={() => partDocCount(part)}
+              onDelete={(docs) => deletePart(part, docs)}
+            />
           </div>
         </div>
         <div class="part-detail">

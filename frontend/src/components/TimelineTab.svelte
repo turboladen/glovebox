@@ -30,6 +30,7 @@
   } from '../lib/types'
   import { formatDate } from '../lib/dates'
   import { formatCents as formatCentsShared } from '../lib/money'
+  import ConfirmDelete from './ConfirmDelete.svelte'
   import ServiceForm from './ServiceForm.svelte'
   import IncidentForm from './IncidentForm.svelte'
   import IncidentDetail from './IncidentDetail.svelte'
@@ -90,8 +91,6 @@
   let editPaidBy = $state('self')
   let editPayerNote = $state('')
   let saving = $state(false)
-  let deleting = $state(false)
-  let confirmDelete = $state(false)
 
   async function loadData() {
     try {
@@ -276,7 +275,6 @@
   function toggleExpand(key: string) {
     expandedId = expandedId === key ? null : key
     editing = false
-    confirmDelete = false
     showMaintenancePicker = false
     linkError = ''
   }
@@ -304,7 +302,6 @@
 
   function cancelEdit() {
     editing = false
-    confirmDelete = false
   }
 
   function shopForName(name: string): Shop | undefined {
@@ -337,17 +334,13 @@
     }
   }
 
-  async function deleteService(id: number) {
-    deleting = true
+  async function deleteService(id: number, documents: 'keep' | 'delete') {
     try {
-      await servicesApi.delete(vehicleId, id)
+      await servicesApi.delete(vehicleId, id, documents)
       expandedId = null
-      confirmDelete = false
       await refresh()
     } catch (e) {
       console.error('Failed to delete service record:', e)
-    } finally {
-      deleting = false
     }
   }
 </script>
@@ -638,15 +631,10 @@
                   <button class="btn btn-secondary btn-sm" onclick={() => { showMaintenancePicker = !showMaintenancePicker; linkError = '' }}>
                     {showMaintenancePicker ? 'Close picker' : 'Link to maintenance item…'}
                   </button>
-                  {#if confirmDelete}
-                    <span class="confirm-text">Delete this record?</span>
-                    <button class="btn btn-danger btn-sm" onclick={() => deleteService(record.id)} disabled={deleting}>
-                      {deleting ? 'Deleting...' : 'Yes, Delete'}
-                    </button>
-                    <button class="btn btn-secondary btn-sm" onclick={() => (confirmDelete = false)}>Cancel</button>
-                  {:else}
-                    <button class="btn btn-danger-outline btn-sm" onclick={() => (confirmDelete = true)}>Delete</button>
-                  {/if}
+                  <ConfirmDelete
+                    getDocCount={() => documentsForService(record.id).length}
+                    onDelete={(docs) => deleteService(record.id, docs)}
+                  />
                 </div>
               {/if}
             </div>
@@ -1001,32 +989,6 @@
     display: flex; align-items: center; gap: var(--sp-2);
     padding-top: var(--sp-2);
     border-top: 1px solid var(--border-subtle);
-  }
-
-  .confirm-text {
-    font-size: 0.8rem;
-    color: var(--danger);
-    font-weight: 500;
-  }
-
-  .btn-danger {
-    background: var(--danger);
-    color: white;
-    border: 1px solid var(--danger);
-  }
-
-  .btn-danger:hover {
-    opacity: 0.9;
-  }
-
-  .btn-danger-outline {
-    background: none;
-    color: var(--danger);
-    border: 1px solid var(--danger);
-  }
-
-  .btn-danger-outline:hover {
-    background: var(--danger-bg);
   }
 
   .btn-sm {

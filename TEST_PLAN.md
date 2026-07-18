@@ -113,10 +113,11 @@ manual odometer readings. Creation actions live here.
 | 3 | "Record service" | The service form (date defaults today, odometer/description/cost/shop/notes, schedule-item checkboxes, Paid By with payer note); saved record appears in the stream with cost |
 | 4 | "Log incident" | Incident form (category/date/odometer/title/details); category `accident` reveals the accident fieldset (other party, claim, adjuster); category `obd_code` reveals the codes input |
 | 5 | Service rows | Green "Service" badge; date, cost, mileage, shop; preview shows notes + linked Parts/Incidents chips |
-| 6 | Expand a service row | Detail panel: parts/labor costs, payer, chips; **Edit** (all fields incl. Paid By; clearing a field saves null) and **Delete** (confirm). The row and its panel read as ONE contiguous card (border on the wrapper, hairline separator between the halves — no split-box seam) |
+| 6 | Expand a service row | Detail panel: parts/labor costs, payer, chips; **Edit** (all fields incl. Paid By; clearing a field saves null) and **Delete** (inline confirm). The row and its panel read as ONE contiguous card (border on the wrapper, hairline separator between the halves — no split-box seam) |
+| 6b | Delete a service with attached document(s) | Confirm becomes 3-way with the real count ("It has N attached document(s)."): **Delete + documents** removes doc rows + files; **Delete, keep documents** unlinks them (link cleared, "Unlinked from service #N on {date} (record deleted)" appended to the doc's notes) so hash-dedup can re-adopt on reimport; **Cancel** |
 | 6a | Maintenance links on an expanded service row | Linked schedule items render as "Maintenance:" chips deep-linking to `plan/due?hl=schedule_item:{id}`; **Link to maintenance item…** opens a compact picker of the vehicle's schedule items (already-linked rows disabled); choosing one union-writes the record's `schedule_item_ids` (same PUT semantics as the Due tab's "Link existing service…") and the reminder clears |
 | 7 | Incident rows | Amber "Incident" badge; expanding shows the full detail: description, recurrence, odometer, OBD chips, accident grid, linked-services chips, followups |
-| 8 | Incident detail actions | Edit (opens the form pre-filled; accident financial fields are edit-only), Mark Resolved (with optional service link picker), Reopen |
+| 8 | Incident detail actions | Edit (opens the form pre-filled; accident financial fields are edit-only), Mark Resolved (with optional service link picker), Reopen, Delete (inline confirm; 3-way with attached documents, same semantics as row 6b; removes followups + service links, un-chains recurrences) |
 | 9 | Add followup | Date/method/contact/summary; entry appears in the followup timeline |
 | 10 | Resolving with a service | Incident shows "Services:" chip; the linked service row shows an "Incidents:" chip |
 | 11 | Mileage rows | Blue "Mileage" badge + reading; manual logs only (service-created logs are folded into their service row) |
@@ -253,7 +254,9 @@ for local `just test-e2e` (via `just dev`), build the SPA first.
 | 3 | Upload a file (select file, set type) | File uploaded, appears with filename and size |
 | 4 | Image document | Inline thumbnail preview |
 | 5 | "View" | Opens file via `/files/` path |
-| 6 | "Delete" | Removes document and file |
+| 6 | "Delete" | Removes document and file (row first, then file — a failed file removal never leaves a dangling row) |
+| 7 | "Unlink" (any linked doc) | Clears the entity link in place; badge disappears, "Unlinked from {type} #N …" note appended |
+| 8 | Orphaned badge (manual only) | A doc whose linked record no longer exists (pre-feature dangling link) shows an "orphaned" badge next to its link badge. Not e2e-creatable post-feature — the API no longer produces dangling links |
 
 ## TP-40: Records → Documents attach-mode (handoff-link)
 
@@ -276,6 +279,7 @@ MCP's `record_service` returns a browser deep link `{public_url}/#/vehicles/{id}
 | 4 | Update incident with cost/resolution | Fields updated, resolved flag toggled |
 | 5 | Link service records to incident | service_record_ids populated; cross-vehicle service 404s and mutates nothing |
 | 6 | `recurrence_of_id` | Same-vehicle links; cross-vehicle/nonexistent 404s |
+| 7 | `DELETE /api/vehicles/:id/incidents/:id?documents=keep\|delete` | Deletes incident + followups + service links, un-chains recurrences; `keep` (default) unlinks attached docs with a provenance note, `delete` cascades doc rows + files; wrong-vehicle 404 byte-identical to nonexistent |
 
 ## TP-17: Planning API (work items + visits)
 
@@ -299,7 +303,8 @@ MCP's `record_service` returns a browser deep link `{public_url}/#/vehicles/{id}
 | 4 | Edit status to "installed" | Badge changes, install date/odometer shown |
 | 5 | Edit a part's location | Form pre-fills; updated location shown |
 | 6 | Installed part with "Create new service" | Inline service created; card shows "via service …" |
-| 7 | Delete a part | Removed from list |
+| 7 | Delete a part | Inline confirm; removed from list |
+| 8 | Delete a part with attached document(s) | 3-way confirm with the real count (same semantics as TP-06 row 6b) |
 
 ## TP-19: Costs Tab
 
@@ -389,7 +394,7 @@ frontend/e2e/
   dashboard.spec.ts      # TP-00, TP-04 (garage + scoped Overview, plan-it)
   vehicle-new.spec.ts    # TP-02, TP-03
   vehicle-detail.spec.ts # TP-04, TP-05 (shell, edit, mileage, tab fallbacks)
-  timeline.spec.ts       # TP-06 (stream, service + incident flows, filters)
+  timeline.spec.ts       # TP-06 (stream, service + incident flows, filters, delete-with-documents)
   plan.spec.ts           # TP-07, TP-26 (due, to-do, visits, research, config)
   builds.spec.ts         # TP-08
   records.spec.ts        # TP-15, TP-18, TP-19 smoke

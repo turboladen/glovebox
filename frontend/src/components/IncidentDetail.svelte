@@ -2,7 +2,8 @@
   // Incident detail panel (actions, accident grid, linked services,
   // followups), re-homed from the retired IncidentsTab (unit F): Timeline
   // rows expand into this.
-  import { incidents as incidentsApi } from '../lib/api'
+  import { documents as documentsApi, incidents as incidentsApi } from '../lib/api'
+  import ConfirmDelete from './ConfirmDelete.svelte'
   import { formatCents } from '../lib/money'
   import type { IncidentWithDetails, ServiceRecordWithLinks, UpdateIncident } from '../lib/types'
   import { formatDate } from '../lib/dates'
@@ -42,6 +43,24 @@
   function serviceLabel(id: number): string {
     const svc = serviceRecords.find((s) => s.id === id)
     return svc ? `${formatDate(svc.service_date)} — ${svc.description || 'Service'}` : `Service #${id}`
+  }
+
+  async function incidentDocCount(): Promise<number> {
+    const docs = await documentsApi.list({
+      vehicle_id: vehicleId,
+      linked_entity_type: 'incident',
+      linked_entity_id: incident.id,
+    })
+    return docs.length
+  }
+
+  async function deleteIncident(documents: 'keep' | 'delete') {
+    try {
+      await incidentsApi.delete(vehicleId, incident.id, documents)
+      onChanged()
+    } catch (e) {
+      console.error('Failed to delete incident:', e)
+    }
   }
 
   async function toggleResolved() {
@@ -123,6 +142,11 @@
     {:else}
       <button class="btn btn-sm btn-secondary" onclick={() => (resolving = true)}>Mark Resolved</button>
     {/if}
+    <ConfirmDelete
+      label="Delete this incident?"
+      getDocCount={incidentDocCount}
+      onDelete={deleteIncident}
+    />
   </div>
 
   {#if incident.description || incident.notes}

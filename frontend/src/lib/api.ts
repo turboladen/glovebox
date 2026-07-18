@@ -60,8 +60,11 @@ export const services = {
     request<ServiceRecordWithLinks>(`/vehicles/${vehicleId}/services`, { method: 'POST', body: JSON.stringify(data) }),
   update: (vehicleId: number, id: number, data: Partial<CreateServiceRecord>) =>
     request<ServiceRecordWithLinks>(`/vehicles/${vehicleId}/services/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
-  delete: (vehicleId: number, id: number) =>
-    request<{ deleted: number }>(`/vehicles/${vehicleId}/services/${id}`, { method: 'DELETE' }),
+  delete: (vehicleId: number, id: number, documents?: 'keep' | 'delete') =>
+    request<{ deleted: number }>(
+      `/vehicles/${vehicleId}/services/${id}${documents ? '?documents=' + documents : ''}`,
+      { method: 'DELETE' },
+    ),
 }
 
 // Schedules
@@ -121,6 +124,11 @@ export const incidents = {
     request<IncidentWithDetails>(`/vehicles/${vehicleId}/incidents/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   addFollowup: (vehicleId: number, incidentId: number, data: CreateFollowup) =>
     request<IncidentFollowup>(`/vehicles/${vehicleId}/incidents/${incidentId}/followups`, { method: 'POST', body: JSON.stringify(data) }),
+  delete: (vehicleId: number, id: number, documents?: 'keep' | 'delete') =>
+    request<{ deleted: number }>(
+      `/vehicles/${vehicleId}/incidents/${id}${documents ? '?documents=' + documents : ''}`,
+      { method: 'DELETE' },
+    ),
 }
 
 // Documents
@@ -142,6 +150,7 @@ export const documents = {
     return res.json()
   },
   delete: (id: number) => request<{ deleted: number }>(`/documents/${id}`, { method: 'DELETE' }),
+  unlink: (id: number) => request<Document>(`/documents/${id}/unlink`, { method: 'POST' }),
 }
 
 // Parts
@@ -157,8 +166,11 @@ export const parts = {
     request<Part>(`/vehicles/${vehicleId}/parts`, { method: 'POST', body: JSON.stringify(data) }),
   update: (vehicleId: number, id: number, data: Partial<Part>) =>
     request<Part>(`/vehicles/${vehicleId}/parts/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
-  delete: (vehicleId: number, id: number) =>
-    request<{ deleted: boolean }>(`/vehicles/${vehicleId}/parts/${id}`, { method: 'DELETE' }),
+  delete: (vehicleId: number, id: number, documents?: 'keep' | 'delete') =>
+    request<{ deleted: boolean }>(
+      `/vehicles/${vehicleId}/parts/${id}${documents ? '?documents=' + documents : ''}`,
+      { method: 'DELETE' },
+    ),
 }
 
 // Costs

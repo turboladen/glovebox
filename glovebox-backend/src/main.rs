@@ -161,7 +161,9 @@ async fn main() -> anyhow::Result<()> {
         )
         .route(
             "/api/vehicles/{vehicle_id}/incidents/{id}",
-            get(api::incidents::get_one).put(api::incidents::update),
+            get(api::incidents::get_one)
+                .put(api::incidents::update)
+                .delete(api::incidents::delete),
         )
         .route(
             "/api/vehicles/{vehicle_id}/incidents/{incident_id}/followups",
@@ -240,6 +242,7 @@ async fn main() -> anyhow::Result<()> {
             "/api/documents/{id}",
             get(api::documents::get_one).delete(api::documents::delete),
         )
+        .route("/api/documents/{id}/unlink", post(api::documents::unlink))
         .nest_service("/files", ServeDir::new(&files_dir))
         .fallback_service(spa_fallback)
         .layer(CorsLayer::permissive())
