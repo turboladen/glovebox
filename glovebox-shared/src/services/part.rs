@@ -513,20 +513,30 @@ mod tests {
         .insert(&db)
         .await
         .unwrap();
-        let finding = research_finding::ActiveModel {
+        let seed_finding = |part_id: i32, title: &str| research_finding::ActiveModel {
             report_id: Set(report.id),
             category: Set("upgrade".into()),
-            title: Set("Better part exists".into()),
+            title: Set(title.into()),
             status: Set("completed".into()),
             linked_entity_type: Set(Some("part".into())),
-            linked_entity_id: Set(Some(part.id)),
+            linked_entity_id: Set(Some(part_id)),
             created_at: Set("2024-01-01 00:00:00".into()),
             updated_at: Set("2024-01-01 00:00:00".into()),
             ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap();
+        };
+        let finding = seed_finding(part.id, "Better part exists")
+            .insert(&db)
+            .await
+            .unwrap();
+        // Negative control: a finding linked to a DIFFERENT part must keep
+        // its link — guards the update_many's id predicate.
+        let other_part = create(&db, vid, minimal_part("Bystander", None))
+            .await
+            .unwrap();
+        let bystander = seed_finding(other_part.id, "Unrelated")
+            .insert(&db)
+            .await
+            .unwrap();
 
         delete(&db, vid, part.id, DocumentDisposition::Keep)
             .await
@@ -539,6 +549,13 @@ mod tests {
             .unwrap();
         assert_eq!(f.linked_entity_type, None);
         assert_eq!(f.linked_entity_id, None);
+        let b = research_finding::Entity::find_by_id(bystander.id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(b.linked_entity_type.as_deref(), Some("part"));
+        assert_eq!(b.linked_entity_id, Some(other_part.id));
     }
 
     #[tokio::test]

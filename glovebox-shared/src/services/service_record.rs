@@ -1126,6 +1126,32 @@ mod tests {
         .await
         .unwrap();
 
+        // Negative control: a finding linked to a DIFFERENT service must keep
+        // its link — guards the update_many's id predicate.
+        let other_svc = service_record::ActiveModel {
+            vehicle_id: Set(vid),
+            service_date: Set("2024-04-01".into()),
+            paid_by: Set("self".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        let bystander = research_finding::ActiveModel {
+            report_id: Set(report.id),
+            category: Set("recall".into()),
+            title: Set("Unrelated".into()),
+            status: Set("completed".into()),
+            linked_entity_type: Set(Some("service".into())),
+            linked_entity_id: Set(Some(other_svc.id)),
+            created_at: Set("2024-01-01 00:00:00".into()),
+            updated_at: Set("2024-01-01 00:00:00".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
         delete(&db, vid, svc_id, DocumentDisposition::Keep)
             .await
             .unwrap();
@@ -1139,6 +1165,13 @@ mod tests {
         assert_eq!(f.linked_entity_type, None);
         assert_eq!(f.linked_entity_id, None);
         assert_eq!(f.status, "completed");
+        let b = research_finding::Entity::find_by_id(bystander.id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(b.linked_entity_type.as_deref(), Some("service"));
+        assert_eq!(b.linked_entity_id, Some(other_svc.id));
 
         // The visit survives, unlinked and re-stamped; the link rows are gone.
         let v = visit::Entity::find_by_id(visit_row.id)
