@@ -517,7 +517,14 @@ pub async fn detach_or_delete_for_entity(
         DocumentDisposition::Keep => {
             let note = unlink_note(entity_type, entity_id, &UnlinkReason::RecordDeleted);
             for (id, _path, notes) in linked {
-                clear_link(id, notes, &note).update(db).await?;
+                match clear_link(id, notes, &note).update(db).await {
+                    // RecordNotUpdated: the row vanished between the SELECT
+                    // and this UPDATE (a concurrent MCP/browser op deleted
+                    // it) — nothing left to unlink, so match the Delete arm's
+                    // delete_many tolerance instead of aborting the txn.
+                    Ok(_) | Err(DbErr::RecordNotUpdated) => {}
+                    Err(e) => return Err(e.into()),
+                }
             }
             Ok(Vec::new())
         }
@@ -1549,6 +1556,18 @@ mod tests {
         ));
         assert!(get(&db, other_id.id).await.is_ok());
         assert!(get(&db, other_type.id).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn detach_delete_with_no_linked_docs_is_a_no_op() {
+        let db = test_db().await;
+        let bystander = create(&db, sample("bystander")).await.unwrap();
+
+        let paths = detach_or_delete_for_entity(&db, "service", 99, DocumentDisposition::Delete)
+            .await
+            .unwrap();
+        assert!(paths.is_empty());
+        assert!(get(&db, bystander.id).await.is_ok());
     }
 
     #[tokio::test]

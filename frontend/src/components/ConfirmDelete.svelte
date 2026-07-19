@@ -5,10 +5,12 @@
   // "keep" unlinks the documents so they never dangle at a deleted record.
   // Errors from getDocCount/onDelete surface here — hosts must NOT swallow
   // them, or a failed delete closes the confirm as if it succeeded.
+  import type { DocumentDisposition } from '../lib/types'
+
   interface Props {
     label?: string
     getDocCount: () => Promise<number> | number
-    onDelete: (documents: 'keep' | 'delete') => Promise<void> | void
+    onDelete: (documents: DocumentDisposition) => Promise<void> | void
   }
 
   let { label = 'Delete this record?', getDocCount, onDelete }: Props = $props()
@@ -44,7 +46,7 @@
     error = ''
   }
 
-  async function run(documents: 'keep' | 'delete') {
+  async function run(documents: DocumentDisposition) {
     busy = true
     error = ''
     try {

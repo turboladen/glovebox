@@ -5,7 +5,7 @@
   import { documents as documentsApi, incidents as incidentsApi } from '../lib/api'
   import ConfirmDelete from './ConfirmDelete.svelte'
   import { formatCents } from '../lib/money'
-  import type { IncidentWithDetails, ServiceRecordWithLinks, UpdateIncident } from '../lib/types'
+  import type { DocumentDisposition, IncidentWithDetails, ServiceRecordWithLinks, UpdateIncident } from '../lib/types'
   import { formatDate } from '../lib/dates'
 
   let {
@@ -47,7 +47,7 @@
 
   // No catch: a failure must propagate to ConfirmDelete, which keeps the
   // confirm row open and shows the error.
-  async function deleteIncident(documents: 'keep' | 'delete') {
+  async function deleteIncident(documents: DocumentDisposition) {
     await incidentsApi.delete(vehicleId, incident.id, documents)
     onChanged()
   }
@@ -133,7 +133,7 @@
     {/if}
     <ConfirmDelete
       label="Delete this incident?"
-      getDocCount={() => documentsApi.countFor(vehicleId, 'incident', incident.id)}
+      getDocCount={() => documentsApi.countFor('incident', incident.id)}
       onDelete={deleteIncident}
     />
   </div>

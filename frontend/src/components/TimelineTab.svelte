@@ -24,6 +24,7 @@
     MileageEntry,
     Part,
     Document,
+    DocumentDisposition,
     ResolvedScheduleItem,
     ServicePrefill,
     Shop,
@@ -337,7 +338,7 @@
   // No catch: a failure must propagate to ConfirmDelete, which keeps the
   // confirm row open and shows the error. Collapse LAST — nulling expandedId
   // first would unmount ConfirmDelete mid-run and lose any late error.
-  async function deleteService(id: number, documents: 'keep' | 'delete') {
+  async function deleteService(id: number, documents: DocumentDisposition) {
     await servicesApi.delete(vehicleId, id, documents)
     await refresh()
     expandedId = null
@@ -631,7 +632,7 @@
                     {showMaintenancePicker ? 'Close picker' : 'Link to maintenance item…'}
                   </button>
                   <ConfirmDelete
-                    getDocCount={() => documentsApi.countFor(vehicleId, 'service', record.id)}
+                    getDocCount={() => documentsApi.countFor('service', record.id)}
                     onDelete={(docs) => deleteService(record.id, docs)}
                   />
                 </div>

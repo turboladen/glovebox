@@ -8,7 +8,7 @@ use crate::entities::vehicle;
 #[cfg(any(test, feature = "test-support"))]
 use sea_orm::{ActiveModelTrait, ConnectionTrait, Set};
 
-/// A fresh in-memory SQLite DB with all migrations applied. For service-layer unit tests.
+/// A fresh in-memory `SQLite` DB with all migrations applied. For service-layer unit tests.
 ///
 /// `sqlite::memory:` databases are per-connection, so the pool is pinned to a single
 /// connection: migrations and the test's queries share one physical connection, and the
@@ -126,4 +126,31 @@ impl VehicleFixture {
     pub async fn insert_id(self, db: &impl ConnectionTrait) -> i32 {
         self.insert(db).await.id
     }
+}
+
+/// Insert a document row linked to an entity — the shared fixture for the
+/// delete/unlink cascade tests (services/part/incident all exercise the same
+/// shape). Returns the new document id; its `file_path` is
+/// `general/other/{entity_type}-{entity_id}.pdf`.
+pub async fn seed_linked_document(
+    db: &impl ConnectionTrait,
+    entity_type: &str,
+    entity_id: i32,
+) -> i32 {
+    use crate::entities::document;
+
+    document::ActiveModel {
+        vehicle_id: Set(None),
+        title: Set(format!("{entity_type} doc")),
+        file_path: Set(format!("general/other/{entity_type}-{entity_id}.pdf")),
+        file_name: Set(format!("{entity_type}-{entity_id}.pdf")),
+        linked_entity_type: Set(Some(entity_type.to_string())),
+        linked_entity_id: Set(Some(entity_id)),
+        content_sha256: Set(Some("0".repeat(64))),
+        ..Default::default()
+    }
+    .insert(db)
+    .await
+    .unwrap()
+    .id
 }

@@ -3,8 +3,8 @@ use serde::Serialize;
 
 use crate::{
     entities::{
-        maintenance_schedule_item, mileage_log, model_template, part, service_record,
-        service_record_line_item, service_schedule_link,
+        incident_service_link, maintenance_schedule_item, mileage_log, model_template, part,
+        service_record, service_record_line_item, service_schedule_link, visit,
     },
     error::{DomainError, DomainResult},
     inputs::{
@@ -755,6 +755,27 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .exec(&txn)
         .await?;
 
+    // Visits reference their produced record via a soft link (no FK in
+    // migration 000020) — clear it or a completed visit points at a deleted
+    // service. Same dangling-link class as incident::delete's work_item
+    // cleanup.
+    visit::Entity::update_many()
+        .set(visit::ActiveModel {
+            service_record_id: Set(None),
+            updated_at: Set(super::now_stamp()),
+            ..Default::default()
+        })
+        .filter(visit::Column::ServiceRecordId.eq(existing.id))
+        .exec(&txn)
+        .await?;
+
+    // Incident links carry an ON DELETE CASCADE FK, but delete explicitly —
+    // pragma-independent and inside the txn, mirroring incident::delete.
+    incident_service_link::Entity::delete_many()
+        .filter(incident_service_link::Column::ServiceRecordId.eq(existing.id))
+        .exec(&txn)
+        .await?;
+
     // Unlink or delete attached documents (rows only; files are the caller's)
     let doc_files = super::document::detach_or_delete_for_entity(&txn, "service", id, docs).await?;
 
@@ -1014,6 +1035,83 @@ mod tests {
             .await
             .unwrap();
         assert!(links.is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_unlinks_completed_visit_and_removes_incident_links() {
+        use crate::entities::incident;
+
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let svc_id = service_record::ActiveModel {
+            vehicle_id: Set(vid),
+            service_date: Set("2024-03-01".into()),
+            paid_by: Set("self".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap()
+        .id;
+
+        // A completed visit pointing at the record (soft link, no FK).
+        let visit_row = visit::ActiveModel {
+            vehicle_id: Set(vid),
+            status: Set("completed".into()),
+            service_record_id: Set(Some(svc_id)),
+            created_at: Set("2024-01-01 00:00:00".into()),
+            updated_at: Set("2024-01-01 00:00:00".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        // An incident linked to the record via the M2M link table.
+        let inc = incident::ActiveModel {
+            vehicle_id: Set(vid),
+            category: Set("noise".into()),
+            title: Set("Rattle".into()),
+            occurred_at: Set("2024-02-01".into()),
+            resolved: Set(false),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        incident_service_link::ActiveModel {
+            incident_id: Set(inc.id),
+            service_record_id: Set(svc_id),
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        delete(&db, vid, svc_id, DocumentDisposition::Keep)
+            .await
+            .unwrap();
+
+        // The visit survives, unlinked and re-stamped; the link rows are gone.
+        let v = visit::Entity::find_by_id(visit_row.id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(v.service_record_id, None);
+        assert_ne!(v.updated_at, "2024-01-01 00:00:00");
+        let links = incident_service_link::Entity::find()
+            .filter(incident_service_link::Column::ServiceRecordId.eq(svc_id))
+            .all(&db)
+            .await
+            .unwrap();
+        assert!(links.is_empty());
+        // The incident itself survives.
+        assert!(
+            incident::Entity::find_by_id(inc.id)
+                .one(&db)
+                .await
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[tokio::test]

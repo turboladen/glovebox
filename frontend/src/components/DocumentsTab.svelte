@@ -141,18 +141,17 @@
     await loadData()
   }
 
+  type LinkedEntity = ServiceRecordWithLinks | Part | IncidentWithDetails
+
   // The ONE table of linkable kinds: the label fallback, the orphaned badge,
   // and the known-kind check all derive from it, so they can never disagree.
-  const linkedEntityFinders: Record<
-    string,
-    (id: number) => ServiceRecordWithLinks | Part | IncidentWithDetails | undefined
-  > = {
+  const linkedEntityFinders: Record<string, (id: number) => LinkedEntity | undefined> = {
     service: (id) => serviceRecords.find((s) => s.id === id),
     part: (id) => partsList.find((p) => p.id === id),
     incident: (id) => incidentsList.find((i) => i.id === id),
   }
 
-  function findLinkedEntity(doc: Document): ServiceRecordWithLinks | Part | IncidentWithDetails | undefined {
+  function findLinkedEntity(doc: Document): LinkedEntity | undefined {
     if (!doc.linked_entity_type || !doc.linked_entity_id) return undefined
     return linkedEntityFinders[doc.linked_entity_type]?.(doc.linked_entity_id)
   }

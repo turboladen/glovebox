@@ -441,29 +441,6 @@ mod tests {
 
     // --- delete + linked documents ---------------------------------------
 
-    async fn seed_linked_doc(db: &impl ConnectionTrait, part_id: i32) -> i32 {
-        crate::services::document::create(
-            db,
-            crate::inputs::document::NewDocument {
-                vehicle_id: None,
-                title: "part invoice".into(),
-                file_path: format!("general/other/part-{part_id}.pdf"),
-                file_name: "part.pdf".into(),
-                mime_type: None,
-                file_size_bytes: None,
-                doc_type: None,
-                linked_entity_type: Some("part".into()),
-                linked_entity_id: Some(part_id),
-                notes: None,
-                extracted_text: None,
-                content_sha256: "0".repeat(64),
-            },
-        )
-        .await
-        .unwrap()
-        .id
-    }
-
     #[tokio::test]
     async fn delete_keep_unlinks_documents() {
         let db = test_db().await;
@@ -471,7 +448,7 @@ mod tests {
         let part = create(&db, vid, minimal_part("Doomed", None))
             .await
             .unwrap();
-        let doc_id = seed_linked_doc(&db, part.id).await;
+        let doc_id = crate::test_support::seed_linked_document(&db, "part", part.id).await;
 
         let paths = delete(&db, vid, part.id, DocumentDisposition::Keep)
             .await
@@ -494,7 +471,7 @@ mod tests {
         let part = create(&db, vid, minimal_part("Doomed", None))
             .await
             .unwrap();
-        let doc_id = seed_linked_doc(&db, part.id).await;
+        let doc_id = crate::test_support::seed_linked_document(&db, "part", part.id).await;
 
         let paths = delete(&db, vid, part.id, DocumentDisposition::Delete)
             .await

@@ -1357,30 +1357,10 @@ mod tests {
         let cascaded = create(&db, vid, new_incident("Take my doc", "noise"))
             .await
             .unwrap();
-        let mut seed_doc = async |incident_id: i32| {
-            crate::services::document::create(
-                &db,
-                crate::inputs::document::NewDocument {
-                    vehicle_id: None,
-                    title: "photo".into(),
-                    file_path: format!("general/photo/{incident_id}.jpg"),
-                    file_name: "photo.jpg".into(),
-                    mime_type: None,
-                    file_size_bytes: None,
-                    doc_type: None,
-                    linked_entity_type: Some("incident".into()),
-                    linked_entity_id: Some(incident_id),
-                    notes: None,
-                    extracted_text: None,
-                    content_sha256: "0".repeat(64),
-                },
-            )
-            .await
-            .unwrap()
-            .id
-        };
-        let kept_doc = seed_doc(kept.incident.id).await;
-        let cascaded_doc = seed_doc(cascaded.incident.id).await;
+        let kept_doc =
+            crate::test_support::seed_linked_document(&db, "incident", kept.incident.id).await;
+        let cascaded_doc =
+            crate::test_support::seed_linked_document(&db, "incident", cascaded.incident.id).await;
 
         let paths = delete(&db, vid, kept.incident.id, DocumentDisposition::Keep)
             .await
@@ -1395,7 +1375,10 @@ mod tests {
             .unwrap();
         assert_eq!(
             paths,
-            vec![format!("general/photo/{}.jpg", cascaded.incident.id)]
+            vec![format!(
+                "general/other/incident-{}.pdf",
+                cascaded.incident.id
+            )]
         );
         assert!(matches!(
             crate::services::document::get(&db, cascaded_doc)
