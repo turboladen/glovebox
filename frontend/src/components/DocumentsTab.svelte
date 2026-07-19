@@ -141,17 +141,20 @@
     await loadData()
   }
 
-  // ONE dispatch over the linkable kinds: the live record behind a doc's link
-  // fields, or undefined. Both the label fallback and the orphaned badge
-  // derive from this same lookup, so they can never disagree.
+  // The ONE table of linkable kinds: the label fallback, the orphaned badge,
+  // and the known-kind check all derive from it, so they can never disagree.
+  const linkedEntityFinders: Record<
+    string,
+    (id: number) => ServiceRecordWithLinks | Part | IncidentWithDetails | undefined
+  > = {
+    service: (id) => serviceRecords.find((s) => s.id === id),
+    part: (id) => partsList.find((p) => p.id === id),
+    incident: (id) => incidentsList.find((i) => i.id === id),
+  }
+
   function findLinkedEntity(doc: Document): ServiceRecordWithLinks | Part | IncidentWithDetails | undefined {
-    if (!doc.linked_entity_id) return undefined
-    switch (doc.linked_entity_type) {
-      case 'service': return serviceRecords.find(s => s.id === doc.linked_entity_id)
-      case 'part': return partsList.find(p => p.id === doc.linked_entity_id)
-      case 'incident': return incidentsList.find(i => i.id === doc.linked_entity_id)
-      default: return undefined
-    }
+    if (!doc.linked_entity_type || !doc.linked_entity_id) return undefined
+    return linkedEntityFinders[doc.linked_entity_type]?.(doc.linked_entity_id)
   }
 
   // A linked document whose target no longer exists (pre-feature deletes left
@@ -159,8 +162,7 @@
   // labels from; unknown link types are not flagged.
   function isOrphaned(doc: Document): boolean {
     if (!doc.linked_entity_type || !doc.linked_entity_id) return false
-    if (!['service', 'part', 'incident'].includes(doc.linked_entity_type)) return false
-    return !findLinkedEntity(doc)
+    return doc.linked_entity_type in linkedEntityFinders && !findLinkedEntity(doc)
   }
 
   function formatSize(bytes: number | null): string {

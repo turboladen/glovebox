@@ -390,6 +390,26 @@ test.describe('Timeline: delete with documents', () => {
     await expect(page.getByText('Doomed Invoice')).not.toBeVisible()
   })
 
+  test('a failed delete surfaces the error and keeps the confirm open', async ({ page }) => {
+    await recordService(page, 'Unkillable service')
+    await page.route('**/api/vehicles/*/services/*', (route) =>
+      route.request().method() === 'DELETE'
+        ? route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'boom' }) })
+        : route.fallback(),
+    )
+    await page.getByText('Unkillable service').click()
+    await page.getByRole('button', { name: 'Delete', exact: true }).click()
+    await page.getByRole('button', { name: 'Yes, Delete' }).click()
+    // The confirm row stays open with the backend's error; the record remains.
+    await expect(page.getByRole('alert')).toContainText('boom')
+    await expect(page.getByRole('button', { name: 'Yes, Delete' })).toBeVisible()
+    // Cancel collapses the row AND clears the stale error.
+    await page.getByRole('button', { name: 'Cancel' }).click()
+    await expect(page.getByRole('alert')).toHaveCount(0)
+    await expect(page.getByText('Unkillable service')).toBeVisible()
+    await page.unroute('**/api/vehicles/*/services/*')
+  })
+
   test('delete an incident from its detail panel', async ({ page }) => {
     await page.goto(`${vehicleUrl}/timeline`)
     await page.getByRole('button', { name: 'Log incident' }).click()

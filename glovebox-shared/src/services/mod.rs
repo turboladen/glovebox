@@ -21,3 +21,8 @@ pub mod vehicle;
 pub mod vin_decode;
 pub mod visit;
 pub mod work_item;
+
+/// The project-wide stored-timestamp stamp (naive UTC, stored as text).
+pub(crate) fn now_stamp() -> String {
+    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
+}

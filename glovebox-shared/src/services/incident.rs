@@ -458,7 +458,7 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .filter(incident_service_link::Column::IncidentId.eq(existing.id))
         .exec(&txn)
         .await?;
-    let stamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let stamp = super::now_stamp();
     incident::Entity::update_many()
         .set(incident::ActiveModel {
             recurrence_of_id: Set(None),

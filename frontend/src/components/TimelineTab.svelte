@@ -335,11 +335,12 @@
   }
 
   // No catch: a failure must propagate to ConfirmDelete, which keeps the
-  // confirm row open and shows the error.
+  // confirm row open and shows the error. Collapse LAST — nulling expandedId
+  // first would unmount ConfirmDelete mid-run and lose any late error.
   async function deleteService(id: number, documents: 'keep' | 'delete') {
     await servicesApi.delete(vehicleId, id, documents)
-    expandedId = null
     await refresh()
+    expandedId = null
   }
 </script>
 
