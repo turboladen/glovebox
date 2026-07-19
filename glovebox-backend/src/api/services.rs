@@ -1,6 +1,6 @@
 use axum::{
     Json,
-    extract::{Path, Query, State},
+    extract::{Path, State},
 };
 use serde::Deserialize;
 
@@ -191,7 +191,7 @@ pub async fn update(
 pub async fn delete(
     State(state): State<AppState>,
     Path((vehicle_id, id)): Path<(i32, i32)>,
-    Query(q): Query<super::documents::DeleteDocsQuery>,
+    q: super::documents::DeleteDocsQuery,
 ) -> Result<Json<serde_json::Value>> {
     glovebox_shared::services::vehicle::require(&state.db, vehicle_id).await?;
     let doc_files = svc::delete(&state.db, vehicle_id, id, q.documents).await?;

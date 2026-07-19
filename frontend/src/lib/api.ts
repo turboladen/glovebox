@@ -177,7 +177,7 @@ export const parts = {
   update: (vehicleId: number, id: number, data: Partial<Part>) =>
     request<Part>(`/vehicles/${vehicleId}/parts/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   delete: (vehicleId: number, id: number, documents?: DocumentDisposition) =>
-    request<{ deleted: boolean }>(`/vehicles/${vehicleId}/parts/${id}${documentsQuery(documents)}`, {
+    request<{ deleted: number }>(`/vehicles/${vehicleId}/parts/${id}${documentsQuery(documents)}`, {
       method: 'DELETE',
     }),
 }

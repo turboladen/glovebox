@@ -1,7 +1,7 @@
 use sea_orm::*;
 
 use crate::{
-    entities::{part, service_record},
+    entities::{part, research_finding, service_record},
     error::{DomainError, DomainResult},
     inputs::{
         document::DocumentDisposition,
@@ -185,6 +185,19 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     let existing = get(db, vehicle_id, id).await?;
 
     let txn = db.begin().await?;
+    // Research findings may soft-link to a part (no FK) — clear the link so
+    // a finding never points at a deleted part, mirroring service delete.
+    research_finding::Entity::update_many()
+        .set(research_finding::ActiveModel {
+            linked_entity_type: Set(None),
+            linked_entity_id: Set(None),
+            updated_at: Set(super::now_stamp()),
+            ..Default::default()
+        })
+        .filter(research_finding::Column::LinkedEntityType.eq("part"))
+        .filter(research_finding::Column::LinkedEntityId.eq(id))
+        .exec(&txn)
+        .await?;
     let doc_files = super::document::detach_or_delete_for_entity(&txn, "part", id, docs).await?;
     existing.delete(&txn).await?;
     txn.commit().await?;
@@ -483,6 +496,49 @@ mod tests {
                 .unwrap_err(),
             DomainError::NotFound(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn delete_clears_research_finding_links() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let part = create(&db, vid, minimal_part("Researched", None))
+            .await
+            .unwrap();
+        let report = crate::entities::research_report::ActiveModel {
+            vehicle_id: Set(vid),
+            generated_at: Set("2024-01-01".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        let finding = research_finding::ActiveModel {
+            report_id: Set(report.id),
+            category: Set("upgrade".into()),
+            title: Set("Better part exists".into()),
+            status: Set("completed".into()),
+            linked_entity_type: Set(Some("part".into())),
+            linked_entity_id: Set(Some(part.id)),
+            created_at: Set("2024-01-01 00:00:00".into()),
+            updated_at: Set("2024-01-01 00:00:00".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        delete(&db, vid, part.id, DocumentDisposition::Keep)
+            .await
+            .unwrap();
+
+        let f = research_finding::Entity::find_by_id(finding.id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(f.linked_entity_type, None);
+        assert_eq!(f.linked_entity_id, None);
     }
 
     #[tokio::test]

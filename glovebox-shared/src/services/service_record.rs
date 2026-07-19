@@ -4,7 +4,7 @@ use serde::Serialize;
 use crate::{
     entities::{
         incident_service_link, maintenance_schedule_item, mileage_log, model_template, part,
-        service_record, service_record_line_item, service_schedule_link, visit,
+        research_finding, service_record, service_record_line_item, service_schedule_link, visit,
     },
     error::{DomainError, DomainResult},
     inputs::{
@@ -776,6 +776,21 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .exec(&txn)
         .await?;
 
+    // Research findings mark their resolving record via the same polymorphic
+    // soft link documents use (no FK, set by visit::complete or ResearchTab)
+    // — clear it so a finding never points at a deleted service.
+    research_finding::Entity::update_many()
+        .set(research_finding::ActiveModel {
+            linked_entity_type: Set(None),
+            linked_entity_id: Set(None),
+            updated_at: Set(super::now_stamp()),
+            ..Default::default()
+        })
+        .filter(research_finding::Column::LinkedEntityType.eq("service"))
+        .filter(research_finding::Column::LinkedEntityId.eq(existing.id))
+        .exec(&txn)
+        .await?;
+
     // Unlink or delete attached documents (rows only; files are the caller's)
     let doc_files = super::document::detach_or_delete_for_entity(&txn, "service", id, docs).await?;
 
@@ -1086,9 +1101,44 @@ mod tests {
         .await
         .unwrap();
 
+        // A research finding resolved by this record (polymorphic soft link,
+        // no FK — the shape visit::complete writes).
+        let report = crate::entities::research_report::ActiveModel {
+            vehicle_id: Set(vid),
+            generated_at: Set("2024-01-01".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        let finding = research_finding::ActiveModel {
+            report_id: Set(report.id),
+            category: Set("recall".into()),
+            title: Set("Recall fixed here".into()),
+            status: Set("completed".into()),
+            linked_entity_type: Set(Some("service".into())),
+            linked_entity_id: Set(Some(svc_id)),
+            created_at: Set("2024-01-01 00:00:00".into()),
+            updated_at: Set("2024-01-01 00:00:00".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
         delete(&db, vid, svc_id, DocumentDisposition::Keep)
             .await
             .unwrap();
+
+        // The research finding survives, its resolving link cleared.
+        let f = research_finding::Entity::find_by_id(finding.id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(f.linked_entity_type, None);
+        assert_eq!(f.linked_entity_id, None);
+        assert_eq!(f.status, "completed");
 
         // The visit survives, unlinked and re-stamped; the link rows are gone.
         let v = visit::Entity::find_by_id(visit_row.id)

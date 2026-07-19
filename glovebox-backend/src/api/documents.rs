@@ -198,6 +198,23 @@ pub struct DeleteDocsQuery {
     pub documents: DocumentDisposition,
 }
 
+/// Extract directly (not via `Query<…>`) so a malformed `?documents=` value
+/// is rejected inside the API's JSON `{"error": …}` envelope — Axum's default
+/// `Query` rejection is `text/plain`, which uniform-error clients choke on.
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for DeleteDocsQuery {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        state: &S,
+    ) -> std::result::Result<Self, Self::Rejection> {
+        let Query(q) = Query::<Self>::from_request_parts(parts, state)
+            .await
+            .map_err(|e| ApiError::BadRequest(e.body_text()))?;
+        Ok(q)
+    }
+}
+
 /// Remove cascade-deleted document files after the owning transaction has
 /// committed. Best-effort by design: the rows are already gone, so a failed
 /// unlink only strands a file on disk — log it, never fail the request.
