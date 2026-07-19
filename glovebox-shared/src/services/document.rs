@@ -493,11 +493,14 @@ pub async fn detach_or_delete_for_entity(
     mode: DocumentDisposition,
 ) -> DomainResult<Vec<String>> {
     // The selector must byte-match what store() wrote; a typo'd literal at a
-    // call site would silently match zero rows and leave dangling links.
-    debug_assert!(
-        VALID_LINKED_ENTITY_TYPES.contains(&entity_type),
-        "unknown linked entity type {entity_type}"
-    );
+    // call site would silently match zero rows and leave dangling links. A
+    // hard error (not debug_assert, which release builds compile out) so a
+    // future untested call site cannot no-op in production.
+    if !VALID_LINKED_ENTITY_TYPES.contains(&entity_type) {
+        return Err(DomainError::Internal(format!(
+            "unknown linked entity type {entity_type}"
+        )));
+    }
     // Project only what each mode needs — extracted_text can be megabytes of
     // OCR text and neither mode reads it.
     let linked: Vec<(i32, String, Option<String>)> = document::Entity::find()
@@ -553,7 +556,16 @@ pub async fn unlink(db: &impl ConnectionTrait, id: i32) -> DomainResult<document
     };
     // Manual reason: the linked record may well still exist.
     let note = unlink_note(&etype, eid, &UnlinkReason::Manual);
-    Ok(clear_link(doc.id, doc.notes, &note).update(db).await?)
+    match clear_link(doc.id, doc.notes, &note).update(db).await {
+        Ok(updated) => Ok(updated),
+        // The doc was deleted between get() and this update (concurrent
+        // MCP/browser op): NotFound is the honest answer, not a 500 — same
+        // race the delete-with-keep loop tolerates.
+        Err(DbErr::RecordNotUpdated) => {
+            Err(DomainError::NotFound(format!("Document {id} not found")))
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Remove a stored file from the files dir by its row-relative `file_path`,
@@ -1556,6 +1568,22 @@ mod tests {
         ));
         assert!(get(&db, other_id.id).await.is_ok());
         assert!(get(&db, other_type.id).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn detach_rejects_unknown_entity_type() {
+        let db = test_db().await;
+        let linked = create(&db, linked_sample("survivor", "service", 7, None))
+            .await
+            .unwrap();
+
+        let err = detach_or_delete_for_entity(&db, "servcie", 7, DocumentDisposition::Keep)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, DomainError::Internal(_)));
+        // Nothing was touched by the rejected call.
+        let doc = get(&db, linked.id).await.unwrap();
+        assert_eq!(doc.linked_entity_type.as_deref(), Some("service"));
     }
 
     #[tokio::test]
