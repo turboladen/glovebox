@@ -52,6 +52,10 @@ export const mileage = {
     request<MileageEntry>(`/vehicles/${vehicleId}/mileage`, { method: 'POST', body: JSON.stringify(data) }),
 }
 
+// `?documents=` suffix shared by the three entity DELETE calls.
+const documentsQuery = (documents?: DocumentDisposition) =>
+  documents ? `?documents=${documents}` : ''
+
 // Service Records
 export const services = {
   list: (vehicleId: number) => request<ServiceRecordWithLinks[]>(`/vehicles/${vehicleId}/services`),
@@ -60,8 +64,10 @@ export const services = {
     request<ServiceRecordWithLinks>(`/vehicles/${vehicleId}/services`, { method: 'POST', body: JSON.stringify(data) }),
   update: (vehicleId: number, id: number, data: Partial<CreateServiceRecord>) =>
     request<ServiceRecordWithLinks>(`/vehicles/${vehicleId}/services/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
-  delete: (vehicleId: number, id: number) =>
-    request<{ deleted: number }>(`/vehicles/${vehicleId}/services/${id}`, { method: 'DELETE' }),
+  delete: (vehicleId: number, id: number, documents?: DocumentDisposition) =>
+    request<{ deleted: number }>(`/vehicles/${vehicleId}/services/${id}${documentsQuery(documents)}`, {
+      method: 'DELETE',
+    }),
 }
 
 // Schedules
@@ -121,6 +127,10 @@ export const incidents = {
     request<IncidentWithDetails>(`/vehicles/${vehicleId}/incidents/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   addFollowup: (vehicleId: number, incidentId: number, data: CreateFollowup) =>
     request<IncidentFollowup>(`/vehicles/${vehicleId}/incidents/${incidentId}/followups`, { method: 'POST', body: JSON.stringify(data) }),
+  delete: (vehicleId: number, id: number, documents?: DocumentDisposition) =>
+    request<{ deleted: number }>(`/vehicles/${vehicleId}/incidents/${id}${documentsQuery(documents)}`, {
+      method: 'DELETE',
+    }),
 }
 
 // Documents
@@ -142,6 +152,15 @@ export const documents = {
     return res.json()
   },
   delete: (id: number) => request<{ deleted: number }>(`/documents/${id}`, { method: 'DELETE' }),
+  unlink: (id: number) => request<Document>(`/documents/${id}/unlink`, { method: 'POST' }),
+  // Fresh linked-doc count for delete-confirm prompts — never trusts a
+  // component's cached document list. Filters by the LINK FIELDS ONLY, the
+  // same selector the backend's cascade uses (vehicle_id is nullable on
+  // documents), so the prompt count matches what a delete would touch.
+  countFor: (linkedEntityType: 'service' | 'part' | 'incident', linkedEntityId: number) =>
+    documents
+      .list({ linked_entity_type: linkedEntityType, linked_entity_id: linkedEntityId })
+      .then((docs) => docs.length),
 }
 
 // Parts
@@ -157,8 +176,10 @@ export const parts = {
     request<Part>(`/vehicles/${vehicleId}/parts`, { method: 'POST', body: JSON.stringify(data) }),
   update: (vehicleId: number, id: number, data: Partial<Part>) =>
     request<Part>(`/vehicles/${vehicleId}/parts/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
-  delete: (vehicleId: number, id: number) =>
-    request<{ deleted: boolean }>(`/vehicles/${vehicleId}/parts/${id}`, { method: 'DELETE' }),
+  delete: (vehicleId: number, id: number, documents?: DocumentDisposition) =>
+    request<{ deleted: number }>(`/vehicles/${vehicleId}/parts/${id}${documentsQuery(documents)}`, {
+      method: 'DELETE',
+    }),
 }
 
 // Costs
@@ -255,7 +276,7 @@ import type {
   ServiceRecordWithLinks, CreateServiceRecord, CreateLineItem,
   ScheduleItem, CreateScheduleItem, ResolvedScheduleItem,
   RemindersResponse, VinDecodeResponse,
-  Shop, Document,
+  Shop, Document, DocumentDisposition,
   IncidentWithDetails, IncidentFollowup, CreateIncident, UpdateIncident, CreateFollowup,
   Part, CreatePart,
   CostSummary, VehicleExport,

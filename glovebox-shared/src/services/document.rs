@@ -8,7 +8,9 @@ use crate::{
     config::AppConfig,
     entities::{document, incident, part, service_record},
     error::{DomainError, DomainResult},
-    inputs::document::{DocumentFilter, DocumentSource, NewDocument, StoreDocument},
+    inputs::document::{
+        DocumentDisposition, DocumentFilter, DocumentSource, NewDocument, StoreDocument,
+    },
 };
 
 /// A stored document plus the idempotency signal: whether an identical file
@@ -430,6 +432,163 @@ pub async fn delete(db: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
     if result.rows_affected == 0 {
         return Err(DomainError::NotFound(format!("Document {id} not found")));
     }
+    Ok(())
+}
+
+/// `notes` with `line` appended on a new line (or alone when there were none).
+fn append_note(notes: Option<String>, line: &str) -> String {
+    match notes {
+        Some(existing) if !existing.trim().is_empty() => format!("{existing}\n{line}"),
+        _ => line.to_string(),
+    }
+}
+
+/// Why a document's link is being cleared — shapes the provenance note, so a
+/// manual unlink never falsely claims the linked record was deleted.
+enum UnlinkReason {
+    RecordDeleted,
+    Manual,
+}
+
+/// The provenance line written onto a document when its link is cleared.
+fn unlink_note(entity_type: &str, entity_id: i32, reason: &UnlinkReason) -> String {
+    let date = chrono::Utc::now().format("%Y-%m-%d");
+    match reason {
+        UnlinkReason::RecordDeleted => {
+            format!("Unlinked from {entity_type} #{entity_id} on {date} (record deleted)")
+        }
+        UnlinkReason::Manual => format!("Unlinked from {entity_type} #{entity_id} on {date}"),
+    }
+}
+
+/// `ActiveModel` clearing a document's link and appending the provenance
+/// note — the ONE place the "null BOTH link fields" invariant is written, so
+/// the cascade-keep and manual-unlink paths cannot drift.
+fn clear_link(id: i32, notes: Option<String>, note: &str) -> document::ActiveModel {
+    document::ActiveModel {
+        id: Set(id),
+        linked_entity_type: Set(None),
+        linked_entity_id: Set(None),
+        notes: Set(Some(append_note(notes, note))),
+        ..Default::default()
+    }
+}
+
+/// Handle the documents linked to an entity that is being deleted. `Keep`
+/// clears both link fields and appends a provenance note (the row becomes a
+/// true orphan, which the content-hash dedup path in [`store`] can re-adopt
+/// on a later import); `Delete` removes the rows and returns their
+/// `file_path`s so the caller can remove the files AFTER its transaction
+/// commits (file removal is not transactional — an orphaned file on disk is
+/// acceptable, a DB row pointing at a deleted record is not).
+///
+/// Selects on the link fields only, NOT `vehicle_id`: `vehicle_id` is
+/// nullable on documents, the caller already vehicle-scoped the entity being
+/// deleted, and the invariant this fn guarantees is "no dangling link
+/// survives" — the link itself is the selector.
+pub async fn detach_or_delete_for_entity(
+    db: &impl ConnectionTrait,
+    entity_type: &str,
+    entity_id: i32,
+    mode: DocumentDisposition,
+) -> DomainResult<Vec<String>> {
+    // The selector must byte-match what store() wrote; a typo'd literal at a
+    // call site would silently match zero rows and leave dangling links. A
+    // hard error (not debug_assert, which release builds compile out) so a
+    // future untested call site cannot no-op in production.
+    if !VALID_LINKED_ENTITY_TYPES.contains(&entity_type) {
+        return Err(DomainError::Internal(format!(
+            "unknown linked entity type {entity_type}"
+        )));
+    }
+    // Project only what each mode needs — extracted_text can be megabytes of
+    // OCR text and neither mode reads it.
+    let linked: Vec<(i32, String, Option<String>)> = document::Entity::find()
+        .select_only()
+        .columns([
+            document::Column::Id,
+            document::Column::FilePath,
+            document::Column::Notes,
+        ])
+        .filter(document::Column::LinkedEntityType.eq(entity_type))
+        .filter(document::Column::LinkedEntityId.eq(entity_id))
+        .into_tuple()
+        .all(db)
+        .await?;
+
+    match mode {
+        DocumentDisposition::Keep => {
+            let note = unlink_note(entity_type, entity_id, &UnlinkReason::RecordDeleted);
+            for (id, _path, notes) in linked {
+                match clear_link(id, notes, &note).update(db).await {
+                    // RecordNotUpdated: the row vanished between the SELECT
+                    // and this UPDATE (a concurrent MCP/browser op deleted
+                    // it) — nothing left to unlink, so match the Delete arm's
+                    // delete_many tolerance instead of aborting the txn.
+                    Ok(_) | Err(DbErr::RecordNotUpdated) => {}
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            Ok(Vec::new())
+        }
+        DocumentDisposition::Delete => {
+            let ids: Vec<i32> = linked.iter().map(|(id, ..)| *id).collect();
+            let file_paths: Vec<String> = linked.into_iter().map(|(_, path, _)| path).collect();
+            if !ids.is_empty() {
+                document::Entity::delete_many()
+                    .filter(document::Column::Id.is_in(ids))
+                    .exec(db)
+                    .await?;
+            }
+            Ok(file_paths)
+        }
+    }
+}
+
+/// Clear a document's entity link (the `DocumentsTab` "Unlink" action, also the
+/// cleanup for pre-existing orphans whose target is already gone). Appends a
+/// provenance note without the "(record deleted)" claim — the linked record
+/// may still exist; succeeds as a no-op when the document is already unlinked.
+pub async fn unlink(db: &impl ConnectionTrait, id: i32) -> DomainResult<document::Model> {
+    let doc = get(db, id).await?;
+    let (Some(etype), Some(eid)) = (doc.linked_entity_type.clone(), doc.linked_entity_id) else {
+        return Ok(doc);
+    };
+    // Manual reason: the linked record may well still exist.
+    let note = unlink_note(&etype, eid, &UnlinkReason::Manual);
+    match clear_link(doc.id, doc.notes, &note).update(db).await {
+        Ok(updated) => Ok(updated),
+        // The doc was deleted between get() and this update (concurrent
+        // MCP/browser op): NotFound is the honest answer, not a 500 — same
+        // race the delete-with-keep loop tolerates.
+        Err(DbErr::RecordNotUpdated) => {
+            Err(DomainError::NotFound(format!("Document {id} not found")))
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Remove a stored file from the files dir by its row-relative `file_path`,
+/// with the same containment check the upload path enforces (a `file_path`
+/// that escapes `files_dir` is rejected, not followed). A missing file is Ok —
+/// the row is already gone and that is the invariant that matters.
+pub async fn remove_stored_file(config: &AppConfig, file_path: &str) -> DomainResult<()> {
+    let files_dir = std::path::Path::new(&config.files_dir)
+        .canonicalize()
+        .map_err(|e| DomainError::Internal(format!("Invalid files_dir: {e}")))?;
+    let full_path = files_dir.join(file_path);
+    if !full_path.exists() {
+        return Ok(());
+    }
+    let full_path = full_path
+        .canonicalize()
+        .map_err(|e| DomainError::Internal(e.to_string()))?;
+    if !full_path.starts_with(&files_dir) {
+        return Err(DomainError::BadRequest("Invalid file path".into()));
+    }
+    tokio::fs::remove_file(&full_path)
+        .await
+        .map_err(|e| DomainError::Internal(e.to_string()))?;
     Ok(())
 }
 
@@ -1320,5 +1479,255 @@ mod tests {
         );
         assert_eq!(sanitize_filename("../../etc/passwd"), ".._.._etc_passwd");
         assert_eq!(sanitize_filename(r"C:\temp\a b.pdf"), "C__temp_a_b.pdf");
+    }
+
+    // ─── detach_or_delete_for_entity / unlink / remove_stored_file ───
+
+    fn linked_sample(title: &str, etype: &str, eid: i32, notes: Option<&str>) -> NewDocument {
+        NewDocument {
+            linked_entity_type: Some(etype.into()),
+            linked_entity_id: Some(eid),
+            notes: notes.map(Into::into),
+            ..sample(title)
+        }
+    }
+
+    #[tokio::test]
+    async fn detach_keep_clears_links_and_appends_note() {
+        let db = test_db().await;
+        let with_notes = create(&db, linked_sample("a", "service", 7, Some("prior note")))
+            .await
+            .unwrap();
+        let without_notes = create(&db, linked_sample("b", "service", 7, None))
+            .await
+            .unwrap();
+        // Same id, different entity type — must be untouched.
+        let other_type = create(&db, linked_sample("c", "part", 7, None))
+            .await
+            .unwrap();
+        let unlinked = create(&db, sample("d")).await.unwrap();
+
+        let paths = detach_or_delete_for_entity(&db, "service", 7, DocumentDisposition::Keep)
+            .await
+            .unwrap();
+        assert!(paths.is_empty(), "Keep mode returns no files to remove");
+
+        let a = get(&db, with_notes.id).await.unwrap();
+        assert_eq!(a.linked_entity_type, None);
+        assert_eq!(a.linked_entity_id, None);
+        let a_notes = a.notes.unwrap();
+        assert!(a_notes.starts_with("prior note\nUnlinked from service #7 on "));
+        assert!(a_notes.ends_with("(record deleted)"));
+
+        let b = get(&db, without_notes.id).await.unwrap();
+        assert_eq!(b.linked_entity_type, None);
+        let b_notes = b.notes.unwrap();
+        assert!(b_notes.starts_with("Unlinked from service #7 on "));
+
+        let c = get(&db, other_type.id).await.unwrap();
+        assert_eq!(c.linked_entity_type.as_deref(), Some("part"));
+        assert_eq!(c.linked_entity_id, Some(7));
+        assert_eq!(c.notes, None);
+
+        let d = get(&db, unlinked.id).await.unwrap();
+        assert_eq!(d.notes, None);
+    }
+
+    #[tokio::test]
+    async fn detach_delete_removes_only_matching_rows_and_returns_paths() {
+        let db = test_db().await;
+        let doomed_a = create(&db, linked_sample("a", "service", 7, None))
+            .await
+            .unwrap();
+        let doomed_b = create(&db, linked_sample("b", "service", 7, None))
+            .await
+            .unwrap();
+        let other_id = create(&db, linked_sample("c", "service", 8, None))
+            .await
+            .unwrap();
+        let other_type = create(&db, linked_sample("d", "part", 7, None))
+            .await
+            .unwrap();
+
+        let mut paths = detach_or_delete_for_entity(&db, "service", 7, DocumentDisposition::Delete)
+            .await
+            .unwrap();
+        paths.sort();
+        assert_eq!(
+            paths,
+            vec![doomed_a.file_path.clone(), doomed_b.file_path.clone()]
+        );
+
+        assert!(matches!(
+            get(&db, doomed_a.id).await.unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+        assert!(matches!(
+            get(&db, doomed_b.id).await.unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+        assert!(get(&db, other_id.id).await.is_ok());
+        assert!(get(&db, other_type.id).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn detach_rejects_unknown_entity_type() {
+        let db = test_db().await;
+        let linked = create(&db, linked_sample("survivor", "service", 7, None))
+            .await
+            .unwrap();
+
+        let err = detach_or_delete_for_entity(&db, "servcie", 7, DocumentDisposition::Keep)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, DomainError::Internal(_)));
+        // Nothing was touched by the rejected call.
+        let doc = get(&db, linked.id).await.unwrap();
+        assert_eq!(doc.linked_entity_type.as_deref(), Some("service"));
+    }
+
+    #[tokio::test]
+    async fn detach_delete_with_no_linked_docs_is_a_no_op() {
+        let db = test_db().await;
+        let bystander = create(&db, sample("bystander")).await.unwrap();
+
+        let paths = detach_or_delete_for_entity(&db, "service", 99, DocumentDisposition::Delete)
+            .await
+            .unwrap();
+        assert!(paths.is_empty());
+        assert!(get(&db, bystander.id).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn unlink_clears_link_notes_provenance_and_is_idempotent() {
+        let db = test_db().await;
+        let doc = create(&db, linked_sample("orphan-me", "incident", 3, None))
+            .await
+            .unwrap();
+
+        let unlinked = unlink(&db, doc.id).await.unwrap();
+        assert_eq!(unlinked.linked_entity_type, None);
+        assert_eq!(unlinked.linked_entity_id, None);
+        let notes = unlinked.notes.clone().unwrap();
+        assert!(notes.starts_with("Unlinked from incident #3 on "));
+        // Manual unlink must not claim the linked record was deleted.
+        assert!(!notes.contains("(record deleted)"));
+
+        // Already unlinked → no-op success, no second note.
+        let again = unlink(&db, doc.id).await.unwrap();
+        assert_eq!(again.notes.as_ref(), Some(&notes));
+
+        assert!(matches!(
+            unlink(&db, 9999).await.unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn remove_stored_file_removes_tolerates_missing_and_rejects_escape() {
+        let root = tempfile::tempdir().unwrap();
+        let files_dir = root.path().join("files");
+        std::fs::create_dir_all(files_dir.join("1/invoice")).unwrap();
+        std::fs::write(files_dir.join("1/invoice/a.pdf"), b"bytes").unwrap();
+        std::fs::write(root.path().join("secret.txt"), b"outside").unwrap();
+        let config = cfg(&files_dir, &root.path().join("inbox"));
+
+        remove_stored_file(&config, "1/invoice/a.pdf")
+            .await
+            .unwrap();
+        assert!(!files_dir.join("1/invoice/a.pdf").exists());
+
+        // Already gone: fine — the row is what matters.
+        remove_stored_file(&config, "1/invoice/a.pdf")
+            .await
+            .unwrap();
+
+        // A file_path escaping files_dir is refused, not followed.
+        assert!(matches!(
+            remove_stored_file(&config, "../secret.txt")
+                .await
+                .unwrap_err(),
+            DomainError::BadRequest(_)
+        ));
+        assert!(root.path().join("secret.txt").exists());
+    }
+
+    /// The glovebox-9fbj ⇄ glovebox-hwaf interaction: delete-with-Keep leaves
+    /// a TRUE orphan (both link fields cleared), which the content-hash dedup
+    /// in `store` adopts on reimport instead of duplicating.
+    #[tokio::test]
+    async fn service_delete_keep_leaves_orphan_that_dedup_readopts() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let svc_id = seed_service(&db, vid).await;
+        let files = tempfile::tempdir().unwrap();
+        let config = files_cfg(&files);
+
+        let doc = store(
+            &db,
+            &config,
+            StoreDocument {
+                linked_entity_type: Some("service".into()),
+                linked_entity_id: Some(svc_id),
+                ..store_input(Some(vid), "invoice.pdf")
+            },
+        )
+        .await
+        .unwrap();
+
+        crate::services::service_record::delete(&db, vid, svc_id, DocumentDisposition::Keep)
+            .await
+            .unwrap();
+
+        let orphan = get(&db, doc.id).await.unwrap();
+        assert_eq!(orphan.linked_entity_type, None);
+        assert!(orphan.notes.unwrap().contains("Unlinked from service"));
+
+        // Reimport of the same bytes with a fresh link adopts the orphan.
+        let new_svc = seed_service(&db, vid).await;
+        let readopted = store(
+            &db,
+            &config,
+            StoreDocument {
+                linked_entity_type: Some("service".into()),
+                linked_entity_id: Some(new_svc),
+                ..store_input(Some(vid), "invoice.pdf")
+            },
+        )
+        .await
+        .unwrap();
+        assert!(readopted.already_present);
+        assert_eq!(readopted.id, doc.id);
+        assert_eq!(readopted.linked_entity_id, Some(new_svc));
+    }
+
+    #[tokio::test]
+    async fn service_delete_cascade_removes_doc_rows_and_returns_paths() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let svc_id = seed_service(&db, vid).await;
+        let files = tempfile::tempdir().unwrap();
+
+        let doc = store(
+            &db,
+            &files_cfg(&files),
+            StoreDocument {
+                linked_entity_type: Some("service".into()),
+                linked_entity_id: Some(svc_id),
+                ..store_input(Some(vid), "invoice.pdf")
+            },
+        )
+        .await
+        .unwrap();
+
+        let paths =
+            crate::services::service_record::delete(&db, vid, svc_id, DocumentDisposition::Delete)
+                .await
+                .unwrap();
+        assert_eq!(paths, vec![doc.file_path.clone()]);
+        assert!(matches!(
+            get(&db, doc.id).await.unwrap_err(),
+            DomainError::NotFound(_)
+        ));
     }
 }

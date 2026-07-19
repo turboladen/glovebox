@@ -1,4 +1,7 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, type Page } from '@playwright/test'
+import * as path from 'path'
+import * as fs from 'fs'
+import * as os from 'os'
 import { createVehicle, seedOverdueItem, vehicleIdFrom } from './helpers'
 
 // TP-06 + TP-14: Timeline — the merged stream subsuming History + Incidents
@@ -288,5 +291,137 @@ test.describe('Timeline', () => {
     await expect(page.getByRole('heading', { name: 'Overdue' })).toHaveCount(0)
     await expect(page.getByText(/Last done/)).toBeVisible()
     await expect(page.getByText('Coolant drain and fill')).toBeVisible()
+  })
+})
+
+// TP-06 + glovebox-9fbj: deleting a service/incident with the
+// attached-documents choice. "Keep" unlinks the docs (with a provenance
+// note); "Delete + documents" cascades rows and files.
+test.describe('Timeline: delete with documents', () => {
+  let vehicleUrl: string
+  const tmpFiles: string[] = []
+
+  function tmpFile(name: string, content: string): string {
+    const p = path.join(os.tmpdir(), name)
+    fs.writeFileSync(p, content)
+    tmpFiles.push(p)
+    return p
+  }
+
+  test.beforeAll(async ({ browser }) => {
+    vehicleUrl = await createVehicle(browser, 'Delete Docs Car')
+  })
+
+  test.afterAll(() => {
+    for (const f of tmpFiles) if (fs.existsSync(f)) fs.unlinkSync(f)
+  })
+
+  async function recordService(page: Page, description: string) {
+    await page.goto(`${vehicleUrl}/timeline`)
+    await page.getByRole('button', { name: 'Record service' }).click()
+    await page.getByLabel('Description').fill(description)
+    await page.getByRole('button', { name: 'Save Service' }).click()
+    await expect(page.getByLabel('Description')).not.toBeVisible()
+    await expect(page.getByText(description)).toBeVisible()
+  }
+
+  async function attachDocToService(page: Page, title: string, serviceDescription: string, filePath: string) {
+    await page.goto(`${vehicleUrl}/records/documents`)
+    await page.getByRole('button', { name: '+ Upload' }).click()
+    await page.locator('input[type="file"]').setInputFiles(filePath)
+    await page.getByLabel('Title').fill(title)
+    await page.getByLabel('Link to').selectOption('service')
+    const option = page.locator('#doc-link-id option', { hasText: serviceDescription })
+    await page.locator('#doc-link-id').selectOption((await option.getAttribute('value'))!)
+    await page.getByRole('button', { name: 'Upload' }).click()
+    await expect(page.getByText(title)).toBeVisible()
+  }
+
+  test('service with no documents gets the plain confirm', async ({ page }) => {
+    await recordService(page, 'Plain doomed service')
+    await page.getByText('Plain doomed service').click()
+    await page.getByRole('button', { name: 'Delete', exact: true }).click()
+    await expect(page.getByText('Delete this record?')).toBeVisible()
+    await page.getByRole('button', { name: 'Yes, Delete' }).click()
+    await expect(page.getByText('Plain doomed service')).not.toBeVisible()
+  })
+
+  test('keeping documents unlinks them with a provenance note', async ({ page }) => {
+    await recordService(page, 'Keep docs service')
+    await attachDocToService(
+      page,
+      'Kept Invoice',
+      'Keep docs service',
+      tmpFile('glovebox-keep-doc.txt', 'kept invoice content'),
+    )
+
+    await page.goto(`${vehicleUrl}/timeline`)
+    await page.getByText('Keep docs service').click()
+    await page.getByRole('button', { name: 'Delete', exact: true }).click()
+    await expect(page.getByText(/It has 1 attached document\./)).toBeVisible()
+    await page.getByRole('button', { name: 'Delete, keep documents' }).click()
+    await expect(page.getByText('Keep docs service')).not.toBeVisible()
+
+    // The document survives, unlinked, note visible.
+    await page.goto(`${vehicleUrl}/records/documents`)
+    const docCard = page.locator('.doc-card').filter({ hasText: 'Kept Invoice' })
+    await expect(docCard).toBeVisible()
+    await expect(docCard.getByText(/Unlinked from service #\d+/)).toBeVisible()
+    await expect(docCard.locator('.doc-link-badge')).toHaveCount(0)
+  })
+
+  test('cascade delete removes the documents too', async ({ page }) => {
+    await recordService(page, 'Cascade docs service')
+    await attachDocToService(
+      page,
+      'Doomed Invoice',
+      'Cascade docs service',
+      tmpFile('glovebox-cascade-doc.txt', 'doomed invoice content'),
+    )
+
+    await page.goto(`${vehicleUrl}/timeline`)
+    await page.getByText('Cascade docs service').click()
+    await page.getByRole('button', { name: 'Delete', exact: true }).click()
+    await page.getByRole('button', { name: 'Delete + documents' }).click()
+    await expect(page.getByText('Cascade docs service')).not.toBeVisible()
+
+    await page.goto(`${vehicleUrl}/records/documents`)
+    await expect(page.getByText('Loading documents...')).not.toBeVisible()
+    await expect(page.getByText('Doomed Invoice')).not.toBeVisible()
+  })
+
+  test('a failed delete surfaces the error and keeps the confirm open', async ({ page }) => {
+    await recordService(page, 'Unkillable service')
+    await page.route('**/api/vehicles/*/services/*', (route) =>
+      route.request().method() === 'DELETE'
+        ? route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'boom' }) })
+        : route.fallback(),
+    )
+    await page.getByText('Unkillable service').click()
+    await page.getByRole('button', { name: 'Delete', exact: true }).click()
+    await page.getByRole('button', { name: 'Yes, Delete' }).click()
+    // The confirm row stays open with the backend's error; the record remains.
+    await expect(page.getByRole('alert')).toContainText('boom')
+    await expect(page.getByRole('button', { name: 'Yes, Delete' })).toBeVisible()
+    // Cancel collapses the row AND clears the stale error.
+    await page.getByRole('button', { name: 'Cancel' }).click()
+    await expect(page.getByRole('alert')).toHaveCount(0)
+    await expect(page.getByText('Unkillable service')).toBeVisible()
+    await page.unroute('**/api/vehicles/*/services/*')
+  })
+
+  test('delete an incident from its detail panel', async ({ page }) => {
+    await page.goto(`${vehicleUrl}/timeline`)
+    await page.getByRole('button', { name: 'Log incident' }).click()
+    await page.getByLabel('Title').fill('Doomed incident')
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
+    await expect(page.getByText('Doomed incident')).toBeVisible()
+
+    await page.getByText('Doomed incident').click()
+    const actions = page.locator('.detail-actions')
+    await actions.getByRole('button', { name: 'Delete', exact: true }).click()
+    await expect(page.getByText('Delete this incident?')).toBeVisible()
+    await actions.getByRole('button', { name: 'Yes, Delete' }).click()
+    await expect(page.getByText('Doomed incident')).not.toBeVisible()
   })
 })

@@ -6,8 +6,9 @@ use serde::Deserialize;
 
 use crate::AppState;
 use glovebox_shared::{
+    config::AppConfig,
     entities::document,
-    inputs::document::{DocumentFilter, DocumentSource, StoreDocument},
+    inputs::document::{DocumentDisposition, DocumentFilter, DocumentSource, StoreDocument},
     services::document as svc,
 };
 
@@ -170,24 +171,57 @@ pub async fn delete(
     Path(id): Path<i32>,
 ) -> Result<Json<serde_json::Value>> {
     let doc = svc::get(&state.db, id).await?;
-
-    // Delete file from disk (with path traversal check)
-    let files_dir = std::path::Path::new(&state.config.files_dir)
-        .canonicalize()
-        .map_err(|e| ApiError::Internal(format!("Invalid files_dir: {e}")))?;
-    let full_path = files_dir.join(&doc.file_path);
-    if full_path.exists() {
-        let full_path = full_path
-            .canonicalize()
-            .map_err(|e| ApiError::Internal(e.to_string()))?;
-        if !full_path.starts_with(&files_dir) {
-            return Err(ApiError::BadRequest("Invalid file path".into()));
-        }
-        tokio::fs::remove_file(&full_path)
-            .await
-            .map_err(|e| ApiError::Internal(e.to_string()))?;
-    }
-
+    // Row first, then file: a file-removal failure after this point leaves an
+    // orphaned file on disk (harmless), whereas the old file-first order could
+    // leave a surviving row pointing at a deleted file. Best-effort like the
+    // cascade path — the row is the invariant, so a file error must not turn
+    // an already-committed delete into a 4xx/5xx the client would retry.
     svc::delete(&state.db, id).await?;
+    remove_files_best_effort(&state.config, std::slice::from_ref(&doc.file_path)).await;
     Ok(Json(serde_json::json!({ "deleted": id })))
+}
+
+/// Clear a document's entity link (`DocumentsTab` "Unlink", incl. orphan
+/// cleanup). Returns the updated row.
+pub async fn unlink(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+) -> Result<Json<document::Model>> {
+    Ok(Json(svc::unlink(&state.db, id).await?))
+}
+
+/// `?documents=keep|delete` on entity DELETE endpoints. Absent means `Keep`
+/// (unlink + provenance note) — dangling links must never be produced.
+#[derive(Deserialize)]
+pub struct DeleteDocsQuery {
+    #[serde(default)]
+    pub documents: DocumentDisposition,
+}
+
+/// Extract directly (not via `Query<…>`) so a malformed `?documents=` value
+/// is rejected inside the API's JSON `{"error": …}` envelope — Axum's default
+/// `Query` rejection is `text/plain`, which uniform-error clients choke on.
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for DeleteDocsQuery {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        state: &S,
+    ) -> std::result::Result<Self, Self::Rejection> {
+        let Query(q) = Query::<Self>::from_request_parts(parts, state)
+            .await
+            .map_err(|e| ApiError::BadRequest(e.body_text()))?;
+        Ok(q)
+    }
+}
+
+/// Remove cascade-deleted document files after the owning transaction has
+/// committed. Best-effort by design: the rows are already gone, so a failed
+/// unlink only strands a file on disk — log it, never fail the request.
+pub(crate) async fn remove_files_best_effort(config: &AppConfig, paths: &[String]) {
+    for path in paths {
+        if let Err(e) = svc::remove_stored_file(config, path).await {
+            tracing::warn!("failed to remove document file {path}: {e:?}");
+        }
+    }
 }

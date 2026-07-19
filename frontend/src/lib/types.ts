@@ -1,3 +1,7 @@
+// What happens to documents linked to an entity being deleted (mirrors the
+// backend's DocumentDisposition; absent on the wire means 'keep').
+export type DocumentDisposition = 'keep' | 'delete'
+
 export interface Vehicle {
   id: number
   model_template_id: number | null

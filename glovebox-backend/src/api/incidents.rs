@@ -199,6 +199,17 @@ pub async fn update(
     Ok(Json(updated))
 }
 
+pub async fn delete(
+    State(state): State<AppState>,
+    Path((vehicle_id, id)): Path<(i32, i32)>,
+    q: super::documents::DeleteDocsQuery,
+) -> Result<Json<serde_json::Value>> {
+    vehicle_svc::require(&state.db, vehicle_id).await?;
+    let doc_files = svc::delete(&state.db, vehicle_id, id, q.documents).await?;
+    super::documents::remove_files_best_effort(&state.config, &doc_files).await;
+    Ok(Json(serde_json::json!({ "deleted": id })))
+}
+
 // --- Followups sub-resource ---
 
 pub async fn list_followups(

@@ -191,7 +191,12 @@ pub async fn update(
 pub async fn delete(
     State(state): State<AppState>,
     Path((vehicle_id, id)): Path<(i32, i32)>,
+    q: super::documents::DeleteDocsQuery,
 ) -> Result<Json<serde_json::Value>> {
-    svc::delete(&state.db, vehicle_id, id).await?;
-    Ok(Json(serde_json::json!({"deleted": true})))
+    glovebox_shared::services::vehicle::require(&state.db, vehicle_id).await?;
+    let doc_files = svc::delete(&state.db, vehicle_id, id, q.documents).await?;
+    super::documents::remove_files_best_effort(&state.config, &doc_files).await;
+    // `{"deleted": id}` like the sibling services/incidents endpoints (this
+    // one historically returned a boolean).
+    Ok(Json(serde_json::json!({ "deleted": id })))
 }

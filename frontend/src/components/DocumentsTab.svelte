@@ -136,6 +136,34 @@
     await loadData()
   }
 
+  async function unlinkDoc(id: number) {
+    await docsApi.unlink(id)
+    await loadData()
+  }
+
+  type LinkedEntity = ServiceRecordWithLinks | Part | IncidentWithDetails
+
+  // The ONE table of linkable kinds: the label fallback, the orphaned badge,
+  // and the known-kind check all derive from it, so they can never disagree.
+  const linkedEntityFinders: Record<string, (id: number) => LinkedEntity | undefined> = {
+    service: (id) => serviceRecords.find((s) => s.id === id),
+    part: (id) => partsList.find((p) => p.id === id),
+    incident: (id) => incidentsList.find((i) => i.id === id),
+  }
+
+  function findLinkedEntity(doc: Document): LinkedEntity | undefined {
+    if (!doc.linked_entity_type || !doc.linked_entity_id) return undefined
+    return linkedEntityFinders[doc.linked_entity_type]?.(doc.linked_entity_id)
+  }
+
+  // A linked document whose target no longer exists (pre-feature deletes left
+  // these dangling). Exactly as reliable as the lists this tab already renders
+  // labels from; unknown link types are not flagged.
+  function isOrphaned(doc: Document): boolean {
+    if (!doc.linked_entity_type || !doc.linked_entity_id) return false
+    return doc.linked_entity_type in linkedEntityFinders && !findLinkedEntity(doc)
+  }
+
   function formatSize(bytes: number | null): string {
     if (bytes == null) return ''
     if (bytes < 1024) return `${bytes} B`
@@ -149,16 +177,17 @@
 
   function linkedEntityLabel(doc: Document): string {
     if (!doc.linked_entity_type || !doc.linked_entity_id) return ''
+    const entity = findLinkedEntity(doc)
     if (doc.linked_entity_type === 'service') {
-      const svc = serviceRecords.find(s => s.id === doc.linked_entity_id)
+      const svc = entity as ServiceRecordWithLinks | undefined
       return svc ? `Service: ${svc.service_date}${svc.description ? ' — ' + svc.description : ''}` : `Service #${doc.linked_entity_id}`
     }
     if (doc.linked_entity_type === 'part') {
-      const part = partsList.find(p => p.id === doc.linked_entity_id)
+      const part = entity as Part | undefined
       return part ? `Part: ${part.name}` : `Part #${doc.linked_entity_id}`
     }
     if (doc.linked_entity_type === 'incident') {
-      const inc = incidentsList.find(i => i.id === doc.linked_entity_id)
+      const inc = entity as IncidentWithDetails | undefined
       return inc ? `Incident: ${inc.occurred_at.split('T')[0].split(' ')[0]} — ${inc.title.slice(0, 40)}` : `Incident #${doc.linked_entity_id}`
     }
     return `${doc.linked_entity_type} #${doc.linked_entity_id}`
@@ -318,7 +347,12 @@
               <span>{formatDate(doc.created_at)}</span>
             </div>
             {#if doc.linked_entity_type}
-              <div class="doc-link-badge">{linkedEntityLabel(doc)}</div>
+              <div class="doc-link-badge">
+                {linkedEntityLabel(doc)}
+                {#if isOrphaned(doc)}
+                  <span class="orphan-badge" title="The linked record no longer exists">orphaned</span>
+                {/if}
+              </div>
             {/if}
             {#if doc.notes}
               <p class="doc-notes">{doc.notes}</p>
@@ -332,6 +366,9 @@
           </div>
           <div class="doc-actions">
             <a href="/files/{doc.file_path}" target="_blank" class="btn btn-secondary">View</a>
+            {#if doc.linked_entity_type}
+              <button class="btn btn-secondary" onclick={() => unlinkDoc(doc.id)}>Unlink</button>
+            {/if}
             <button class="btn btn-secondary" onclick={() => deleteDoc(doc.id)}>Delete</button>
           </div>
         </div>
@@ -436,6 +473,16 @@
     font-size: 0.75rem;
     color: var(--primary);
     margin-top: var(--sp-1);
+  }
+  .orphan-badge {
+    margin-left: var(--sp-1);
+    padding: 0 var(--sp-1);
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--danger);
+    border: 1px solid var(--danger);
+    border-radius: var(--radius-sm);
   }
   .doc-notes { font-size: 0.85rem; color: var(--text-muted); margin: var(--sp-1) 0 0; }
   .doc-extracted-text { margin-top: var(--sp-2); font-size: 0.8rem; }

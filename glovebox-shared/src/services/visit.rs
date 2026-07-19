@@ -42,9 +42,7 @@ pub(crate) fn is_open(status: &str) -> bool {
     matches!(status, "planned" | "scheduled")
 }
 
-fn now_stamp() -> String {
-    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
-}
+use super::now_stamp;
 
 /// Existence-check a `shop_id` before storing it. Shops are global (not
 /// vehicle-scoped) and `visits.shop_id` carries no FK, so a blind write

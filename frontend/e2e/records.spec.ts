@@ -79,9 +79,81 @@ test.describe('Records: Parts', () => {
   test('delete a part', async ({ page }) => {
     await page.goto(`${vehicleUrl}/records`)
     await addPart(page, 'Doomed Part')
-    page.on('dialog', dialog => dialog.accept())
-    await page.locator('.part-card').filter({ hasText: 'Doomed Part' }).getByRole('button', { name: 'Delete' }).click()
-    await expect(page.getByText('Doomed Part')).not.toBeVisible()
+    const card = page.locator('.part-card').filter({ hasText: 'Doomed Part' })
+    await card.getByRole('button', { name: 'Delete', exact: true }).click()
+    // No linked documents → the plain 2-way confirm.
+    await expect(card.getByText('Delete part "Doomed Part"?')).toBeVisible()
+    await card.getByRole('button', { name: 'Yes, Delete' }).click()
+    await expect(page.locator('.part-card').filter({ hasText: 'Doomed Part' })).toHaveCount(0)
+  })
+
+  // TP-18 + glovebox-9fbj: deleting a part with an attached document offers
+  // the 3-way choice; "keep" unlinks the doc instead of leaving it dangling.
+  test('delete a part with an attached document keeps the doc on request', async ({ page }) => {
+    const docFile = path.join(os.tmpdir(), 'glovebox-part-doc.txt')
+    fs.writeFileSync(docFile, 'part invoice content')
+    try {
+      await page.goto(`${vehicleUrl}/records`)
+      await addPart(page, 'Documented Part')
+
+      // Attach a document linked to the part.
+      await page.getByRole('button', { name: 'Documents' }).click()
+      await page.getByRole('button', { name: '+ Upload' }).click()
+      await page.locator('input[type="file"]').setInputFiles(docFile)
+      await page.getByLabel('Title').fill('Part Invoice')
+      await page.getByLabel('Link to').selectOption('part')
+      const option = page.locator('#doc-link-id option', { hasText: 'Documented Part' })
+      await page.locator('#doc-link-id').selectOption((await option.getAttribute('value'))!)
+      await page.getByRole('button', { name: 'Upload' }).click()
+      await expect(page.getByText('Part Invoice')).toBeVisible()
+
+      // Delete the part, keeping the document.
+      await page.getByRole('button', { name: 'Parts', exact: true }).click()
+      const card = page.locator('.part-card').filter({ hasText: 'Documented Part' })
+      await card.getByRole('button', { name: 'Delete', exact: true }).click()
+      await expect(card.getByText(/It has 1 attached document\./)).toBeVisible()
+      await card.getByRole('button', { name: 'Delete, keep documents' }).click()
+      await expect(page.locator('.part-card').filter({ hasText: 'Documented Part' })).toHaveCount(0)
+
+      // The document survives, unlinked, with the provenance note (scoped to
+      // its card — other tests on this shared vehicle may add linked docs).
+      await page.getByRole('button', { name: 'Documents' }).click()
+      const keptCard = page.locator('.doc-card').filter({ hasText: 'Part Invoice' })
+      await expect(keptCard).toBeVisible()
+      await expect(keptCard.getByText(/Unlinked from part #\d+/)).toBeVisible()
+      await expect(keptCard.locator('.doc-link-badge')).toHaveCount(0)
+    } finally {
+      fs.unlinkSync(docFile)
+    }
+  })
+
+  // TP-15 + glovebox-9fbj: Unlink clears a document's entity link in place.
+  test('Unlink clears a linked document\'s badge and records a note', async ({ page }) => {
+    const docFile = path.join(os.tmpdir(), 'glovebox-unlink-doc.txt')
+    fs.writeFileSync(docFile, 'unlink me content')
+    try {
+      // Self-contained: create the part this test links to (tests must not
+      // depend on prior test state).
+      await page.goto(`${vehicleUrl}/records`)
+      await addPart(page, 'Unlink Anchor Part')
+
+      await page.getByRole('button', { name: 'Documents' }).click()
+      await page.getByRole('button', { name: '+ Upload' }).click()
+      await page.locator('input[type="file"]').setInputFiles(docFile)
+      await page.getByLabel('Title').fill('Unlink Me')
+      await page.getByLabel('Link to').selectOption('part')
+      const option = page.locator('#doc-link-id option', { hasText: 'Unlink Anchor Part' })
+      await page.locator('#doc-link-id').selectOption((await option.getAttribute('value'))!)
+      await page.getByRole('button', { name: 'Upload' }).click()
+
+      const docCard = page.locator('.doc-card').filter({ hasText: 'Unlink Me' })
+      await expect(docCard.locator('.doc-link-badge')).toContainText('Part: Unlink Anchor Part')
+      await docCard.getByRole('button', { name: 'Unlink' }).click()
+      await expect(docCard.locator('.doc-link-badge')).toHaveCount(0)
+      await expect(docCard.getByText(/Unlinked from part #\d+/)).toBeVisible()
+    } finally {
+      fs.unlinkSync(docFile)
+    }
   })
 
   // TP-19 smoke: parts feed the costs rollup

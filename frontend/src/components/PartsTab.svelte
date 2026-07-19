@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { parts as partsApi, services as servicesApi } from '../lib/api'
+  import { documents as documentsApi, parts as partsApi, services as servicesApi } from '../lib/api'
+  import ConfirmDelete from './ConfirmDelete.svelte'
   import { formatCents } from '../lib/money'
-  import type { Part, ServiceRecordWithLinks } from '../lib/types'
+  import type { DocumentDisposition, Part, ServiceRecordWithLinks } from '../lib/types'
   import { formatDate } from '../lib/dates'
 
   let { vehicleId }: { vehicleId: number } = $props()
@@ -169,14 +170,14 @@
     }
   }
 
-  async function deletePart(part: Part) {
-    if (!confirm(`Delete part "${part.name}"?`)) return
-    try {
-      await partsApi.delete(vehicleId, part.id)
-      await loadData()
-    } catch (e: any) {
-      alert(`Failed to delete part: ${e.message}`)
-    }
+  // No catch: a failure must propagate to ConfirmDelete, which keeps the
+  // confirm row open and shows the error.
+  async function deletePart(part: Part, documents: DocumentDisposition) {
+    await partsApi.delete(vehicleId, part.id, documents)
+    // The inline confirm isn't modal (window.confirm was): the edit form can
+    // be open on the part being deleted — close it, or saving would 404.
+    if (editingPart?.id === part.id) closePartForm()
+    await loadData()
   }
 </script>
 
@@ -374,7 +375,11 @@
           </div>
           <div class="part-actions">
             <button class="btn btn-sm btn-secondary" onclick={() => openPartForm(part)}>Edit</button>
-            <button class="btn btn-sm btn-danger" onclick={() => deletePart(part)}>Delete</button>
+            <ConfirmDelete
+              label={`Delete part "${part.name}"?`}
+              getDocCount={() => documentsApi.countFor('part', part.id)}
+              onDelete={(docs) => deletePart(part, docs)}
+            />
           </div>
         </div>
         <div class="part-detail">

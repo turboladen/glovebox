@@ -1,3 +1,15 @@
+/// What to do with documents linked to an entity being deleted. `Keep` (the
+/// default, including when the API param is absent) clears the link so the
+/// document becomes a true orphan — re-adoptable by the content-hash dedup
+/// path — instead of dangling at a deleted record.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DocumentDisposition {
+    #[default]
+    Keep,
+    Delete,
+}
+
 /// Filter for listing documents.
 #[derive(Default)]
 pub struct DocumentFilter {

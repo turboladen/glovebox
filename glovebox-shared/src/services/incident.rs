@@ -7,9 +7,12 @@ use sea_orm::*;
 use serde::Serialize;
 
 use crate::{
-    entities::{incident, incident_followup, incident_service_link, service_record},
+    entities::{incident, incident_followup, incident_service_link, service_record, work_item},
     error::{DomainError, DomainResult},
-    inputs::incident::{NewFollowup, NewIncident, UpdateIncident},
+    inputs::{
+        document::DocumentDisposition,
+        incident::{NewFollowup, NewIncident, UpdateIncident},
+    },
 };
 
 /// Category whitelist — the lossless union of every category the two retired
@@ -428,6 +431,63 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         followups,
         service_record_ids,
     })
+}
+
+/// Delete an incident and its owned rows (followups, service links).
+/// Incidents that pointed at this one via `recurrence_of_id` are unlinked
+/// (the DB FK is ON DELETE SET NULL, but explicit keeps the behavior
+/// pragma-independent and inside the same transaction), as are work items
+/// referencing it (soft link, no FK). Linked documents are handled per
+/// `docs`; the returned paths are files the CALLER must remove after commit
+/// (see [`super::document::detach_or_delete_for_entity`]).
+pub async fn delete<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    id: i32,
+    docs: DocumentDisposition,
+) -> DomainResult<Vec<String>> {
+    let existing = require_incident(db, vehicle_id, id).await?;
+
+    let txn = db.begin().await?;
+
+    incident_followup::Entity::delete_many()
+        .filter(incident_followup::Column::IncidentId.eq(existing.id))
+        .exec(&txn)
+        .await?;
+    incident_service_link::Entity::delete_many()
+        .filter(incident_service_link::Column::IncidentId.eq(existing.id))
+        .exec(&txn)
+        .await?;
+    let stamp = super::now_stamp();
+    incident::Entity::update_many()
+        .set(incident::ActiveModel {
+            recurrence_of_id: Set(None),
+            updated_at: Set(stamp.clone()),
+            ..Default::default()
+        })
+        .filter(incident::Column::RecurrenceOfId.eq(existing.id))
+        .exec(&txn)
+        .await?;
+    // Work items reference incidents via a soft link (no FK in migration
+    // 000020) — clear it or planning rows point at a deleted incident.
+    work_item::Entity::update_many()
+        .set(work_item::ActiveModel {
+            incident_id: Set(None),
+            updated_at: Set(stamp),
+            ..Default::default()
+        })
+        .filter(work_item::Column::IncidentId.eq(existing.id))
+        .exec(&txn)
+        .await?;
+
+    let doc_files =
+        super::document::detach_or_delete_for_entity(&txn, "incident", id, docs).await?;
+
+    existing.delete(&txn).await?;
+
+    txn.commit().await?;
+
+    Ok(doc_files)
 }
 
 pub async fn list_followups(
@@ -1195,5 +1255,156 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].followups.len(), 1);
         assert_eq!(listed[0].service_record_ids, vec![svc]);
+    }
+
+    // --- delete ----------------------------------------------------------
+
+    #[tokio::test]
+    async fn delete_removes_followups_links_and_unlinks_recurrences() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let svc = seed_service(&db, vid).await;
+
+        let doomed = create(
+            &db,
+            vid,
+            NewIncident {
+                service_record_ids: Some(vec![svc]),
+                ..new_incident("Original rattle", "noise")
+            },
+        )
+        .await
+        .unwrap();
+        create_followup(
+            &db,
+            vid,
+            doomed.incident.id,
+            NewFollowup {
+                occurred_at: "2024-02-01".into(),
+                contact_method: None,
+                contact_with: None,
+                summary: "called shop".into(),
+                notes: None,
+            },
+        )
+        .await
+        .unwrap();
+        let recurrence = create(
+            &db,
+            vid,
+            NewIncident {
+                recurrence_of_id: Some(doomed.incident.id),
+                ..new_incident("Rattle is back", "noise")
+            },
+        )
+        .await
+        .unwrap();
+        let work_item = work_item::ActiveModel {
+            vehicle_id: Set(vid),
+            title: Set("Chase the rattle".into()),
+            status: Set("todo".into()),
+            incident_id: Set(Some(doomed.incident.id)),
+            created_at: Set("2024-01-01 00:00:00".into()),
+            updated_at: Set("2024-01-01 00:00:00".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        let paths = delete(&db, vid, doomed.incident.id, DocumentDisposition::Keep)
+            .await
+            .unwrap();
+        assert!(paths.is_empty());
+
+        assert!(matches!(
+            get(&db, vid, doomed.incident.id).await.unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+        let followups = incident_followup::Entity::find()
+            .filter(incident_followup::Column::IncidentId.eq(doomed.incident.id))
+            .all(&db)
+            .await
+            .unwrap();
+        assert!(followups.is_empty());
+        let links = incident_service_link::Entity::find()
+            .filter(incident_service_link::Column::IncidentId.eq(doomed.incident.id))
+            .all(&db)
+            .await
+            .unwrap();
+        assert!(links.is_empty());
+        // The recurrence survives, unchained.
+        let recur = get(&db, vid, recurrence.incident.id).await.unwrap();
+        assert_eq!(recur.incident.recurrence_of_id, None);
+        // Work items are soft-linked (no FK) — the link must be cleared too.
+        let wi = work_item::Entity::find_by_id(work_item.id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(wi.incident_id, None);
+        assert_ne!(wi.updated_at, "2024-01-01 00:00:00");
+    }
+
+    #[tokio::test]
+    async fn delete_handles_linked_documents_per_mode() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+
+        let kept = create(&db, vid, new_incident("Keep my doc", "noise"))
+            .await
+            .unwrap();
+        let cascaded = create(&db, vid, new_incident("Take my doc", "noise"))
+            .await
+            .unwrap();
+        let kept_doc =
+            crate::test_support::seed_linked_document(&db, "incident", kept.incident.id).await;
+        let cascaded_doc =
+            crate::test_support::seed_linked_document(&db, "incident", cascaded.incident.id).await;
+
+        let paths = delete(&db, vid, kept.incident.id, DocumentDisposition::Keep)
+            .await
+            .unwrap();
+        assert!(paths.is_empty());
+        let doc = crate::services::document::get(&db, kept_doc).await.unwrap();
+        assert_eq!(doc.linked_entity_type, None);
+        assert!(doc.notes.unwrap().contains("Unlinked from incident"));
+
+        let paths = delete(&db, vid, cascaded.incident.id, DocumentDisposition::Delete)
+            .await
+            .unwrap();
+        assert_eq!(
+            paths,
+            vec![format!(
+                "general/other/incident-{}.pdf",
+                cascaded.incident.id
+            )]
+        );
+        assert!(matches!(
+            crate::services::document::get(&db, cascaded_doc)
+                .await
+                .unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn delete_wrong_vehicle_is_byte_identical_to_nonexistent() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let other_vid = seed_vehicle(&db).await;
+        let inc = create(&db, vid, new_incident("Mine", "noise"))
+            .await
+            .unwrap();
+
+        let err = delete(&db, other_vid, inc.incident.id, DocumentDisposition::Keep)
+            .await
+            .unwrap_err();
+        let DomainError::NotFound(msg) = err else {
+            panic!("expected NotFound");
+        };
+        // Same message a truly nonexistent id yields: no ownership oracle.
+        assert_eq!(msg, format!("Incident {} not found", inc.incident.id));
+        assert!(get(&db, vid, inc.incident.id).await.is_ok());
     }
 }
