@@ -334,14 +334,12 @@
     }
   }
 
+  // No catch: a failure must propagate to ConfirmDelete, which keeps the
+  // confirm row open and shows the error.
   async function deleteService(id: number, documents: 'keep' | 'delete') {
-    try {
-      await servicesApi.delete(vehicleId, id, documents)
-      expandedId = null
-      await refresh()
-    } catch (e) {
-      console.error('Failed to delete service record:', e)
-    }
+    await servicesApi.delete(vehicleId, id, documents)
+    expandedId = null
+    await refresh()
   }
 </script>
 
@@ -632,7 +630,7 @@
                     {showMaintenancePicker ? 'Close picker' : 'Link to maintenance item…'}
                   </button>
                   <ConfirmDelete
-                    getDocCount={() => documentsForService(record.id).length}
+                    getDocCount={() => documentsApi.countFor(vehicleId, 'service', record.id)}
                     onDelete={(docs) => deleteService(record.id, docs)}
                   />
                 </div>

@@ -45,22 +45,11 @@
     return svc ? `${formatDate(svc.service_date)} — ${svc.description || 'Service'}` : `Service #${id}`
   }
 
-  async function incidentDocCount(): Promise<number> {
-    const docs = await documentsApi.list({
-      vehicle_id: vehicleId,
-      linked_entity_type: 'incident',
-      linked_entity_id: incident.id,
-    })
-    return docs.length
-  }
-
+  // No catch: a failure must propagate to ConfirmDelete, which keeps the
+  // confirm row open and shows the error.
   async function deleteIncident(documents: 'keep' | 'delete') {
-    try {
-      await incidentsApi.delete(vehicleId, incident.id, documents)
-      onChanged()
-    } catch (e) {
-      console.error('Failed to delete incident:', e)
-    }
+    await incidentsApi.delete(vehicleId, incident.id, documents)
+    onChanged()
   }
 
   async function toggleResolved() {
@@ -144,7 +133,7 @@
     {/if}
     <ConfirmDelete
       label="Delete this incident?"
-      getDocCount={incidentDocCount}
+      getDocCount={() => documentsApi.countFor(vehicleId, 'incident', incident.id)}
       onDelete={deleteIncident}
     />
   </div>

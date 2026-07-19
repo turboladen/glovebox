@@ -7,7 +7,7 @@ use sea_orm::*;
 use serde::Serialize;
 
 use crate::{
-    entities::{incident, incident_followup, incident_service_link, service_record},
+    entities::{incident, incident_followup, incident_service_link, service_record, work_item},
     error::{DomainError, DomainResult},
     inputs::{
         document::DocumentDisposition,
@@ -436,9 +436,10 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
 /// Delete an incident and its owned rows (followups, service links).
 /// Incidents that pointed at this one via `recurrence_of_id` are unlinked
 /// (the DB FK is ON DELETE SET NULL, but explicit keeps the behavior
-/// pragma-independent and inside the same transaction). Linked documents are
-/// handled per `docs`; the returned paths are files the CALLER must remove
-/// after commit (see [`super::document::detach_or_delete_for_entity`]).
+/// pragma-independent and inside the same transaction), as are work items
+/// referencing it (soft link, no FK). Linked documents are handled per
+/// `docs`; the returned paths are files the CALLER must remove after commit
+/// (see [`super::document::detach_or_delete_for_entity`]).
 pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -457,12 +458,25 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .filter(incident_service_link::Column::IncidentId.eq(existing.id))
         .exec(&txn)
         .await?;
+    let stamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
     incident::Entity::update_many()
         .set(incident::ActiveModel {
             recurrence_of_id: Set(None),
+            updated_at: Set(stamp.clone()),
             ..Default::default()
         })
         .filter(incident::Column::RecurrenceOfId.eq(existing.id))
+        .exec(&txn)
+        .await?;
+    // Work items reference incidents via a soft link (no FK in migration
+    // 000020) — clear it or planning rows point at a deleted incident.
+    work_item::Entity::update_many()
+        .set(work_item::ActiveModel {
+            incident_id: Set(None),
+            updated_at: Set(stamp),
+            ..Default::default()
+        })
+        .filter(work_item::Column::IncidentId.eq(existing.id))
         .exec(&txn)
         .await?;
 
@@ -1285,6 +1299,18 @@ mod tests {
         )
         .await
         .unwrap();
+        let work_item = work_item::ActiveModel {
+            vehicle_id: Set(vid),
+            title: Set("Chase the rattle".into()),
+            status: Set("todo".into()),
+            incident_id: Set(Some(doomed.incident.id)),
+            created_at: Set("2024-01-01 00:00:00".into()),
+            updated_at: Set("2024-01-01 00:00:00".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
 
         let paths = delete(&db, vid, doomed.incident.id, DocumentDisposition::Keep)
             .await
@@ -1310,6 +1336,14 @@ mod tests {
         // The recurrence survives, unchained.
         let recur = get(&db, vid, recurrence.incident.id).await.unwrap();
         assert_eq!(recur.incident.recurrence_of_id, None);
+        // Work items are soft-linked (no FK) — the link must be cleared too.
+        let wi = work_item::Entity::find_by_id(work_item.id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(wi.incident_id, None);
+        assert_ne!(wi.updated_at, "2024-01-01 00:00:00");
     }
 
     #[tokio::test]

@@ -170,22 +170,11 @@
     }
   }
 
-  async function partDocCount(part: Part): Promise<number> {
-    const docs = await documentsApi.list({
-      vehicle_id: vehicleId,
-      linked_entity_type: 'part',
-      linked_entity_id: part.id,
-    })
-    return docs.length
-  }
-
+  // No catch: a failure must propagate to ConfirmDelete, which keeps the
+  // confirm row open and shows the error.
   async function deletePart(part: Part, documents: 'keep' | 'delete') {
-    try {
-      await partsApi.delete(vehicleId, part.id, documents)
-      await loadData()
-    } catch (e: any) {
-      alert(`Failed to delete part: ${e.message}`)
-    }
+    await partsApi.delete(vehicleId, part.id, documents)
+    await loadData()
   }
 </script>
 
@@ -385,7 +374,7 @@
             <button class="btn btn-sm btn-secondary" onclick={() => openPartForm(part)}>Edit</button>
             <ConfirmDelete
               label={`Delete part "${part.name}"?`}
-              getDocCount={() => partDocCount(part)}
+              getDocCount={() => documentsApi.countFor(vehicleId, 'part', part.id)}
               onDelete={(docs) => deletePart(part, docs)}
             />
           </div>

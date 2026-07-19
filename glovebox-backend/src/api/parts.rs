@@ -193,6 +193,7 @@ pub async fn delete(
     Path((vehicle_id, id)): Path<(i32, i32)>,
     Query(q): Query<super::documents::DeleteDocsQuery>,
 ) -> Result<Json<serde_json::Value>> {
+    glovebox_shared::services::vehicle::require(&state.db, vehicle_id).await?;
     let doc_files = svc::delete(&state.db, vehicle_id, id, q.documents).await?;
     super::documents::remove_files_best_effort(&state.config, &doc_files).await;
     Ok(Json(serde_json::json!({"deleted": true})))

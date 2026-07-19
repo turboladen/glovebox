@@ -173,9 +173,11 @@ pub async fn delete(
     let doc = svc::get(&state.db, id).await?;
     // Row first, then file: a file-removal failure after this point leaves an
     // orphaned file on disk (harmless), whereas the old file-first order could
-    // leave a surviving row pointing at a deleted file.
+    // leave a surviving row pointing at a deleted file. Best-effort like the
+    // cascade path — the row is the invariant, so a file error must not turn
+    // an already-committed delete into a 4xx/5xx the client would retry.
     svc::delete(&state.db, id).await?;
-    svc::remove_stored_file(&state.config, &doc.file_path).await?;
+    remove_files_best_effort(&state.config, std::slice::from_ref(&doc.file_path)).await;
     Ok(Json(serde_json::json!({ "deleted": id })))
 }
 

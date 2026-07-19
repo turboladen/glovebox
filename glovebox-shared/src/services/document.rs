@@ -443,10 +443,35 @@ fn append_note(notes: Option<String>, line: &str) -> String {
     }
 }
 
+/// Why a document's link is being cleared — shapes the provenance note, so a
+/// manual unlink never falsely claims the linked record was deleted.
+enum UnlinkReason {
+    RecordDeleted,
+    Manual,
+}
+
 /// The provenance line written onto a document when its link is cleared.
-fn unlink_note(entity_type: &str, entity_id: i32) -> String {
+fn unlink_note(entity_type: &str, entity_id: i32, reason: &UnlinkReason) -> String {
     let date = chrono::Utc::now().format("%Y-%m-%d");
-    format!("Unlinked from {entity_type} #{entity_id} on {date} (record deleted)")
+    match reason {
+        UnlinkReason::RecordDeleted => {
+            format!("Unlinked from {entity_type} #{entity_id} on {date} (record deleted)")
+        }
+        UnlinkReason::Manual => format!("Unlinked from {entity_type} #{entity_id} on {date}"),
+    }
+}
+
+/// `ActiveModel` clearing a document's link and appending the provenance
+/// note — the ONE place the "null BOTH link fields" invariant is written, so
+/// the cascade-keep and manual-unlink paths cannot drift.
+fn clear_link(id: i32, notes: Option<String>, note: &str) -> document::ActiveModel {
+    document::ActiveModel {
+        id: Set(id),
+        linked_entity_type: Set(None),
+        linked_entity_id: Set(None),
+        notes: Set(Some(append_note(notes, note))),
+        ..Default::default()
+    }
 }
 
 /// Handle the documents linked to an entity that is being deleted. `Keep`
@@ -467,28 +492,38 @@ pub async fn detach_or_delete_for_entity(
     entity_id: i32,
     mode: DocumentDisposition,
 ) -> DomainResult<Vec<String>> {
-    let linked = document::Entity::find()
+    // The selector must byte-match what store() wrote; a typo'd literal at a
+    // call site would silently match zero rows and leave dangling links.
+    debug_assert!(
+        VALID_LINKED_ENTITY_TYPES.contains(&entity_type),
+        "unknown linked entity type {entity_type}"
+    );
+    // Project only what each mode needs — extracted_text can be megabytes of
+    // OCR text and neither mode reads it.
+    let linked: Vec<(i32, String, Option<String>)> = document::Entity::find()
+        .select_only()
+        .columns([
+            document::Column::Id,
+            document::Column::FilePath,
+            document::Column::Notes,
+        ])
         .filter(document::Column::LinkedEntityType.eq(entity_type))
         .filter(document::Column::LinkedEntityId.eq(entity_id))
+        .into_tuple()
         .all(db)
         .await?;
 
     match mode {
         DocumentDisposition::Keep => {
-            let note = unlink_note(entity_type, entity_id);
-            for doc in linked {
-                let notes = doc.notes.clone();
-                let mut active: document::ActiveModel = doc.into();
-                active.linked_entity_type = Set(None);
-                active.linked_entity_id = Set(None);
-                active.notes = Set(Some(append_note(notes, &note)));
-                active.update(db).await?;
+            let note = unlink_note(entity_type, entity_id, &UnlinkReason::RecordDeleted);
+            for (id, _path, notes) in linked {
+                clear_link(id, notes, &note).update(db).await?;
             }
             Ok(Vec::new())
         }
         DocumentDisposition::Delete => {
-            let file_paths: Vec<String> = linked.iter().map(|d| d.file_path.clone()).collect();
-            let ids: Vec<i32> = linked.iter().map(|d| d.id).collect();
+            let ids: Vec<i32> = linked.iter().map(|(id, ..)| *id).collect();
+            let file_paths: Vec<String> = linked.into_iter().map(|(_, path, _)| path).collect();
             if !ids.is_empty() {
                 document::Entity::delete_many()
                     .filter(document::Column::Id.is_in(ids))
@@ -501,21 +536,17 @@ pub async fn detach_or_delete_for_entity(
 }
 
 /// Clear a document's entity link (the `DocumentsTab` "Unlink" action, also the
-/// cleanup for pre-existing orphans whose target is already gone). Appends the
-/// same provenance note as the delete-with-keep path; succeeds as a no-op when
-/// the document is already unlinked.
+/// cleanup for pre-existing orphans whose target is already gone). Appends a
+/// provenance note without the "(record deleted)" claim — the linked record
+/// may still exist; succeeds as a no-op when the document is already unlinked.
 pub async fn unlink(db: &impl ConnectionTrait, id: i32) -> DomainResult<document::Model> {
     let doc = get(db, id).await?;
     let (Some(etype), Some(eid)) = (doc.linked_entity_type.clone(), doc.linked_entity_id) else {
         return Ok(doc);
     };
-    let note = unlink_note(&etype, eid);
-    let notes = doc.notes.clone();
-    let mut active: document::ActiveModel = doc.into();
-    active.linked_entity_type = Set(None);
-    active.linked_entity_id = Set(None);
-    active.notes = Set(Some(append_note(notes, &note)));
-    Ok(active.update(db).await?)
+    // Manual reason: the linked record may well still exist.
+    let note = unlink_note(&etype, eid, &UnlinkReason::Manual);
+    Ok(clear_link(doc.id, doc.notes, &note).update(db).await?)
 }
 
 /// Remove a stored file from the files dir by its row-relative `file_path`,
@@ -1532,6 +1563,8 @@ mod tests {
         assert_eq!(unlinked.linked_entity_id, None);
         let notes = unlinked.notes.clone().unwrap();
         assert!(notes.starts_with("Unlinked from incident #3 on "));
+        // Manual unlink must not claim the linked record was deleted.
+        assert!(!notes.contains("(record deleted)"));
 
         // Already unlinked → no-op success, no second note.
         let again = unlink(&db, doc.id).await.unwrap();

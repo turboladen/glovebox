@@ -115,11 +115,13 @@ test.describe('Records: Parts', () => {
       await card.getByRole('button', { name: 'Delete, keep documents' }).click()
       await expect(page.locator('.part-card').filter({ hasText: 'Documented Part' })).toHaveCount(0)
 
-      // The document survives, unlinked, with the provenance note.
+      // The document survives, unlinked, with the provenance note (scoped to
+      // its card — other tests on this shared vehicle may add linked docs).
       await page.getByRole('button', { name: 'Documents' }).click()
-      await expect(page.getByText('Part Invoice')).toBeVisible()
-      await expect(page.getByText(/Unlinked from part #\d+/)).toBeVisible()
-      await expect(page.locator('.doc-link-badge')).toHaveCount(0)
+      const keptCard = page.locator('.doc-card').filter({ hasText: 'Part Invoice' })
+      await expect(keptCard).toBeVisible()
+      await expect(keptCard.getByText(/Unlinked from part #\d+/)).toBeVisible()
+      await expect(keptCard.locator('.doc-link-badge')).toHaveCount(0)
     } finally {
       fs.unlinkSync(docFile)
     }

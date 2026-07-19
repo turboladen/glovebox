@@ -141,15 +141,26 @@
     await loadData()
   }
 
+  // ONE dispatch over the linkable kinds: the live record behind a doc's link
+  // fields, or undefined. Both the label fallback and the orphaned badge
+  // derive from this same lookup, so they can never disagree.
+  function findLinkedEntity(doc: Document): ServiceRecordWithLinks | Part | IncidentWithDetails | undefined {
+    if (!doc.linked_entity_id) return undefined
+    switch (doc.linked_entity_type) {
+      case 'service': return serviceRecords.find(s => s.id === doc.linked_entity_id)
+      case 'part': return partsList.find(p => p.id === doc.linked_entity_id)
+      case 'incident': return incidentsList.find(i => i.id === doc.linked_entity_id)
+      default: return undefined
+    }
+  }
+
   // A linked document whose target no longer exists (pre-feature deletes left
   // these dangling). Exactly as reliable as the lists this tab already renders
-  // labels from.
+  // labels from; unknown link types are not flagged.
   function isOrphaned(doc: Document): boolean {
     if (!doc.linked_entity_type || !doc.linked_entity_id) return false
-    if (doc.linked_entity_type === 'service') return !serviceRecords.some(s => s.id === doc.linked_entity_id)
-    if (doc.linked_entity_type === 'part') return !partsList.some(p => p.id === doc.linked_entity_id)
-    if (doc.linked_entity_type === 'incident') return !incidentsList.some(i => i.id === doc.linked_entity_id)
-    return false
+    if (!['service', 'part', 'incident'].includes(doc.linked_entity_type)) return false
+    return !findLinkedEntity(doc)
   }
 
   function formatSize(bytes: number | null): string {
@@ -165,16 +176,17 @@
 
   function linkedEntityLabel(doc: Document): string {
     if (!doc.linked_entity_type || !doc.linked_entity_id) return ''
+    const entity = findLinkedEntity(doc)
     if (doc.linked_entity_type === 'service') {
-      const svc = serviceRecords.find(s => s.id === doc.linked_entity_id)
+      const svc = entity as ServiceRecordWithLinks | undefined
       return svc ? `Service: ${svc.service_date}${svc.description ? ' — ' + svc.description : ''}` : `Service #${doc.linked_entity_id}`
     }
     if (doc.linked_entity_type === 'part') {
-      const part = partsList.find(p => p.id === doc.linked_entity_id)
+      const part = entity as Part | undefined
       return part ? `Part: ${part.name}` : `Part #${doc.linked_entity_id}`
     }
     if (doc.linked_entity_type === 'incident') {
-      const inc = incidentsList.find(i => i.id === doc.linked_entity_id)
+      const inc = entity as IncidentWithDetails | undefined
       return inc ? `Incident: ${inc.occurred_at.split('T')[0].split(' ')[0]} — ${inc.title.slice(0, 40)}` : `Incident #${doc.linked_entity_id}`
     }
     return `${doc.linked_entity_type} #${doc.linked_entity_id}`

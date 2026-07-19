@@ -52,6 +52,10 @@ export const mileage = {
     request<MileageEntry>(`/vehicles/${vehicleId}/mileage`, { method: 'POST', body: JSON.stringify(data) }),
 }
 
+// `?documents=` suffix shared by the three entity DELETE calls.
+const documentsQuery = (documents?: 'keep' | 'delete') =>
+  documents ? `?documents=${documents}` : ''
+
 // Service Records
 export const services = {
   list: (vehicleId: number) => request<ServiceRecordWithLinks[]>(`/vehicles/${vehicleId}/services`),
@@ -61,10 +65,9 @@ export const services = {
   update: (vehicleId: number, id: number, data: Partial<CreateServiceRecord>) =>
     request<ServiceRecordWithLinks>(`/vehicles/${vehicleId}/services/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   delete: (vehicleId: number, id: number, documents?: 'keep' | 'delete') =>
-    request<{ deleted: number }>(
-      `/vehicles/${vehicleId}/services/${id}${documents ? '?documents=' + documents : ''}`,
-      { method: 'DELETE' },
-    ),
+    request<{ deleted: number }>(`/vehicles/${vehicleId}/services/${id}${documentsQuery(documents)}`, {
+      method: 'DELETE',
+    }),
 }
 
 // Schedules
@@ -125,10 +128,9 @@ export const incidents = {
   addFollowup: (vehicleId: number, incidentId: number, data: CreateFollowup) =>
     request<IncidentFollowup>(`/vehicles/${vehicleId}/incidents/${incidentId}/followups`, { method: 'POST', body: JSON.stringify(data) }),
   delete: (vehicleId: number, id: number, documents?: 'keep' | 'delete') =>
-    request<{ deleted: number }>(
-      `/vehicles/${vehicleId}/incidents/${id}${documents ? '?documents=' + documents : ''}`,
-      { method: 'DELETE' },
-    ),
+    request<{ deleted: number }>(`/vehicles/${vehicleId}/incidents/${id}${documentsQuery(documents)}`, {
+      method: 'DELETE',
+    }),
 }
 
 // Documents
@@ -151,6 +153,12 @@ export const documents = {
   },
   delete: (id: number) => request<{ deleted: number }>(`/documents/${id}`, { method: 'DELETE' }),
   unlink: (id: number) => request<Document>(`/documents/${id}/unlink`, { method: 'POST' }),
+  // Fresh linked-doc count for delete-confirm prompts — never trusts a
+  // component's cached document list.
+  countFor: (vehicleId: number, linkedEntityType: 'service' | 'part' | 'incident', linkedEntityId: number) =>
+    documents
+      .list({ vehicle_id: vehicleId, linked_entity_type: linkedEntityType, linked_entity_id: linkedEntityId })
+      .then((docs) => docs.length),
 }
 
 // Parts
@@ -167,10 +175,9 @@ export const parts = {
   update: (vehicleId: number, id: number, data: Partial<Part>) =>
     request<Part>(`/vehicles/${vehicleId}/parts/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   delete: (vehicleId: number, id: number, documents?: 'keep' | 'delete') =>
-    request<{ deleted: boolean }>(
-      `/vehicles/${vehicleId}/parts/${id}${documents ? '?documents=' + documents : ''}`,
-      { method: 'DELETE' },
-    ),
+    request<{ deleted: boolean }>(`/vehicles/${vehicleId}/parts/${id}${documentsQuery(documents)}`, {
+      method: 'DELETE',
+    }),
 }
 
 // Costs
