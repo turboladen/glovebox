@@ -592,8 +592,7 @@ async fn link_incidents(
 ) -> DomainResult<()> {
     resolved_ids.extend(completed.iter().filter_map(|w| w.incident_id));
     for (ids, role) in [(resolved_ids, "resolved"), (noticed_ids, "noticed")] {
-        let mut seen = std::collections::HashSet::new();
-        for id in ids.into_iter().filter(|id| seen.insert(*id)) {
+        for id in super::dedup_ids(&ids) {
             incident_svc::link_service(txn, vehicle_id, id, record_id, role).await?;
         }
     }
@@ -836,7 +835,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         active.payer_note = Set(v);
     }
 
-    active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
+    active.updated_at = Set(super::now_stamp());
 
     let record = active.update(&txn).await?;
 
@@ -1017,7 +1016,7 @@ pub async fn link_schedule_items<C: ConnectionTrait + TransactionTrait>(
 
     // Linking changes what the record accounts for — stamp it like update().
     let mut active: service_record::ActiveModel = existing.into();
-    active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
+    active.updated_at = Set(super::now_stamp());
     let record = active.update(&txn).await?;
     txn.commit().await?;
 

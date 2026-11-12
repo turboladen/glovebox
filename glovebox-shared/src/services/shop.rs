@@ -60,7 +60,7 @@ pub async fn update(
         active.notes = Set(v);
     }
 
-    active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
+    active.updated_at = Set(super::now_stamp());
     Ok(active.update(db).await?)
 }
 

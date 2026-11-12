@@ -24,6 +24,12 @@ pub(crate) fn now_stamp() -> String {
     chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
+/// Drops repeated ids, keeping first-seen order.
+pub(crate) fn dedup_ids(ids: &[i32]) -> Vec<i32> {
+    let mut seen = std::collections::HashSet::new();
+    ids.iter().copied().filter(|id| seen.insert(*id)).collect()
+}
+
 /// Checks that `value` is a calendar date written `YYYY-MM-DD`.
 pub(crate) fn validate_date(field: &str, value: &str) -> crate::error::DomainResult<()> {
     chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")

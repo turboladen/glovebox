@@ -308,7 +308,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     if let Some(sid) = input.noticed_during_service_id {
         link_service(&txn, vehicle_id, inc.id, sid, ROLE_NOTICED).await?;
     }
-    for sid in dedup(input.resolved_by_service_ids.unwrap_or_default()) {
+    for sid in super::dedup_ids(&input.resolved_by_service_ids.unwrap_or_default()) {
         link_service(&txn, vehicle_id, inc.id, sid, ROLE_RESOLVED).await?;
     }
 
@@ -317,12 +317,6 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     txn.commit().await?;
 
     Ok(created.pop().expect("one incident in, one detail out"))
-}
-
-/// Drops repeated ids, keeping first-seen order.
-fn dedup(ids: Vec<i32>) -> Vec<i32> {
-    let mut seen = std::collections::HashSet::new();
-    ids.into_iter().filter(|id| seen.insert(*id)).collect()
 }
 
 #[allow(clippy::too_many_lines)]
@@ -450,7 +444,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         active.recurrence_of_id = Set(v);
     }
 
-    active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
+    active.updated_at = Set(super::now_stamp());
 
     let inc = active.update(&txn).await?;
 
@@ -466,7 +460,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
             .filter(incident_service_link::Column::Role.eq(ROLE_RESOLVED))
             .exec(&txn)
             .await?;
-        for sid in dedup(sids) {
+        for sid in super::dedup_ids(&sids) {
             link_service(&txn, vehicle_id, inc.id, sid, ROLE_RESOLVED).await?;
         }
     }

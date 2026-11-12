@@ -7,10 +7,7 @@ use sea_orm::*;
 use serde::Serialize;
 
 use crate::{
-    entities::{
-        incident, mileage_log, research_finding, research_report, service_schedule_link, vehicle,
-        work_item,
-    },
+    entities::{mileage_log, research_finding, research_report, service_schedule_link, work_item},
     error::{DomainError, DomainResult},
     inputs::work_item::{NewWorkItem, UpdateWorkItem},
 };
@@ -120,20 +117,6 @@ async fn require_finding_owned(
     Ok(())
 }
 
-/// Verify a referenced incident belongs to the vehicle.
-async fn require_incident_owned(
-    db: &impl ConnectionTrait,
-    vehicle_id: i32,
-    incident_id: i32,
-) -> DomainResult<()> {
-    incident::Entity::find_by_id(incident_id)
-        .filter(incident::Column::VehicleId.eq(vehicle_id))
-        .one(db)
-        .await?
-        .ok_or_else(|| DomainError::NotFound(format!("Incident {incident_id} not found")))?;
-    Ok(())
-}
-
 /// Guard every present source link on a work item: schedule item (vehicle
 /// scope chain), research finding (via its report), and incident, each
 /// vehicle-scoped. Returns the schedule item id to store, which is the
@@ -157,7 +140,7 @@ async fn require_links_owned(
         require_finding_owned(db, vehicle_id, id).await?;
     }
     if let Some(id) = incident_id {
-        require_incident_owned(db, vehicle_id, id).await?;
+        crate::services::incident::require_incident(db, vehicle_id, id).await?;
     }
     Ok(tracked)
 }
@@ -196,7 +179,11 @@ pub async fn list_with_status(
             .await?
             > 0;
         if has_readings || v.purchase_mileage.is_some() {
-            Some(estimate_odometer(db, vehicle_id, &v).await?)
+            Some(
+                crate::services::reminders::estimate_mileage(db, vehicle_id, &v)
+                    .await?
+                    .0,
+            )
         } else {
             None
         }
@@ -213,18 +200,6 @@ pub async fn list_with_status(
         .collect())
 }
 
-async fn estimate_odometer(
-    db: &impl ConnectionTrait,
-    vehicle_id: i32,
-    v: &vehicle::Model,
-) -> DomainResult<i32> {
-    Ok(
-        crate::services::reminders::estimate_mileage(db, vehicle_id, v)
-            .await?
-            .0,
-    )
-}
-
 /// Marks the named open items of a vehicle as done by a service record, and
 /// links each item's schedule item to that service so its reminder clears.
 /// Runs inside the caller's transaction. An id from another vehicle reads as
@@ -235,9 +210,8 @@ pub(crate) async fn complete_with_service(
     ids: &[i32],
     service_record_id: i32,
 ) -> DomainResult<Vec<work_item::Model>> {
-    let mut seen = std::collections::HashSet::new();
     let mut completed = Vec::new();
-    for &id in ids.iter().filter(|id| seen.insert(**id)) {
+    for id in super::dedup_ids(ids) {
         let existing = get(db, vehicle_id, id).await?;
         if existing.status != "planned" {
             return Err(DomainError::BadRequest(format!(
@@ -249,7 +223,7 @@ pub(crate) async fn complete_with_service(
         let mut active: work_item::ActiveModel = existing.into();
         active.status = Set("done".to_string());
         active.completed_service_id = Set(Some(service_record_id));
-        active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
+        active.updated_at = Set(super::now_stamp());
         completed.push(active.update(db).await?);
 
         if let Some(schedule_item_id) = schedule_item_id {
@@ -382,7 +356,7 @@ pub async fn update(
         active.status = Set(v);
     }
 
-    active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
+    active.updated_at = Set(super::now_stamp());
     Ok(active.update(db).await?)
 }
 
@@ -397,8 +371,8 @@ mod tests {
     use super::*;
     use crate::{
         entities::{
-            maintenance_schedule_item, mileage_log, part, service_record, service_record_line_item,
-            service_schedule_link,
+            incident, maintenance_schedule_item, mileage_log, part, service_record,
+            service_record_line_item, service_schedule_link,
         },
         inputs::{
             part::NewPart,

@@ -521,7 +521,7 @@ mod tests {
         let db = test_db().await;
         // Expired date but a live mileage bound: EITHER bound suffices.
         let vid = seed_vehicle(&db, Some("2020-01-01"), Some(60_000)).await;
-        let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let now = crate::services::now_stamp();
         mileage_log::ActiveModel {
             vehicle_id: Set(vid),
             mileage: Set(50_000),
@@ -538,7 +538,7 @@ mod tests {
 
         // Same bounds but the odometer is already past → not covered.
         let past = seed_vehicle(&db, Some("2020-01-01"), Some(40_000)).await;
-        let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let now = crate::services::now_stamp();
         mileage_log::ActiveModel {
             vehicle_id: Set(past),
             mileage: Set(50_000),

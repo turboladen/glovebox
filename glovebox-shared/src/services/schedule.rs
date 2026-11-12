@@ -135,7 +135,7 @@ pub async fn update(
         active.est_cost_cents = Set(v);
     }
 
-    active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
+    active.updated_at = Set(super::now_stamp());
     Ok(active.update(db).await?)
 }
 
@@ -427,8 +427,7 @@ pub(crate) async fn tracked_ids(
         }
     }
 
-    let mut seen = std::collections::HashSet::new();
-    Ok(ids
+    let mapped: Vec<i32> = ids
         .iter()
         .map(|id| {
             let item = &found[id];
@@ -438,8 +437,8 @@ pub(crate) async fn tracked_ids(
                 own_by_name.get(&item.name).copied().unwrap_or(*id)
             }
         })
-        .filter(|id| seen.insert(*id))
-        .collect())
+        .collect();
+    Ok(super::dedup_ids(&mapped))
 }
 
 pub async fn delete(db: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
@@ -657,7 +656,7 @@ pub async fn undismiss_for_vehicle(
 
     let mut active: maintenance_schedule_item::ActiveModel = item.into();
     active.enabled = Set(true);
-    active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
+    active.updated_at = Set(super::now_stamp());
     Ok(active.update(db).await?)
 }
 

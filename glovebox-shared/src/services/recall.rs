@@ -5,7 +5,7 @@
 //! `completed`, `not_applicable` when its stored status is `dismissed`,
 //! `planned` when an open work item points at it, and `open` otherwise.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use sea_orm::*;
 use serde::Serialize;
@@ -260,12 +260,7 @@ pub(crate) async fn link_service(
     finding_ids: &[i32],
     service_record_id: i32,
 ) -> DomainResult<()> {
-    let mut seen = HashSet::new();
-    let unique: Vec<i32> = finding_ids
-        .iter()
-        .copied()
-        .filter(|id| seen.insert(*id))
-        .collect();
+    let unique = super::dedup_ids(finding_ids);
     if unique.is_empty() {
         return Ok(());
     }

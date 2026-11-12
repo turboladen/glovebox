@@ -28,7 +28,7 @@ pub async fn create(
     if let Some(at) = &input.recorded_at {
         super::validate_datetime("recorded_at", at)?;
     }
-    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let now = super::now_stamp();
     let model = mileage_log::ActiveModel {
         vehicle_id: Set(vehicle_id),
         mileage: Set(input.mileage),

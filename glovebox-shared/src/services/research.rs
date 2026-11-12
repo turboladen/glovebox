@@ -322,7 +322,7 @@ pub async fn update_finding(
         active.status = Set(status);
     }
 
-    active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
+    active.updated_at = Set(super::now_stamp());
 
     Ok(active.update(db).await?)
 }
@@ -352,7 +352,7 @@ pub async fn file_finding(
             // list_reports (order_by_desc(GeneratedAt)) instead of sinking
             // below old recall reports with a stale first-filing date.
             let mut active: research_report::ActiveModel = r.into();
-            active.generated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
+            active.generated_at = Set(super::now_stamp());
             active.update(db).await?
         }
         None => {
