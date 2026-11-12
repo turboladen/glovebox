@@ -850,6 +850,7 @@ async fn delete_service_asks_what_to_do_with_the_recalls_it_performed() {
         .await;
     assert_eq!(deleted["recalls_kept_done"], json!([recall]));
     assert_eq!(deleted["recalls_reopened"], json!([]));
+    assert_eq!(deleted["recalls_still_done_elsewhere"], json!([]));
     let read = t
         .call(
             "set_recall_status",

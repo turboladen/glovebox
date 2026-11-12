@@ -110,7 +110,7 @@ impl GloveboxMcp {
 
     #[tool(
         name = "delete_service",
-        description = "Permanently delete a service record, for one that was filed by mistake or against the wrong car. If the service performed recalls, this tool refuses and lists them until you pass `recalls`: ask the owner whether those recalls should be reopened (`\"reopen\"`) or kept as done (`\"keep_done\"`), and never choose on your own. Deleting also reopens what else it closed: an incident it fixed goes back to unresolved unless another service also fixed it, and to-dos it completed return to planned. Its schedule links, line items and odometer reading are removed. Parts it installed are kept, reverted to purchased with their install details cleared, and the result lists their ids in `kept_part_ids`: when re-filing the invoice, attach them with `record_service`'s `part_ids`; otherwise remove them with `delete_part`. To change a record rather than remove it, use `correct_service`.",
+        description = "Permanently delete a service record, for one that was filed by mistake or against the wrong car. If the service performed recalls, this tool refuses and lists them until you pass `recalls`: ask the owner whether those recalls should be reopened (`\"reopen\"`) or kept as done (`\"keep_done\"`), and never choose on your own. The result lists `recalls_reopened`, `recalls_kept_done`, and `recalls_still_done_elsewhere` for reopened recalls that stay done because another service performed them too. Deleting also reopens what else it closed: an incident it fixed goes back to unresolved unless another service also fixed it, and to-dos it completed return to planned. Its schedule links, line items and odometer reading are removed. Parts it installed are kept, reverted to purchased with their install details cleared, and the result lists their ids in `kept_part_ids`: when re-filing the invoice, attach them with `record_service`'s `part_ids`; otherwise remove them with `delete_part`. To change a record rather than remove it, use `correct_service`.",
         input_schema = rmcp::handler::server::common::schema_for_type::<DeleteServiceInput>()
     )]
     async fn delete_service(
@@ -135,6 +135,7 @@ impl GloveboxMcp {
                     "id": p.service_id,
                     "kept_part_ids": out.kept_part_ids,
                     "recalls_reopened": out.reopened_recall_ids,
+                    "recalls_still_done_elsewhere": out.still_done_elsewhere_recall_ids,
                     "recalls_kept_done": out.kept_done_recall_ids,
                 })
             }),

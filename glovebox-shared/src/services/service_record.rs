@@ -1038,8 +1038,10 @@ pub enum RecallsOnDelete {
 pub struct DeletedService {
     /// Ids of the parts the service installed, now `purchased` and unlinked.
     pub kept_part_ids: Vec<i32>,
-    /// Ids of the recalls reset to `open` because the caller chose `Reopen`.
+    /// Ids of the recalls that read `open` again after a `Reopen` delete.
     pub reopened_recall_ids: Vec<i32>,
+    /// Ids of the recalls a `Reopen` delete left `done` because another service also performed them.
+    pub still_done_elsewhere_recall_ids: Vec<i32>,
     /// Ids of the recalls stored as `done` because the caller chose `KeepDone`.
     pub kept_done_recall_ids: Vec<i32>,
 }
@@ -1049,7 +1051,8 @@ pub struct DeletedService {
 /// If the service performed recalls, `recalls` must say what becomes of them:
 /// with `None` nothing is deleted and the call returns `BadRequest` listing
 /// the recalls and telling the caller to ask the owner. Without recalls the
-/// parameter is ignored. Each incident the service resolved goes back to
+/// parameter is ignored. A recall another service also performed stays `done` and is reported in
+/// `still_done_elsewhere_recall_ids`. Each incident the service resolved goes back to
 /// unresolved unless another service also resolved it. Each work item it
 /// completed returns to `planned`. Parts it installed stay, reverted to
 /// `purchased` with their install fields cleared, including parts created
@@ -1147,6 +1150,27 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
 
     // Delete the service record
     existing.delete(&txn).await?;
+
+    // Read after this service's links are gone: a reopened recall that another
+    // service also performed still reads done through that link.
+    if !outcome.reopened_recall_ids.is_empty() {
+        let linked_elsewhere: std::collections::HashSet<i32> = service_recall_link::Entity::find()
+            .filter(
+                service_recall_link::Column::ResearchFindingId
+                    .is_in(outcome.reopened_recall_ids.clone()),
+            )
+            .all(&txn)
+            .await?
+            .into_iter()
+            .map(|l| l.research_finding_id)
+            .collect();
+        let (elsewhere, open): (Vec<i32>, Vec<i32>) = outcome
+            .reopened_recall_ids
+            .iter()
+            .partition(|id| linked_elsewhere.contains(id));
+        outcome.reopened_recall_ids = open;
+        outcome.still_done_elsewhere_recall_ids = elsewhere;
+    }
 
     txn.commit().await?;
 
@@ -3158,10 +3182,12 @@ mod tests {
         let first = service_with_recall(&db, v, finding_id).await;
         let second = service_with_recall(&db, v, finding_id).await;
 
-        delete(&db, v, first, Some(RecallsOnDelete::Reopen))
+        let out = delete(&db, v, first, Some(RecallsOnDelete::Reopen))
             .await
             .unwrap();
 
+        assert!(out.reopened_recall_ids.is_empty());
+        assert_eq!(out.still_done_elsewhere_recall_ids, vec![finding_id]);
         assert_eq!(
             recall_status(&db, v).await,
             vec![("done".into(), Some(second))]
