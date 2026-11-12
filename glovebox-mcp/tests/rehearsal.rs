@@ -4,7 +4,7 @@
 
 mod common;
 
-use common::connect;
+use common::{connect, reminder};
 use serde_json::{Value, json};
 
 fn titles(items: &Value) -> Vec<&str> {
@@ -14,15 +14,6 @@ fn titles(items: &Value) -> Vec<&str> {
         .iter()
         .map(|i| i["title"].as_str().expect("title"))
         .collect()
-}
-
-fn reminder<'a>(coming: &'a Value, name: &str) -> &'a Value {
-    coming["reminders"]
-        .as_array()
-        .expect("reminders array")
-        .iter()
-        .find(|r| r["schedule_item"]["name"] == name)
-        .unwrap_or_else(|| panic!("no reminder named {name}; got: {coming}"))
 }
 
 #[tokio::test]

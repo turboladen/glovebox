@@ -1,4 +1,6 @@
-use sea_orm::{ActiveModelTrait, ConnectionTrait, DatabaseConnection, Set};
+use sea_orm::{
+    ActiveModelTrait, ConnectionTrait, DatabaseConnection, EntityTrait, PaginatorTrait, Set,
+};
 
 use crate::entities::vehicle;
 
@@ -7,6 +9,15 @@ use crate::entities::vehicle;
 /// unit tests.
 pub async fn test_db() -> DatabaseConnection {
     crate::db::connect_in_memory().await
+}
+
+/// The number of rows in `E`'s table. Panics if the query fails.
+pub async fn row_count<E>(db: &DatabaseConnection) -> u64
+where
+    E: EntityTrait,
+    E::Model: Sync,
+{
+    E::find().count(db).await.unwrap()
 }
 
 /// Test-only builder for a `vehicle` row. The single construction point for

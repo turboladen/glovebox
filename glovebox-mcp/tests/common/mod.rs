@@ -215,6 +215,17 @@ pub fn schedule_item_every_12_months(vehicle_id: i32, name: &str) -> NewSchedule
     }
 }
 
+/// The reminder for the schedule item called `name` in a `whats_coming`
+/// payload. Panics when there is none.
+pub fn reminder<'a>(coming: &'a Value, name: &str) -> &'a Value {
+    coming["reminders"]
+        .as_array()
+        .expect("reminders array")
+        .iter()
+        .find(|r| r["schedule_item"]["name"] == name)
+        .unwrap_or_else(|| panic!("no reminder named {name}; got: {coming}"))
+}
+
 /// Status of one named reminder out of a `whats_coming` call.
 pub async fn reminder_status(client: &TestClient, vehicle_id: i32, name: &str) -> String {
     let payload = client
@@ -223,11 +234,7 @@ pub async fn reminder_status(client: &TestClient, vehicle_id: i32, name: &str) -
             serde_json::json!({ "vehicle_id": vehicle_id }),
         )
         .await;
-    let reminders = payload["reminders"].as_array().expect("reminders array");
-    reminders
-        .iter()
-        .find(|r| r["schedule_item"]["name"] == name)
-        .unwrap_or_else(|| panic!("no reminder named {name}; got: {payload}"))["status"]
+    reminder(&payload, name)["status"]
         .as_str()
         .expect("status string")
         .to_string()

@@ -1,6 +1,6 @@
 mod common;
 
-use common::{connect, new_vehicle, schedule_item_every_12_months};
+use common::{connect, new_vehicle, reminder, schedule_item_every_12_months};
 use glovebox_shared::{
     inputs::vehicle::NewVehicle,
     services::{schedule as schedule_svc, vehicle},
@@ -210,15 +210,6 @@ async fn changing_an_inherited_item_keeps_its_service_history_and_plans() {
         )
         .await;
     assert_eq!(again["id"], updated["id"]);
-}
-
-fn reminder<'a>(coming: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
-    coming["reminders"]
-        .as_array()
-        .expect("reminders array")
-        .iter()
-        .find(|r| r["schedule_item"]["name"] == name)
-        .unwrap_or_else(|| panic!("no reminder named {name}; got: {coming}"))
 }
 
 async fn schedule_svc_template(t: &common::TestClient) -> i32 {

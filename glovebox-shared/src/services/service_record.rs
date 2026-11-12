@@ -1111,7 +1111,7 @@ mod tests {
     use crate::{
         inputs::{incident::NewIncident, part::NewPart},
         services::incident,
-        test_support::{VehicleFixture, test_db},
+        test_support::{VehicleFixture, row_count, test_db},
     };
 
     async fn seed_vehicle(db: &impl ConnectionTrait) -> i32 {
@@ -2217,25 +2217,6 @@ mod tests {
             .collect()
     }
 
-    async fn count_services(db: &DatabaseConnection) -> u64 {
-        service_record::Entity::find().count(db).await.unwrap()
-    }
-
-    async fn count_line_items(db: &DatabaseConnection) -> u64 {
-        service_record_line_item::Entity::find()
-            .count(db)
-            .await
-            .unwrap()
-    }
-
-    async fn count_parts(db: &DatabaseConnection) -> u64 {
-        part::Entity::find().count(db).await.unwrap()
-    }
-
-    async fn count_mileage_readings(db: &DatabaseConnection) -> u64 {
-        mileage_log::Entity::find().count(db).await.unwrap()
-    }
-
     #[tokio::test]
     async fn create_stores_who_did_it_the_date_range_and_line_kinds() {
         let db = test_db().await;
@@ -2277,7 +2258,7 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "end_date"));
-        assert_eq!(count_services(&db).await, 0);
+        assert_eq!(row_count::<service_record::Entity>(&db).await, 0);
     }
 
     #[tokio::test]
@@ -2309,7 +2290,7 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "performed_by"));
-        assert_eq!(count_services(&db).await, 0);
+        assert_eq!(row_count::<service_record::Entity>(&db).await, 0);
     }
 
     #[tokio::test]
@@ -2397,8 +2378,8 @@ mod tests {
         .unwrap();
         assert!(second.already_recorded);
         assert_eq!(second.record.id, first.record.id);
-        assert_eq!(count_line_items(&db).await, 1);
-        assert_eq!(count_parts(&db).await, 1);
+        assert_eq!(row_count::<service_record_line_item::Entity>(&db).await, 1);
+        assert_eq!(row_count::<part::Entity>(&db).await, 1);
     }
 
     #[tokio::test]
@@ -2421,10 +2402,10 @@ mod tests {
             result,
             Err(DomainError::Invalid { ref field, .. }) if field == "supplied_by"
         ));
-        assert_eq!(count_services(&db).await, 0);
-        assert_eq!(count_line_items(&db).await, 0);
-        assert_eq!(count_parts(&db).await, 0);
-        assert_eq!(count_mileage_readings(&db).await, 0);
+        assert_eq!(row_count::<service_record::Entity>(&db).await, 0);
+        assert_eq!(row_count::<service_record_line_item::Entity>(&db).await, 0);
+        assert_eq!(row_count::<part::Entity>(&db).await, 0);
+        assert_eq!(row_count::<mileage_log::Entity>(&db).await, 0);
     }
 
     #[tokio::test]
@@ -2634,7 +2615,7 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(err, DomainError::BadRequest(_)), "got {err:?}");
-        assert_eq!(service_record::Entity::find().count(&db).await.unwrap(), 1);
+        assert_eq!(row_count::<service_record::Entity>(&db).await, 1);
     }
 
     #[tokio::test]
@@ -2687,7 +2668,7 @@ mod tests {
         let v2 = seed_vehicle(&db).await;
         let foreign_incident = observation(&db, v2, None).await;
         let foreign_service = service_dated(&db, v2, "2023-05-03").await;
-        let services_before = service_record::Entity::find().count(&db).await.unwrap();
+        let services_before = row_count::<service_record::Entity>(&db).await;
 
         // A foreign noticed_during_service_id on create reads like a missing one.
         let wrong = incident::create(
@@ -2747,32 +2728,14 @@ mod tests {
                 gone.to_string().replace("9999", "N")
             );
             assert_eq!(
-                service_record::Entity::find().count(&db).await.unwrap(),
+                row_count::<service_record::Entity>(&db).await,
                 services_before
             );
-            assert_eq!(
-                service_record_line_item::Entity::find()
-                    .count(&db)
-                    .await
-                    .unwrap(),
-                0
-            );
-            assert_eq!(part::Entity::find().count(&db).await.unwrap(), 0);
-            assert_eq!(mileage_log::Entity::find().count(&db).await.unwrap(), 0);
-            assert_eq!(
-                service_schedule_link::Entity::find()
-                    .count(&db)
-                    .await
-                    .unwrap(),
-                0
-            );
-            assert_eq!(
-                incident_service_link::Entity::find()
-                    .count(&db)
-                    .await
-                    .unwrap(),
-                0
-            );
+            assert_eq!(row_count::<service_record_line_item::Entity>(&db).await, 0);
+            assert_eq!(row_count::<part::Entity>(&db).await, 0);
+            assert_eq!(row_count::<mileage_log::Entity>(&db).await, 0);
+            assert_eq!(row_count::<service_schedule_link::Entity>(&db).await, 0);
+            assert_eq!(row_count::<incident_service_link::Entity>(&db).await, 0);
         }
         assert!(
             !incident::get(&db, v2, foreign_incident)

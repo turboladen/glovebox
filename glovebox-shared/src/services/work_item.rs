@@ -394,7 +394,7 @@ mod tests {
             service_record::{NewLineItem, NewServiceRecord},
         },
         services::{reminders, service_record as service_svc},
-        test_support::{VehicleFixture, test_db},
+        test_support::{VehicleFixture, row_count, test_db},
     };
     use chrono::NaiveDate;
 
@@ -632,23 +632,11 @@ mod tests {
             err.to_string().replace(&foreign.id.to_string(), "N"),
             missing.to_string().replace("9999", "N")
         );
-        assert_eq!(service_record::Entity::find().count(&db).await.unwrap(), 0);
-        assert_eq!(
-            service_record_line_item::Entity::find()
-                .count(&db)
-                .await
-                .unwrap(),
-            0
-        );
-        assert_eq!(part::Entity::find().count(&db).await.unwrap(), 0);
-        assert_eq!(mileage_log::Entity::find().count(&db).await.unwrap(), 0);
-        assert_eq!(
-            service_schedule_link::Entity::find()
-                .count(&db)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(row_count::<service_record::Entity>(&db).await, 0);
+        assert_eq!(row_count::<service_record_line_item::Entity>(&db).await, 0);
+        assert_eq!(row_count::<part::Entity>(&db).await, 0);
+        assert_eq!(row_count::<mileage_log::Entity>(&db).await, 0);
+        assert_eq!(row_count::<service_schedule_link::Entity>(&db).await, 0);
         assert_eq!(get(&db, v2, foreign.id).await.unwrap().status, "planned");
     }
 
@@ -665,7 +653,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, DomainError::BadRequest(_)), "got {err:?}");
-        assert_eq!(service_record::Entity::find().count(&db).await.unwrap(), 1);
+        assert_eq!(row_count::<service_record::Entity>(&db).await, 1);
     }
 
     #[tokio::test]
