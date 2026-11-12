@@ -324,23 +324,6 @@ async fn insert_line_items(
     Ok(())
 }
 
-/// Links a service record to the schedule items it satisfies.
-async fn insert_schedule_links(
-    txn: &impl ConnectionTrait,
-    record_id: i32,
-    schedule_item_ids: &[i32],
-) -> DomainResult<()> {
-    for item_id in schedule_item_ids {
-        service_schedule_link::ActiveModel {
-            service_record_id: Set(record_id),
-            schedule_item_id: Set(*item_id),
-        }
-        .insert(txn)
-        .await?;
-    }
-    Ok(())
-}
-
 /// Insert the mileage log a service record auto-creates for its odometer
 /// reading (`source = "service"`, linked via `service_record_id`).
 async fn insert_auto_mileage_log(
@@ -644,10 +627,16 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     let line_items_input = input.line_items.unwrap_or_default();
     validate_line_items(&line_items_input)?;
 
-    let schedule_item_ids = input.schedule_item_ids.unwrap_or_default();
-    let schedule_item_ids = schedule::tracked_ids(db, vehicle_id, &schedule_item_ids).await?;
-
     let txn = db.begin().await?;
+
+    // Resolved before the record is written so a bad schedule id is reported
+    // ahead of any error the insert itself could raise.
+    let schedule_item_ids = schedule::tracked_ids(
+        &txn,
+        vehicle_id,
+        &input.schedule_item_ids.unwrap_or_default(),
+    )
+    .await?;
 
     let record = service_record::ActiveModel {
         vehicle_id: Set(vehicle_id),
@@ -674,7 +663,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
 
     // Every link step below runs on `txn`, so a failure in any of them rolls
     // back the record and everything written before it.
-    insert_schedule_links(&txn, record.id, &schedule_item_ids).await?;
+    schedule::insert_service_links(&txn, record.id, &schedule_item_ids, LinkMode::Add).await?;
 
     let completed = work_item::complete_with_service(
         &txn,
@@ -843,19 +832,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     sync_auto_mileage_log(&txn, vehicle_id, &record).await?;
 
     if let Some(item_ids) = input.schedule_item_ids {
-        let item_ids = schedule::tracked_ids(&txn, vehicle_id, &item_ids).await?;
-        service_schedule_link::Entity::delete_many()
-            .filter(service_schedule_link::Column::ServiceRecordId.eq(record.id))
-            .exec(&txn)
-            .await?;
-
-        for item_id in &item_ids {
-            let link = service_schedule_link::ActiveModel {
-                service_record_id: Set(record.id),
-                schedule_item_id: Set(*item_id),
-            };
-            link.insert(&txn).await?;
-        }
+        schedule::link_service(&txn, vehicle_id, record.id, &item_ids, LinkMode::Replace).await?;
     }
 
     // Handle part linking on update
@@ -942,27 +919,7 @@ async fn require_invoice_ref_free(
     }
 }
 
-/// How [`link_schedule_items`] treats the record's existing schedule links.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LinkMode {
-    /// Union the given items with the existing links (safe for incremental
-    /// reconciliation loops — nothing already linked is clobbered).
-    Add,
-    /// Overwrite: the given items become the record's only links.
-    Replace,
-}
-
-impl LinkMode {
-    pub fn parse(mode: &str) -> DomainResult<Self> {
-        match mode {
-            "add" => Ok(Self::Add),
-            "replace" => Ok(Self::Replace),
-            other => Err(DomainError::BadRequest(format!(
-                "Invalid mode '{other}'. Must be one of: add, replace"
-            ))),
-        }
-    }
-}
+pub use super::schedule::LinkMode;
 
 /// Link a service record to maintenance-schedule items without touching the
 /// rest of the record. Self-guarded: the record must belong to `vehicle_id`,
@@ -983,36 +940,7 @@ pub async fn link_schedule_items<C: ConnectionTrait + TransactionTrait>(
         .ok_or_else(|| DomainError::NotFound(format!("Service record {id} not found")))?;
 
     let txn = db.begin().await?;
-    let item_ids = schedule::tracked_ids(&txn, vehicle_id, item_ids).await?;
-
-    let already_linked: std::collections::HashSet<i32> = match mode {
-        LinkMode::Replace => {
-            service_schedule_link::Entity::delete_many()
-                .filter(service_schedule_link::Column::ServiceRecordId.eq(existing.id))
-                .exec(&txn)
-                .await?;
-            std::collections::HashSet::new()
-        }
-        LinkMode::Add => service_schedule_link::Entity::find()
-            .filter(service_schedule_link::Column::ServiceRecordId.eq(existing.id))
-            .all(&txn)
-            .await?
-            .into_iter()
-            .map(|l| l.schedule_item_id)
-            .collect(),
-    };
-
-    let mut inserted = already_linked;
-    for item_id in item_ids {
-        if inserted.insert(item_id) {
-            service_schedule_link::ActiveModel {
-                service_record_id: Set(existing.id),
-                schedule_item_id: Set(item_id),
-            }
-            .insert(&txn)
-            .await?;
-        }
-    }
+    schedule::link_service(&txn, vehicle_id, existing.id, item_ids, mode).await?;
 
     // Linking changes what the record accounts for — stamp it like update().
     let mut active: service_record::ActiveModel = existing.into();

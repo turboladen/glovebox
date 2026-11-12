@@ -374,6 +374,81 @@ async fn repoint_links(
     Ok(())
 }
 
+/// How a schedule-link write treats the service's existing links.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinkMode {
+    /// Union the given items with the existing links (safe for incremental
+    /// reconciliation loops — nothing already linked is clobbered).
+    Add,
+    /// Overwrite: the given items become the record's only links.
+    Replace,
+}
+
+impl LinkMode {
+    pub fn parse(mode: &str) -> DomainResult<Self> {
+        match mode {
+            "add" => Ok(Self::Add),
+            "replace" => Ok(Self::Replace),
+            other => Err(DomainError::BadRequest(format!(
+                "Invalid mode '{other}'. Must be one of: add, replace"
+            ))),
+        }
+    }
+}
+
+/// Links a service to the schedule items the vehicle tracks for `item_ids`,
+/// resolving them with [`tracked_ids`] first. Runs on the caller's
+/// connection, so inside its transaction when there is one.
+pub(crate) async fn link_service(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    service_record_id: i32,
+    item_ids: &[i32],
+    mode: LinkMode,
+) -> DomainResult<()> {
+    let tracked = tracked_ids(db, vehicle_id, item_ids).await?;
+    insert_service_links(db, service_record_id, &tracked, mode).await
+}
+
+/// Writes a service's schedule links for ids that are already resolved:
+/// `Replace` drops the existing links first, `Add` skips the ones present.
+/// Callers that resolve through [`tracked_ids`] earlier, or hold an id that
+/// was resolved when it was stored, use this instead of [`link_service`].
+pub(crate) async fn insert_service_links(
+    db: &impl ConnectionTrait,
+    service_record_id: i32,
+    item_ids: &[i32],
+    mode: LinkMode,
+) -> DomainResult<()> {
+    let already: std::collections::HashSet<i32> = match mode {
+        LinkMode::Replace => {
+            service_schedule_link::Entity::delete_many()
+                .filter(service_schedule_link::Column::ServiceRecordId.eq(service_record_id))
+                .exec(db)
+                .await?;
+            std::collections::HashSet::new()
+        }
+        LinkMode::Add => service_schedule_link::Entity::find()
+            .filter(service_schedule_link::Column::ServiceRecordId.eq(service_record_id))
+            .all(db)
+            .await?
+            .into_iter()
+            .map(|l| l.schedule_item_id)
+            .collect(),
+    };
+    let new_links = super::dedup_ids(item_ids)
+        .into_iter()
+        .filter(|id| !already.contains(id))
+        .map(|schedule_item_id| service_schedule_link::ActiveModel {
+            service_record_id: Set(service_record_id),
+            schedule_item_id: Set(schedule_item_id),
+        });
+    service_schedule_link::Entity::insert_many(new_links)
+        .exec_without_returning(db)
+        .await?;
+    Ok(())
+}
+
 /// Checks that every id is in the vehicle's schedule scope and maps each one
 /// to the item the vehicle actually tracks: an inherited id the vehicle has
 /// its own same-named item for becomes that item's id. Duplicates are

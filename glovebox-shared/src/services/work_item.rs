@@ -7,7 +7,7 @@ use sea_orm::*;
 use serde::Serialize;
 
 use crate::{
-    entities::{mileage_log, research_finding, research_report, service_schedule_link, work_item},
+    entities::{mileage_log, research_finding, research_report, work_item},
     error::{DomainError, DomainResult},
     inputs::work_item::{NewWorkItem, UpdateWorkItem},
 };
@@ -226,20 +226,16 @@ pub(crate) async fn complete_with_service(
         active.updated_at = Set(super::now_stamp());
         completed.push(active.update(db).await?);
 
+        // The stored schedule item id was resolved when the work item was
+        // filed, so it is linked as is.
         if let Some(schedule_item_id) = schedule_item_id {
-            let already_linked =
-                service_schedule_link::Entity::find_by_id((service_record_id, schedule_item_id))
-                    .one(db)
-                    .await?
-                    .is_some();
-            if !already_linked {
-                service_schedule_link::ActiveModel {
-                    service_record_id: Set(service_record_id),
-                    schedule_item_id: Set(schedule_item_id),
-                }
-                .insert(db)
-                .await?;
-            }
+            super::schedule::insert_service_links(
+                db,
+                service_record_id,
+                &[schedule_item_id],
+                super::schedule::LinkMode::Add,
+            )
+            .await?;
         }
     }
     Ok(completed)
