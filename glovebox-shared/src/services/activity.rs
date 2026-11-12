@@ -325,7 +325,9 @@ mod tests {
             .await
             .unwrap();
 
-        svc_svc::delete(&db, vid, created.record.id).await.unwrap();
+        svc_svc::delete(&db, vid, created.record.id, None)
+            .await
+            .unwrap();
 
         // No orphaned auto-log lingers: the feed is empty, not hiding a ghost.
         assert!(recent(&db, vid, DEFAULT_LIMIT).await.unwrap().is_empty());

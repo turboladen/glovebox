@@ -3,8 +3,9 @@ use serde::Serialize;
 
 use crate::{
     entities::{
-        incident, incident_service_link, mileage_log, part, service_recall_link, service_record,
-        service_record_line_item, service_schedule_link, work_item as work_item_entity,
+        incident, incident_service_link, mileage_log, part, research_finding, service_recall_link,
+        service_record, service_record_line_item, service_schedule_link,
+        work_item as work_item_entity,
     },
     error::{DomainError, DomainResult},
     inputs::{
@@ -1023,20 +1024,44 @@ pub async fn link_schedule_items<C: ConnectionTrait + TransactionTrait>(
     load_service_links(db, record).await
 }
 
+/// What happens to the recalls a deleted service performed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecallsOnDelete {
+    /// Each recall reads `open` again, unless another service also performed it.
+    Reopen,
+    /// Each recall reads `done` with no service, as `recall::set_status(.., "done")` stores it.
+    KeepDone,
+}
+
+/// What [`delete`] changed besides the service itself.
+#[derive(Debug, Default, Serialize)]
+pub struct DeletedService {
+    /// Ids of the parts the service installed, now `purchased` and unlinked.
+    pub kept_part_ids: Vec<i32>,
+    /// Ids of the recalls reset to `open` because the caller chose `Reopen`.
+    pub reopened_recall_ids: Vec<i32>,
+    /// Ids of the recalls stored as `done` because the caller chose `KeepDone`.
+    pub kept_done_recall_ids: Vec<i32>,
+}
+
 /// Deletes a service record and its owned rows, and reopens what it closed.
 ///
-/// Recalls it performed read as `open` again unless the owner marked them
-/// done by hand. Each incident it resolved goes back to unresolved unless
-/// another service also resolved it. Each work item it completed returns to
-/// `planned`. Parts it installed stay, reverted to `purchased` with their
-/// install fields cleared, including parts created inline by this service.
-/// Returns the ids of those kept parts, so the caller can attach them to a
-/// re-filed service or delete them with `part::delete`.
+/// If the service performed recalls, `recalls` must say what becomes of them:
+/// with `None` nothing is deleted and the call returns `BadRequest` listing
+/// the recalls and telling the caller to ask the owner. Without recalls the
+/// parameter is ignored. Each incident the service resolved goes back to
+/// unresolved unless another service also resolved it. Each work item it
+/// completed returns to `planned`. Parts it installed stay, reverted to
+/// `purchased` with their install fields cleared, including parts created
+/// inline by this service; their ids come back in `kept_part_ids` so the
+/// caller can attach them to a re-filed service or delete them with
+/// `part::delete`.
 pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
     id: i32,
-) -> DomainResult<Vec<i32>> {
+    recalls: Option<RecallsOnDelete>,
+) -> DomainResult<DeletedService> {
     let existing = service_record::Entity::find_by_id(id)
         .filter(service_record::Column::VehicleId.eq(vehicle_id))
         .one(db)
@@ -1044,6 +1069,34 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .ok_or_else(|| DomainError::NotFound(format!("Service record {id} not found")))?;
 
     let txn = db.begin().await?;
+
+    let performed = recall::load_performed(&txn, &[existing.id])
+        .await?
+        .remove(&existing.id)
+        .unwrap_or_default();
+    let mut outcome = DeletedService::default();
+    if !performed.is_empty() {
+        let Some(choice) = recalls else {
+            return Err(recalls_need_a_choice(&performed));
+        };
+        let finding_ids: Vec<i32> = performed.iter().map(|r| r.finding_id).collect();
+        // The stored status is what makes a recall read done or open once its
+        // link is gone: `completed` reads done, `new` reads open.
+        let (stored, ids) = match choice {
+            RecallsOnDelete::Reopen => ("new", &mut outcome.reopened_recall_ids),
+            RecallsOnDelete::KeepDone => ("completed", &mut outcome.kept_done_recall_ids),
+        };
+        research_finding::Entity::update_many()
+            .set(research_finding::ActiveModel {
+                status: Set(stored.to_owned()),
+                updated_at: Set(super::now_stamp()),
+                ..Default::default()
+            })
+            .filter(research_finding::Column::Id.is_in(finding_ids.clone()))
+            .exec(&txn)
+            .await?;
+        *ids = finding_ids;
+    }
 
     reopen_what_it_closed(&txn, existing.id).await?;
 
@@ -1053,7 +1106,7 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .order_by_asc(part::Column::Id)
         .all(&txn)
         .await?;
-    let kept_part_ids: Vec<i32> = linked_parts.iter().map(|p| p.id).collect();
+    outcome.kept_part_ids = linked_parts.iter().map(|p| p.id).collect();
     for p in linked_parts {
         let mut active_part: part::ActiveModel = p.into();
         active_part.status = Set("purchased".to_string());
@@ -1097,7 +1150,23 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
 
     txn.commit().await?;
 
-    Ok(kept_part_ids)
+    Ok(outcome)
+}
+
+fn recalls_need_a_choice(performed: &[RecallRef]) -> DomainError {
+    let listed = performed
+        .iter()
+        .map(|r| match &r.campaign_number {
+            Some(n) => format!("recall {} (campaign {n}): {}", r.finding_id, r.title),
+            None => format!("recall {}: {}", r.finding_id, r.title),
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    DomainError::BadRequest(format!(
+        "This service performed {listed}. Ask the owner whether these recalls should be reopened \
+         or kept as done, then call again with recalls: \"reopen\" or recalls: \"keep_done\". \
+         Nothing was deleted."
+    ))
 }
 
 /// Undoes the closing effects of a service that is about to be deleted. Runs
@@ -1395,7 +1464,10 @@ mod tests {
         .await
         .unwrap();
 
-        let kept = delete(&db, vid, created.record.id).await.unwrap();
+        let kept = delete(&db, vid, created.record.id, None)
+            .await
+            .unwrap()
+            .kept_part_ids;
         assert_eq!(kept, vec![part_id], "the kept parts are reported");
 
         // Record gone
@@ -1457,7 +1529,7 @@ mod tests {
         .await
         .unwrap();
 
-        delete(&db, vid, svc_id).await.unwrap();
+        delete(&db, vid, svc_id, None).await.unwrap();
 
         // The incident link rows are gone.
         let links = incident_service_link::Entity::find()
@@ -1530,7 +1602,7 @@ mod tests {
         .await
         .unwrap();
 
-        delete(&db, vid, created.record.id).await.unwrap();
+        delete(&db, vid, created.record.id, None).await.unwrap();
 
         let logs = mileage_log::Entity::find()
             .filter(mileage_log::Column::VehicleId.eq(vid))
@@ -2903,7 +2975,9 @@ mod tests {
         assert_eq!(work_item_before.status, "done");
         assert_eq!(recall::list(&db, v).await.unwrap()[0].status, "done");
 
-        delete(&db, v, closing.record.id).await.unwrap();
+        delete(&db, v, closing.record.id, Some(RecallsOnDelete::Reopen))
+            .await
+            .unwrap();
 
         let work_item_after = work_item_svc::get(&db, v, work_item.id).await.unwrap();
         assert_eq!(work_item_after.status, "planned");
@@ -2915,17 +2989,12 @@ mod tests {
         assert_eq!(recall::list(&db, v).await.unwrap()[0].status, "open");
     }
 
-    #[tokio::test]
-    async fn deleting_a_service_keeps_a_recall_the_owner_marked_done() {
-        use crate::services::{recall, research};
-
-        let db = test_db().await;
-        let v = seed_vehicle(&db).await;
-        let finding_id = research::record_recalls(
-            &db,
+    async fn seed_recall(db: &DatabaseConnection, v: i32, campaign: &str) -> i32 {
+        crate::services::research::record_recalls(
+            db,
             v,
             &[crate::services::nhtsa::RecallInfo {
-                campaign_number: "24V999".into(),
+                campaign_number: campaign.into(),
                 manufacturer: None,
                 subject: "Pump".into(),
                 summary: None,
@@ -2939,9 +3008,12 @@ mod tests {
         .await
         .unwrap()
         .recalls[0]
-            .finding_id;
-        let svc = create(
-            &db,
+            .finding_id
+    }
+
+    async fn service_with_recall(db: &DatabaseConnection, v: i32, finding_id: i32) -> i32 {
+        create(
+            db,
             v,
             NewServiceRecord {
                 service_date: "2024-06-01".into(),
@@ -2950,15 +3022,150 @@ mod tests {
             },
         )
         .await
+        .unwrap()
+        .record
+        .id
+    }
+
+    async fn recall_status(db: &DatabaseConnection, v: i32) -> Vec<(String, Option<i32>)> {
+        crate::services::recall::list(db, v)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.status, r.done_service.map(|s| s.id)))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn deleting_a_service_with_recalls_and_no_choice_changes_nothing() {
+        use crate::{inputs::work_item::NewWorkItem, services::work_item as work_item_svc};
+
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let finding_id = seed_recall(&db, v, "24V123").await;
+        let incident_id = observation(&db, v, None).await;
+        let work_item = work_item_svc::create(
+            &db,
+            v,
+            NewWorkItem {
+                title: "Do the thing".into(),
+                notes: None,
+                schedule_item_id: None,
+                research_finding_id: None,
+                incident_id: None,
+                est_cost_cents: None,
+                revisit_by_date: None,
+                revisit_by_miles: None,
+            },
+        )
+        .await
         .unwrap();
-        recall::set_status(&db, v, finding_id, "done")
+        let svc = create(
+            &db,
+            v,
+            NewServiceRecord {
+                service_date: "2024-06-01".into(),
+                recall_finding_ids: Some(vec![finding_id]),
+                work_item_ids: Some(vec![work_item.id]),
+                resolved_incident_ids: Some(vec![incident_id]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let id = svc.record.id;
+
+        let err = delete(&db, v, id, None).await.unwrap_err();
+
+        let DomainError::BadRequest(message) = err else {
+            panic!("expected BadRequest, got {err:?}");
+        };
+        assert!(message.contains(&finding_id.to_string()), "{message}");
+        assert!(message.contains("24V123"), "{message}");
+        assert!(message.contains("Pump"), "{message}");
+        assert!(message.contains("reopen"), "{message}");
+        assert!(message.contains("keep_done"), "{message}");
+        assert!(get(&db, v, id).await.is_ok());
+        assert_eq!(recall_status(&db, v).await, vec![("done".into(), Some(id))]);
+        assert_eq!(
+            work_item_svc::get(&db, v, work_item.id)
+                .await
+                .unwrap()
+                .status,
+            "done"
+        );
+        assert!(
+            incident::get(&db, v, incident_id)
+                .await
+                .unwrap()
+                .incident
+                .resolved
+        );
+    }
+
+    #[tokio::test]
+    async fn reopen_makes_a_performed_recall_open_even_if_the_owner_marked_it_done() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let finding_id = seed_recall(&db, v, "24V999").await;
+        let svc = service_with_recall(&db, v, finding_id).await;
+        crate::services::recall::set_status(&db, v, finding_id, "done")
             .await
             .unwrap();
 
-        delete(&db, v, svc.record.id).await.unwrap();
+        let out = delete(&db, v, svc, Some(RecallsOnDelete::Reopen))
+            .await
+            .unwrap();
 
-        // The owner's own "done" is not the link's to take back.
-        assert_eq!(recall::list(&db, v).await.unwrap()[0].status, "done");
+        assert_eq!(out.reopened_recall_ids, vec![finding_id]);
+        assert!(out.kept_done_recall_ids.is_empty());
+        assert_eq!(recall_status(&db, v).await, vec![("open".into(), None)]);
+    }
+
+    #[tokio::test]
+    async fn keep_done_leaves_a_performed_recall_done_with_no_service() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let finding_id = seed_recall(&db, v, "24V999").await;
+        let svc = service_with_recall(&db, v, finding_id).await;
+
+        let out = delete(&db, v, svc, Some(RecallsOnDelete::KeepDone))
+            .await
+            .unwrap();
+
+        assert_eq!(out.kept_done_recall_ids, vec![finding_id]);
+        assert!(out.reopened_recall_ids.is_empty());
+        assert_eq!(recall_status(&db, v).await, vec![("done".into(), None)]);
+    }
+
+    #[tokio::test]
+    async fn a_service_without_recalls_deletes_with_no_choice() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let svc = service_dated(&db, v, "2024-06-01").await;
+
+        let out = delete(&db, v, svc, None).await.unwrap();
+
+        assert!(out.reopened_recall_ids.is_empty() && out.kept_done_recall_ids.is_empty());
+        assert!(get(&db, v, svc).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn reopen_leaves_a_recall_done_through_another_service() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let finding_id = seed_recall(&db, v, "24V999").await;
+        let first = service_with_recall(&db, v, finding_id).await;
+        let second = service_with_recall(&db, v, finding_id).await;
+
+        delete(&db, v, first, Some(RecallsOnDelete::Reopen))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            recall_status(&db, v).await,
+            vec![("done".into(), Some(second))]
+        );
     }
 
     #[tokio::test]
@@ -2982,7 +3189,7 @@ mod tests {
         .unwrap();
         let part_id = svc.parts[0].id;
 
-        delete(&db, v, svc.record.id).await.unwrap();
+        delete(&db, v, svc.record.id, None).await.unwrap();
 
         let kept = part_svc::get(&db, v, part_id).await.unwrap();
         assert_eq!(kept.status, "purchased");

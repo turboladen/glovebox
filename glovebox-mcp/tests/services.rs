@@ -803,3 +803,59 @@ async fn malformed_dates_are_refused_naming_the_field() {
         .await;
     }
 }
+
+#[tokio::test]
+async fn delete_service_asks_what_to_do_with_the_recalls_it_performed() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let recall = common::seed_recall(&t.db, v.id, "24V110000").await;
+    let service = t
+        .call(
+            "record_service",
+            json!({
+                "vehicle_id": v.id,
+                "service_date": "2025-03-25",
+                "recall_finding_ids": [recall]
+            }),
+        )
+        .await;
+    let args = json!({ "vehicle_id": v.id, "service_id": service["id"] });
+
+    let refused = t.call_err("delete_service", args.clone()).await;
+    assert!(refused.contains("24V110000"), "got: {refused}");
+    assert!(refused.contains(&recall.to_string()), "got: {refused}");
+    assert!(
+        refused.contains("reopen") && refused.contains("keep_done"),
+        "got: {refused}"
+    );
+    t.call("get_service", args.clone()).await;
+
+    let invalid = t
+        .call_err(
+            "delete_service",
+            json!({ "vehicle_id": v.id, "service_id": service["id"], "recalls": "ignore" }),
+        )
+        .await;
+    assert!(
+        invalid.contains("reopen") && invalid.contains("keep_done"),
+        "got: {invalid}"
+    );
+    t.call("get_service", args.clone()).await;
+
+    let deleted = t
+        .call(
+            "delete_service",
+            json!({ "vehicle_id": v.id, "service_id": service["id"], "recalls": "keep_done" }),
+        )
+        .await;
+    assert_eq!(deleted["recalls_kept_done"], json!([recall]));
+    assert_eq!(deleted["recalls_reopened"], json!([]));
+    let read = t
+        .call(
+            "set_recall_status",
+            json!({ "vehicle_id": v.id, "finding_id": recall, "status": "done" }),
+        )
+        .await;
+    assert_eq!(read["status"], "done");
+    assert!(read["done_service"].is_null(), "got: {read}");
+}
