@@ -11,7 +11,7 @@ use crate::schemas::RecordPartInput;
 impl GloveboxMcp {
     #[tool(
         name = "record_part",
-        description = "Record a part you bought or installed for this vehicle — purchase info, cost (integer cents), where it goes (location), and an optional link to the installing service. Use record_service for the labor; this is the part itself.",
+        description = "Record a part you bought or installed for this vehicle — purchase info, cost (integer cents), who supplied it (`supplied_by`: `self` or `shop`), where it goes (location), and an optional link to the installing service. For parts listed on an invoice, pass them in `parts` on `record_service` instead; use this tool for a part bought ahead of the install.",
         input_schema = rmcp::handler::server::common::schema_for_type::<RecordPartInput>()
     )]
     async fn record_part(

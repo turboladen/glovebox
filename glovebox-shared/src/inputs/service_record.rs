@@ -1,13 +1,21 @@
+use crate::inputs::part::NewPart;
+
 pub struct NewLineItem {
     pub description: String,
-    pub category: Option<String>,
+    /// One of `service_record::VALID_WORK_KINDS`.
+    pub work_kind: String,
     pub quantity: Option<f64>,
     pub unit_cost_cents: Option<i32>,
     pub cost_cents: Option<i32>,
 }
 
+#[derive(Default)]
 pub struct NewServiceRecord {
     pub service_date: String,
+    /// Last day of the work for multi-day jobs; never before `service_date`.
+    pub end_date: Option<String>,
+    /// `shop` (default) or `self`.
+    pub performed_by: Option<String>,
     pub mileage: Option<i32>,
     pub description: Option<String>,
     pub parts_cost_cents: Option<i32>,
@@ -24,6 +32,8 @@ pub struct NewServiceRecord {
     pub payer_note: Option<String>,
     pub schedule_item_ids: Option<Vec<i32>>,
     pub part_ids: Option<Vec<i32>>,
+    /// Parts created and installed by this record.
+    pub parts: Option<Vec<NewPart>>,
     pub line_items: Option<Vec<NewLineItem>>,
     /// Invoice/receipt number. When present, the record is hard-idempotent on
     /// `(vehicle_id, invoice_ref)`: re-recording the same ref returns the
@@ -34,6 +44,9 @@ pub struct NewServiceRecord {
 #[derive(Default)]
 pub struct UpdateServiceRecord {
     pub service_date: Option<String>,
+    pub end_date: Option<Option<String>>,
+    /// Plain option: the column is non-nullable, so there is no "clear" case.
+    pub performed_by: Option<String>,
     pub mileage: Option<Option<i32>>,
     pub description: Option<Option<String>>,
     pub parts_cost_cents: Option<Option<i32>>,

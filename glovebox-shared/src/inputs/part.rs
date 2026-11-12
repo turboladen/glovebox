@@ -1,3 +1,4 @@
+#[derive(Default)]
 pub struct NewPart {
     pub name: String,
     pub manufacturer: Option<String>,
@@ -18,6 +19,8 @@ pub struct NewPart {
     /// Warranty expiry (decision ⑩): date (`YYYY-MM-DD`) and/or mileage.
     pub warranty_expires_on: Option<String>,
     pub warranty_expires_miles: Option<i32>,
+    /// `self` (default) or `shop`.
+    pub supplied_by: Option<String>,
 }
 
 #[derive(Default)]
@@ -42,6 +45,8 @@ pub struct UpdatePart {
     pub location: Option<Option<String>>,
     pub warranty_expires_on: Option<Option<String>>,
     pub warranty_expires_miles: Option<Option<i32>>,
+    /// Plain option: the column is non-nullable, so there is no "clear" case.
+    pub supplied_by: Option<String>,
 }
 
 /// Filter for listing parts within a vehicle.

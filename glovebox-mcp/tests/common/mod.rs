@@ -183,6 +183,9 @@ pub fn minimal_service(date: &str, description: &str) -> NewServiceRecord {
         part_ids: None,
         line_items: None,
         invoice_ref: None,
+        end_date: None,
+        performed_by: None,
+        parts: None,
     }
 }
 

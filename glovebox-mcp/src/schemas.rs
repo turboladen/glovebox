@@ -32,8 +32,14 @@ pub struct VehicleParams {
 pub struct RecordServiceInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
-    /// Date the work was done, `YYYY-MM-DD`.
+    /// Date the work was done (the first day, for multi-day jobs), `YYYY-MM-DD`.
     pub service_date: String,
+    /// Last day of the work for a multi-day job, `YYYY-MM-DD`. Not before
+    /// `service_date`. Omit for same-day work.
+    pub end_date: Option<String>,
+    /// Who did the work: `shop` (default) or `self` (the owner did it, e.g. a
+    /// DIY job or an ECU flash). A `self` job takes no `shop_name`.
+    pub performed_by: Option<String>,
     /// What was done, e.g. "Oil change + tire rotation".
     pub description: Option<String>,
     /// Odometer reading at service time. Also logs a mileage entry.
@@ -54,15 +60,19 @@ pub struct RecordServiceInput {
     pub paid_by: Option<String>,
     /// Who exactly paid / claim number, e.g. "Progressive claim #12345".
     pub payer_note: Option<String>,
-    /// Itemized invoice lines.
+    /// Itemized invoice lines, one per job on the paperwork.
     pub line_items: Option<Vec<LineItemInput>>,
+    /// Parts this invoice lists. Each is created already installed by this
+    /// service, at its mileage and date, so no separate `record_part` call is
+    /// needed.
+    pub parts: Option<Vec<InlinePartInput>>,
     /// Ids of schedule items (from `check_due_maintenance`) this work
     /// satisfies — linking clears the reminder and restarts its interval.
     pub schedule_item_ids: Option<Vec<i32>>,
-    /// The invoice/receipt number read off the scan (e.g. "FCP-2026-06-1234").
-    /// Pass it to make the import idempotent: re-recording the SAME ref for
-    /// this vehicle returns the existing record instead of creating a
-    /// duplicate. Omit for work with no invoice number.
+    /// The number printed on the invoice or repair order (e.g. "RO-1182").
+    /// Re-recording the SAME ref for this vehicle returns the existing record
+    /// (with `already_recorded: true`) instead of creating a duplicate. Omit
+    /// for work with no paperwork number.
     pub invoice_ref: Option<String>,
 }
 
@@ -70,8 +80,9 @@ pub struct RecordServiceInput {
 pub struct LineItemInput {
     /// Line description, e.g. "5W-30 synthetic oil, 5qt".
     pub description: String,
-    /// Category, e.g. "parts", "labor", "fluids", "fees".
-    pub category: Option<String>,
+    /// What kind of work this line is: `maintenance`, `mod`, `repair`, or
+    /// `inspection`.
+    pub work_kind: String,
     pub quantity: Option<f64>,
     /// Per-unit cost, integer cents.
     pub unit_cost_cents: Option<i32>,
@@ -86,7 +97,7 @@ impl RecordServiceInput {
                 .into_iter()
                 .map(|li| NewLineItem {
                     description: li.description,
-                    category: li.category,
+                    work_kind: li.work_kind,
                     quantity: li.quantity,
                     unit_cost_cents: li.unit_cost_cents,
                     cost_cents: li.cost_cents,
@@ -114,6 +125,11 @@ impl RecordServiceInput {
                 part_ids: None,
                 line_items,
                 invoice_ref: self.invoice_ref,
+                end_date: self.end_date,
+                performed_by: self.performed_by,
+                parts: self
+                    .parts
+                    .map(|ps| ps.into_iter().map(InlinePartInput::into_domain).collect()),
             },
         )
     }
@@ -189,6 +205,54 @@ impl SaveNoteInput {
     }
 }
 
+/// A part listed on a service invoice. The service supplies the install
+/// date, mileage and link.
+#[derive(Deserialize, JsonSchema)]
+pub struct InlinePartInput {
+    /// Part name, e.g. "Front brake pads".
+    pub name: String,
+    /// Manufacturer/brand, e.g. "Sachs".
+    pub manufacturer: Option<String>,
+    /// Manufacturer part number.
+    pub part_number: Option<String>,
+    /// Where it was bought, e.g. "FCP Euro".
+    pub seller: Option<String>,
+    /// Purchase date, `YYYY-MM-DD`.
+    pub purchase_date: Option<String>,
+    /// What it cost, integer cents.
+    pub cost_cents: Option<i32>,
+    /// Who supplied the part: `self` (the owner bought it, the default) or
+    /// `shop` (the shop sourced it and billed for it).
+    pub supplied_by: Option<String>,
+    /// Where it goes on the car (free text), e.g. "Front brakes".
+    pub location: Option<String>,
+    /// Free-form notes.
+    pub notes: Option<String>,
+    /// Part warranty expiry date, `YYYY-MM-DD`.
+    pub warranty_expires_on: Option<String>,
+    /// Part warranty expiry odometer reading (whole miles).
+    pub warranty_expires_miles: Option<i32>,
+}
+
+impl InlinePartInput {
+    fn into_domain(self) -> NewPart {
+        NewPart {
+            name: self.name,
+            manufacturer: self.manufacturer,
+            part_number: self.part_number,
+            seller: self.seller,
+            purchase_date: self.purchase_date,
+            cost_cents: self.cost_cents,
+            supplied_by: self.supplied_by,
+            location: self.location,
+            notes: self.notes,
+            warranty_expires_on: self.warranty_expires_on,
+            warranty_expires_miles: self.warranty_expires_miles,
+            ..Default::default()
+        }
+    }
+}
+
 #[derive(Deserialize, JsonSchema)]
 pub struct RecordPartInput {
     /// Vehicle id, from `list_vehicles`.
@@ -205,6 +269,9 @@ pub struct RecordPartInput {
     pub purchase_date: Option<String>,
     /// What it cost, integer cents (e.g. $123.45 -> 12345).
     pub cost_cents: Option<i32>,
+    /// Who supplied the part: `self` (the owner bought it, the default) or
+    /// `shop` (the shop sourced it and billed for it).
+    pub supplied_by: Option<String>,
     /// Lifecycle status: `purchased`, `installed`, or `replaced`.
     /// Defaults to `purchased`.
     pub status: Option<String>,
@@ -249,6 +316,7 @@ impl RecordPartInput {
                 location: self.location,
                 warranty_expires_on: self.warranty_expires_on,
                 warranty_expires_miles: self.warranty_expires_miles,
+                supplied_by: self.supplied_by,
             },
         )
     }

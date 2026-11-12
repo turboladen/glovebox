@@ -24,7 +24,7 @@ async fn record_service_then_summarize_recent_activity_round_trip() {
                 "mileage": 48_000,
                 "total_cost_cents": 8_999,
                 "line_items": [
-                    { "description": "5W-30 oil 5qt", "cost_cents": 4_500 }
+                    { "description": "5W-30 oil 5qt", "work_kind": "maintenance", "cost_cents": 4_500 }
                 ]
             }),
         )
@@ -333,4 +333,60 @@ async fn link_service_to_maintenance_wrong_parent_both_ways() {
     );
     let fetched = svc_svc::get(&t.db, v.id, mine_svc.record.id).await.unwrap();
     assert!(fetched.schedule_item_ids.is_empty());
+}
+
+#[tokio::test]
+async fn record_service_files_a_multi_line_invoice_in_one_call() {
+    let c = connect().await;
+    let v = vehicle::create(&c.db, new_vehicle("Daily"))
+        .await
+        .unwrap()
+        .id;
+    let out = c
+        .call(
+            "record_service",
+            json!({
+                "vehicle_id": v, "service_date": "2025-03-24", "end_date": "2025-03-25",
+                "performed_by": "shop", "shop_name": "Example VW", "mileage": 53010,
+                "invoice_ref": "RO-1182", "total_cost_cents": 48250,
+                "line_items": [
+                    {"description": "Brake fluid flush", "work_kind": "maintenance", "cost_cents": 14900},
+                    {"description": "Install owner-supplied pads", "work_kind": "repair", "cost_cents": 33350}],
+                "parts": [{"name": "Front brake pads", "seller": "FCP Euro", "supplied_by": "self",
+                           "cost_cents": 8900}]
+            }),
+        )
+        .await;
+    assert_eq!(out["performed_by"], "shop");
+    assert_eq!(out["end_date"], "2025-03-25");
+    assert_eq!(out["parts"][0]["supplied_by"], "self");
+    assert_eq!(out["parts"][0]["installed_odometer"], 53010);
+    assert_eq!(out["line_items"][1]["work_kind"], "repair");
+    assert_eq!(out["already_recorded"], false);
+
+    let again = c
+        .call(
+            "record_service",
+            json!({"vehicle_id": v, "service_date": "2025-03-24", "invoice_ref": "RO-1182"}),
+        )
+        .await;
+    assert_eq!(again["already_recorded"], true);
+    assert_eq!(again["id"], out["id"]);
+}
+
+#[tokio::test]
+async fn record_service_rejects_a_bad_work_kind_with_the_field_name() {
+    let c = connect().await;
+    let v = vehicle::create(&c.db, new_vehicle("Daily"))
+        .await
+        .unwrap()
+        .id;
+    let err = c
+        .call_err(
+            "record_service",
+            json!({"vehicle_id": v, "service_date": "2025-03-24",
+                   "line_items": [{"description": "Tune", "work_kind": "upgrade"}]}),
+        )
+        .await;
+    assert!(err.contains("work_kind"), "got: {err}");
 }

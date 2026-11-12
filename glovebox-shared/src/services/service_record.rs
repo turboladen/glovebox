@@ -7,8 +7,61 @@ use crate::{
         service_record, service_record_line_item, service_schedule_link,
     },
     error::{DomainError, DomainResult},
-    inputs::service_record::{NewLineItem, NewServiceRecord, UpdateServiceRecord},
+    inputs::{
+        part::NewPart,
+        service_record::{NewLineItem, NewServiceRecord, UpdateServiceRecord},
+    },
+    services::part as part_svc,
 };
+
+/// Allowed values for `service_records.performed_by`.
+pub const VALID_PERFORMED_BY: [&str; 2] = ["shop", "self"];
+
+/// Allowed values for `service_record_line_items.work_kind`.
+pub const VALID_WORK_KINDS: [&str; 4] = ["maintenance", "mod", "repair", "inspection"];
+
+fn validate_choice(field: &str, value: &str, allowed: &[&str]) -> DomainResult<()> {
+    if allowed.contains(&value) {
+        return Ok(());
+    }
+    Err(DomainError::invalid(
+        field,
+        format!(
+            "'{value}' is not valid. Must be one of: {}",
+            allowed.join(", ")
+        ),
+    ))
+}
+
+fn validate_line_items(items: &[NewLineItem]) -> DomainResult<()> {
+    items
+        .iter()
+        .try_for_each(|li| validate_choice("work_kind", &li.work_kind, &VALID_WORK_KINDS))
+}
+
+/// Checks the fields that depend on each other: the date range runs forward,
+/// and a self-performed job has no shop. Dates compare as `YYYY-MM-DD` text.
+fn validate_who_and_when(
+    service_date: &str,
+    end_date: Option<&str>,
+    performed_by: &str,
+    shop_name: Option<&str>,
+) -> DomainResult<()> {
+    validate_choice("performed_by", performed_by, &VALID_PERFORMED_BY)?;
+    if end_date.is_some_and(|end| end < service_date) {
+        return Err(DomainError::invalid(
+            "end_date",
+            "must not be before service_date",
+        ));
+    }
+    if performed_by == "self" && shop_name.is_some() {
+        return Err(DomainError::invalid(
+            "shop_name",
+            "a self-performed service has no shop",
+        ));
+    }
+    Ok(())
+}
 
 /// Payer whitelist for `service_records.paid_by`.
 const VALID_PAYERS: [&str; 3] = ["self", "insurance", "third_party"];
@@ -74,7 +127,12 @@ pub struct ServiceRecordWithLinks {
     pub record: service_record::Model,
     pub schedule_item_ids: Vec<i32>,
     pub part_ids: Vec<i32>,
+    /// The full rows behind `part_ids`.
+    pub parts: Vec<part::Model>,
     pub line_items: Vec<service_record_line_item::Model>,
+    /// True when `create` found a record with the same `invoice_ref` on this
+    /// vehicle and returned it unchanged instead of writing anything.
+    pub already_recorded: bool,
     /// Soft advisory: other same-day records on this vehicle, surfaced only
     /// when a record was created WITHOUT an `invoice_ref` so the caller can
     /// reconcile a possible duplicate. Never blocks — distinct records
@@ -92,30 +150,56 @@ pub struct PossibleDuplicate {
     pub total_cost_cents: Option<i32>,
 }
 
-/// Load schedule link IDs, part IDs, and line items for a single service record.
+impl ServiceRecordWithLinks {
+    fn assemble(
+        record: service_record::Model,
+        schedule_item_ids: Vec<i32>,
+        parts: Vec<part::Model>,
+        line_items: Vec<service_record_line_item::Model>,
+    ) -> Self {
+        Self {
+            record,
+            schedule_item_ids,
+            part_ids: parts.iter().map(|p| p.id).collect(),
+            parts,
+            line_items,
+            already_recorded: false,
+            possible_duplicates: Vec::new(),
+        }
+    }
+}
+
+/// Load a record's schedule link ids, installed parts, and line items.
 async fn load_service_links(
     db: &impl ConnectionTrait,
-    record_id: i32,
-) -> DomainResult<(Vec<i32>, Vec<i32>, Vec<service_record_line_item::Model>)> {
-    let links = service_schedule_link::Entity::find()
-        .filter(service_schedule_link::Column::ServiceRecordId.eq(record_id))
+    record: service_record::Model,
+) -> DomainResult<ServiceRecordWithLinks> {
+    let schedule_item_ids = service_schedule_link::Entity::find()
+        .filter(service_schedule_link::Column::ServiceRecordId.eq(record.id))
         .all(db)
-        .await?;
-    let schedule_item_ids = links.into_iter().map(|l| l.schedule_item_id).collect();
+        .await?
+        .into_iter()
+        .map(|l| l.schedule_item_id)
+        .collect();
 
     let parts = part::Entity::find()
-        .filter(part::Column::InstalledServiceId.eq(record_id))
+        .filter(part::Column::InstalledServiceId.eq(record.id))
+        .order_by_asc(part::Column::Id)
         .all(db)
         .await?;
-    let part_ids = parts.into_iter().map(|p| p.id).collect();
 
     let line_items = service_record_line_item::Entity::find()
-        .filter(service_record_line_item::Column::ServiceRecordId.eq(record_id))
+        .filter(service_record_line_item::Column::ServiceRecordId.eq(record.id))
         .order_by_asc(service_record_line_item::Column::Id)
         .all(db)
         .await?;
 
-    Ok((schedule_item_ids, part_ids, line_items))
+    Ok(ServiceRecordWithLinks::assemble(
+        record,
+        schedule_item_ids,
+        parts,
+        line_items,
+    ))
 }
 
 /// Insert line items for a service record within a transaction.
@@ -128,7 +212,7 @@ async fn insert_line_items(
         let li = service_record_line_item::ActiveModel {
             service_record_id: Set(record_id),
             description: Set(item.description),
-            work_kind: Set("maintenance".to_string()),
+            work_kind: Set(item.work_kind),
             quantity: Set(item.quantity),
             unit_cost_cents: Set(item.unit_cost_cents),
             cost_cents: Set(item.cost_cents),
@@ -224,6 +308,7 @@ pub async fn list(
     } else {
         part::Entity::find()
             .filter(part::Column::InstalledServiceId.is_in(record_ids.clone()))
+            .order_by_asc(part::Column::Id)
             .all(db)
             .await?
     };
@@ -246,23 +331,17 @@ pub async fn list(
                 .filter(|l| l.service_record_id == record.id)
                 .map(|l| l.schedule_item_id)
                 .collect();
-            let part_ids = all_parts
+            let parts = all_parts
                 .iter()
                 .filter(|p| p.installed_service_id == Some(record.id))
-                .map(|p| p.id)
+                .cloned()
                 .collect();
             let line_items = all_line_items
                 .iter()
                 .filter(|li| li.service_record_id == record.id)
                 .cloned()
                 .collect();
-            ServiceRecordWithLinks {
-                record,
-                schedule_item_ids,
-                part_ids,
-                line_items,
-                possible_duplicates: Vec::new(),
-            }
+            ServiceRecordWithLinks::assemble(record, schedule_item_ids, parts, line_items)
         })
         .collect();
 
@@ -280,18 +359,49 @@ pub async fn get(
         .await?
         .ok_or_else(|| DomainError::NotFound(format!("Service record {id} not found")))?;
 
-    let (schedule_item_ids, part_ids, line_items) = load_service_links(db, record.id).await?;
-
-    Ok(ServiceRecordWithLinks {
-        record,
-        schedule_item_ids,
-        part_ids,
-        line_items,
-        possible_duplicates: Vec::new(),
-    })
+    load_service_links(db, record).await
 }
 
-#[allow(clippy::too_many_lines)] // linear create + idempotency + advisory
+/// Marks existing parts as installed by `record` and creates the parts its
+/// invoice lists, already installed.
+async fn install_parts(
+    txn: &impl ConnectionTrait,
+    vehicle_id: i32,
+    record: &service_record::Model,
+    existing_ids: Vec<i32>,
+    new_parts: Vec<NewPart>,
+) -> DomainResult<()> {
+    for part_id in existing_ids {
+        let existing_part = part::Entity::find_by_id(part_id)
+            .filter(part::Column::VehicleId.eq(vehicle_id))
+            .one(txn)
+            .await?
+            .ok_or_else(|| DomainError::NotFound(format!("Part {part_id} not found")))?;
+
+        let mut active_part: part::ActiveModel = existing_part.into();
+        active_part.status = Set("installed".to_string());
+        active_part.installed_service_id = Set(Some(record.id));
+        active_part.installed_date = Set(Some(record.service_date.clone()));
+        if let Some(miles) = record.mileage {
+            active_part.installed_odometer = Set(Some(miles));
+        }
+        active_part.update(txn).await?;
+    }
+
+    for mut new_part in new_parts {
+        new_part.status = Some("installed".into());
+        new_part.installed_service_id = Some(record.id);
+        new_part.installed_date = Some(record.service_date.clone());
+        new_part.installed_odometer = record.mileage;
+        part_svc::create(txn, vehicle_id, new_part).await?;
+    }
+    Ok(())
+}
+
+/// Creates a service record with its line items, installed parts, schedule
+/// links and odometer reading in one transaction; any failure leaves nothing
+/// behind. A record already filed under the same `invoice_ref` is returned
+/// unchanged with `already_recorded` set.
 pub async fn create<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -307,14 +417,15 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     // duplicate. Trim so "INV-1 " and "INV-1" are the same identity signal.
     let invoice_ref = input
         .invoice_ref
+        .as_deref()
         .map(|r| r.trim().to_string())
         .filter(|r| !r.is_empty());
 
     // Hard-idempotency: an invoice_ref is a deterministic identity signal.
     // If this vehicle already has a record with the same ref, return it
-    // UNTOUCHED — no new record, no new links/parts/line-items from this call
-    // (reconcile those via `link` if needed). Short-circuits before any guard
-    // or write. The partial unique index is the backstop against a race.
+    // UNTOUCHED: no new record, no new links, parts or line items from this
+    // call. The short-circuit runs before any other check or write. The
+    // partial unique index is the backstop against a race.
     if let Some(invoice_ref) = &invoice_ref {
         let existing = service_record::Entity::find()
             .filter(service_record::Column::VehicleId.eq(vehicle_id))
@@ -322,17 +433,21 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
             .one(db)
             .await?;
         if let Some(existing) = existing {
-            let (schedule_item_ids, part_ids, line_items) =
-                load_service_links(db, existing.id).await?;
-            return Ok(ServiceRecordWithLinks {
-                record: existing,
-                schedule_item_ids,
-                part_ids,
-                line_items,
-                possible_duplicates: Vec::new(),
-            });
+            let mut found = load_service_links(db, existing).await?;
+            found.already_recorded = true;
+            return Ok(found);
         }
     }
+
+    let performed_by = input.performed_by.unwrap_or_else(|| "shop".into());
+    validate_who_and_when(
+        &input.service_date,
+        input.end_date.as_deref(),
+        &performed_by,
+        input.shop_name.as_deref(),
+    )?;
+    let line_items_input = input.line_items.unwrap_or_default();
+    validate_line_items(&line_items_input)?;
 
     let schedule_item_ids = input.schedule_item_ids.unwrap_or_default();
     require_schedule_items_in_scope(db, vehicle_id, &schedule_item_ids).await?;
@@ -342,6 +457,8 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     let record = service_record::ActiveModel {
         vehicle_id: Set(vehicle_id),
         service_date: Set(input.service_date.clone()),
+        end_date: Set(input.end_date),
+        performed_by: Set(performed_by),
         mileage: Set(input.mileage),
         description: Set(input.description),
         parts_cost_cents: Set(input.parts_cost_cents),
@@ -360,6 +477,8 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     };
     let record = record.insert(&txn).await?;
 
+    // Every link step below runs on `txn`, so a failure in any of them rolls
+    // back the record and everything written before it.
     for item_id in &schedule_item_ids {
         let link = service_schedule_link::ActiveModel {
             service_record_id: Set(record.id),
@@ -368,53 +487,35 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
         link.insert(&txn).await?;
     }
 
-    // Mark linked parts as installed
-    let part_ids = input.part_ids.unwrap_or_default();
-    for part_id in &part_ids {
-        let existing_part = part::Entity::find_by_id(*part_id)
-            .filter(part::Column::VehicleId.eq(vehicle_id))
-            .one(&txn)
-            .await?
-            .ok_or_else(|| DomainError::NotFound(format!("Part {part_id} not found")))?;
+    install_parts(
+        &txn,
+        vehicle_id,
+        &record,
+        input.part_ids.unwrap_or_default(),
+        input.parts.unwrap_or_default(),
+    )
+    .await?;
 
-        let mut active_part: part::ActiveModel = existing_part.into();
-        active_part.status = Set("installed".to_string());
-        active_part.installed_service_id = Set(Some(record.id));
-        active_part.installed_date = Set(Some(input.service_date.clone()));
-        if let Some(miles) = record.mileage {
-            active_part.installed_odometer = Set(Some(miles));
-        }
-        active_part.update(&txn).await?;
-    }
-
-    // Insert line items
-    let line_items_input = input.line_items.unwrap_or_default();
     insert_line_items(&txn, record.id, line_items_input).await?;
 
-    // Also create a mileage log entry if mileage was provided. The FK is the
-    // real linkage (activity dedupe + update/delete maintenance key on it);
-    // `source` stays as a display label.
+    // The odometer reading is linked by FK (activity dedupe and
+    // update/delete maintenance key on it); `source` is a display label.
     if let Some(miles) = record.mileage {
         insert_auto_mileage_log(&txn, vehicle_id, &record, miles).await?;
     }
 
-    // Load back the inserted line items to return
-    let line_items = service_record_line_item::Entity::find()
-        .filter(service_record_line_item::Column::ServiceRecordId.eq(record.id))
-        .order_by_asc(service_record_line_item::Column::Id)
-        .all(&txn)
-        .await?;
+    let mut created = load_service_links(&txn, record).await?;
 
     txn.commit().await?;
 
     // Soft advisory: with no invoice_ref there is no deterministic identity
     // signal, so surface other same-day records on this vehicle for the caller
-    // to reconcile. Read-only, never blocks — distinct records coexist.
-    let possible_duplicates = if record.invoice_ref.is_none() {
-        service_record::Entity::find()
+    // to reconcile. Read-only, never blocks; distinct records coexist.
+    if created.record.invoice_ref.is_none() {
+        created.possible_duplicates = service_record::Entity::find()
             .filter(service_record::Column::VehicleId.eq(vehicle_id))
-            .filter(service_record::Column::ServiceDate.eq(record.service_date.clone()))
-            .filter(service_record::Column::Id.ne(record.id))
+            .filter(service_record::Column::ServiceDate.eq(created.record.service_date.clone()))
+            .filter(service_record::Column::Id.ne(created.record.id))
             .order_by_asc(service_record::Column::Id)
             .all(db)
             .await?
@@ -425,18 +526,10 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
                 description: r.description,
                 total_cost_cents: r.total_cost_cents,
             })
-            .collect()
-    } else {
-        Vec::new()
-    };
+            .collect();
+    }
 
-    Ok(ServiceRecordWithLinks {
-        record,
-        schedule_item_ids,
-        part_ids,
-        line_items,
-        possible_duplicates,
-    })
+    Ok(created)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -452,12 +545,42 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         .await?
         .ok_or_else(|| DomainError::NotFound(format!("Service record {id} not found")))?;
 
+    validate_who_and_when(
+        input
+            .service_date
+            .as_ref()
+            .unwrap_or(&existing.service_date),
+        input
+            .end_date
+            .as_ref()
+            .unwrap_or(&existing.end_date)
+            .as_deref(),
+        input
+            .performed_by
+            .as_ref()
+            .unwrap_or(&existing.performed_by),
+        input
+            .shop_name
+            .as_ref()
+            .unwrap_or(&existing.shop_name)
+            .as_deref(),
+    )?;
+    if let Some(items) = &input.line_items {
+        validate_line_items(items)?;
+    }
+
     let txn = db.begin().await?;
 
     let mut active: service_record::ActiveModel = existing.into();
 
     if let Some(v) = input.service_date {
         active.service_date = Set(v);
+    }
+    if let Some(v) = input.end_date {
+        active.end_date = Set(v);
+    }
+    if let Some(v) = input.performed_by {
+        active.performed_by = Set(v);
     }
     if let Some(v) = input.mileage {
         active.mileage = Set(v);
@@ -507,7 +630,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     // Keep the auto-created mileage log in step with the record.
     sync_auto_mileage_log(&txn, vehicle_id, &record).await?;
 
-    let schedule_item_ids = if let Some(item_ids) = input.schedule_item_ids {
+    if let Some(item_ids) = input.schedule_item_ids {
         require_schedule_items_in_scope(&txn, vehicle_id, &item_ids).await?;
         service_schedule_link::Entity::delete_many()
             .filter(service_schedule_link::Column::ServiceRecordId.eq(record.id))
@@ -521,17 +644,10 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
             };
             link.insert(&txn).await?;
         }
-        item_ids
-    } else {
-        let links = service_schedule_link::Entity::find()
-            .filter(service_schedule_link::Column::ServiceRecordId.eq(record.id))
-            .all(&txn)
-            .await?;
-        links.into_iter().map(|l| l.schedule_item_id).collect()
-    };
+    }
 
     // Handle part linking on update
-    let part_ids = if let Some(new_part_ids) = input.part_ids {
+    if let Some(new_part_ids) = input.part_ids {
         // Unlink previously linked parts
         let old_parts = part::Entity::find()
             .filter(part::Column::InstalledServiceId.eq(record.id))
@@ -565,14 +681,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
             active_part.installed_odometer = Set(record.mileage);
             active_part.update(&txn).await?;
         }
-        new_part_ids
-    } else {
-        let parts = part::Entity::find()
-            .filter(part::Column::InstalledServiceId.eq(record.id))
-            .all(&txn)
-            .await?;
-        parts.into_iter().map(|p| p.id).collect()
-    };
+    }
 
     // Handle line items: replace-all semantics when provided
     if let Some(new_line_items) = input.line_items {
@@ -583,21 +692,11 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         insert_line_items(&txn, record.id, new_line_items).await?;
     }
 
-    let line_items = service_record_line_item::Entity::find()
-        .filter(service_record_line_item::Column::ServiceRecordId.eq(record.id))
-        .order_by_asc(service_record_line_item::Column::Id)
-        .all(&txn)
-        .await?;
+    let updated = load_service_links(&txn, record).await?;
 
     txn.commit().await?;
 
-    Ok(ServiceRecordWithLinks {
-        record,
-        schedule_item_ids,
-        part_ids,
-        line_items,
-        possible_duplicates: Vec::new(),
-    })
+    Ok(updated)
 }
 
 /// How [`link_schedule_items`] treats the record's existing schedule links.
@@ -678,14 +777,7 @@ pub async fn link_schedule_items<C: ConnectionTrait + TransactionTrait>(
     let record = active.update(&txn).await?;
     txn.commit().await?;
 
-    let (schedule_item_ids, part_ids, line_items) = load_service_links(db, record.id).await?;
-    Ok(ServiceRecordWithLinks {
-        record,
-        schedule_item_ids,
-        part_ids,
-        line_items,
-        possible_duplicates: Vec::new(),
-    })
+    load_service_links(db, record).await
 }
 
 /// Delete a service record and its owned rows.
@@ -751,7 +843,10 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{VehicleFixture, test_db};
+    use crate::{
+        inputs::part::NewPart,
+        test_support::{VehicleFixture, test_db},
+    };
 
     async fn seed_vehicle(db: &impl ConnectionTrait) -> i32 {
         VehicleFixture::new().insert_id(db).await
@@ -813,12 +908,15 @@ mod tests {
                 part_ids: Some(vec![part_id]),
                 line_items: Some(vec![NewLineItem {
                     description: "Synthetic oil".into(),
-                    category: Some("parts".into()),
+                    work_kind: "maintenance".into(),
                     quantity: Some(5.0),
                     unit_cost_cents: Some(1_000),
                     cost_cents: Some(5_000),
                 }]),
                 invoice_ref: None,
+                end_date: None,
+                performed_by: None,
+                parts: None,
             },
         )
         .await
@@ -885,12 +983,15 @@ mod tests {
                 part_ids: Some(vec![part_a]),
                 line_items: Some(vec![NewLineItem {
                     description: "old".into(),
-                    category: None,
+                    work_kind: "maintenance".into(),
                     quantity: None,
                     unit_cost_cents: None,
                     cost_cents: Some(100),
                 }]),
                 invoice_ref: None,
+                end_date: None,
+                performed_by: None,
+                parts: None,
             },
         )
         .await
@@ -904,7 +1005,7 @@ mod tests {
                 part_ids: Some(vec![part_b]),
                 line_items: Some(vec![NewLineItem {
                     description: "new".into(),
-                    category: None,
+                    work_kind: "maintenance".into(),
                     quantity: None,
                     unit_cost_cents: None,
                     cost_cents: Some(200),
@@ -965,6 +1066,9 @@ mod tests {
                 part_ids: Some(vec![part_id]),
                 line_items: None,
                 invoice_ref: None,
+                end_date: None,
+                performed_by: None,
+                parts: None,
             },
         )
         .await
@@ -1229,6 +1333,9 @@ mod tests {
             part_ids: None,
             line_items: None,
             invoice_ref: None,
+            end_date: None,
+            performed_by: None,
+            parts: None,
         }
     }
 
@@ -1265,7 +1372,7 @@ mod tests {
                 schedule_item_ids: Some(vec![9999]),
                 line_items: Some(vec![NewLineItem {
                     description: "should not be added".into(),
-                    category: None,
+                    work_kind: "maintenance".into(),
                     quantity: None,
                     unit_cost_cents: None,
                     cost_cents: Some(100),
@@ -1770,5 +1877,312 @@ mod tests {
             created.schedule_item_ids,
             vec![platform_item, template_item]
         );
+    }
+
+    // --- invoice detail: who did the work, date range, line kinds, parts ---
+
+    fn line(description: &str, work_kind: &str) -> NewLineItem {
+        NewLineItem {
+            description: description.into(),
+            work_kind: work_kind.into(),
+            quantity: None,
+            unit_cost_cents: None,
+            cost_cents: None,
+        }
+    }
+
+    fn inline_part(name: &str, supplied_by: &str) -> NewPart {
+        NewPart {
+            name: name.into(),
+            supplied_by: Some(supplied_by.into()),
+            ..Default::default()
+        }
+    }
+
+    fn kinds(got: &ServiceRecordWithLinks) -> Vec<&str> {
+        got.line_items
+            .iter()
+            .map(|l| l.work_kind.as_str())
+            .collect()
+    }
+
+    async fn count_services(db: &DatabaseConnection) -> u64 {
+        service_record::Entity::find().count(db).await.unwrap()
+    }
+
+    async fn count_line_items(db: &DatabaseConnection) -> u64 {
+        service_record_line_item::Entity::find()
+            .count(db)
+            .await
+            .unwrap()
+    }
+
+    async fn count_parts(db: &DatabaseConnection) -> u64 {
+        part::Entity::find().count(db).await.unwrap()
+    }
+
+    async fn count_mileage_readings(db: &DatabaseConnection) -> u64 {
+        mileage_log::Entity::find().count(db).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn create_stores_who_did_it_the_date_range_and_line_kinds() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let got = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: "2025-03-24".into(),
+                end_date: Some("2025-03-25".into()),
+                performed_by: Some("shop".into()),
+                line_items: Some(vec![
+                    line("Replace suction jet pump", "repair"),
+                    line("Intake upgrade", "mod"),
+                ]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(got.record.performed_by, "shop");
+        assert_eq!(got.record.end_date.as_deref(), Some("2025-03-25"));
+        assert_eq!(kinds(&got), vec!["repair", "mod"]);
+    }
+
+    #[tokio::test]
+    async fn create_rejects_an_end_date_before_the_start() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let err = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: "2025-03-25".into(),
+                end_date: Some("2025-03-24".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "end_date"));
+        assert_eq!(count_services(&db).await, 0);
+    }
+
+    #[tokio::test]
+    async fn create_rejects_an_unknown_work_kind_and_performer() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let err = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: "2025-03-24".into(),
+                line_items: Some(vec![line("Upgrade", "upgrade")]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "work_kind"));
+
+        let err = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: "2025-03-24".into(),
+                performed_by: Some("dealer".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "performed_by"));
+        assert_eq!(count_services(&db).await, 0);
+    }
+
+    #[tokio::test]
+    async fn create_rejects_a_self_performed_service_with_a_shop_name() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let err = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: "2025-03-24".into(),
+                performed_by: Some("self".into()),
+                shop_name: Some("Example VW".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "shop_name"));
+    }
+
+    #[tokio::test]
+    async fn inline_parts_are_installed_by_the_service_and_keep_their_supplier() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let got = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: "2025-03-24".into(),
+                mileage: Some(52_747),
+                parts: Some(vec![
+                    NewPart {
+                        seller: Some("FCP Euro".into()),
+                        ..inline_part("Front brake pads", "self")
+                    },
+                    inline_part("Brake fluid", "shop"),
+                ]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(got.parts.len(), 2);
+        assert_eq!(got.part_ids.len(), 2);
+        assert_eq!(got.parts[0].supplied_by, "self");
+        assert_eq!(got.parts[0].installed_service_id, Some(got.record.id));
+        assert_eq!(got.parts[0].installed_odometer, Some(52_747));
+        assert_eq!(got.parts[0].installed_date.as_deref(), Some("2025-03-24"));
+        assert_eq!(got.parts[0].status, "installed");
+        assert_eq!(got.parts[1].supplied_by, "shop");
+    }
+
+    #[tokio::test]
+    async fn refiling_an_invoice_number_returns_the_first_record_untouched() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let first = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: "2025-03-24".into(),
+                invoice_ref: Some("07447".into()),
+                line_items: Some(vec![line("Oil change", "maintenance")]),
+                parts: Some(vec![inline_part("Oil filter", "shop")]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(!first.already_recorded);
+
+        let second = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: "2025-03-24".into(),
+                invoice_ref: Some("07447".into()),
+                line_items: Some(vec![line("Other", "repair"), line("Another", "mod")]),
+                parts: Some(vec![inline_part("A", "self"), inline_part("B", "self")]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(second.already_recorded);
+        assert_eq!(second.record.id, first.record.id);
+        assert_eq!(count_line_items(&db).await, 1);
+        assert_eq!(count_parts(&db).await, 1);
+    }
+
+    #[tokio::test]
+    async fn a_bad_part_supplier_rolls_back_the_whole_service() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let result = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: "2025-03-24".into(),
+                mileage: Some(50_000),
+                line_items: Some(vec![line("Oil change", "maintenance")]),
+                parts: Some(vec![inline_part("Filter", "dealer")]),
+                ..Default::default()
+            },
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(DomainError::Invalid { ref field, .. }) if field == "supplied_by"
+        ));
+        assert_eq!(count_services(&db).await, 0);
+        assert_eq!(count_line_items(&db).await, 0);
+        assert_eq!(count_parts(&db).await, 0);
+        assert_eq!(count_mileage_readings(&db).await, 0);
+    }
+
+    #[tokio::test]
+    async fn a_self_performed_service_records_an_ecu_flash() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let got = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: "2025-03-24".into(),
+                performed_by: Some("self".into()),
+                line_items: Some(vec![line("IE Stage 1 tune flash", "mod")]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(got.record.performed_by, "self");
+        assert!(got.record.shop_name.is_none());
+    }
+
+    #[tokio::test]
+    async fn update_changes_performer_and_end_date_and_validates_them() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let made = create(&db, vid, minimal_record(None)).await.unwrap();
+
+        let updated = update(
+            &db,
+            vid,
+            made.record.id,
+            UpdateServiceRecord {
+                performed_by: Some("self".into()),
+                end_date: Some(Some("2024-03-02".into())),
+                line_items: Some(vec![line("Flash", "mod")]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.record.performed_by, "self");
+        assert_eq!(updated.record.end_date.as_deref(), Some("2024-03-02"));
+        assert_eq!(kinds(&updated), vec!["mod"]);
+
+        let err = update(
+            &db,
+            vid,
+            made.record.id,
+            UpdateServiceRecord {
+                end_date: Some(Some("2024-02-01".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "end_date"));
+
+        let cleared = update(
+            &db,
+            vid,
+            made.record.id,
+            UpdateServiceRecord {
+                end_date: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(cleared.record.end_date.is_none());
     }
 }

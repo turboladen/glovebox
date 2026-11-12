@@ -14,7 +14,7 @@ use crate::schemas::{LinkServiceToMaintenanceInput, RecordServiceInput};
 impl GloveboxMcp {
     #[tool(
         name = "record_service",
-        description = "Record maintenance or repair work that was done: what, when, at what mileage, and what it cost (integer cents). Providing `mileage` also logs an odometer reading. Use `line_items` for itemized invoices. If the work satisfies due/overdue schedule items from `check_due_maintenance`, pass their ids in `schedule_item_ids` so the reminders clear; for records you already created (e.g. a bulk import), reconcile afterwards with `link_service_to_maintenance` instead of re-recording.",
+        description = "Record work that was done on a vehicle: one call per invoice or repair order. Give `service_date` (and `end_date` for multi-day jobs), `performed_by` (`shop` or `self`), `mileage` (also logs an odometer reading), and costs in integer cents. Put each job on the paperwork in `line_items` with a `work_kind` (`maintenance`, `mod`, `repair`, `inspection`), and list anything installed in `parts` so each part is created and installed by this service. `invoice_ref` is the number printed on the paperwork; filing the same one again returns the existing record with `already_recorded: true`. If the work satisfies due/overdue schedule items from `check_due_maintenance`, pass their ids in `schedule_item_ids` so the reminders clear; for records that already exist, reconcile with `link_service_to_maintenance`.",
         input_schema = rmcp::handler::server::common::schema_for_type::<RecordServiceInput>()
     )]
     async fn record_service(

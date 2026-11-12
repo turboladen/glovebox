@@ -6,6 +6,22 @@ use crate::{
     inputs::part::{NewPart, PartFilter, UpdatePart},
 };
 
+/// Allowed values for `parts.supplied_by`.
+pub const VALID_SUPPLIED_BY: [&str; 2] = ["self", "shop"];
+
+fn validate_supplied_by(supplied_by: &str) -> DomainResult<()> {
+    if VALID_SUPPLIED_BY.contains(&supplied_by) {
+        return Ok(());
+    }
+    Err(DomainError::Invalid {
+        field: "supplied_by".into(),
+        message: format!(
+            "'{supplied_by}' is not valid. Must be one of: {}",
+            VALID_SUPPLIED_BY.join(", ")
+        ),
+    })
+}
+
 /// Verify a referenced service record belongs to the vehicle. A cross-vehicle
 /// service must be indistinguishable from a nonexistent one.
 async fn require_service_record_owned(
@@ -48,6 +64,8 @@ pub async fn create(
     vehicle_id: i32,
     input: NewPart,
 ) -> DomainResult<part::Model> {
+    let supplied_by = input.supplied_by.unwrap_or_else(|| "self".to_string());
+    validate_supplied_by(&supplied_by)?;
     if let Some(service_id) = input.installed_service_id {
         require_service_record_owned(db, vehicle_id, service_id).await?;
     }
@@ -72,7 +90,7 @@ pub async fn create(
         location: Set(input.location),
         warranty_expires_on: Set(input.warranty_expires_on),
         warranty_expires_miles: Set(input.warranty_expires_miles),
-        supplied_by: Set("self".to_string()),
+        supplied_by: Set(supplied_by),
         ..Default::default()
     };
     Ok(model.insert(db).await?)
@@ -90,8 +108,15 @@ pub async fn update(
         require_service_record_owned(db, vehicle_id, service_id).await?;
     }
 
+    if let Some(v) = &input.supplied_by {
+        validate_supplied_by(v)?;
+    }
+
     let mut active: part::ActiveModel = existing.into();
 
+    if let Some(v) = input.supplied_by {
+        active.supplied_by = Set(v);
+    }
     if let Some(v) = input.name {
         active.name = Set(v);
     }
@@ -205,6 +230,7 @@ mod tests {
             location: None,
             warranty_expires_on: None,
             warranty_expires_miles: None,
+            supplied_by: None,
         }
     }
 
@@ -426,5 +452,65 @@ mod tests {
         assert_eq!(wrong_parent_msg, format!("Part {} not found", part.id));
         // The part survives a wrong-parent delete attempt.
         assert!(get(&db, vid, part.id).await.is_ok());
+    }
+
+    // --- supplied_by ------------------------------------------------------
+
+    #[tokio::test]
+    async fn supplied_by_defaults_to_self_and_is_validated_on_create_and_update() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let made = create(&db, vid, minimal_part("Pads", None)).await.unwrap();
+        assert_eq!(made.supplied_by, "self");
+
+        let shop_part = create(
+            &db,
+            vid,
+            NewPart {
+                supplied_by: Some("shop".into()),
+                ..minimal_part("Fluid", None)
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(shop_part.supplied_by, "shop");
+
+        let err = create(
+            &db,
+            vid,
+            NewPart {
+                supplied_by: Some("dealer".into()),
+                ..minimal_part("Bad", None)
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "supplied_by"));
+
+        let updated = update(
+            &db,
+            vid,
+            made.id,
+            UpdatePart {
+                supplied_by: Some("shop".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.supplied_by, "shop");
+
+        let err = update(
+            &db,
+            vid,
+            made.id,
+            UpdatePart {
+                supplied_by: Some("dealer".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "supplied_by"));
     }
 }
