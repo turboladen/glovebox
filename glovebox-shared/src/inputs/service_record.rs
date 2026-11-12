@@ -39,6 +39,10 @@ pub struct NewServiceRecord {
     /// `(vehicle_id, invoice_ref)`: re-recording the same ref returns the
     /// existing record instead of creating a duplicate.
     pub invoice_ref: Option<String>,
+    /// To-do items this service completes. Each must be an open item on the
+    /// same vehicle; its schedule item, if any, is linked so the reminder
+    /// clears.
+    pub work_item_ids: Option<Vec<i32>>,
 }
 
 #[derive(Default)]

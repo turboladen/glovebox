@@ -4,9 +4,13 @@
 //! cross-vehicle reference is indistinguishable from a nonexistent one.
 
 use sea_orm::*;
+use serde::Serialize;
 
 use crate::{
-    entities::{incident, research_finding, research_report, work_item},
+    entities::{
+        incident, mileage_log, research_finding, research_report, service_schedule_link, vehicle,
+        work_item,
+    },
     error::{DomainError, DomainResult},
     inputs::work_item::{NewWorkItem, UpdateWorkItem},
 };
@@ -23,6 +27,83 @@ fn validate_status(status: &str) -> DomainResult<()> {
         status,
         VALID_STATUSES.join(", ")
     )))
+}
+
+/// Days before a revisit date, and miles before a revisit odometer reading,
+/// at which an item counts as due soon.
+const DUE_SOON_DAYS: i64 = 30;
+const DUE_SOON_MILES: i32 = 1000;
+
+fn parse_revisit_date(value: &str) -> DomainResult<()> {
+    chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .map(|_| ())
+        .map_err(|_| DomainError::invalid("revisit_by_date", "must be a date like 2027-05-01"))
+}
+
+fn validate_revisit(date: Option<&str>, miles: Option<i32>) -> DomainResult<()> {
+    if let Some(date) = date {
+        parse_revisit_date(date)?;
+    }
+    if miles.is_some_and(|m| m < 0) {
+        return Err(DomainError::invalid(
+            "revisit_by_miles",
+            "must not be negative",
+        ));
+    }
+    Ok(())
+}
+
+/// How close an item's revisit-by is: `None` when it has no revisit date or
+/// mileage, else `"overdue"`, `"due_soon"` (within 30 days or 1000 miles) or
+/// `"ok"`. The worse of the date and mileage readings wins. With no
+/// estimated mileage, only the date is judged.
+#[must_use]
+pub fn revisit_status(
+    item: &work_item::Model,
+    today: chrono::NaiveDate,
+    estimated_mileage: Option<i32>,
+) -> Option<&'static str> {
+    let by_date = item
+        .revisit_by_date
+        .as_deref()
+        .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
+        .map(|due| {
+            let days = (due - today).num_days();
+            if days < 0 {
+                2
+            } else {
+                i32::from(days <= DUE_SOON_DAYS)
+            }
+        });
+    let by_miles = item
+        .revisit_by_miles
+        .zip(estimated_mileage)
+        .map(|(due, est)| {
+            let remaining = due - est;
+            if remaining < 0 {
+                2
+            } else {
+                i32::from(remaining <= DUE_SOON_MILES)
+            }
+        });
+    if item.revisit_by_date.is_none() && item.revisit_by_miles.is_none() {
+        return None;
+    }
+    Some(match Ord::max(by_date, by_miles).unwrap_or(0) {
+        2 => "overdue",
+        1 => "due_soon",
+        _ => "ok",
+    })
+}
+
+/// A to-do item with its revisit reading, as `list_with_status` returns it.
+#[derive(Debug, Serialize)]
+pub struct PlannedItem {
+    #[serde(flatten)]
+    pub item: work_item::Model,
+    /// See [`revisit_status`]; omitted when the item has no revisit-by.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revisit_status: Option<&'static str>,
 }
 
 /// Verify a referenced research finding belongs to the vehicle (via its
@@ -99,6 +180,98 @@ pub async fn list(
         .await?)
 }
 
+/// Lists a vehicle's to-do items, each with its revisit status judged against
+/// today and the estimated odometer. A vehicle with no mileage data is
+/// judged on dates alone.
+pub async fn list_with_status(
+    db: &DatabaseConnection,
+    vehicle_id: i32,
+    include_done: bool,
+) -> DomainResult<Vec<PlannedItem>> {
+    let items = list(db, vehicle_id, include_done).await?;
+    let estimated = if items.iter().any(|i| i.revisit_by_miles.is_some()) {
+        let v = crate::services::vehicle::require(db, vehicle_id).await?;
+        let has_readings = mileage_log::Entity::find()
+            .filter(mileage_log::Column::VehicleId.eq(vehicle_id))
+            .count(db)
+            .await?
+            > 0;
+        if has_readings || v.purchase_mileage.is_some() {
+            Some(estimate_odometer(db, vehicle_id, &v).await?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let today = chrono::Utc::now().date_naive();
+    Ok(items
+        .into_iter()
+        .map(|item| PlannedItem {
+            revisit_status: revisit_status(&item, today, estimated),
+            item,
+        })
+        .collect())
+}
+
+async fn estimate_odometer(
+    db: &DatabaseConnection,
+    vehicle_id: i32,
+    v: &vehicle::Model,
+) -> DomainResult<i32> {
+    Ok(
+        crate::services::reminders::estimate_mileage(db, vehicle_id, v)
+            .await?
+            .0,
+    )
+}
+
+/// Marks the named open items of a vehicle as done by a service record, and
+/// links each item's schedule item to that service so its reminder clears.
+/// Runs inside the caller's transaction. An id from another vehicle reads as
+/// nonexistent; an item that is already done or dropped is a `BadRequest`.
+pub(crate) async fn complete_with_service(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    ids: &[i32],
+    service_record_id: i32,
+) -> DomainResult<Vec<work_item::Model>> {
+    let mut seen = std::collections::HashSet::new();
+    let mut completed = Vec::new();
+    for &id in ids.iter().filter(|id| seen.insert(**id)) {
+        let existing = get(db, vehicle_id, id).await?;
+        if existing.status != "planned" {
+            return Err(DomainError::BadRequest(format!(
+                "Work item {id} is already {}",
+                existing.status
+            )));
+        }
+        let schedule_item_id = existing.schedule_item_id;
+        let mut active: work_item::ActiveModel = existing.into();
+        active.status = Set("done".to_string());
+        active.completed_service_id = Set(Some(service_record_id));
+        active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
+        completed.push(active.update(db).await?);
+
+        if let Some(schedule_item_id) = schedule_item_id {
+            let already_linked =
+                service_schedule_link::Entity::find_by_id((service_record_id, schedule_item_id))
+                    .one(db)
+                    .await?
+                    .is_some();
+            if !already_linked {
+                service_schedule_link::ActiveModel {
+                    service_record_id: Set(service_record_id),
+                    schedule_item_id: Set(schedule_item_id),
+                }
+                .insert(db)
+                .await?;
+            }
+        }
+    }
+    Ok(completed)
+}
+
 pub async fn get(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -119,6 +292,7 @@ pub async fn create(
     if input.title.trim().is_empty() {
         return Err(DomainError::invalid("title", "must not be blank"));
     }
+    validate_revisit(input.revisit_by_date.as_deref(), input.revisit_by_miles)?;
     crate::services::vehicle::require(db, vehicle_id).await?;
     require_links_owned(
         db,
@@ -137,6 +311,8 @@ pub async fn create(
         research_finding_id: Set(input.research_finding_id),
         incident_id: Set(input.incident_id),
         est_cost_cents: Set(input.est_cost_cents),
+        revisit_by_date: Set(input.revisit_by_date),
+        revisit_by_miles: Set(input.revisit_by_miles),
         status: Set("planned".to_string()),
         ..Default::default()
     };
@@ -159,6 +335,10 @@ pub async fn update(
     if let Some(status) = &input.status {
         validate_status(status)?;
     }
+    validate_revisit(
+        input.revisit_by_date.as_ref().and_then(|d| d.as_deref()),
+        input.revisit_by_miles.flatten(),
+    )?;
     // Same guards as create, on the links this update actually changes.
     require_links_owned(
         db,
@@ -189,6 +369,12 @@ pub async fn update(
     if let Some(v) = input.est_cost_cents {
         active.est_cost_cents = Set(v);
     }
+    if let Some(v) = input.revisit_by_date {
+        active.revisit_by_date = Set(v);
+    }
+    if let Some(v) = input.revisit_by_miles {
+        active.revisit_by_miles = Set(v);
+    }
     if let Some(v) = input.status {
         active.status = Set(v);
     }
@@ -206,7 +392,13 @@ pub async fn delete(db: &impl ConnectionTrait, vehicle_id: i32, id: i32) -> Doma
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{VehicleFixture, test_db};
+    use crate::{
+        entities::{maintenance_schedule_item, service_record},
+        inputs::service_record::NewServiceRecord,
+        services::{reminders, service_record as service_svc},
+        test_support::{VehicleFixture, test_db},
+    };
+    use chrono::NaiveDate;
 
     async fn seed_vehicle(db: &impl ConnectionTrait) -> i32 {
         VehicleFixture::new().insert_id(db).await
@@ -268,7 +460,236 @@ mod tests {
             research_finding_id: None,
             incident_id: None,
             est_cost_cents: None,
+            revisit_by_date: None,
+            revisit_by_miles: None,
         }
+    }
+
+    fn with_revisit(date: Option<&str>, miles: Option<i32>) -> work_item::Model {
+        work_item::Model {
+            id: 1,
+            vehicle_id: 1,
+            title: "t".into(),
+            notes: None,
+            schedule_item_id: None,
+            research_finding_id: None,
+            incident_id: None,
+            est_cost_cents: None,
+            status: "planned".into(),
+            created_at: String::new(),
+            updated_at: String::new(),
+            revisit_by_date: date.map(Into::into),
+            revisit_by_miles: miles,
+            completed_service_id: None,
+        }
+    }
+
+    fn service_on(date: &str, work_item_ids: Vec<i32>) -> NewServiceRecord {
+        NewServiceRecord {
+            service_date: date.into(),
+            work_item_ids: Some(work_item_ids),
+            ..Default::default()
+        }
+    }
+
+    async fn reminder_status(db: &DatabaseConnection, vehicle_id: i32, name: &str) -> String {
+        reminders::calculate_reminders(db, vehicle_id)
+            .await
+            .unwrap()
+            .reminders
+            .into_iter()
+            .find(|r| r.schedule_item.name == name)
+            .expect("reminder present")
+            .status
+    }
+
+    #[test]
+    fn revisit_status_takes_the_worse_of_date_and_mileage() {
+        let today = NaiveDate::from_ymd_opt(2026, 11, 12).unwrap();
+        assert_eq!(
+            revisit_status(&with_revisit(None, None), today, Some(64000)),
+            None
+        );
+        assert_eq!(
+            revisit_status(&with_revisit(Some("2026-10-01"), None), today, None),
+            Some("overdue")
+        );
+        assert_eq!(
+            revisit_status(&with_revisit(Some("2026-12-01"), None), today, None),
+            Some("due_soon")
+        );
+        assert_eq!(
+            revisit_status(&with_revisit(Some("2027-06-01"), None), today, None),
+            Some("ok")
+        );
+        assert_eq!(
+            revisit_status(
+                &with_revisit(Some("2027-06-01"), Some(64500)),
+                today,
+                Some(64000)
+            ),
+            Some("due_soon")
+        );
+        assert_eq!(
+            revisit_status(&with_revisit(None, Some(60000)), today, Some(64000)),
+            Some("overdue")
+        );
+        assert_eq!(
+            revisit_status(&with_revisit(None, Some(60000)), today, None),
+            Some("ok")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_service_completes_the_work_items_it_names_and_clears_their_reminders() {
+        let db = test_db().await;
+        let v = VehicleFixture::new()
+            .purchase_date("2020-01-01")
+            .insert_id(&db)
+            .await;
+        let sched = maintenance_schedule_item::ActiveModel {
+            vehicle_id: Set(Some(v)),
+            name: Set("Brake fluid flush".into()),
+            interval_months: Set(Some(12)),
+            enabled: Set(true),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap()
+        .id;
+        assert_eq!(
+            reminder_status(&db, v, "Brake fluid flush").await,
+            "overdue"
+        );
+        let planned = create(
+            &db,
+            v,
+            NewWorkItem {
+                schedule_item_id: Some(sched),
+                ..item("Flush brake fluid")
+            },
+        )
+        .await
+        .unwrap();
+
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let svc = service_svc::create(&db, v, service_on(&today, vec![planned.id]))
+            .await
+            .unwrap();
+
+        let item_after = get(&db, v, planned.id).await.unwrap();
+        assert_eq!(item_after.status, "done");
+        assert_eq!(item_after.completed_service_id, Some(svc.record.id));
+        assert_eq!(reminder_status(&db, v, "Brake fluid flush").await, "ok");
+    }
+
+    #[tokio::test]
+    async fn a_work_item_from_another_vehicle_is_not_found_and_nothing_commits() {
+        let db = test_db().await;
+        let v1 = seed_vehicle(&db).await;
+        let v2 = seed_vehicle(&db).await;
+        let foreign = create(&db, v2, item("theirs")).await.unwrap();
+
+        let err = service_svc::create(&db, v1, service_on("2026-11-12", vec![foreign.id]))
+            .await
+            .unwrap_err();
+        let missing = service_svc::create(&db, v1, service_on("2026-11-12", vec![9999]))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, DomainError::NotFound(_)));
+        assert_eq!(
+            err.to_string().replace(&foreign.id.to_string(), "N"),
+            missing.to_string().replace("9999", "N")
+        );
+        assert_eq!(service_record::Entity::find().count(&db).await.unwrap(), 0);
+        assert_eq!(get(&db, v2, foreign.id).await.unwrap().status, "planned");
+    }
+
+    #[tokio::test]
+    async fn a_finished_work_item_cannot_be_completed_again() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let planned = create(&db, v, item("once")).await.unwrap();
+        service_svc::create(&db, v, service_on("2026-11-12", vec![planned.id]))
+            .await
+            .unwrap();
+
+        let err = service_svc::create(&db, v, service_on("2026-11-13", vec![planned.id]))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, DomainError::BadRequest(_)), "got {err:?}");
+        assert_eq!(service_record::Entity::find().count(&db).await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn revisit_fields_round_trip_validate_and_clear() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let created = create(
+            &db,
+            v,
+            NewWorkItem {
+                revisit_by_date: Some("2027-05-01".into()),
+                revisit_by_miles: Some(70_000),
+                ..item("watch the seep")
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(created.revisit_by_date.as_deref(), Some("2027-05-01"));
+        assert_eq!(created.revisit_by_miles, Some(70_000));
+
+        assert!(matches!(
+            create(
+                &db,
+                v,
+                NewWorkItem {
+                    revisit_by_date: Some("soon".into()),
+                    ..item("bad")
+                }
+            )
+            .await
+            .unwrap_err(),
+            DomainError::Invalid { field, .. } if field == "revisit_by_date"
+        ));
+
+        let cleared = update(
+            &db,
+            v,
+            created.id,
+            UpdateWorkItem {
+                revisit_by_date: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(cleared.revisit_by_date, None);
+        assert_eq!(cleared.revisit_by_miles, Some(70_000));
+    }
+
+    #[tokio::test]
+    async fn planned_items_get_a_revisit_status_even_without_mileage_data() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        create(
+            &db,
+            v,
+            NewWorkItem {
+                revisit_by_date: Some("2000-01-01".into()),
+                revisit_by_miles: Some(10),
+                ..item("late")
+            },
+        )
+        .await
+        .unwrap();
+        create(&db, v, item("plain")).await.unwrap();
+
+        let listed = list_with_status(&db, v, false).await.unwrap();
+        let by_title = |t: &str| listed.iter().find(|p| p.item.title == t).unwrap();
+        assert_eq!(by_title("late").revisit_status, Some("overdue"));
+        assert_eq!(by_title("plain").revisit_status, None);
     }
 
     #[tokio::test]

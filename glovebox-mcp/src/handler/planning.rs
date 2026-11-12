@@ -5,13 +5,10 @@ use rmcp::{ErrorData as McpError, model::CallToolResult, tool, tool_router};
 use super::{GloveboxMcp, LenientParameters, domain_error, domain_result, tool_json_result};
 use serde::Serialize;
 
-use glovebox_shared::{
-    entities::work_item,
-    services::{
-        budget::{self, BudgetForecast},
-        reminders::{self, RemindersResponse},
-        work_item as work_item_svc,
-    },
+use glovebox_shared::services::{
+    budget::{self, BudgetForecast},
+    reminders::{self, RemindersResponse},
+    work_item::{self as work_item_svc, PlannedItem},
 };
 
 use crate::schemas::{ListPlannedWorkInput, PlanWorkInput, VehicleParams};
@@ -20,7 +17,7 @@ use crate::schemas::{ListPlannedWorkInput, PlanWorkInput, VehicleParams};
 impl GloveboxMcp {
     #[tool(
         name = "plan_work",
-        description = "Add something to the vehicle's to-do list — work the user intends to do or have done. Link the source so completing the work closes the loop (a recall finding from check_recalls, an overdue schedule item from check_due_maintenance, or an incident). Review the list with list_planned_work.",
+        description = "Add something to the vehicle's to-do list — work the user intends to do or have done. Link the source so completing the work closes the loop (a recall finding from check_recalls, an overdue schedule item from check_due_maintenance, or an incident). Set revisit_by_date and/or revisit_by_miles for work to watch rather than do now. Review the list with list_planned_work.",
         input_schema = rmcp::handler::server::common::schema_for_type::<PlanWorkInput>()
     )]
     async fn plan_work(
@@ -37,7 +34,7 @@ impl GloveboxMcp {
 
     #[tool(
         name = "list_planned_work",
-        description = "The vehicle's planning state: the open work items (the to-do list). Set include_done to also see finished and dropped work.",
+        description = "The vehicle's planning state: the open work items (the to-do list), each with a revisit_status (ok, due_soon or overdue) when it has a revisit_by_date or revisit_by_miles. Complete an item by passing its id in record_service's work_item_ids. Set include_done to also see finished and dropped work.",
         input_schema = rmcp::handler::server::common::schema_for_type::<ListPlannedWorkInput>()
     )]
     async fn list_planned_work(
@@ -46,17 +43,18 @@ impl GloveboxMcp {
     ) -> Result<CallToolResult, McpError> {
         #[derive(Serialize)]
         struct PlannedWork {
-            items: Vec<work_item::Model>,
+            items: Vec<PlannedItem>,
         }
         let p = match params.into_tool_input("list_planned_work") {
             Ok(v) => v,
             Err(e) => return Ok(e),
         };
         let include_done = p.include_done.unwrap_or(false);
-        let items = match work_item_svc::list(&*self.db, p.vehicle_id, include_done).await {
-            Ok(v) => v,
-            Err(e) => return domain_error(e),
-        };
+        let items =
+            match work_item_svc::list_with_status(&self.db, p.vehicle_id, include_done).await {
+                Ok(v) => v,
+                Err(e) => return domain_error(e),
+            };
         tool_json_result(&PlannedWork { items })
     }
 

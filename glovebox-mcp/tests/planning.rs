@@ -129,3 +129,58 @@ async fn planning_tools_reject_wrong_vehicle_and_malformed_args() {
         "must name the missing field and point at the schema; got: {err}"
     );
 }
+
+// A to-do item with a revisit-by reports its status, and a service that names
+// it completes it.
+#[tokio::test]
+async fn revisit_by_work_reports_its_status_and_a_service_completes_it() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    t.call(
+        "log_mileage",
+        json!({ "vehicle_id": v.id, "mileage": 64_000 }),
+    )
+    .await;
+
+    let planned = t
+        .call(
+            "plan_work",
+            json!({
+                "vehicle_id": v.id,
+                "title": "Re-check the valve cover seep",
+                "revisit_by_date": "2999-05-01",
+                "revisit_by_miles": 200_000
+            }),
+        )
+        .await;
+    let item_id = planned["id"].as_i64().expect("item id");
+
+    let list = t
+        .call("list_planned_work", json!({ "vehicle_id": v.id }))
+        .await;
+    let item = &list["items"][0];
+    assert_eq!(item["revisit_by_date"], "2999-05-01");
+    assert_eq!(item["revisit_by_miles"], 200_000);
+    assert_eq!(item["revisit_status"], "ok");
+
+    t.call(
+        "record_service",
+        json!({
+            "vehicle_id": v.id,
+            "service_date": "2026-11-12",
+            "work_item_ids": [item_id]
+        }),
+    )
+    .await;
+    let open = t
+        .call("list_planned_work", json!({ "vehicle_id": v.id }))
+        .await;
+    assert_eq!(open["items"].as_array().map(Vec::len), Some(0));
+    let all = t
+        .call(
+            "list_planned_work",
+            json!({ "vehicle_id": v.id, "include_done": true }),
+        )
+        .await;
+    assert_eq!(all["items"][0]["status"], "done");
+}

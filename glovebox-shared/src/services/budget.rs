@@ -320,6 +320,8 @@ mod tests {
                 research_finding_id: None,
                 incident_id: None,
                 est_cost_cents: Some(7_500),
+                revisit_by_date: None,
+                revisit_by_miles: None,
             },
         )
         .await
@@ -334,6 +336,8 @@ mod tests {
                 research_finding_id: None,
                 incident_id: None,
                 est_cost_cents: Some(99_900),
+                revisit_by_date: None,
+                revisit_by_miles: None,
             },
         )
         .await
@@ -421,6 +425,8 @@ mod tests {
                     research_finding_id: None,
                     incident_id: None,
                     est_cost_cents: Some(est),
+                    revisit_by_date: None,
+                    revisit_by_miles: None,
                 },
             )
             .await

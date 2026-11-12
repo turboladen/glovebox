@@ -71,9 +71,13 @@ pub struct RecordServiceInput {
     pub schedule_item_ids: Option<Vec<i32>>,
     /// The number printed on the invoice or repair order (e.g. "RO-1182").
     /// Re-recording the SAME ref for this vehicle returns the existing record
-    /// (with `already_recorded: true`) instead of creating a duplicate. Omit
-    /// for work with no paperwork number.
+    /// (with `already_recorded: true`) and ignores the lines and parts sent
+    /// this time; they are not merged. Omit for work with no paperwork number.
     pub invoice_ref: Option<String>,
+    /// Ids of open to-do items (from `list_planned_work`) this service
+    /// completes. Each is marked done, and its schedule item, if any, is
+    /// linked so the reminder clears.
+    pub work_item_ids: Option<Vec<i32>>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -123,6 +127,7 @@ impl RecordServiceInput {
                 payer_note: self.payer_note,
                 schedule_item_ids: self.schedule_item_ids,
                 part_ids: None,
+                work_item_ids: self.work_item_ids,
                 line_items,
                 invoice_ref: self.invoice_ref,
                 end_date: self.end_date,
@@ -342,6 +347,11 @@ pub struct PlanWorkInput {
     /// The incident this fixes (from `log_incident`) — completing the work
     /// links the incident to the service record.
     pub incident_id: Option<i32>,
+    /// Date to look at this item again, `YYYY-MM-DD`, for work to watch
+    /// rather than do now.
+    pub revisit_by_date: Option<String>,
+    /// Odometer reading at which to look at this item again.
+    pub revisit_by_miles: Option<i32>,
 }
 
 impl PlanWorkInput {
@@ -355,6 +365,8 @@ impl PlanWorkInput {
                 research_finding_id: self.research_finding_id,
                 incident_id: self.incident_id,
                 est_cost_cents: self.est_cost_cents,
+                revisit_by_date: self.revisit_by_date,
+                revisit_by_miles: self.revisit_by_miles,
             },
         )
     }

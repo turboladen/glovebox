@@ -11,7 +11,7 @@ use crate::{
         part::NewPart,
         service_record::{NewLineItem, NewServiceRecord, UpdateServiceRecord},
     },
-    services::part as part_svc,
+    services::{part as part_svc, work_item},
 };
 
 /// Allowed values for `service_records.performed_by`.
@@ -219,6 +219,23 @@ async fn insert_line_items(
             ..Default::default()
         };
         li.insert(txn).await?;
+    }
+    Ok(())
+}
+
+/// Links a service record to the schedule items it satisfies.
+async fn insert_schedule_links(
+    txn: &impl ConnectionTrait,
+    record_id: i32,
+    schedule_item_ids: &[i32],
+) -> DomainResult<()> {
+    for item_id in schedule_item_ids {
+        service_schedule_link::ActiveModel {
+            service_record_id: Set(record_id),
+            schedule_item_id: Set(*item_id),
+        }
+        .insert(txn)
+        .await?;
     }
     Ok(())
 }
@@ -479,13 +496,15 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
 
     // Every link step below runs on `txn`, so a failure in any of them rolls
     // back the record and everything written before it.
-    for item_id in &schedule_item_ids {
-        let link = service_schedule_link::ActiveModel {
-            service_record_id: Set(record.id),
-            schedule_item_id: Set(*item_id),
-        };
-        link.insert(&txn).await?;
-    }
+    insert_schedule_links(&txn, record.id, &schedule_item_ids).await?;
+
+    work_item::complete_with_service(
+        &txn,
+        vehicle_id,
+        &input.work_item_ids.unwrap_or_default(),
+        record.id,
+    )
+    .await?;
 
     install_parts(
         &txn,
@@ -916,6 +935,7 @@ mod tests {
                 invoice_ref: None,
                 end_date: None,
                 performed_by: None,
+                work_item_ids: None,
                 parts: None,
             },
         )
@@ -991,6 +1011,7 @@ mod tests {
                 invoice_ref: None,
                 end_date: None,
                 performed_by: None,
+                work_item_ids: None,
                 parts: None,
             },
         )
@@ -1068,6 +1089,7 @@ mod tests {
                 invoice_ref: None,
                 end_date: None,
                 performed_by: None,
+                work_item_ids: None,
                 parts: None,
             },
         )
@@ -1335,6 +1357,7 @@ mod tests {
             invoice_ref: None,
             end_date: None,
             performed_by: None,
+            work_item_ids: None,
             parts: None,
         }
     }
