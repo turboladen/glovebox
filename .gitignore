@@ -5,12 +5,6 @@ data/
 *.db-shm
 *.db-wal
 .env
-frontend/dist
-frontend/node_modules/
-test-results/
-frontend/test-results/
-frontend/playwright-report/
-
 # Dolt database files (added by bd init)
 .dolt/
 
