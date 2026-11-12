@@ -551,3 +551,17 @@ async fn delete_service_reopens_the_incident_and_work_it_closed() {
         .await;
     assert_eq!(planned["items"][0]["status"], "planned");
 }
+
+#[tokio::test]
+async fn services_tools_reject_unknown_arguments() {
+    let t = connect().await;
+    common::assert_unknown_field_rejected(
+        &t,
+        "correct_service",
+        json!({ "vehicle_id": 1, "service_id": 1, "recall_ids": [1] }),
+        "recall_ids",
+    )
+    .await;
+    common::assert_unknown_field_rejected(&t, "record_service", json!({ "vehicle_id": 1, "service_date": "2026-11-10", "line_items": [{ "description": "Oil", "work_kind": "maintenance", "category": "x" }] }), "category").await;
+    common::assert_unknown_field_rejected(&t, "record_service", json!({ "vehicle_id": 1, "service_date": "2026-11-10", "parts": [{ "name": "Filter", "brand": "Mann" }] }), "brand").await;
+}

@@ -124,3 +124,15 @@ async fn file_research_finding_persists_and_rejects_a_missing_vehicle() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn recalls_tools_reject_unknown_arguments() {
+    let t = connect().await;
+    common::assert_unknown_field_rejected(
+        &t,
+        "set_recall_status",
+        json!({ "vehicle_id": 1, "finding_id": 1, "status": "done", "campaign": "20UF" }),
+        "campaign",
+    )
+    .await;
+}

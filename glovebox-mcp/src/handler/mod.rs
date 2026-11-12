@@ -103,7 +103,8 @@ impl ServerHandler for GloveboxMcp {
                  `search_records` and `cost_summary` to look things up, `check_recalls` and \
                  `set_recall_status` for recalls. Every record can be listed, corrected and \
                  deleted; a correct or update tool leaves absent fields alone and clears a field \
-                 sent as null. All money is integer cents; all dates are YYYY-MM-DD.",
+                 sent as null, and an argument a tool does not define is an error. All money is \
+                 integer cents; all dates are YYYY-MM-DD.",
             )
     }
 

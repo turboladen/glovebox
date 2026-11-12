@@ -368,3 +368,15 @@ async fn removing_the_last_fixing_service_through_update_incident_unresolves_it(
         .await;
     assert_eq!(cleared["resolved"], false, "got: {cleared}");
 }
+
+#[tokio::test]
+async fn incidents_tools_reject_unknown_arguments() {
+    let t = connect().await;
+    common::assert_unknown_field_rejected(
+        &t,
+        "log_incident",
+        json!({ "vehicle_id": 1, "title": "Squeak", "severity": "x" }),
+        "severity",
+    )
+    .await;
+}

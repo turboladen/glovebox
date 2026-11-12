@@ -109,7 +109,9 @@ comments become the LLM-visible field descriptions. `LenientParameters<T>` defer
 so malformed arguments come back as actionable tool errors, not bare JSON-RPC `-32602`s. Pair it
 with an explicit `input_schema = schema_for_type::<T>()` on every `#[tool]`. A `correct_*` or
 `update_*` input uses `Option<Option<T>>`: an absent key leaves the field alone, and an explicit
-`null` clears it.
+`null` clears it. Every input struct, nested ones included, carries
+`#[serde(deny_unknown_fields)]`, so an argument the tool does not define is a tool error that names
+it. Serde does not support it together with `#[serde(flatten)]`, so input structs never flatten.
 
 **`record_service` is transactional.** One call writes the service, its lines, its parts and every
 link (schedule items, work items, recalls, incidents) in one transaction. One bad id fails the call

@@ -28,6 +28,7 @@ where
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AddVehicleInput {
     /// Display name, e.g. 'Daily Golf R'.
     pub name: String,
@@ -97,6 +98,7 @@ impl AddVehicleInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateVehicleInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -264,6 +266,7 @@ impl UpdateVehicleInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ListServicesInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -274,6 +277,7 @@ pub struct ListServicesInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ListPartsInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -282,6 +286,7 @@ pub struct ListPartsInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ListIncidentsInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -290,6 +295,7 @@ pub struct ListIncidentsInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CorrectServiceInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -393,6 +399,7 @@ impl CorrectServiceInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DeleteServiceInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -401,6 +408,7 @@ pub struct DeleteServiceInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CorrectPartInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -535,6 +543,7 @@ impl CorrectPartInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DeletePartInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -543,6 +552,7 @@ pub struct DeletePartInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateIncidentInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -697,6 +707,7 @@ impl UpdateIncidentInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AddIncidentFollowupInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -731,6 +742,7 @@ impl AddIncidentFollowupInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DeleteIncidentInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -739,6 +751,7 @@ pub struct DeleteIncidentInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct UpdatePlannedWorkInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -813,6 +826,7 @@ impl UpdatePlannedWorkInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DeletePlannedWorkInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -821,6 +835,7 @@ pub struct DeletePlannedWorkInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AddScheduleItemInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -868,6 +883,7 @@ impl AddScheduleItemInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateScheduleItemInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,

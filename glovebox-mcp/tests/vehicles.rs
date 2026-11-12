@@ -116,6 +116,11 @@ async fn tools_list_advertises_the_remaining_verb_set() {
     // advertises an empty one, and a name check alone would not catch it.
     for tool in &tools {
         let name = tool["name"].as_str().expect("tool name");
+        // Every input refuses keys it does not define, and says so in its schema.
+        assert_eq!(
+            tool["inputSchema"]["additionalProperties"], false,
+            "tool {name} must advertise additionalProperties: false; got: {tool}"
+        );
         if name == "list_vehicles" || name == "list_model_templates" {
             continue; // deliberately take no arguments
         }
@@ -219,4 +224,16 @@ async fn an_unknown_model_template_is_a_clear_tool_error() {
         )
         .await;
     assert!(err.contains("list_model_templates"), "got: {err}");
+}
+
+#[tokio::test]
+async fn vehicles_tools_reject_unknown_arguments() {
+    let t = connect().await;
+    common::assert_unknown_field_rejected(
+        &t,
+        "update_vehicle",
+        json!({ "vehicle_id": 1, "nickname": "x" }),
+        "nickname",
+    )
+    .await;
 }

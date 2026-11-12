@@ -263,3 +263,15 @@ async fn update_and_delete_planned_work() {
         .await;
     assert_eq!(listed["items"], json!([]));
 }
+
+#[tokio::test]
+async fn planning_tools_reject_unknown_arguments() {
+    let t = connect().await;
+    common::assert_unknown_field_rejected(
+        &t,
+        "plan_work",
+        json!({ "vehicle_id": 1, "title": "Pads", "priority": "high" }),
+        "priority",
+    )
+    .await;
+}

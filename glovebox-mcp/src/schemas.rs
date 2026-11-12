@@ -27,15 +27,18 @@ mod corrections;
 pub use corrections::*;
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct EmptyParams {}
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct VehicleParams {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RecordServiceInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -99,6 +102,7 @@ pub struct RecordServiceInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct LineItemInput {
     /// Line description, e.g. "5W-30 synthetic oil, 5qt".
     pub description: String,
@@ -165,6 +169,7 @@ impl RecordServiceInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct LogIncidentInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -195,6 +200,7 @@ pub struct LogIncidentInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SetRecallStatusInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -206,6 +212,7 @@ pub struct SetRecallStatusInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GetServiceInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -214,6 +221,7 @@ pub struct GetServiceInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GetIncidentInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -242,6 +250,7 @@ impl LogIncidentInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SaveNoteInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -269,6 +278,7 @@ impl SaveNoteInput {
 /// A part listed on a service invoice. The service supplies the install
 /// date, mileage and link.
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct InlinePartInput {
     /// Part name, e.g. "Front brake pads".
     pub name: String,
@@ -315,6 +325,7 @@ impl InlinePartInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RecordPartInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -384,6 +395,7 @@ impl RecordPartInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PlanWorkInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -431,6 +443,7 @@ impl PlanWorkInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ListPlannedWorkInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -440,6 +453,7 @@ pub struct ListPlannedWorkInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct LogMileageInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -466,6 +480,7 @@ impl LogMileageInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DismissScheduleItemInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -476,6 +491,7 @@ pub struct DismissScheduleItemInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RestoreScheduleItemInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -486,6 +502,7 @@ pub struct RestoreScheduleItemInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ListScheduleInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -494,6 +511,7 @@ pub struct ListScheduleInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SummarizeActivityInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -502,6 +520,7 @@ pub struct SummarizeActivityInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SearchRecordsInput {
     /// Full-text query. Plain words; no special syntax needed.
     pub query: String,
@@ -513,6 +532,7 @@ pub struct SearchRecordsInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct FileResearchFindingInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -545,6 +565,7 @@ impl FileResearchFindingInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct LinkServiceToMaintenanceInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,

@@ -106,3 +106,15 @@ async fn list_correct_and_delete_a_part() {
     let after = t.call("list_parts", json!({ "vehicle_id": v.id })).await;
     assert_eq!(after, json!([]));
 }
+
+#[tokio::test]
+async fn parts_tools_reject_unknown_arguments() {
+    let t = connect().await;
+    common::assert_unknown_field_rejected(
+        &t,
+        "record_part",
+        json!({ "vehicle_id": 1, "name": "Pads", "brand": "x" }),
+        "brand",
+    )
+    .await;
+}

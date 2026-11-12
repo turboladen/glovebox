@@ -174,3 +174,15 @@ async fn the_server_offers_exactly_the_expected_tools() {
         ]
     );
 }
+
+#[tokio::test]
+async fn reads_tools_reject_unknown_arguments() {
+    let t = connect().await;
+    common::assert_unknown_field_rejected(
+        &t,
+        "search_records",
+        json!({ "query": "brake", "limit": 5 }),
+        "limit",
+    )
+    .await;
+}

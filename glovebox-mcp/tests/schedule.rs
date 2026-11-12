@@ -290,3 +290,15 @@ async fn a_dismissed_item_can_be_found_and_restored() {
         .await;
     assert!(err.contains("not found"), "got: {err}");
 }
+
+#[tokio::test]
+async fn schedule_tools_reject_unknown_arguments() {
+    let t = connect().await;
+    common::assert_unknown_field_rejected(
+        &t,
+        "add_schedule_item",
+        json!({ "vehicle_id": 1, "name": "Smog", "interval_km": 5 }),
+        "interval_km",
+    )
+    .await;
+}

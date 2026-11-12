@@ -231,3 +231,18 @@ pub async fn reminder_status(client: &TestClient, vehicle_id: i32, name: &str) -
         .expect("status string")
         .to_string()
 }
+
+/// Calls `tool` with `args` and asserts the call fails as a tool error that
+/// names `field` as unknown.
+pub async fn assert_unknown_field_rejected(
+    client: &TestClient,
+    tool: &str,
+    args: Value,
+    field: &str,
+) {
+    let err = client.call_err(tool, args).await;
+    assert!(
+        err.contains("unknown field") && err.contains(&format!("`{field}`")),
+        "{tool} must reject the unknown field {field}; got: {err}"
+    );
+}
