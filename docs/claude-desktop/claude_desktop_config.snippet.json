@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "glovebox": {
+      "command": "/Users/sloveless/Development/projects/glovebox/target/release/glovebox-mcp",
+      "env": { "GLOVEBOX_DB_PATH": "/Users/sloveless/Development/projects/glovebox/data/glovebox.db" }
+    }
+  }
+}

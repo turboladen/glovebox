@@ -43,7 +43,7 @@ impl GloveboxMcp {
 
     #[tool(
         name = "file_research_finding",
-        description = "Save research you've done about this vehicle (forum consensus, TSBs, known issues, upgrade notes) as a persistent finding. Use after answering research questions so the knowledge isn't lost when the conversation ends. Findings appear in the app's Research view.",
+        description = "Save research you've done about this vehicle (forum consensus, TSBs, known issues, upgrade notes) as a persistent finding. Use after answering research questions so the knowledge isn't lost when the conversation ends.",
         input_schema = rmcp::handler::server::common::schema_for_type::<FileResearchFindingInput>()
     )]
     async fn file_research_finding(
