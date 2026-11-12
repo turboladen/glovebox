@@ -103,15 +103,13 @@ fn candidate_base_urls(listen: &str) -> Vec<String> {
         .next()
         .and_then(|p| p.parse::<u16>().ok())
         .unwrap_or(3003);
-    let mut urls: Vec<String> = if_addrs::get_if_addrs()
-        .map(|ifaces| {
-            ifaces
-                .iter()
-                .filter(|i| !i.is_loopback() && !i.is_link_local() && i.ip().is_ipv4())
-                .map(|i| format!("http://{}:{port}", i.ip()))
-                .collect()
-        })
-        .unwrap_or_default();
+    let mut urls: Vec<String> = if_addrs::get_if_addrs().map_or_default(|ifaces| {
+        ifaces
+            .iter()
+            .filter(|i| !i.is_loopback() && !i.is_link_local() && i.ip().is_ipv4())
+            .map(|i| format!("http://{}:{port}", i.ip()))
+            .collect()
+    });
     urls.sort();
     urls.dedup();
     urls.push(format!("http://localhost:{port}"));

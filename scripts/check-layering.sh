@@ -7,9 +7,19 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-if rg -n '\b(axum|rmcp)\b' glovebox-shared/src; then
-  echo "FAIL: glovebox-shared/src references axum or rmcp (the domain must stay transport-agnostic)"
-  exit 1
-fi
+status=0
+grep -rnwE 'axum|rmcp' glovebox-shared/src || status=$?
 
-echo "layering OK"
+case "$status" in
+  0)
+    echo "FAIL: glovebox-shared/src references axum or rmcp (the domain must stay transport-agnostic)"
+    exit 1
+    ;;
+  1)
+    echo "layering OK"
+    ;;
+  *)
+    echo "FAIL: grep errored with status $status"
+    exit "$status"
+    ;;
+esac

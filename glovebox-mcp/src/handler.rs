@@ -591,6 +591,8 @@ impl GloveboxMcp {
     }
 }
 
+// The `#[tool_handler]` expansion generates async trait methods that contain no `.await`.
+#[allow(clippy::unused_async_trait_impl)]
 #[tool_handler]
 impl ServerHandler for GloveboxMcp {
     fn get_info(&self) -> ServerInfo {
