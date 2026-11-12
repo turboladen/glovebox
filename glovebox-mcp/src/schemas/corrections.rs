@@ -573,7 +573,7 @@ pub struct UpdateIncidentInput {
     pub category: Option<String>,
     /// New title.
     pub title: Option<String>,
-    /// When it happened, `YYYY-MM-DD HH:MM:SS`.
+    /// When it happened, `YYYY-MM-DD HH:MM:SS` or just `YYYY-MM-DD`.
     pub occurred_at: Option<String>,
     /// Mark resolved or unresolved by hand, e.g. fixed with no invoice. Omit to leave the flag to the service links.
     pub resolved: Option<bool>,
@@ -731,7 +731,7 @@ pub struct AddIncidentFollowupInput {
     pub vehicle_id: i32,
     /// Incident id, from `list_incidents` or `log_incident`.
     pub incident_id: i32,
-    /// When the contact happened, `YYYY-MM-DD HH:MM:SS`.
+    /// When the contact happened, `YYYY-MM-DD HH:MM:SS` or just `YYYY-MM-DD`.
     pub occurred_at: String,
     /// What happened or was said, e.g. 'Adjuster approved the estimate'.
     pub summary: String,
@@ -777,7 +777,7 @@ pub struct UpdatePlannedWorkInput {
     pub work_item_id: i32,
     /// New title.
     pub title: Option<String>,
-    /// `planned`, `done` or `dropped`. Use `dropped` for work the owner no longer intends to do; `planned` reopens an item.
+    /// `planned`, `done` or `dropped`. Use `done` only for work that left no paperwork (otherwise `record_service` with `work_item_ids`), `dropped` for work the owner has decided against, and `planned` to reopen an item.
     pub status: Option<String>,
     /// Free-form notes.
     ///

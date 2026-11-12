@@ -64,7 +64,7 @@ impl GloveboxMcp {
 
     #[tool(
         name = "whats_coming",
-        description = "Call this first for any \"what does the car need?\" question. One answer covers scheduled maintenance (each item's status, when it is due, and bundle suggestions), the planned to-do list sorted by urgency with its estimated cost, a 12-month budget forecast, open recalls, unresolved incidents, the estimated mileage and the warranty status (possibly_covered: remind the user to check coverage before paying). Group overdue and due-soon items into one shop trip when advising. For items worth doing, offer to plan_work them (linked via schedule_item_id); when recorded work satisfies an item, link it via `record_service`'s `schedule_item_ids` so the reminder clears, or for service records that already exist call `link_service_to_maintenance`; for an item that does not apply to this vehicle, use `dismiss_schedule_item`.",
+        description = "Call this first for any \"what does the car need?\" question. One answer covers scheduled maintenance (each item's status, `overdue`, `due_soon` or `ok`, when it is due, and bundle suggestions), the planned to-do list sorted by urgency with its estimated cost, a 12-month budget forecast, open recalls, unresolved incidents, the estimated mileage and the warranty status (possibly_covered: remind the user to check coverage before paying). Group overdue and due-soon items into one shop trip when advising. For items worth doing, offer to plan_work them (linked via schedule_item_id); when recorded work satisfies an item, link it via `record_service`'s `schedule_item_ids` so the reminder clears, or for service records that already exist call `link_service_to_maintenance`; for an item that does not apply to this vehicle, use `dismiss_schedule_item`.",
         input_schema = rmcp::handler::server::common::schema_for_type::<VehicleParams>()
     )]
     async fn whats_coming(
@@ -80,7 +80,7 @@ impl GloveboxMcp {
 
     #[tool(
         name = "update_planned_work",
-        description = "Change a to-do item: title, notes, estimated cost, revisit date or mileage, the schedule item, recall or incident it is linked to, or its `status`. Send only the fields to change; null clears a field, and a field left out is untouched. Set `status: \"dropped\"` when the owner no longer intends to do the work (it leaves `whats_coming` but stays in history), or `planned` to reopen an item. Do not set `done` by hand for work that was performed; record it with `record_service` and `work_item_ids` so the service, reminder, incident and recall are linked. Use `delete_planned_work` only for an item added by mistake.",
+        description = "Change a to-do item: title, notes, estimated cost, revisit date or mileage, the schedule item, recall or incident it is linked to, or its `status`. Send only the fields to change; null clears a field, and a field left out is untouched. Set `status: \"dropped\"` when the owner no longer intends to do the work (it leaves `whats_coming` but stays in history), or `planned` to reopen an item. When the work was done and there is an invoice, record it with `record_service` and `work_item_ids` instead, so the service, reminder, incident and recall are linked; set `done` here only for work that left no paperwork. Use `delete_planned_work` only for an item added by mistake.",
         input_schema = rmcp::handler::server::common::schema_for_type::<UpdatePlannedWorkInput>()
     )]
     async fn update_planned_work(

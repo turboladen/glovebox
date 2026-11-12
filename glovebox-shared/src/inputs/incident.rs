@@ -1,5 +1,4 @@
-//! Domain inputs for the unified incident primitive (union of the retired
-//! observation + accident input surfaces).
+//! Domain inputs for incidents and their followups.
 
 pub struct NewIncident {
     pub category: String,

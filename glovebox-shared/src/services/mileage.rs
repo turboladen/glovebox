@@ -25,6 +25,9 @@ pub async fn create(
     vehicle_id: i32,
     input: NewMileageEntry,
 ) -> DomainResult<mileage_log::Model> {
+    if let Some(at) = &input.recorded_at {
+        super::validate_datetime("recorded_at", at)?;
+    }
     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let model = mileage_log::ActiveModel {
         vehicle_id: Set(vehicle_id),

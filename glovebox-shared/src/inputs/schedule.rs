@@ -15,8 +15,8 @@ pub struct NewScheduleItem {
     pub notes: Option<String>,
     pub is_factory_recommended: Option<bool>,
     pub labor_categories: Option<String>,
-    /// Estimated cost per occurrence, integer cents (decision ⑧ — feeds
-    /// the budget forecast).
+    /// Estimated cost per occurrence, integer cents. Feeds the budget
+    /// forecast.
     pub est_cost_cents: Option<i32>,
 }
 

@@ -14,6 +14,8 @@ use crate::{
 #[derive(Debug, Serialize, Clone)]
 pub struct ReminderStatus {
     pub schedule_item: ScheduleItemSummary,
+    /// `overdue`, `due_soon` (within the item's warning miles or days) or
+    /// `ok`: the same words planned work's `revisit_status` uses.
     pub status: String,
     pub last_service: Option<LastServiceInfo>,
     pub due_at_miles: Option<i32>,
@@ -50,12 +52,12 @@ pub struct BundleItem {
     pub due_in_miles: Option<i32>,
 }
 
-/// Warranty posture derived from the vehicle's nullable expiry fields
-/// (decision ⑩). `possibly_covered` is true when EITHER bound still holds —
-/// today ≤ `expires_on` OR estimated mileage ≤ `expires_miles` (either is
-/// sufficient on its own; real warranties are usually whichever-comes-first,
-/// but "possibly covered" deliberately errs toward telling the user to
-/// check).
+/// Warranty posture derived from the vehicle's nullable expiry fields.
+/// `possibly_covered` is true when either bound still holds: today is on or
+/// before `expires_on`, or the estimated mileage is at or below
+/// `expires_miles`.
+// Real warranties usually end at whichever bound comes first, but "possibly
+// covered" errs toward telling the owner to check.
 #[derive(Debug, Serialize, Clone)]
 pub struct WarrantyStatus {
     pub expires_on: Option<String>,
@@ -172,7 +174,7 @@ pub async fn calculate_reminders(
     let (estimated_mileage, mileage_as_of, avg_daily_miles, mileage_is_estimate) =
         estimate_mileage(db, vehicle_id, &v).await?;
 
-    // Resolve the effective schedule (same algorithm as api::schedules::resolve)
+    // The same layering as `schedule::resolve`: vehicle over template over platform.
     let effective_items = resolve_schedule(db, &v).await?;
 
     let today = chrono::Utc::now().date_naive();
@@ -246,7 +248,7 @@ pub async fn calculate_reminders(
             if r <= 0 {
                 "overdue"
             } else if r <= warning_miles {
-                "upcoming"
+                "due_soon"
             } else {
                 "ok"
             }
@@ -256,7 +258,7 @@ pub async fn calculate_reminders(
             if r <= 0 {
                 "overdue"
             } else if r <= i64::from(warning_days) {
-                "upcoming"
+                "due_soon"
             } else {
                 "ok"
             }
@@ -265,14 +267,14 @@ pub async fn calculate_reminders(
         // Use the more urgent status
         let status = match (miles_status, time_status) {
             (Some("overdue"), _) | (_, Some("overdue")) => "overdue",
-            (Some("upcoming"), _) | (_, Some("upcoming")) => "upcoming",
+            (Some("due_soon"), _) | (_, Some("due_soon")) => "due_soon",
             _ => "ok",
         };
 
         let trigger = match (miles_status, time_status) {
             (Some(m), Some(t)) if m == t => Some("both"),
-            (Some("overdue" | "upcoming"), _) | (Some(_), None) => Some("mileage"),
-            (_, Some("overdue" | "upcoming")) | (None, Some(_)) => Some("time"),
+            (Some("overdue" | "due_soon"), _) | (Some(_), None) => Some("mileage"),
+            (_, Some("overdue" | "due_soon")) | (None, Some(_)) => Some("time"),
             _ => None,
         };
 
@@ -295,11 +297,11 @@ pub async fn calculate_reminders(
         });
     }
 
-    // Sort: overdue first, then upcoming, then ok
+    // Sort: overdue first, then due soon, then ok
     reminders.sort_by(|a, b| {
         let priority = |s: &str| match s {
             "overdue" => 0,
-            "upcoming" => 1,
+            "due_soon" => 1,
             _ => 2,
         };
         priority(&a.status)
@@ -379,7 +381,7 @@ fn calculate_bundles(reminders: &[ReminderStatus], bundling_window: i32) -> Vec<
             // This item is within bundling window of being due
             let due_items: Vec<&ReminderStatus> = reminders
                 .iter()
-                .filter(|r| r.status == "overdue" || r.status == "upcoming")
+                .filter(|r| r.status == "overdue" || r.status == "due_soon")
                 .collect();
 
             if !due_items.is_empty() {
@@ -554,5 +556,44 @@ mod tests {
                 .unwrap()
                 .possibly_covered
         );
+    }
+
+    #[tokio::test]
+    async fn an_item_inside_its_warning_window_is_due_soon() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db, None, None).await;
+        let today = chrono::Utc::now().date_naive();
+        let item = maintenance_schedule_item::ActiveModel {
+            vehicle_id: Set(Some(vid)),
+            name: Set("Wipers".into()),
+            interval_months: Set(Some(12)),
+            enabled: Set(true),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        // Serviced 350 days ago: due in about 15 days, inside the 30-day default.
+        let svc = service_record::ActiveModel {
+            vehicle_id: Set(vid),
+            service_date: Set((today - chrono::Duration::days(350))
+                .format("%Y-%m-%d")
+                .to_string()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        service_schedule_link::ActiveModel {
+            service_record_id: Set(svc.id),
+            schedule_item_id: Set(item.id),
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        let resp = calculate_reminders(&db, vid).await.unwrap();
+        assert_eq!(resp.reminders[0].status, "due_soon");
+        assert_eq!(resp.reminders[0].trigger.as_deref(), Some("time"));
     }
 }

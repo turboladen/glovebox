@@ -1,7 +1,7 @@
-//! The unified incident primitive (2hea unit B): observations + accidents
-//! merged into one vehicle-scoped record with constrained categories,
-//! followups (generalized correspondence), M2M service links, and recurrence
-//! chains. Replaces the retired `observation` and `accident` services.
+//! Incidents: anything noticed about a vehicle, from a noise or a shop
+//! observation to an accident, as one vehicle-scoped record with a
+//! constrained category, dated followups, links to the services that noticed
+//! and fixed it, and recurrence chains.
 
 use sea_orm::*;
 use serde::Serialize;
@@ -273,6 +273,9 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     input: NewIncident,
 ) -> DomainResult<IncidentWithDetails> {
     validate_category(&input.category)?;
+    if let Some(at) = &input.occurred_at {
+        super::validate_datetime("occurred_at", at)?;
+    }
     require_links_owned(db, vehicle_id, input.recurrence_of_id).await?;
 
     let txn = db.begin().await?;
@@ -333,6 +336,9 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
 
     if let Some(category) = &input.category {
         validate_category(category)?;
+    }
+    if let Some(at) = &input.occurred_at {
+        super::validate_datetime("occurred_at", at)?;
     }
     require_links_owned(db, vehicle_id, input.recurrence_of_id.flatten()).await?;
     // An incident cannot be a recurrence of itself — directly or through a
@@ -566,6 +572,7 @@ pub async fn create_followup(
 ) -> DomainResult<incident_followup::Model> {
     // Verify the incident belongs to this vehicle before attaching a followup.
     require_incident(db, vehicle_id, incident_id).await?;
+    super::validate_datetime("occurred_at", &input.occurred_at)?;
 
     let model = incident_followup::ActiveModel {
         incident_id: Set(incident_id),

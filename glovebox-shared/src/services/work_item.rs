@@ -34,16 +34,8 @@ fn validate_status(status: &str) -> DomainResult<()> {
 const DUE_SOON_DAYS: i64 = 30;
 const DUE_SOON_MILES: i32 = 1000;
 
-fn parse_revisit_date(value: &str) -> DomainResult<()> {
-    chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
-        .map(|_| ())
-        .map_err(|_| DomainError::invalid("revisit_by_date", "must be a date like 2027-05-01"))
-}
-
 fn validate_revisit(date: Option<&str>, miles: Option<i32>) -> DomainResult<()> {
-    if let Some(date) = date {
-        parse_revisit_date(date)?;
-    }
+    super::validate_optional_date("revisit_by_date", date)?;
     if miles.is_some_and(|m| m < 0) {
         return Err(DomainError::invalid(
             "revisit_by_miles",
@@ -56,7 +48,8 @@ fn validate_revisit(date: Option<&str>, miles: Option<i32>) -> DomainResult<()> 
 /// How close an item's revisit-by is: `None` when it has no revisit date or
 /// mileage, else `"overdue"`, `"due_soon"` (within 30 days or 1000 miles) or
 /// `"ok"`. The worse of the date and mileage readings wins. With no
-/// estimated mileage, only the date is judged.
+/// estimated mileage, only the date is judged, so an item with only a
+/// revisit mileage reads `"ok"`.
 #[must_use]
 pub fn revisit_status(
     item: &work_item::Model,
@@ -749,11 +742,24 @@ mod tests {
         .await
         .unwrap();
         create(&db, v, item("plain")).await.unwrap();
+        create(
+            &db,
+            v,
+            NewWorkItem {
+                revisit_by_miles: Some(10),
+                ..item("miles only")
+            },
+        )
+        .await
+        .unwrap();
 
         let listed = list_with_status(&db, v, false).await.unwrap();
         let by_title = |t: &str| listed.iter().find(|p| p.item.title == t).unwrap();
         assert_eq!(by_title("late").revisit_status, Some("overdue"));
         assert_eq!(by_title("plain").revisit_status, None);
+        // With no odometer reading and no purchase mileage, a miles-only
+        // revisit cannot be judged yet and reads `ok`.
+        assert_eq!(by_title("miles only").revisit_status, Some("ok"));
     }
 
     #[tokio::test]

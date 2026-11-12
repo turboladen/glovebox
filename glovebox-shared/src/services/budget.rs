@@ -53,7 +53,8 @@ pub struct ForecastLine {
     pub est_cents: i64,
 }
 
-/// Project the vehicle's next 12 months of maintenance spend.
+/// Projects the vehicle's next 12 months of maintenance spend from reminders
+/// the caller has already computed with [`reminders::calculate_reminders`].
 ///
 /// For each enabled resolved schedule item carrying `est_cost_cents`:
 /// occurrences repeat at the item's interval — `interval_months`, and/or
@@ -61,13 +62,6 @@ pub struct ForecastLine {
 /// cycle is shorter). Overdue items count as one occurrence now. Items with
 /// no projectable due date (e.g. mileage-only interval on a vehicle with no
 /// mileage history) are skipped unless overdue.
-pub async fn forecast(db: &DatabaseConnection, vehicle_id: i32) -> DomainResult<BudgetForecast> {
-    let rems = reminders::calculate_reminders(db, vehicle_id).await?;
-    forecast_from(db, vehicle_id, &rems).await
-}
-
-/// [`forecast`] with the reminders precomputed — for callers that already have a [`RemindersResponse`] and
-/// must not compute it twice.
 #[allow(clippy::cast_possible_truncation)] // day counts, not money
 #[allow(clippy::too_many_lines)] // one linear pass over the buckets
 pub async fn forecast_from(
@@ -195,6 +189,11 @@ mod tests {
         services::work_item as work_item_svc,
         test_support::{VehicleFixture, test_db},
     };
+
+    async fn forecast(db: &DatabaseConnection, vehicle_id: i32) -> DomainResult<BudgetForecast> {
+        let rems = reminders::calculate_reminders(db, vehicle_id).await?;
+        forecast_from(db, vehicle_id, &rems).await
+    }
 
     fn days_ago(days: i64) -> String {
         (chrono::Utc::now().date_naive() - chrono::Duration::days(days))
@@ -443,31 +442,5 @@ mod tests {
         // No double count: the planned occurrences appear only as the
         // backlog estimates.
         assert_eq!(f.total_cents, 7 * 2_000 + 7_700);
-    }
-
-    /// `forecast_from` with precomputed reminders is `forecast` —
-    /// same buckets, same lines.
-    #[tokio::test]
-    async fn forecast_from_matches_forecast() {
-        let db = test_db().await;
-        let vid = VehicleFixture::new()
-            .purchase_date(&days_ago(730))
-            .insert_id(&db)
-            .await;
-        seed_item(&db, vid, "Timing belt check", None, Some(12), Some(5_000)).await;
-
-        let via_forecast = forecast(&db, vid).await.unwrap();
-        let rems = crate::services::reminders::calculate_reminders(&db, vid)
-            .await
-            .unwrap();
-        let via_from = forecast_from(&db, vid, &rems).await.unwrap();
-
-        assert_eq!(
-            via_from.projected_maintenance_cents,
-            via_forecast.projected_maintenance_cents
-        );
-        assert_eq!(via_from.total_cents, via_forecast.total_cents);
-        assert_eq!(via_from.lines.len(), via_forecast.lines.len());
-        assert_eq!(via_from.total_cents, 5_000);
     }
 }

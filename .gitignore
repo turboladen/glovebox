@@ -10,4 +10,5 @@ data/
 
 # Beads / Dolt files (added by bd init)
 .beads-credential-key
+.beads.gate.lock
 .superpowers/

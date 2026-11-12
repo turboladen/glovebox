@@ -2,7 +2,7 @@
 
 use rmcp::{ErrorData as McpError, model::CallToolResult, tool, tool_router};
 
-use super::{GloveboxMcp, LenientParameters, deleted_result, domain_error, domain_result};
+use super::{GloveboxMcp, LenientParameters, domain_error, domain_result};
 use glovebox_shared::services::{
     service_record::{self, LinkMode},
     vehicle,
@@ -110,7 +110,7 @@ impl GloveboxMcp {
 
     #[tool(
         name = "delete_service",
-        description = "Permanently delete a service record, for one that was filed by mistake or against the wrong car. Deleting reopens what it closed: recalls it performed read as open again (unless the owner marked them done by hand), an incident it fixed goes back to unresolved unless another service also fixed it, and to-dos it completed return to planned. Its schedule links, line items and odometer reading are removed. Parts it installed are kept, reverted to purchased with their install details cleared; remove them separately with `delete_part`. To change a record rather than remove it, use `correct_service`.",
+        description = "Permanently delete a service record, for one that was filed by mistake or against the wrong car. Deleting reopens what it closed: recalls it performed read as open again (unless the owner marked them done by hand), an incident it fixed goes back to unresolved unless another service also fixed it, and to-dos it completed return to planned. Its schedule links, line items and odometer reading are removed. Parts it installed are kept, reverted to purchased with their install details cleared, and the result lists their ids in `kept_part_ids`: when re-filing the invoice, attach them with `record_service`'s `part_ids`; otherwise remove them with `delete_part`. To change a record rather than remove it, use `correct_service`.",
         input_schema = rmcp::handler::server::common::schema_for_type::<DeleteServiceInput>()
     )]
     async fn delete_service(
@@ -121,10 +121,16 @@ impl GloveboxMcp {
             Ok(v) => v,
             Err(e) => return Ok(e),
         };
-        deleted_result(
-            "service",
-            p.service_id,
-            service_record::delete(&*self.db, p.vehicle_id, p.service_id).await,
+        domain_result(
+            service_record::delete(&*self.db, p.vehicle_id, p.service_id)
+                .await
+                .map(|kept_part_ids| {
+                    serde_json::json!({
+                        "deleted": "service",
+                        "id": p.service_id,
+                        "kept_part_ids": kept_part_ids,
+                    })
+                }),
         )
     }
 }

@@ -720,4 +720,86 @@ async fn record_service_installs_parts_recorded_earlier() {
         wrong_vehicle.replace(&foreign["id"].to_string(), "N"),
         missing.replace("99999", "N")
     );
+
+    // Deleting the service keeps the part and says which parts were kept.
+    let deleted = t
+        .call(
+            "delete_service",
+            json!({ "vehicle_id": v.id, "service_id": service["id"] }),
+        )
+        .await;
+    assert_eq!(deleted["kept_part_ids"], json!([pads["id"]]));
+    let parts = t.call("list_parts", json!({ "vehicle_id": v.id })).await;
+    assert_eq!(parts[0]["status"], "purchased", "got: {parts}");
+}
+
+#[tokio::test]
+async fn malformed_dates_are_refused_naming_the_field() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let id = v.id;
+    let service = t
+        .call(
+            "record_service",
+            json!({ "vehicle_id": id, "service_date": "2026-11-10" }),
+        )
+        .await;
+    let cases = [
+        (
+            "record_service",
+            json!({ "vehicle_id": id, "service_date": "11/10/2026" }),
+            "service_date",
+        ),
+        (
+            "record_service",
+            json!({ "vehicle_id": id, "service_date": "2026-11-10", "end_date": "2026-11-31" }),
+            "end_date",
+        ),
+        (
+            "correct_service",
+            json!({ "vehicle_id": id, "service_id": service["id"], "service_date": "yesterday" }),
+            "service_date",
+        ),
+        (
+            "list_services",
+            json!({ "vehicle_id": id, "from": "2026" }),
+            "from",
+        ),
+        (
+            "record_part",
+            json!({ "vehicle_id": id, "name": "Pads", "purchase_date": "2026-13-01" }),
+            "purchase_date",
+        ),
+        (
+            "update_vehicle",
+            json!({ "vehicle_id": id, "warranty_expires_on": "June 2027" }),
+            "warranty_expires_on",
+        ),
+        (
+            "log_incident",
+            json!({ "vehicle_id": id, "title": "Squeak", "occurred_at": "last week" }),
+            "occurred_at",
+        ),
+        (
+            "log_mileage",
+            json!({ "vehicle_id": id, "mileage": 1, "recorded_at": "2026-11-10 25:00:00" }),
+            "recorded_at",
+        ),
+    ];
+    for (tool, args, field) in cases {
+        let err = t.call_err(tool, args).await;
+        assert!(
+            err.starts_with(&format!("{field}: ")) && err.contains("2027-05-01"),
+            "{tool} must refuse a bad {field}; got: {err}"
+        );
+    }
+
+    // A date-time field takes a bare date or a date and time.
+    for occurred_at in ["2026-11-10", "2026-11-10 08:30:00"] {
+        t.call(
+            "log_incident",
+            json!({ "vehicle_id": id, "title": "Squeak", "occurred_at": occurred_at }),
+        )
+        .await;
+    }
 }

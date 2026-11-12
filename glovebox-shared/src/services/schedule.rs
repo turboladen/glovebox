@@ -551,7 +551,7 @@ pub async fn resolve_for_listing(
 /// Load a schedule item only if it's within the vehicle's schedule scope:
 /// owned by the vehicle itself, by its model template, or by that template's
 /// platform. Anything else — including another vehicle's items — must be
-/// indistinguishable from a nonexistent item (paxy discipline).
+/// indistinguishable from a nonexistent item.
 /// `pub(crate)`: shared single-id guard (`work_item` links reuse it).
 pub(crate) async fn require_in_vehicle_scope(
     db: &impl ConnectionTrait,
@@ -637,7 +637,7 @@ pub async fn dismiss_for_vehicle<C: ConnectionTrait + TransactionTrait>(
 
 /// Reverses a dismissal by re-enabling the vehicle-owned row that
 /// [`dismiss_for_vehicle`] returned. A restored copy of an inherited item
-/// keeps the definition it had when it was copied and no longer follows
+/// keeps the definition it had when it was copied and does not follow
 /// later changes to the template.
 ///
 /// Rows not owned by this vehicle are indistinguishable from nonexistent.

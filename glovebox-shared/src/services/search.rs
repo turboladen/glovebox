@@ -201,15 +201,12 @@ pub async fn search(
         ));
     }
     if want(SearchScope::Maintenance) {
-        // A schedule item is owned by exactly one of platform / model template /
-        // vehicle, and applies to every vehicle that resolves it (vehicle →
-        // template → platform), so the join fans out to one hit per applicable
-        // vehicle — each is a distinct navigable destination (Plan → Due).
-        // Override/dismissal resolution is deliberately NOT replicated here: an
-        // overridden or disabled item is still discoverable (it lives in
-        // Schedule ⚙'s Dismissed section), and its `?hl` on Due silently no-ops
-        // per the deep-link convention. Items whose platform/template has no
-        // vehicles have no destination and drop out via the inner join.
+        // A schedule item is owned by exactly one of platform, model template or
+        // vehicle, and applies to every vehicle that resolves it, so the join
+        // fans out to one hit per applicable vehicle. Override and dismissal
+        // are not resolved here: an overridden or dismissed item is still
+        // found, and `list_schedule` with `include_dismissed` shows it. Items
+        // whose platform or template has no vehicles drop out of the inner join.
         subs.push(subquery(
             "schedule_item",
             "fts_maintenance_schedule_items",
@@ -236,15 +233,14 @@ pub async fn search(
         ));
     }
 
-    // Dedupe by (kind, id, vehicle_id) IN SQL, before the LIMIT: a service
-    // matching in its own text and in several line items is one domain record,
-    // and duplicate raw rows must not starve other matching records out of the
-    // capped result set. vehicle_id joins the key for the schedule-item arm,
-    // where one inherited item legitimately fans out to one hit per applicable
-    // vehicle (every other kind has exactly one vehicle_id per (kind, id), so
-    // the extra key is a no-op for them). SQLite's bare-columns-with-MIN
-    // semantics make title/snippet come from the best-ranked row of each group;
-    // kind/id/vehicle_id tiebreakers keep equal-rank ordering deterministic.
+    // Dedupe by (kind, id, vehicle_id) in SQL, before the LIMIT: a service
+    // matching in its own text and in several line items is one record, and
+    // duplicate raw rows must not starve other records out of the capped
+    // result. vehicle_id is in the key for the schedule-item arm, where one
+    // inherited item fans out to one hit per vehicle. SQLite's
+    // bare-columns-with-MIN semantics take title and snippet from the
+    // best-ranked row of each group.
+
     // The CTE must be MATERIALIZED: if SQLite flattens the arms into the
     // aggregate query, bm25() lands outside its FTS cursor and fails with
     // "unable to use function bm25 in the requested context".

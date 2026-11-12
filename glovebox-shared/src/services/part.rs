@@ -66,6 +66,9 @@ pub async fn create(
 ) -> DomainResult<part::Model> {
     let supplied_by = input.supplied_by.unwrap_or_else(|| "self".to_string());
     validate_supplied_by(&supplied_by)?;
+    super::validate_optional_date("purchase_date", input.purchase_date.as_deref())?;
+    super::validate_optional_date("installed_date", input.installed_date.as_deref())?;
+    super::validate_optional_date("warranty_expires_on", input.warranty_expires_on.as_deref())?;
     if let Some(service_id) = input.installed_service_id {
         require_service_record_owned(db, vehicle_id, service_id).await?;
     }
@@ -110,6 +113,14 @@ pub async fn update(
 
     if let Some(v) = &input.supplied_by {
         validate_supplied_by(v)?;
+    }
+    for (field, value) in [
+        ("purchase_date", &input.purchase_date),
+        ("installed_date", &input.installed_date),
+        ("replaced_date", &input.replaced_date),
+        ("warranty_expires_on", &input.warranty_expires_on),
+    ] {
+        super::validate_optional_date(field, value.as_ref().and_then(|v| v.as_deref()))?;
     }
 
     let mut active: part::ActiveModel = existing.into();

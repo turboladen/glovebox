@@ -473,8 +473,8 @@ mod tests {
             Some("external_research")
         );
         assert_eq!(report.findings.len(), 2);
-        // Another vehicle gets its OWN anchor — never vehicle A's (the
-        // paxy-class regression this pins: dropping the VehicleId filter).
+        // Another vehicle gets its own anchor, never vehicle A's, which is
+        // what a lookup missing its VehicleId filter would return.
         let other = seed_vehicle(&db).await;
         let f3 = file_finding(
             &db,

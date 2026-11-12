@@ -191,7 +191,7 @@ pub struct LogIncidentInput {
     pub description: Option<String>,
     /// Odometer reading when it happened.
     pub odometer: Option<i32>,
-    /// When it happened, `YYYY-MM-DD HH:MM:SS`. Defaults to now.
+    /// When it happened, `YYYY-MM-DD HH:MM:SS` or just `YYYY-MM-DD`. Defaults to now.
     pub occurred_at: Option<String>,
     /// OBD-II codes if a scanner was involved, e.g. "P0301,P0420".
     pub obd_codes: Option<String>,
@@ -426,7 +426,9 @@ pub struct PlanWorkInput {
     /// rather than do now.
     pub revisit_by_date: Option<String>,
     /// Odometer reading at which to look at this item again. It is judged
-    /// only when the car has odometer readings.
+    /// against the estimated mileage, which needs an odometer reading or a
+    /// purchase mileage; until the car has one, an item with only this field
+    /// reads `revisit_status: "ok"`.
     pub revisit_by_miles: Option<i32>,
 }
 
@@ -465,7 +467,7 @@ pub struct LogMileageInput {
     pub vehicle_id: i32,
     /// Odometer reading (whole miles).
     pub mileage: i32,
-    /// When the reading was taken, `YYYY-MM-DD HH:MM:SS`. Defaults to now.
+    /// When the reading was taken, `YYYY-MM-DD HH:MM:SS` or just `YYYY-MM-DD`. Defaults to now.
     pub recorded_at: Option<String>,
     /// Free-form notes.
     pub notes: Option<String>,

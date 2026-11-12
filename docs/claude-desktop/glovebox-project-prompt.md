@@ -125,14 +125,17 @@ second service to patch the first.
 - `correct_service` also fixes the `invoice_ref` and replaces the recalls a service performed
   (`recall_finding_ids`). `update_incident` sets, changes or clears `noticed_during_service_id`.
 - `delete_service`, `delete_part`, `delete_incident` and `delete_planned_work` remove a record.
-  Deleting a service reopens what it closed.
+  Deleting a service reopens what it closed. Its parts are kept and listed in `kept_part_ids`:
+  when you file the invoice again, attach them with `part_ids`; otherwise delete them with
+  `delete_part`.
 - A mistyped odometer reading is found with `list_mileage` and removed with `delete_mileage`. A
   reading that came from a service is fixed with `correct_service` instead.
 - `delete_vehicle` removes a car added by mistake. It refuses once the car has any history.
 - `set_recall_status` marks a recall `done` when the work left no paperwork, `not_applicable` when
   it does not apply to this car, or `open` to undo either.
-- Do not set planned work to `done` by hand. File the work with `record_service` so the service,
-  the reminder, the incident and the recall are all linked.
+- When planned work was done and there is an invoice, file it with `record_service` and name the
+  work in `work_item_ids`, so the service, the reminder, the incident and the recall are all
+  linked. Use `update_planned_work` with `status: "done"` only for work that left no paperwork.
 
 ## Looking things up
 

@@ -44,8 +44,8 @@ fn validate_line_items(items: &[NewLineItem]) -> DomainResult<()> {
         .try_for_each(|li| validate_choice("work_kind", &li.work_kind, &VALID_WORK_KINDS))
 }
 
-/// Checks the fields that depend on each other: the date range runs forward,
-/// and a self-performed job has no shop. Dates compare as `YYYY-MM-DD` text.
+/// Checks the dates are `YYYY-MM-DD`, the range runs forward, and a
+/// self-performed job has no shop. Dates compare as `YYYY-MM-DD` text.
 fn validate_who_and_when(
     service_date: &str,
     end_date: Option<&str>,
@@ -53,6 +53,8 @@ fn validate_who_and_when(
     shop_name: Option<&str>,
 ) -> DomainResult<()> {
     validate_choice("performed_by", performed_by, &VALID_PERFORMED_BY)?;
+    super::validate_date("service_date", service_date)?;
+    super::validate_optional_date("end_date", end_date)?;
     if end_date.is_some_and(|end| end < service_date) {
         return Err(DomainError::invalid(
             "end_date",
@@ -412,6 +414,8 @@ pub async fn list_between(
     from: Option<&str>,
     to: Option<&str>,
 ) -> DomainResult<Vec<ServiceRecordWithLinks>> {
+    super::validate_optional_date("from", from)?;
+    super::validate_optional_date("to", to)?;
     let mut query =
         service_record::Entity::find().filter(service_record::Column::VehicleId.eq(vehicle_id));
     if let Some(from) = from {
@@ -1022,16 +1026,17 @@ pub async fn link_schedule_items<C: ConnectionTrait + TransactionTrait>(
 /// Deletes a service record and its owned rows, and reopens what it closed.
 ///
 /// Recalls it performed read as `open` again unless the owner marked them
-/// done by hand, each incident it resolved goes
-/// back to unresolved unless another service also resolved it, and each work
-/// item it completed returns to `planned`. Parts it installed stay, reverted
-/// to `purchased` with their install fields cleared, including parts that were
-/// created inline by this service; delete them with `part::delete`.
+/// done by hand. Each incident it resolved goes back to unresolved unless
+/// another service also resolved it. Each work item it completed returns to
+/// `planned`. Parts it installed stay, reverted to `purchased` with their
+/// install fields cleared, including parts created inline by this service.
+/// Returns the ids of those kept parts, so the caller can attach them to a
+/// re-filed service or delete them with `part::delete`.
 pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
     id: i32,
-) -> DomainResult<()> {
+) -> DomainResult<Vec<i32>> {
     let existing = service_record::Entity::find_by_id(id)
         .filter(service_record::Column::VehicleId.eq(vehicle_id))
         .one(db)
@@ -1045,8 +1050,10 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     // Unlink parts installed during this service (revert to purchased)
     let linked_parts = part::Entity::find()
         .filter(part::Column::InstalledServiceId.eq(existing.id))
+        .order_by_asc(part::Column::Id)
         .all(&txn)
         .await?;
+    let kept_part_ids: Vec<i32> = linked_parts.iter().map(|p| p.id).collect();
     for p in linked_parts {
         let mut active_part: part::ActiveModel = p.into();
         active_part.status = Set("purchased".to_string());
@@ -1090,7 +1097,7 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
 
     txn.commit().await?;
 
-    Ok(())
+    Ok(kept_part_ids)
 }
 
 /// Undoes the closing effects of a service that is about to be deleted. Runs
@@ -1388,7 +1395,8 @@ mod tests {
         .await
         .unwrap();
 
-        delete(&db, vid, created.record.id).await.unwrap();
+        let kept = delete(&db, vid, created.record.id).await.unwrap();
+        assert_eq!(kept, vec![part_id], "the kept parts are reported");
 
         // Record gone
         assert!(matches!(

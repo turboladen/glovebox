@@ -16,7 +16,7 @@ pub struct NewPart {
     pub installed_service_id: Option<i32>,
     pub notes: Option<String>,
     pub location: Option<String>,
-    /// Warranty expiry (decision ⑩): date (`YYYY-MM-DD`) and/or mileage.
+    /// Warranty expiry: date (`YYYY-MM-DD`) and/or mileage.
     pub warranty_expires_on: Option<String>,
     pub warranty_expires_miles: Option<i32>,
     /// `self` (default) or `shop`.

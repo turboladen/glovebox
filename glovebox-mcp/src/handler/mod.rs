@@ -106,7 +106,8 @@ impl ServerHandler for GloveboxMcp {
                  recalls) and `set_recall_status` for recalls. Every record can be listed, \
                  corrected and deleted; a correct or update tool leaves absent fields alone and \
                  clears a field sent as null, and an argument a tool does not define is an error. \
-                 All money is integer cents; all dates are YYYY-MM-DD.",
+                 All money is integer cents; all dates are YYYY-MM-DD, and a malformed date is an \
+                 error naming the field.",
             )
     }
 
