@@ -393,8 +393,14 @@ pub async fn delete(db: &impl ConnectionTrait, vehicle_id: i32, id: i32) -> Doma
 mod tests {
     use super::*;
     use crate::{
-        entities::{maintenance_schedule_item, service_record},
-        inputs::service_record::NewServiceRecord,
+        entities::{
+            maintenance_schedule_item, mileage_log, part, service_record, service_record_line_item,
+            service_schedule_link,
+        },
+        inputs::{
+            part::NewPart,
+            service_record::{NewLineItem, NewServiceRecord},
+        },
         services::{reminders, service_record as service_svc},
         test_support::{VehicleFixture, test_db},
     };
@@ -540,6 +546,23 @@ mod tests {
         );
     }
 
+    #[test]
+    fn revisit_status_boundaries() {
+        let today = NaiveDate::from_ymd_opt(2026, 11, 12).unwrap();
+        let by_date = |d: &str| revisit_status(&with_revisit(Some(d), None), today, None);
+        assert_eq!(by_date("2026-11-12"), Some("due_soon"));
+        assert_eq!(by_date("2026-12-12"), Some("due_soon"));
+        assert_eq!(by_date("2026-12-13"), Some("ok"));
+        assert_eq!(by_date("2026-11-11"), Some("overdue"));
+
+        let by_miles =
+            |est: i32| revisit_status(&with_revisit(None, Some(64000)), today, Some(est));
+        assert_eq!(by_miles(64000), Some("due_soon"));
+        assert_eq!(by_miles(64001), Some("overdue"));
+        assert_eq!(by_miles(63000), Some("due_soon"));
+        assert_eq!(by_miles(62999), Some("ok"));
+    }
+
     #[tokio::test]
     async fn a_service_completes_the_work_items_it_names_and_clears_their_reminders() {
         let db = test_db().await;
@@ -591,9 +614,24 @@ mod tests {
         let v2 = seed_vehicle(&db).await;
         let foreign = create(&db, v2, item("theirs")).await.unwrap();
 
-        let err = service_svc::create(&db, v1, service_on("2026-11-12", vec![foreign.id]))
-            .await
-            .unwrap_err();
+        let sched = seed_schedule_item(&db, v1).await;
+        let full = NewServiceRecord {
+            mileage: Some(50_000),
+            line_items: Some(vec![NewLineItem {
+                description: "Oil".into(),
+                work_kind: "maintenance".into(),
+                quantity: None,
+                unit_cost_cents: None,
+                cost_cents: None,
+            }]),
+            parts: Some(vec![NewPart {
+                name: "Filter".into(),
+                ..Default::default()
+            }]),
+            schedule_item_ids: Some(vec![sched]),
+            ..service_on("2026-11-12", vec![foreign.id])
+        };
+        let err = service_svc::create(&db, v1, full).await.unwrap_err();
         let missing = service_svc::create(&db, v1, service_on("2026-11-12", vec![9999]))
             .await
             .unwrap_err();
@@ -603,6 +641,22 @@ mod tests {
             missing.to_string().replace("9999", "N")
         );
         assert_eq!(service_record::Entity::find().count(&db).await.unwrap(), 0);
+        assert_eq!(
+            service_record_line_item::Entity::find()
+                .count(&db)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(part::Entity::find().count(&db).await.unwrap(), 0);
+        assert_eq!(mileage_log::Entity::find().count(&db).await.unwrap(), 0);
+        assert_eq!(
+            service_schedule_link::Entity::find()
+                .count(&db)
+                .await
+                .unwrap(),
+            0
+        );
         assert_eq!(get(&db, v2, foreign.id).await.unwrap().status, "planned");
     }
 

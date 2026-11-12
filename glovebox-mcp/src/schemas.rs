@@ -350,7 +350,8 @@ pub struct PlanWorkInput {
     /// Date to look at this item again, `YYYY-MM-DD`, for work to watch
     /// rather than do now.
     pub revisit_by_date: Option<String>,
-    /// Odometer reading at which to look at this item again.
+    /// Odometer reading at which to look at this item again. It is judged
+    /// only when the car has odometer readings.
     pub revisit_by_miles: Option<i32>,
 }
 
