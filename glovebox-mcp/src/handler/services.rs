@@ -110,7 +110,7 @@ impl GloveboxMcp {
 
     #[tool(
         name = "delete_service",
-        description = "Permanently delete a service record, for one that was filed by mistake or against the wrong car. Deleting reopens what it closed: recalls it performed read as open again, an incident it fixed goes back to unresolved unless another service also fixed it, and to-dos it completed return to planned. Its schedule links, line items and odometer reading are removed. Parts it installed are kept, reverted to purchased with their install details cleared; remove them separately with `delete_part`. To change a record rather than remove it, use `correct_service`.",
+        description = "Permanently delete a service record, for one that was filed by mistake or against the wrong car. Deleting reopens what it closed: recalls it performed read as open again (unless the owner marked them done by hand), an incident it fixed goes back to unresolved unless another service also fixed it, and to-dos it completed return to planned. Its schedule links, line items and odometer reading are removed. Parts it installed are kept, reverted to purchased with their install details cleared; remove them separately with `delete_part`. To change a record rather than remove it, use `correct_service`.",
         input_schema = rmcp::handler::server::common::schema_for_type::<DeleteServiceInput>()
     )]
     async fn delete_service(

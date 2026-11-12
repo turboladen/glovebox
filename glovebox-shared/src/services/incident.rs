@@ -32,7 +32,7 @@ pub const VALID_CATEGORIES: [&str; 11] = [
 pub const VALID_LINK_ROLES: [&str; 2] = ["noticed", "resolved"];
 
 const ROLE_NOTICED: &str = "noticed";
-const ROLE_RESOLVED: &str = "resolved";
+pub(crate) const ROLE_RESOLVED: &str = "resolved";
 
 fn validate_category(category: &str) -> DomainResult<()> {
     if VALID_CATEGORIES.contains(&category) {

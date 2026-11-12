@@ -208,3 +208,15 @@ async fn update_vehicle_sets_a_field_and_clears_another_with_null() {
         .await;
     assert!(err.contains("not found"), "got: {err}");
 }
+
+#[tokio::test]
+async fn an_unknown_model_template_is_a_clear_tool_error() {
+    let t = connect().await;
+    let err = t
+        .call_err(
+            "add_vehicle",
+            json!({ "name": "Daily", "model_template_id": 99999 }),
+        )
+        .await;
+    assert!(err.contains("list_model_templates"), "got: {err}");
+}

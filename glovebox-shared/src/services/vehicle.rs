@@ -25,7 +25,24 @@ pub async fn get(db: &impl ConnectionTrait, id: i32) -> DomainResult<vehicle::Mo
     require(db, id).await
 }
 
+/// Fails with a `NotFound` that points at `list_model_templates` when the id
+/// names no template.
+async fn require_template(db: &impl ConnectionTrait, id: Option<i32>) -> DomainResult<()> {
+    if let Some(id) = id
+        && crate::entities::model_template::Entity::find_by_id(id)
+            .one(db)
+            .await?
+            .is_none()
+    {
+        return Err(DomainError::NotFound(format!(
+            "Model template {id} not found; list_model_templates shows the valid ids"
+        )));
+    }
+    Ok(())
+}
+
 pub async fn create(db: &impl ConnectionTrait, input: NewVehicle) -> DomainResult<vehicle::Model> {
+    require_template(db, input.model_template_id).await?;
     let model = vehicle::ActiveModel {
         name: Set(input.name),
         model_template_id: Set(input.model_template_id),
@@ -91,6 +108,7 @@ pub async fn update(
     input: UpdateVehicle,
 ) -> DomainResult<vehicle::Model> {
     let existing = require(db, id).await?;
+    require_template(db, input.model_template_id.flatten()).await?;
     let mut active: vehicle::ActiveModel = existing.into();
 
     if let Some(v) = input.name {
@@ -374,5 +392,38 @@ mod tests {
         .unwrap();
         assert_eq!(made.make, None);
         assert_eq!(attribute_count(&db, made.id).await, 0);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_model_template_is_not_found_on_create_and_update() {
+        let db = test_db().await;
+        let err = create_with_vin_decode(
+            &db,
+            NewVehicle {
+                name: "Daily".into(),
+                model_template_id: Some(99_999),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(&err, DomainError::NotFound(m) if m.contains("list_model_templates")),
+            "got: {err}"
+        );
+
+        let v = seed(&db, "Car").await;
+        let err = update(
+            &db,
+            v.id,
+            UpdateVehicle {
+                model_template_id: Some(Some(99_999)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::NotFound(_)), "got: {err}");
     }
 }

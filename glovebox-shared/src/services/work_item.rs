@@ -376,7 +376,7 @@ pub async fn update(
         active.revisit_by_miles = Set(v);
     }
     if let Some(v) = input.status {
-        // Only a service completes an item, so any other status drops the link.
+        // A completing service link is kept only while the item is done.
         if v != "done" {
             active.completed_service_id = Set(None);
         }

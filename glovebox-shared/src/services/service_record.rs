@@ -4,8 +4,8 @@ use serde::Serialize;
 use crate::{
     entities::{
         incident, incident_service_link, maintenance_schedule_item, mileage_log, model_template,
-        part, research_finding, service_recall_link, service_record, service_record_line_item,
-        service_schedule_link, work_item as work_item_entity,
+        part, service_recall_link, service_record, service_record_line_item, service_schedule_link,
+        work_item as work_item_entity,
     },
     error::{DomainError, DomainResult},
     inputs::{
@@ -1024,7 +1024,8 @@ pub async fn link_schedule_items<C: ConnectionTrait + TransactionTrait>(
 
 /// Deletes a service record and its owned rows, and reopens what it closed.
 ///
-/// Recalls it performed read as `open` again, each incident it resolved goes
+/// Recalls it performed read as `open` again unless the owner marked them
+/// done by hand, each incident it resolved goes
 /// back to unresolved unless another service also resolved it, and each work
 /// item it completed returns to `planned`. Parts it installed stay, reverted
 /// to `purchased` with their install fields cleared, including parts that were
@@ -1113,7 +1114,7 @@ async fn reopen_what_it_closed(txn: &impl ConnectionTrait, service_id: i32) -> D
 
     let resolved_here: Vec<i32> = incident_service_link::Entity::find()
         .filter(incident_service_link::Column::ServiceRecordId.eq(service_id))
-        .filter(incident_service_link::Column::Role.eq("resolved"))
+        .filter(incident_service_link::Column::Role.eq(incident_svc::ROLE_RESOLVED))
         .all(txn)
         .await?
         .into_iter()
@@ -1122,7 +1123,7 @@ async fn reopen_what_it_closed(txn: &impl ConnectionTrait, service_id: i32) -> D
     for incident_id in resolved_here {
         let resolved_elsewhere = incident_service_link::Entity::find()
             .filter(incident_service_link::Column::IncidentId.eq(incident_id))
-            .filter(incident_service_link::Column::Role.eq("resolved"))
+            .filter(incident_service_link::Column::Role.eq(incident_svc::ROLE_RESOLVED))
             .filter(incident_service_link::Column::ServiceRecordId.ne(service_id))
             .count(txn)
             .await?
@@ -1140,28 +1141,6 @@ async fn reopen_what_it_closed(txn: &impl ConnectionTrait, service_id: i32) -> D
         }
     }
 
-    // A recall reads as done while a service link or a stored `completed`
-    // status exists. Clear the stored status too, so the recall reads as open
-    // once the link goes.
-    let performed: Vec<i32> = service_recall_link::Entity::find()
-        .filter(service_recall_link::Column::ServiceRecordId.eq(service_id))
-        .all(txn)
-        .await?
-        .into_iter()
-        .map(|l| l.research_finding_id)
-        .collect();
-    if !performed.is_empty() {
-        research_finding::Entity::update_many()
-            .set(research_finding::ActiveModel {
-                status: Set("new".to_string()),
-                updated_at: Set(stamp),
-                ..Default::default()
-            })
-            .filter(research_finding::Column::Id.is_in(performed))
-            .filter(research_finding::Column::Status.eq("completed"))
-            .exec(txn)
-            .await?;
-    }
     Ok(())
 }
 
@@ -2907,7 +2886,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn deleting_a_service_clears_a_stored_done_status_on_its_recalls() {
+    async fn deleting_a_service_keeps_a_recall_the_owner_marked_done() {
         use crate::services::{recall, research};
 
         let db = test_db().await;
@@ -2948,7 +2927,8 @@ mod tests {
 
         delete(&db, v, svc.record.id).await.unwrap();
 
-        assert_eq!(recall::list(&db, v).await.unwrap()[0].status, "open");
+        // The owner's own "done" is not the link's to take back.
+        assert_eq!(recall::list(&db, v).await.unwrap()[0].status, "done");
     }
 
     #[tokio::test]
