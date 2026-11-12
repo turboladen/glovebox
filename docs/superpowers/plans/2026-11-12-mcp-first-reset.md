@@ -6,7 +6,7 @@
 
 **Architecture:** Two crates remain: `glovebox-shared` (domain library: entities, one squashed migration, services) and `glovebox-mcp` (rmcp tool surface plus a stdio binary that Claude Desktop launches). The frontend, the Playwright suite, the HTTP API and `glovebox-backend` are deleted. Every tool body stays arg-struct → shared service → serialize.
 
-**Tech Stack:** Rust 2024, SeaORM 1.1 + SQLite (FTS5), rmcp 2.2 (stdio transport), schemars 1, `just`.
+**Tech Stack:** Rust 2024, SeaORM + SQLite (FTS5), rmcp (stdio transport), schemars, `just`, each at the latest stable release chosen in Task 2b.
 
 **Spec:** `docs/superpowers/specs/2026-11-12-mcp-first-reset-design.md`
 
@@ -24,7 +24,7 @@
 - Gate for every task: `just ci` passes (`cargo +nightly fmt --all --check`, layering script, `cargo build/test --workspace --locked`, `cargo clippy --workspace -- -D clippy::pedantic`).
 - Comments follow the owner's global rules: full sentences, no history narration, no `//` block over 10 lines, tests use `//` not `///`.
 - Never stage `.beads/issues.jsonl` in these commits (`git restore --staged .beads/issues.jsonl` if it gets picked up). Commits end with `Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>`.
-- rmcp's exact stdio and in-process client API must be read from the rmcp 2.2 docs (Context7) or the crate source under `~/.cargo/registry/src/index.crates.io-*/rmcp-2.2*/` before Task 4 is written. Do not write it from memory.
+- rmcp's exact stdio and in-process client API must be read from the docs (Context7) or the crate source under `~/.cargo/registry/src/index.crates.io-*/rmcp-<version>/` for the version Task 2b lands on, before Task 4 is written. Do not write it from memory. The same holds for any SeaORM 2.x API this plan names.
 
 ## Review Focus
 
@@ -51,7 +51,7 @@ Kept tables keep their current columns except as listed. "Removed" columns are s
 | `service_recall_links` (new) | `service_record_id`, `research_finding_id`, composite primary key, both FKs `ON DELETE CASCADE`. |
 | `research_findings` | Remove `linked_entity_type`, `linked_entity_id`. |
 | `vehicles` | Remove `photo_path`. |
-| Removed entirely | `builds`, `visits`, `documents`, `vehicle_attributes`, and their FTS tables and triggers. |
+| Removed entirely | `builds`, `visits`, `documents`, and their FTS tables and triggers. `vehicle_attributes` stays; the VIN decoder writes to it. |
 
 Whitelists (constants in the owning service module):
 
@@ -66,8 +66,8 @@ Whitelists (constants in the owning service module):
 
 - Delete: `frontend/`, `glovebox-backend/`, `TEST_PLAN.md`, `.claude/skills/new-e2e-test/`, `.claude/skills/new-entity/`, empty dirs `git/` and `pull/`, `data/e2e.db*`, `data/e2e-files/`.
 - `glovebox-shared/src/migration/`: replace the 22 files with `m20261112_000001_initial_schema.rs` and `m20261112_000002_seed_vw_mqb.rs`.
-- `glovebox-shared/src/entities/`: delete `build.rs`, `visit.rs`, `document.rs`, `vehicle_attribute.rs`; create `service_recall_link.rs`; modify the rest per the schema table.
-- `glovebox-shared/src/services/`: delete `build.rs`, `visit.rs`, `document.rs`, `dashboard.rs`, `export.rs`, `vin_decode.rs`; create `recall.rs`, `upcoming.rs`; create `glovebox-shared/src/db.rs`.
+- `glovebox-shared/src/entities/`: delete `build.rs`, `visit.rs`, `document.rs`; create `service_recall_link.rs`; modify the rest per the schema table.
+- `glovebox-shared/src/services/`: delete `build.rs`, `visit.rs`, `document.rs`, `dashboard.rs`, `export.rs`; keep `vin_decode.rs`; create `recall.rs`, `upcoming.rs`; create `glovebox-shared/src/db.rs`.
 - `glovebox-shared/src/inputs/`: delete `build.rs`, `visit.rs`, `document.rs`.
 - `glovebox-mcp/src/`: create `main.rs`; `lib.rs` shrinks to module declarations and `pub use handler::GloveboxMcp`; `handler.rs` is split into `handler/{mod,vehicles,services,parts,incidents,planning,schedule,recalls,reads}.rs` in Task 4 (it is already 954 lines and roughly doubles).
 - `glovebox-mcp/tests/`: replace `mcp_integration_test.rs` with `common/mod.rs` plus one test file per handler module.
@@ -97,7 +97,7 @@ Whitelists (constants in the owning service module):
 ### Task 2: Remove builds, visits and documents from the domain and the tools
 
 **Files:**
-- Delete: `glovebox-shared/src/services/{build,visit,document,dashboard,export,vin_decode}.rs`, `glovebox-shared/src/inputs/{build,visit,document}.rs`
+- Delete: `glovebox-shared/src/services/{build,visit,document,dashboard,export}.rs`, `glovebox-shared/src/inputs/{build,visit,document}.rs`
 - Modify: `glovebox-shared/src/services/mod.rs`, `glovebox-shared/src/inputs/mod.rs`, `glovebox-shared/src/services/{search,activity,costs,work_item,incident,part,service_record,research}.rs`, `glovebox-shared/src/test_support.rs`, `glovebox-shared/src/config.rs`, `glovebox-mcp/src/{handler,schemas}.rs`, `glovebox-mcp/tests/mcp_integration_test.rs`
 
 **Interfaces:**
@@ -128,12 +128,29 @@ async fn tools_list_has_no_build_visit_or_document_verbs() {
 - [ ] **Step 6: Verify.** `just ci` passes.
 - [ ] **Step 7: Commit.** `git commit -m "refactor: remove builds, visits and document storage"`
 
+### Task 2b: Update every Rust dependency
+
+**Files:**
+- Modify: `Cargo.toml`, `glovebox-shared/Cargo.toml`, `glovebox-mcp/Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` if present, plus whatever source the new APIs require
+
+**Interfaces:**
+- Produces: a workspace on the latest stable release of every direct dependency, including majors. Later tasks read their APIs from these versions.
+
+This runs after Task 2 so the removed code does not have to be migrated, and before Task 3 so the squashed migration and the stdio server are written once against current APIs.
+
+- [ ] **Step 1: List what is behind.** Run `cargo update` and then `cargo outdated --workspace --root-deps-only` (install `cargo-outdated` if missing). Record the list in the commit body.
+- [ ] **Step 2: Take the compatible updates.** `cargo update`, then `just ci`. Commit: `chore(deps): cargo update`.
+- [ ] **Step 3: Take each major bump as its own commit,** reading that crate's migration notes first (Context7 or its changelog). Expected majors: `sea-orm` and `sea-orm-migration` to 2.x together with `sqlx` to 0.9 (this is bead `glovebox-666f`; the two must move together because SeaORM pins sqlx), `rmcp`, `reqwest`, `schemars`, `thiserror`. Run `just ci` after each one.
+- [ ] **Step 4: If a major cannot land,** because a release is not out or it breaks something this plan does not otherwise touch, pin it at the newest version that works, and file a bead naming the blocker. Do not leave it silently behind.
+- [ ] **Step 5: Verify.** `cargo outdated --workspace --root-deps-only` lists nothing except crates with a bead from Step 4, and `just ci` passes.
+- [ ] **Step 6: Close `glovebox-666f`** if SeaORM 2.x and sqlx 0.9 landed, or update its notes with the current blocker.
+
 ### Task 3: Squash the schema and open the database in one place
 
 **Files:**
 - Delete: all 22 files under `glovebox-shared/src/migration/` except `mod.rs`
 - Create: `glovebox-shared/src/migration/m20261112_000001_initial_schema.rs`, `glovebox-shared/src/migration/m20261112_000002_seed_vw_mqb.rs`, `glovebox-shared/src/entities/service_recall_link.rs`, `glovebox-shared/src/db.rs`
-- Delete: `glovebox-shared/src/entities/{build,visit,document,vehicle_attribute}.rs`
+- Delete: `glovebox-shared/src/entities/{build,visit,document}.rs`
 - Modify: `glovebox-shared/src/migration/mod.rs`, `glovebox-shared/src/entities/{mod,service_record,service_record_line_item,part,work_item,incident,incident_service_link,research_finding,vehicle}.rs`, `glovebox-shared/src/lib.rs`, `glovebox-shared/src/test_support.rs`, plus every service that names a removed or renamed column
 
 **Interfaces:**
@@ -158,7 +175,7 @@ async fn connect_creates_the_file_enables_foreign_keys_and_migrates() {
     for t in ["vehicles", "service_records", "service_recall_links", "work_items"] {
         assert!(tables.contains(&t.to_string()), "missing {t}");
     }
-    for t in ["builds", "visits", "documents", "vehicle_attributes"] {
+    for t in ["builds", "visits", "documents"] {
         assert!(!tables.contains(&t.to_string()), "{t} must not exist");
     }
 }
@@ -197,9 +214,9 @@ Add `tempfile = "3"` to `glovebox-shared` dev-dependencies. Confirm the seeded i
 - Produces: test helper `pub async fn connect() -> TestClient` in `tests/common/mod.rs`, where `TestClient` wraps an rmcp client connected to a `GloveboxMcp` over `tokio::io::duplex` and exposes `db: DatabaseConnection`, `async fn call(&self, tool: &str, args: serde_json::Value) -> serde_json::Value` (panics on a tool-level error), `async fn call_err(&self, tool: &str, args: serde_json::Value) -> String` (returns the error text, panics on success) and `async fn tool_names(&self) -> Vec<String>`.
 - Produces: `just install`, which runs `cargo build --release -p glovebox-mcp` and prints the absolute binary path and the Claude Desktop config path.
 
-`Cargo.toml`: replace the rmcp feature `transport-streamable-http-server` with the stdio transport feature; add the rmcp client feature under dev-dependencies; remove `axum`, `if-addrs` and `tower`; add `tokio` and `tracing-subscriber` as dependencies. Splitting `handler.rs` is a move with no behavior change: each new file holds one `#[tool_router]`-compatible group of the existing tools, combined the way rmcp 2.2 documents for multi-file routers. Resources keep `glovebox://vehicles`, `glovebox://vehicles/{id}` and `glovebox://vehicles/{id}/activity`; the builds URI is gone.
+`Cargo.toml`: replace the rmcp feature `transport-streamable-http-server` with the stdio transport feature; add the rmcp client feature under dev-dependencies; remove `axum`, `if-addrs` and `tower`; add `tokio` and `tracing-subscriber` as dependencies. Splitting `handler.rs` is a move with no behavior change: each new file holds one `#[tool_router]`-compatible group of the existing tools, combined the way the installed rmcp version documents for multi-file routers. Resources keep `glovebox://vehicles`, `glovebox://vehicles/{id}` and `glovebox://vehicles/{id}/activity`; the builds URI is gone.
 
-- [ ] **Step 1: Read the rmcp 2.2 docs** for the stdio server transport, combining tool routers across impl blocks, and an in-process client over a duplex stream. Note the exact function and feature names in the commit message body.
+- [ ] **Step 1: Read the docs for the installed rmcp version** for the stdio server transport, combining tool routers across impl blocks, and an in-process client over a duplex stream. Note the exact function and feature names in the commit message body.
 - [ ] **Step 2: Write the failing tests.** In `tests/stdio.rs`:
 
 ```rust
@@ -605,7 +622,7 @@ If `calculate_reminders` errors on a vehicle with no mileage data, fix it there 
 
 | Tool | Input | Service fn |
 |---|---|---|
-| `add_vehicle` | `NewVehicle` fields incl. optional `model_template_id` | `vehicle::create` |
+| `add_vehicle` | `NewVehicle` fields incl. optional `model_template_id` and `vin` | new `vehicle::create_with_vin_decode` (see below) |
 | `update_vehicle` | `vehicle_id` + `UpdateVehicle` fields | `vehicle::update` |
 | `list_model_templates` | none | `model_template::list` with each template's platform name |
 | `list_services` | `vehicle_id`, optional `from`, `to` | `service_record::list` |
@@ -625,6 +642,8 @@ If `calculate_reminders` errors on a vehicle with no mileage data, fix it there 
 | `update_schedule_item` | `vehicle_id`, `schedule_item_id` + the same fields and `enabled` | `schedule::update`, vehicle-scoped items only |
 
 - Produces: `service_record::delete` reopens what the service closed, inside one transaction: work items with `completed_service_id` equal to the service return to `planned`; each incident whose only `resolved` link was this service gets `resolved = false`. Recall links and incident links go by `ON DELETE CASCADE`.
+
+`vehicle::create_with_vin_decode(db, input: NewVehicle, decoded: Option<&VinDecodeResult>) -> DomainResult<vehicle::Model>` fills each of year, make, model, trim, body style, engine, transmission and drivetrain that the caller left empty from the decode result, creates the vehicle, and calls `vin_decode::store_attributes`. A value the caller supplied always wins. The `add_vehicle` tool calls `vin_decode::decode_vin` when a `vin` is given and passes the result in; when the lookup fails (offline, NHTSA down, invalid VIN) the vehicle is still created from the supplied fields and the tool result carries a `vin_decode_error` string. Unit tests cover: blanks filled from a hand-built `VinDecodeResult`, a supplied `make` not overwritten, and `None` behaving like plain `create`. Tests never call the live decoder.
 
 Double-option fields in tool inputs use the existing lenient pattern in `schemas.rs`: an explicit JSON `null` clears the field and an absent key leaves it alone. `update_schedule_item` on a platform or template item returns `BadRequest` telling the caller to use `dismiss_schedule_item` or add a vehicle-specific item. The existing `link_service_to_maintenance`, `dismiss_schedule_item`, `log_mileage`, `save_note`, `file_research_finding`, `search_records`, `cost_summary` and `summarize_recent_activity` tools stay.
 
@@ -716,7 +735,7 @@ async fn a_new_owner_can_set_up_file_an_invoice_and_ask_whats_coming() {
 - [ ] **Step 3: Write the three `docs/claude-desktop/` files.** The README covers `just install`, merging the snippet into `~/Library/Application Support/Claude/claude_desktop_config.json`, restarting Desktop, creating a project with the prompt, and connecting NotePlan's own MCP server separately.
 - [ ] **Step 4: Rewrite `CLAUDE.md` and mirror it to `AGENTS.md`** for the two-crate layout: commands, environment (`GLOVEBOX_DB_PATH` only), architecture, conventions that still apply, the tool list by handler module. Remove every frontend, Playwright, HTTP, router, deep-link and `TEST_PLAN.md` section. Update `BRIEF.md` to the spec's intent. Update the `new-migration` skill for the squashed baseline.
 - [ ] **Step 5: Install and smoke-test by hand.** Run `just install`, then pipe one `initialize` request into the release binary with `GLOVEBOX_DB_PATH` pointing at the scratchpad and confirm a JSON-RPC response on stdout.
-- [ ] **Step 6: Triage beads,** serialized in one session. Close as obsolete, each with `--reason="Removed by the MCP-first reset (docs/superpowers/specs/2026-11-12-mcp-first-reset-design.md)"`: `1dco`, `w57q`, `5toj`, `f3dv`, `lwq6`, `z8c0`, `3dyj`, `8ru0`, `cgrq`, `sawg`, `870l`, `6vln`, `j316`, `m53`, `x3gz`, `vrgv`, `brm2`. Close `urf1` with a reason citing the `db::connect` foreign-key test. Rewrite `y064` to drop its build half. Leave `2mh3`, `nd5i`, `06ek`, `666f`, `cp69`, `fbss`, `om74`, `leqa`, `toh` open. File one new bead: "Named milestone services (VW 10k–60k checklists as first-class objects)", P3, referencing the spec. Run `bd show` on each id before closing to confirm it matches this description.
+- [ ] **Step 6: Triage beads,** serialized in one session. Close as obsolete, each with `--reason="Removed by the MCP-first reset (docs/superpowers/specs/2026-11-12-mcp-first-reset-design.md)"`: `1dco`, `w57q`, `5toj`, `f3dv`, `lwq6`, `z8c0`, `3dyj`, `8ru0`, `cgrq`, `sawg`, `870l`, `6vln`, `j316`, `m53`, `x3gz`, `vrgv`, `brm2`. Close `urf1` with a reason citing the `db::connect` foreign-key test. Rewrite `y064` to drop its build half. Leave `2mh3`, `nd5i`, `06ek`, `cp69`, `fbss`, `om74`, `leqa`, `toh` open; `666f` is handled in Task 2b. File one new bead: "Named milestone services (VW 10k–60k checklists as first-class objects)", P3, referencing the spec. Run `bd show` on each id before closing to confirm it matches this description.
 - [ ] **Step 7: Verify.** `just ci` passes.
 - [ ] **Step 8: Commit.** `git commit -m "docs: Claude Desktop setup, project prompt and two-crate CLAUDE.md"`
 

@@ -101,7 +101,7 @@ Kept as they are unless noted: `vehicles`, `platforms`, `model_templates`,
 entities.
 
 Removed: `builds`, `visits`, `documents`, and every `build_id` / `visit_id` column and FTS table
-that refers to them. `vehicle_attributes` is removed if no kept service uses it.
+that refers to them. `vehicle_attributes` stays, because the VIN decoder writes to it.
 
 ### Service record
 
@@ -199,7 +199,9 @@ visits, documents and deep links are removed from the remaining tool description
 
 **Added** (exact names are the builder's choice):
 
-- Add a vehicle and update a vehicle. Today a vehicle can only be created in the web UI.
+- Add a vehicle and update a vehicle. Today a vehicle can only be created in the web UI. Adding a
+  vehicle with a VIN decodes it through NHTSA and fills in whatever details the caller left out;
+  a failed lookup does not block adding the car.
 - Correct and delete for services, parts, incidents and work items. An import mistake must be
   fixable in the same conversation.
 - Add, update and disable a schedule item for one vehicle, including its estimated cost. This is
@@ -224,7 +226,8 @@ parts second, save anything durable as a research finding or schedule estimate).
 
 ## Stages
 
-1. **Trim.** Tag `pre-mcp-reset`. Remove the frontend, e2e suite, HTTP API and backend crate.
+1. **Trim.** Tag `pre-mcp-reset`. Update every Rust dependency to its latest stable release,
+   majors included, once the removed code is gone, so the new work is not built on old versions. Remove the frontend, e2e suite, HTTP API and backend crate.
    Remove builds, visits and documents from the domain library and MCP. Squash migrations. Add the
    stdio binary. Close the open beads that only concern removed code, each with a reason pointing
    at this reset.
