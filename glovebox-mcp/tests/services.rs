@@ -390,3 +390,164 @@ async fn record_service_rejects_a_bad_work_kind_with_the_field_name() {
         .await;
     assert!(err.contains("work_kind"), "got: {err}");
 }
+
+#[tokio::test]
+async fn correct_service_changes_the_cost_and_replaces_the_lines() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let recorded = t
+        .call(
+            "record_service",
+            json!({
+                "vehicle_id": v.id,
+                "service_date": "2026-06-01",
+                "description": "Brakes",
+                "notes": "rotors warped",
+                "total_cost_cents": 48_250,
+                "line_items": [
+                    { "description": "Pads", "work_kind": "maintenance", "cost_cents": 20_000 }
+                ]
+            }),
+        )
+        .await;
+    let sid = recorded["id"].clone();
+
+    let corrected = t
+        .call(
+            "correct_service",
+            json!({
+                "vehicle_id": v.id,
+                "service_id": sid,
+                "total_cost_cents": 48_520,
+                "notes": null,
+                "line_items": [
+                    { "description": "Pads", "work_kind": "maintenance", "cost_cents": 20_000 },
+                    { "description": "Rotors", "work_kind": "repair", "cost_cents": 28_520 }
+                ]
+            }),
+        )
+        .await;
+    assert_eq!(corrected["total_cost_cents"], 48_520);
+    assert!(
+        corrected["notes"].is_null(),
+        "null clears notes: {corrected}"
+    );
+    assert_eq!(corrected["description"], "Brakes", "absent keys stay put");
+    assert_eq!(corrected["line_items"].as_array().map(Vec::len), Some(2));
+
+    let listed = t
+        .call(
+            "list_services",
+            json!({ "vehicle_id": v.id, "from": "2026-01-01", "to": "2026-12-31" }),
+        )
+        .await;
+    assert_eq!(listed.as_array().map(Vec::len), Some(1));
+    let outside = t
+        .call(
+            "list_services",
+            json!({ "vehicle_id": v.id, "from": "2027-01-01" }),
+        )
+        .await;
+    assert_eq!(outside, json!([]));
+
+    let other = vehicle::create(&t.db, new_vehicle("Other")).await.unwrap();
+    let wrong = t
+        .call_err(
+            "correct_service",
+            json!({ "vehicle_id": other.id, "service_id": sid, "notes": "x" }),
+        )
+        .await;
+    let missing = t
+        .call_err(
+            "correct_service",
+            json!({ "vehicle_id": other.id, "service_id": 99999, "notes": "x" }),
+        )
+        .await;
+    assert_eq!(
+        wrong.replace(&sid.to_string(), "N"),
+        missing.replace("99999", "N")
+    );
+
+    let wrong_delete = t
+        .call_err(
+            "delete_service",
+            json!({ "vehicle_id": other.id, "service_id": sid }),
+        )
+        .await;
+    assert_eq!(
+        wrong_delete.replace(&sid.to_string(), "N"),
+        t.call_err(
+            "delete_service",
+            json!({ "vehicle_id": other.id, "service_id": 99999 })
+        )
+        .await
+        .replace("99999", "N")
+    );
+
+    t.call(
+        "delete_service",
+        json!({ "vehicle_id": v.id, "service_id": sid }),
+    )
+    .await;
+    let gone = t
+        .call_err(
+            "get_service",
+            json!({ "vehicle_id": v.id, "service_id": sid }),
+        )
+        .await;
+    assert!(gone.contains("not found"), "got: {gone}");
+}
+
+#[tokio::test]
+async fn delete_service_reopens_the_incident_and_work_it_closed() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let incident = t
+        .call(
+            "log_incident",
+            json!({ "vehicle_id": v.id, "title": "Squeak", "category": "noise" }),
+        )
+        .await;
+    let work = t
+        .call(
+            "plan_work",
+            json!({ "vehicle_id": v.id, "title": "Fix squeak" }),
+        )
+        .await;
+    let recorded = t
+        .call(
+            "record_service",
+            json!({
+                "vehicle_id": v.id,
+                "service_date": "2026-06-01",
+                "resolved_incident_ids": [incident["id"]],
+                "work_item_ids": [work["id"]]
+            }),
+        )
+        .await;
+    let fixed = t
+        .call(
+            "get_incident",
+            json!({ "vehicle_id": v.id, "incident_id": incident["id"] }),
+        )
+        .await;
+    assert_eq!(fixed["resolved"], true);
+
+    t.call(
+        "delete_service",
+        json!({ "vehicle_id": v.id, "service_id": recorded["id"] }),
+    )
+    .await;
+
+    let reopened = t
+        .call(
+            "get_incident",
+            json!({ "vehicle_id": v.id, "incident_id": incident["id"] }),
+        )
+        .await;
+    assert_eq!(reopened["resolved"], false);
+    let planned = t
+        .call("list_planned_work", json!({ "vehicle_id": v.id }))
+        .await;
+    assert_eq!(planned["items"][0]["status"], "planned");
+}

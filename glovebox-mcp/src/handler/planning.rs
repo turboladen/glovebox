@@ -2,7 +2,9 @@
 
 use rmcp::{ErrorData as McpError, model::CallToolResult, tool, tool_router};
 
-use super::{GloveboxMcp, LenientParameters, domain_error, domain_result, tool_json_result};
+use super::{
+    GloveboxMcp, LenientParameters, deleted_result, domain_error, domain_result, tool_json_result,
+};
 use serde::Serialize;
 
 use glovebox_shared::services::{
@@ -10,7 +12,10 @@ use glovebox_shared::services::{
     work_item::{self as work_item_svc, PlannedItem},
 };
 
-use crate::schemas::{ListPlannedWorkInput, PlanWorkInput, VehicleParams};
+use crate::schemas::{
+    DeletePlannedWorkInput, ListPlannedWorkInput, PlanWorkInput, UpdatePlannedWorkInput,
+    VehicleParams,
+};
 
 #[tool_router(router = planning_router, vis = "pub(super)")]
 impl GloveboxMcp {
@@ -71,5 +76,42 @@ impl GloveboxMcp {
             Err(e) => return Ok(e),
         };
         domain_result(upcoming::upcoming(&*self.db, p.vehicle_id).await)
+    }
+
+    #[tool(
+        name = "update_planned_work",
+        description = "Change a to-do item: title, notes, estimated cost, revisit date or mileage, the schedule item, recall or incident it is linked to, or its `status`. Send only the fields to change; null clears a field, and a field left out is untouched. Set `status: \"dropped\"` when the owner no longer intends to do the work (it leaves `whats_coming` but stays in history), or `planned` to reopen an item. Do not set `done` by hand for work that was performed; record it with `record_service` and `work_item_ids` so the service, reminder, incident and recall are linked. Use `delete_planned_work` only for an item added by mistake.",
+        input_schema = rmcp::handler::server::common::schema_for_type::<UpdatePlannedWorkInput>()
+    )]
+    async fn update_planned_work(
+        &self,
+        params: LenientParameters<UpdatePlannedWorkInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = match params.into_tool_input("update_planned_work") {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        };
+        let (vehicle_id, work_item_id, input) = p.into_domain();
+        domain_result(work_item_svc::update(&*self.db, vehicle_id, work_item_id, input).await)
+    }
+
+    #[tool(
+        name = "delete_planned_work",
+        description = "Permanently delete a to-do item that was added by mistake. For work the owner decided not to do, use `update_planned_work` with `status: \"dropped\"`, which keeps the record.",
+        input_schema = rmcp::handler::server::common::schema_for_type::<DeletePlannedWorkInput>()
+    )]
+    async fn delete_planned_work(
+        &self,
+        params: LenientParameters<DeletePlannedWorkInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = match params.into_tool_input("delete_planned_work") {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        };
+        deleted_result(
+            "planned work",
+            p.work_item_id,
+            work_item_svc::delete(&*self.db, p.vehicle_id, p.work_item_id).await,
+        )
     }
 }

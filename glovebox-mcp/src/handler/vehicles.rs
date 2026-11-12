@@ -3,9 +3,25 @@
 use rmcp::{ErrorData as McpError, model::CallToolResult, tool, tool_router};
 
 use super::{GloveboxMcp, LenientParameters, domain_error, domain_result};
-use glovebox_shared::services::{mileage, vehicle};
+use glovebox_shared::{
+    entities,
+    services::{mileage, model_template, vehicle, vin_decode},
+};
+use serde::Serialize;
 
-use crate::schemas::{EmptyParams, LogMileageInput, VehicleBrief, VehicleParams};
+use crate::schemas::{
+    AddVehicleInput, EmptyParams, LogMileageInput, UpdateVehicleInput, VehicleBrief, VehicleParams,
+};
+
+/// The created vehicle plus what the VIN lookup did, when one was asked for.
+#[derive(Serialize)]
+struct AddedVehicle {
+    #[serde(flatten)]
+    vehicle: entities::vehicle::Model,
+    /// Present only when a `vin` was sent and the lookup failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vin_decode_error: Option<String>,
+}
 
 #[tool_router(router = vehicles_router, vis = "pub(super)")]
 impl GloveboxMcp {
@@ -62,5 +78,68 @@ impl GloveboxMcp {
             return domain_error(e);
         }
         domain_result(mileage::create(&*self.db, vehicle_id, input).await)
+    }
+
+    #[tool(
+        name = "add_vehicle",
+        description = "Add a car to the garage. Give a `name` and whatever is known. Pass `model_template_id` (from `list_model_templates`) when the car matches one, so it inherits that platform's maintenance schedule (`list_schedule` shows it). Pass `vin` to fill blank year, make, model, trim, engine, transmission and drivetrain from NHTSA; anything sent explicitly wins, and if the lookup fails (offline, invalid VIN) the car is still added and the result carries `vin_decode_error`. Use `update_vehicle` to change a car that already exists.",
+        input_schema = rmcp::handler::server::common::schema_for_type::<AddVehicleInput>()
+    )]
+    async fn add_vehicle(
+        &self,
+        params: LenientParameters<AddVehicleInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = match params.into_tool_input("add_vehicle") {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        };
+        let input = p.into_domain();
+        let (decoded, vin_decode_error) = match input.vin.as_deref().map(str::trim) {
+            Some(vin) if !vin.is_empty() => match vin_decode::decode_vin(vin).await {
+                Ok(d) => (Some(d), None),
+                Err(e) => (None, Some(e)),
+            },
+            _ => (None, None),
+        };
+        domain_result(
+            vehicle::create_with_vin_decode(&*self.db, input, decoded.as_ref())
+                .await
+                .map(|vehicle| AddedVehicle {
+                    vehicle,
+                    vin_decode_error,
+                }),
+        )
+    }
+
+    #[tool(
+        name = "update_vehicle",
+        description = "Change details of an existing vehicle: name, plate, color, VIN, purchase or sale details, warranty expiry, notes, model template. Send only the fields to change; a field sent as null is cleared, and a field left out is untouched. Use `add_vehicle` for a car that is not in the garage yet.",
+        input_schema = rmcp::handler::server::common::schema_for_type::<UpdateVehicleInput>()
+    )]
+    async fn update_vehicle(
+        &self,
+        params: LenientParameters<UpdateVehicleInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = match params.into_tool_input("update_vehicle") {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        };
+        let (vehicle_id, input) = p.into_domain();
+        domain_result(vehicle::update(&*self.db, vehicle_id, input).await)
+    }
+
+    #[tool(
+        name = "list_model_templates",
+        description = "List the known model templates (year, make, model, trim and the platform each belongs to). Call before `add_vehicle` to find the `model_template_id` that gives a new car its inherited maintenance schedule. A car that matches none can still be added without one.",
+        input_schema = rmcp::handler::server::common::schema_for_type::<EmptyParams>()
+    )]
+    async fn list_model_templates(
+        &self,
+        params: LenientParameters<EmptyParams>,
+    ) -> Result<CallToolResult, McpError> {
+        if let Err(e) = params.into_tool_input("list_model_templates") {
+            return Ok(e);
+        }
+        domain_result(model_template::list_with_platform(&*self.db).await)
     }
 }

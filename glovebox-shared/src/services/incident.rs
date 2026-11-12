@@ -219,8 +219,21 @@ pub async fn list(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
 ) -> DomainResult<Vec<IncidentWithDetails>> {
-    let incidents = incident::Entity::find()
-        .filter(incident::Column::VehicleId.eq(vehicle_id))
+    list_filtered(db, vehicle_id, None).await
+}
+
+/// Lists a vehicle's incidents newest first, keeping only resolved ones for
+/// `Some(true)`, only unresolved ones for `Some(false)`, and all for `None`.
+pub async fn list_filtered(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    resolved: Option<bool>,
+) -> DomainResult<Vec<IncidentWithDetails>> {
+    let mut query = incident::Entity::find().filter(incident::Column::VehicleId.eq(vehicle_id));
+    if let Some(resolved) = resolved {
+        query = query.filter(incident::Column::Resolved.eq(resolved));
+    }
+    let incidents = query
         .order_by_desc(incident::Column::OccurredAt)
         .order_by_desc(incident::Column::Id)
         .all(db)

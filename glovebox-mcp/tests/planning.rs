@@ -185,3 +185,81 @@ async fn revisit_by_work_reports_its_status_and_a_service_completes_it() {
         .await;
     assert_eq!(all["items"][0]["status"], "done");
 }
+
+#[tokio::test]
+async fn update_and_delete_planned_work() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let other = vehicle::create(&t.db, new_vehicle("Other")).await.unwrap();
+    let item = t
+        .call(
+            "plan_work",
+            json!({
+                "vehicle_id": v.id,
+                "title": "Replace pads",
+                "est_cost_cents": 30_000,
+                "notes": "front only"
+            }),
+        )
+        .await;
+    let wid = item["id"].clone();
+
+    let updated = t
+        .call(
+            "update_planned_work",
+            json!({
+                "vehicle_id": v.id,
+                "work_item_id": wid,
+                "title": "Replace pads and rotors",
+                "notes": null
+            }),
+        )
+        .await;
+    assert_eq!(updated["title"], "Replace pads and rotors");
+    assert!(updated["notes"].is_null(), "null clears notes: {updated}");
+    assert_eq!(updated["est_cost_cents"], 30_000, "absent keys stay put");
+
+    let before = t.call("whats_coming", json!({ "vehicle_id": v.id })).await;
+    assert_eq!(before["planned_work"].as_array().map(Vec::len), Some(1));
+    t.call(
+        "update_planned_work",
+        json!({ "vehicle_id": v.id, "work_item_id": wid, "status": "dropped" }),
+    )
+    .await;
+    let after = t.call("whats_coming", json!({ "vehicle_id": v.id })).await;
+    assert_eq!(
+        after["planned_work"].as_array().map(Vec::len),
+        Some(0),
+        "dropped work leaves the forecast: {after}"
+    );
+
+    for tool in ["update_planned_work", "delete_planned_work"] {
+        let wrong = t
+            .call_err(tool, json!({ "vehicle_id": other.id, "work_item_id": wid }))
+            .await;
+        let missing = t
+            .call_err(
+                tool,
+                json!({ "vehicle_id": other.id, "work_item_id": 99999 }),
+            )
+            .await;
+        assert_eq!(
+            wrong.replace(&wid.to_string(), "N"),
+            missing.replace("99999", "N"),
+            "{tool}: a wrong-vehicle id must read like a nonexistent one"
+        );
+    }
+
+    t.call(
+        "delete_planned_work",
+        json!({ "vehicle_id": v.id, "work_item_id": wid }),
+    )
+    .await;
+    let listed = t
+        .call(
+            "list_planned_work",
+            json!({ "vehicle_id": v.id, "include_done": true }),
+        )
+        .await;
+    assert_eq!(listed["items"], json!([]));
+}

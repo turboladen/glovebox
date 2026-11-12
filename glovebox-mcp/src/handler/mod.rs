@@ -78,23 +78,31 @@ impl ServerHandler for GloveboxMcp {
                 env!("CARGO_PKG_VERSION"),
             ))
             .with_instructions(
-                "glovebox MCP: car maintenance tracking. Canonical workflow: (1) ORIENT — \
-                 `list_vehicles` for ids, then `summarize_recent_activity` for the vehicle's \
-                 recent history. (2) ANSWER \"what does it need?\" — `whats_coming` before \
-                 recommending any work (one call covers the schedule, planned work, open recalls, \
-                 unresolved incidents, the 12-month budget forecast and warranty status); \
-                 `check_recalls` to refresh safety recalls. Resolve due/overdue items by linking \
-                 completed work (`record_service` with `schedule_item_ids`, or \
-                 `link_service_to_maintenance` for records that already exist — the import \
-                 reconciliation loop) or waiving ones that don't apply (`dismiss_schedule_item`). \
-                 (3) PLAN — when the user intends to do something about a recall, an overdue \
-                 item, or an incident, `plan_work` it with the source linked; review the to-do \
-                 list with `list_planned_work`. (4) CAPTURE — `record_service` for completed \
-                 work, `record_part` for parts bought or installed, `log_incident` for \
-                 symptoms/damage/accidents, `save_note` for facts worth remembering, \
-                 `log_mileage` whenever the user mentions an odometer reading. (5) LOOK THINGS UP \
-                 — `search_records` for anything, `cost_summary` for spend. All money is integer \
-                 cents; all dates are YYYY-MM-DD.",
+                "glovebox MCP: car maintenance tracking, driven entirely through these tools. \
+                 Start with `list_vehicles` for ids (`add_vehicle` for a new car, \
+                 `list_model_templates` to give it an inherited schedule). Three loops cover \
+                 almost everything. (1) FILE AN INVOICE: `record_service` once per invoice, with \
+                 `invoice_ref`, `line_items` (each with a `work_kind`), `parts`, and the ids of \
+                 anything the work closes: `schedule_item_ids` from `whats_coming`, \
+                 `work_item_ids` from `list_planned_work`, `resolved_incident_ids`, \
+                 `recall_finding_ids` from `check_recalls`. Filing the same `invoice_ref` again \
+                 returns the existing record; fix a record with `correct_service`, remove one \
+                 with `delete_service` (which reopens what it closed). (2) CAPTURE AN ADVISORY: \
+                 when a shop flags something it did not fix, `log_incident` with category \
+                 `shop_observation` and `noticed_during_service_id`, then `plan_work` the fix \
+                 with `revisit_by_date` or `revisit_by_miles`; progress it with \
+                 `update_incident`, `add_incident_followup` and `update_planned_work`. (3) ANSWER \
+                 \"WHAT'S COMING?\": call `whats_coming` before recommending any work; it covers \
+                 the schedule, planned work, open recalls, unresolved incidents, the 12-month \
+                 forecast and warranty status. Tune the schedule with `list_schedule`, \
+                 `add_schedule_item`, `update_schedule_item` and `dismiss_schedule_item`. Also: \
+                 `log_mileage` whenever the user mentions an odometer reading, `record_part` and \
+                 `list_parts` / `correct_part` / `delete_part` for parts, `save_note` for facts \
+                 worth keeping, `search_records` and `cost_summary` to look things up, \
+                 `check_recalls` and `set_recall_status` for recalls. Every record can be listed, \
+                 corrected and deleted; a correct or update tool leaves absent fields alone and \
+                 clears a field sent as null. All money is integer cents; all dates are \
+                 YYYY-MM-DD.",
             )
     }
 
@@ -245,6 +253,16 @@ fn tool_json_result<T: Serialize>(value: &T) -> Result<CallToolResult, McpError>
         McpError::internal_error("failed to serialize result", None)
     })?;
     Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+}
+
+/// Serializes the result of a delete as `{"deleted": "<kind>", "id": <id>}`,
+/// or routes the service error through [`domain_error`].
+fn deleted_result(
+    kind: &str,
+    id: i32,
+    result: DomainResult<()>,
+) -> Result<CallToolResult, McpError> {
+    domain_result(result.map(|()| serde_json::json!({ "deleted": kind, "id": id })))
 }
 
 fn resource_json<T: Serialize>(value: &T) -> Result<String, McpError> {

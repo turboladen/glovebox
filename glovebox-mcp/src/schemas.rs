@@ -19,6 +19,13 @@ use glovebox_shared::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+// The correct and update inputs use `Option<Option<T>>` to tell an absent key
+// from an explicit `null`.
+#[allow(clippy::option_option)]
+mod corrections;
+
+pub use corrections::*;
+
 #[derive(Deserialize, JsonSchema)]
 pub struct EmptyParams {}
 
@@ -105,20 +112,23 @@ pub struct LineItemInput {
     pub cost_cents: Option<i32>,
 }
 
+impl LineItemInput {
+    pub fn into_domain(self) -> NewLineItem {
+        NewLineItem {
+            description: self.description,
+            work_kind: self.work_kind,
+            quantity: self.quantity,
+            unit_cost_cents: self.unit_cost_cents,
+            cost_cents: self.cost_cents,
+        }
+    }
+}
+
 impl RecordServiceInput {
     pub fn into_domain(self) -> (i32, NewServiceRecord) {
-        let line_items = self.line_items.map(|items| {
-            items
-                .into_iter()
-                .map(|li| NewLineItem {
-                    description: li.description,
-                    work_kind: li.work_kind,
-                    quantity: li.quantity,
-                    unit_cost_cents: li.unit_cost_cents,
-                    cost_cents: li.cost_cents,
-                })
-                .collect()
-        });
+        let line_items = self
+            .line_items
+            .map(|items| items.into_iter().map(LineItemInput::into_domain).collect());
         (
             self.vehicle_id,
             NewServiceRecord {

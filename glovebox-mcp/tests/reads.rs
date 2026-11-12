@@ -123,3 +123,53 @@ async fn read_resource_unknown_uri_and_missing_record_are_clean_errors() {
     let err = t.read_resource_err("glovebox://vehicles/999").await;
     assert!(err.contains("not found"), "got: {err}");
 }
+
+#[tokio::test]
+async fn the_server_offers_exactly_the_expected_tools() {
+    let t = connect().await;
+    let mut names = t.tool_names().await;
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            "add_incident_followup",
+            "add_schedule_item",
+            "add_vehicle",
+            "check_recalls",
+            "correct_part",
+            "correct_service",
+            "cost_summary",
+            "delete_incident",
+            "delete_part",
+            "delete_planned_work",
+            "delete_service",
+            "dismiss_schedule_item",
+            "file_research_finding",
+            "get_incident",
+            "get_service",
+            "get_vehicle",
+            "link_service_to_maintenance",
+            "list_incidents",
+            "list_model_templates",
+            "list_parts",
+            "list_planned_work",
+            "list_schedule",
+            "list_services",
+            "list_vehicles",
+            "log_incident",
+            "log_mileage",
+            "plan_work",
+            "record_part",
+            "record_service",
+            "save_note",
+            "search_records",
+            "set_recall_status",
+            "summarize_recent_activity",
+            "update_incident",
+            "update_planned_work",
+            "update_schedule_item",
+            "update_vehicle",
+            "whats_coming",
+        ]
+    );
+}

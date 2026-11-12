@@ -111,14 +111,13 @@ async fn tools_list_advertises_the_remaining_verb_set() {
         !names.contains(&"check_due_maintenance".to_string()),
         "check_due_maintenance is replaced by whats_coming"
     );
-    assert_eq!(tools.len(), 20, "expected exactly 20 tools; got: {names:?}");
     // Every argument-taking tool must advertise a real, non-empty input
     // schema. Forgetting the `input_schema =` override on a #[tool] silently
     // advertises an empty one, and a name check alone would not catch it.
     for tool in &tools {
         let name = tool["name"].as_str().expect("tool name");
-        if name == "list_vehicles" {
-            continue; // deliberately takes no arguments
+        if name == "list_vehicles" || name == "list_model_templates" {
+            continue; // deliberately take no arguments
         }
         let props = tool["inputSchema"]["properties"].as_object();
         assert!(
@@ -126,4 +125,86 @@ async fn tools_list_advertises_the_remaining_verb_set() {
             "tool {name} must advertise a non-empty input schema; got: {tool}"
         );
     }
+}
+
+#[tokio::test]
+async fn add_vehicle_from_a_template_inherits_its_schedule() {
+    let t = connect().await;
+
+    let templates = t.call("list_model_templates", json!({})).await;
+    let template = templates
+        .as_array()
+        .and_then(|a| a.first())
+        .unwrap_or_else(|| panic!("the seeded template must be listed; got: {templates}"));
+    assert!(
+        template["platform_name"].is_string(),
+        "each template names its platform: {template}"
+    );
+
+    let added = t
+        .call(
+            "add_vehicle",
+            json!({
+                "name": "Daily",
+                "model_template_id": template["id"],
+                "license_plate": "ABC123",
+                "notes": "bought used"
+            }),
+        )
+        .await;
+    assert_eq!(added["name"], "Daily");
+    assert_eq!(added["license_plate"], "ABC123");
+    assert!(
+        added.get("vin_decode_error").is_none(),
+        "no vin was sent, so no lookup ran: {added}"
+    );
+
+    let schedule = t
+        .call("list_schedule", json!({ "vehicle_id": added["id"] }))
+        .await;
+    assert!(
+        schedule.as_array().is_some_and(|a| !a.is_empty()),
+        "a templated vehicle inherits maintenance items: {schedule}"
+    );
+}
+
+#[tokio::test]
+async fn update_vehicle_sets_a_field_and_clears_another_with_null() {
+    let t = connect().await;
+    let added = t
+        .call(
+            "add_vehicle",
+            json!({ "name": "Daily", "notes": "bought used" }),
+        )
+        .await;
+    let id = added["id"].clone();
+
+    let updated = t
+        .call(
+            "update_vehicle",
+            json!({ "vehicle_id": id, "license_plate": "XYZ789", "notes": null }),
+        )
+        .await;
+    assert_eq!(updated["license_plate"], "XYZ789");
+    assert!(updated["notes"].is_null(), "null clears notes: {updated}");
+    assert_eq!(updated["name"], "Daily", "absent keys are left alone");
+
+    let untouched = t
+        .call(
+            "update_vehicle",
+            json!({ "vehicle_id": id, "color": "red" }),
+        )
+        .await;
+    assert_eq!(
+        untouched["license_plate"], "XYZ789",
+        "an absent key must not clear the plate"
+    );
+
+    let err = t
+        .call_err(
+            "update_vehicle",
+            json!({ "vehicle_id": 9999, "color": "red" }),
+        )
+        .await;
+    assert!(err.contains("not found"), "got: {err}");
 }

@@ -227,3 +227,144 @@ async fn a_shop_observation_is_linked_to_the_services_that_noticed_and_fixed_it(
         .await;
     assert!(err.contains("not found"), "got: {err}");
 }
+
+#[tokio::test]
+async fn list_update_followup_and_delete_an_incident() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let other = vehicle::create(&t.db, new_vehicle("Other")).await.unwrap();
+    let incident = t
+        .call(
+            "log_incident",
+            json!({
+                "vehicle_id": v.id,
+                "title": "Squeak",
+                "category": "noise",
+                "notes": "only when cold"
+            }),
+        )
+        .await;
+    let iid = incident["id"].clone();
+
+    let open = t
+        .call(
+            "list_incidents",
+            json!({ "vehicle_id": v.id, "resolved": false }),
+        )
+        .await;
+    assert_eq!(open.as_array().map(Vec::len), Some(1));
+    let resolved = t
+        .call(
+            "list_incidents",
+            json!({ "vehicle_id": v.id, "resolved": true }),
+        )
+        .await;
+    assert_eq!(resolved, json!([]));
+
+    let updated = t
+        .call(
+            "update_incident",
+            json!({
+                "vehicle_id": v.id,
+                "incident_id": iid,
+                "title": "Squeak, front left",
+                "notes": null,
+                "resolved": true
+            }),
+        )
+        .await;
+    assert_eq!(updated["title"], "Squeak, front left");
+    assert!(updated["notes"].is_null(), "null clears notes: {updated}");
+    assert_eq!(updated["resolved"], true);
+    assert_eq!(updated["category"], "noise", "absent keys stay put");
+
+    let followup = t
+        .call(
+            "add_incident_followup",
+            json!({
+                "vehicle_id": v.id,
+                "incident_id": iid,
+                "occurred_at": "2026-06-02 10:00:00",
+                "summary": "Shop could not reproduce it"
+            }),
+        )
+        .await;
+    assert_eq!(followup["summary"], "Shop could not reproduce it");
+    let full = t
+        .call(
+            "get_incident",
+            json!({ "vehicle_id": v.id, "incident_id": iid }),
+        )
+        .await;
+    assert_eq!(full["followups"].as_array().map(Vec::len), Some(1));
+
+    for (tool, extra) in [
+        ("update_incident", json!({ "title": "x" })),
+        ("delete_incident", json!({})),
+        (
+            "add_incident_followup",
+            json!({ "occurred_at": "2026-06-02 10:00:00", "summary": "x" }),
+        ),
+    ] {
+        let mut wrong = json!({ "vehicle_id": other.id, "incident_id": iid });
+        let mut missing = json!({ "vehicle_id": other.id, "incident_id": 99999 });
+        for (args, _) in [(&mut wrong, ()), (&mut missing, ())] {
+            for (k, v) in extra.as_object().unwrap() {
+                args[k] = v.clone();
+            }
+        }
+        let wrong = t.call_err(tool, wrong).await;
+        let missing = t.call_err(tool, missing).await;
+        assert_eq!(
+            wrong.replace(&iid.to_string(), "N"),
+            missing.replace("99999", "N"),
+            "{tool}: a wrong-vehicle id must read like a nonexistent one"
+        );
+    }
+
+    t.call(
+        "delete_incident",
+        json!({ "vehicle_id": v.id, "incident_id": iid }),
+    )
+    .await;
+    let gone = t
+        .call_err(
+            "get_incident",
+            json!({ "vehicle_id": v.id, "incident_id": iid }),
+        )
+        .await;
+    assert!(gone.contains("not found"), "got: {gone}");
+}
+
+#[tokio::test]
+async fn removing_the_last_fixing_service_through_update_incident_unresolves_it() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let incident = t
+        .call(
+            "log_incident",
+            json!({ "vehicle_id": v.id, "title": "Leak" }),
+        )
+        .await;
+    t.call(
+        "record_service",
+        json!({
+            "vehicle_id": v.id,
+            "service_date": "2026-06-01",
+            "resolved_incident_ids": [incident["id"]]
+        }),
+    )
+    .await;
+
+    let cleared = t
+        .call(
+            "update_incident",
+            json!({
+                "vehicle_id": v.id,
+                "incident_id": incident["id"],
+                "resolved_by_service_ids": []
+            }),
+        )
+        .await;
+    assert_eq!(cleared["resolved"], false, "got: {cleared}");
+}

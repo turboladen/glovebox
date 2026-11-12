@@ -2,10 +2,13 @@
 
 use rmcp::{ErrorData as McpError, model::CallToolResult, tool, tool_router};
 
-use super::{GloveboxMcp, LenientParameters, domain_error, domain_result};
+use super::{GloveboxMcp, LenientParameters, deleted_result, domain_error, domain_result};
 use glovebox_shared::services::{incident, vehicle};
 
-use crate::schemas::{LogIncidentInput, SaveNoteInput};
+use crate::schemas::{
+    AddIncidentFollowupInput, DeleteIncidentInput, ListIncidentsInput, LogIncidentInput,
+    SaveNoteInput, UpdateIncidentInput,
+};
 
 #[tool_router(router = incidents_router, vis = "pub(super)")]
 impl GloveboxMcp {
@@ -47,5 +50,78 @@ impl GloveboxMcp {
             return domain_error(e);
         }
         domain_result(incident::create(&*self.db, vehicle_id, input).await)
+    }
+
+    #[tool(
+        name = "list_incidents",
+        description = "The vehicle's incidents (noises, leaks, warning lights, damage, accidents, shop observations, notes), newest first, each with its followups and the services that noticed or fixed it. Pass `resolved: false` for what is still open. Use `get_incident` for one in full and this tool to find an `incident_id` for `update_incident`.",
+        input_schema = rmcp::handler::server::common::schema_for_type::<ListIncidentsInput>()
+    )]
+    async fn list_incidents(
+        &self,
+        params: LenientParameters<ListIncidentsInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = match params.into_tool_input("list_incidents") {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        };
+        if let Err(e) = vehicle::require(&*self.db, p.vehicle_id).await {
+            return domain_error(e);
+        }
+        domain_result(incident::list_filtered(&*self.db, p.vehicle_id, p.resolved).await)
+    }
+
+    #[tool(
+        name = "update_incident",
+        description = "Correct or progress an incident: title, category, description, odometer, codes, notes, accident and insurance details, repair cost, deductible, payout, recurrence link. Send only the fields to change; null clears a field, and a field left out is untouched. Set `resolved` to close it by hand (e.g. fixed without an invoice) or reopen it. `resolved_by_service_ids` REPLACES the services that fixed it: a non-empty list marks it resolved and an empty list marks it unresolved (unless `resolved` is sent too). For a fix that has paperwork, prefer `record_service` with `resolved_incident_ids`. To note a phone call or email about it, use `add_incident_followup`.",
+        input_schema = rmcp::handler::server::common::schema_for_type::<UpdateIncidentInput>()
+    )]
+    async fn update_incident(
+        &self,
+        params: LenientParameters<UpdateIncidentInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = match params.into_tool_input("update_incident") {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        };
+        let (vehicle_id, incident_id, input) = p.into_domain();
+        domain_result(incident::update(&*self.db, vehicle_id, incident_id, input).await)
+    }
+
+    #[tool(
+        name = "add_incident_followup",
+        description = "Add a dated followup to an incident: a call with the adjuster, an email to the shop, what was learned. Give `occurred_at`, a `summary`, and optionally `contact_method`, `contact_with` and `notes`. Use `update_incident` to change the incident's own fields.",
+        input_schema = rmcp::handler::server::common::schema_for_type::<AddIncidentFollowupInput>()
+    )]
+    async fn add_incident_followup(
+        &self,
+        params: LenientParameters<AddIncidentFollowupInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = match params.into_tool_input("add_incident_followup") {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        };
+        let (vehicle_id, incident_id, input) = p.into_domain();
+        domain_result(incident::create_followup(&*self.db, vehicle_id, incident_id, input).await)
+    }
+
+    #[tool(
+        name = "delete_incident",
+        description = "Permanently delete an incident that was logged by mistake, with its followups and service links. Incidents that recurred from it are unlinked, and planned work pointing at it is detached. To close an incident that was really fixed, use `update_incident` with `resolved: true` or `record_service` with `resolved_incident_ids`, which keep the history.",
+        input_schema = rmcp::handler::server::common::schema_for_type::<DeleteIncidentInput>()
+    )]
+    async fn delete_incident(
+        &self,
+        params: LenientParameters<DeleteIncidentInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = match params.into_tool_input("delete_incident") {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        };
+        deleted_result(
+            "incident",
+            p.incident_id,
+            incident::delete(&*self.db, p.vehicle_id, p.incident_id).await,
+        )
     }
 }
