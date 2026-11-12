@@ -45,12 +45,12 @@ pub fn router(db: DatabaseConnection) -> Router {
     // plain-JSON responses instead of SSE, which is simpler for HTTP-only
     // bridges.
     let mut http_config = default_config.with_allowed_hosts(allowed_hosts);
-    http_config.stateful_mode = false;
+    http_config.legacy_session_mode = false;
     http_config.json_response = true;
 
     let streamable = StreamableHttpService::new(
         move || Ok(GloveboxMcp::new(db.clone())),
-        // Required by the constructor; unused when stateful_mode is false.
+        // Required by the constructor; unused when legacy_session_mode is false.
         Arc::new(LocalSessionManager::default()),
         http_config,
     );

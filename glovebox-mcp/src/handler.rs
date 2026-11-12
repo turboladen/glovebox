@@ -10,8 +10,8 @@ use rmcp::{
     handler::server::{common::FromContextPart, tool::ToolCallContext},
     model::{
         CallToolResult, ContentBlock, Implementation, ListResourcesResult, PaginatedRequestParams,
-        ReadResourceRequestParams, ReadResourceResult, Resource, ResourceContents,
-        ResourcesCapability, ServerCapabilities, ServerInfo, ToolsCapability,
+        ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
+        ResourceContents, ResourcesCapability, ServerCapabilities, ServerConfig, ToolsCapability,
     },
     service::RequestContext,
     tool, tool_handler, tool_router,
@@ -398,11 +398,11 @@ impl GloveboxMcp {
 #[allow(clippy::unused_async_trait_impl)]
 #[tool_handler]
 impl ServerHandler for GloveboxMcp {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         let mut capabilities = ServerCapabilities::default();
         capabilities.tools = Some(ToolsCapability::default());
         capabilities.resources = Some(ResourcesCapability::default());
-        ServerInfo::new(capabilities)
+        ServerConfig::new(capabilities)
             .with_server_info(Implementation::new(
                 "glovebox-mcp",
                 env!("CARGO_PKG_VERSION"),
@@ -467,7 +467,7 @@ impl ServerHandler for GloveboxMcp {
         &self,
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResult, McpError> {
+    ) -> Result<ReadResourceResponse, McpError> {
         let uri = request.uri.as_str();
         let Some(parsed) = parse_resource_uri(uri) else {
             return Err(McpError::invalid_params(
@@ -499,7 +499,8 @@ impl ServerHandler for GloveboxMcp {
         };
         Ok(ReadResourceResult::new(vec![
             ResourceContents::text(json, &request.uri).with_mime_type("application/json"),
-        ]))
+        ])
+        .into())
     }
 }
 
