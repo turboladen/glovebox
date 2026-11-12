@@ -871,9 +871,11 @@ impl AddScheduleItemInput {
 pub struct UpdateScheduleItemInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
-    /// Schedule item id, from `list_schedule`. Must be a vehicle-specific item.
+    /// Schedule item id, from `list_schedule` or `whats_coming`. An inherited
+    /// item's id and the id of this car's copy of it reach the same item.
     pub schedule_item_id: i32,
-    /// New name.
+    /// New name. Only an item added with `add_schedule_item` can be renamed;
+    /// an inherited item keeps its name.
     pub name: Option<String>,
     /// `false` stops the item appearing in `whats_coming`.
     pub enabled: Option<bool>,

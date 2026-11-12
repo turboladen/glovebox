@@ -140,7 +140,96 @@ async fn add_and_update_schedule_items_round_trip() {
 }
 
 #[tokio::test]
-async fn updating_an_inherited_schedule_item_points_at_dismiss() {
+async fn changing_an_inherited_item_keeps_its_service_history_and_plans() {
+    let t = connect().await;
+    let template = schedule_svc_template(&t).await;
+    let v = vehicle::create(
+        &t.db,
+        NewVehicle {
+            model_template_id: Some(template),
+            purchase_date: Some("2017-03-05".into()),
+            purchase_mileage: Some(40),
+            ..new_vehicle("Golf")
+        },
+    )
+    .await
+    .unwrap();
+    let coming = t.call("whats_coming", json!({ "vehicle_id": v.id })).await;
+    let plugs_id = reminder(&coming, "Spark Plugs")["schedule_item"]["id"].clone();
+
+    let recorded = t
+        .call(
+            "record_service",
+            json!({
+                "vehicle_id": v.id,
+                "service_date": "2026-11-10",
+                "mileage": 64_000,
+                "description": "Spark plugs",
+                "schedule_item_ids": [plugs_id]
+            }),
+        )
+        .await;
+    let service_id = recorded["id"].clone();
+    let planned = t
+        .call(
+            "plan_work",
+            json!({ "vehicle_id": v.id, "title": "Plugs again", "schedule_item_id": plugs_id }),
+        )
+        .await;
+    let before = t.call("whats_coming", json!({ "vehicle_id": v.id })).await;
+    assert_eq!(reminder(&before, "Spark Plugs")["status"], "ok");
+
+    let updated = t
+        .call(
+            "update_schedule_item",
+            json!({ "vehicle_id": v.id, "schedule_item_id": plugs_id, "est_cost_cents": 25_000 }),
+        )
+        .await;
+    assert_ne!(updated["id"], plugs_id, "the shared item is never edited");
+    assert_eq!(updated["overrides_item_id"], plugs_id);
+    assert_eq!(updated["est_cost_cents"], 25_000);
+
+    let after = t.call("whats_coming", json!({ "vehicle_id": v.id })).await;
+    let plugs = reminder(&after, "Spark Plugs");
+    assert_eq!(plugs["schedule_item"]["id"], updated["id"]);
+    assert_eq!(plugs["status"], "ok", "got: {plugs}");
+    assert_eq!(plugs["last_service"]["id"], service_id);
+    let work = after["planned_work"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["id"] == planned["id"])
+        .unwrap_or_else(|| panic!("planned work must still be open: {after}"));
+    assert_eq!(work["schedule_item_id"], updated["id"]);
+
+    // The same call on the new id edits the same item.
+    let again = t
+        .call(
+            "update_schedule_item",
+            json!({ "vehicle_id": v.id, "schedule_item_id": updated["id"], "notes": "NGK" }),
+        )
+        .await;
+    assert_eq!(again["id"], updated["id"]);
+}
+
+fn reminder<'a>(coming: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
+    coming["reminders"]
+        .as_array()
+        .expect("reminders array")
+        .iter()
+        .find(|r| r["schedule_item"]["name"] == name)
+        .unwrap_or_else(|| panic!("no reminder named {name}; got: {coming}"))
+}
+
+async fn schedule_svc_template(t: &common::TestClient) -> i32 {
+    glovebox_shared::services::model_template::list(&t.db)
+        .await
+        .unwrap()[0]
+        .id
+}
+
+#[tokio::test]
+async fn a_dismissed_item_can_be_found_and_restored() {
     let t = connect().await;
     let template = schedule_svc_template(&t).await;
     let v = vehicle::create(
@@ -152,28 +241,52 @@ async fn updating_an_inherited_schedule_item_points_at_dismiss() {
     )
     .await
     .unwrap();
-    let listed = t.call("list_schedule", json!({ "vehicle_id": v.id })).await;
-    let inherited = listed
-        .as_array()
-        .and_then(|items| items.iter().find(|i| !i["inherited_from"].is_null()))
-        .unwrap_or_else(|| panic!("a seeded template item must be inherited: {listed}"));
+    let coming = t.call("whats_coming", json!({ "vehicle_id": v.id })).await;
+    let wipers = reminder(&coming, "Wiper Blades")["schedule_item"]["id"].clone();
+    t.call(
+        "dismiss_schedule_item",
+        json!({ "vehicle_id": v.id, "schedule_item_id": wipers }),
+    )
+    .await;
 
-    let err = t
-        .call_err(
-            "update_schedule_item",
-            json!({
-                "vehicle_id": v.id,
-                "schedule_item_id": inherited["effective_item"]["id"],
-                "est_cost_cents": 1
-            }),
+    let named = |listed: &serde_json::Value| -> Option<serde_json::Value> {
+        listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["effective_item"]["name"] == "Wiper Blades")
+            .map(|i| i["effective_item"].clone())
+    };
+    let shown = t.call("list_schedule", json!({ "vehicle_id": v.id })).await;
+    assert!(
+        named(&shown).is_none(),
+        "dismissed items are hidden by default"
+    );
+    let all = t
+        .call(
+            "list_schedule",
+            json!({ "vehicle_id": v.id, "include_dismissed": true }),
         )
         .await;
-    assert!(err.contains("dismiss_schedule_item"), "got: {err}");
-}
+    let dismissed = named(&all).unwrap_or_else(|| panic!("dismissed item listed: {all}"));
+    assert_eq!(dismissed["enabled"], false);
 
-async fn schedule_svc_template(t: &common::TestClient) -> i32 {
-    glovebox_shared::services::model_template::list(&t.db)
-        .await
-        .unwrap()[0]
-        .id
+    let restored = t
+        .call(
+            "restore_schedule_item",
+            json!({ "vehicle_id": v.id, "schedule_item_id": dismissed["id"] }),
+        )
+        .await;
+    assert_eq!(restored["enabled"], true);
+    let coming = t.call("whats_coming", json!({ "vehicle_id": v.id })).await;
+    reminder(&coming, "Wiper Blades");
+
+    let other = vehicle::create(&t.db, new_vehicle("Other")).await.unwrap();
+    let err = t
+        .call_err(
+            "restore_schedule_item",
+            json!({ "vehicle_id": other.id, "schedule_item_id": dismissed["id"] }),
+        )
+        .await;
+    assert!(err.contains("not found"), "got: {err}");
 }

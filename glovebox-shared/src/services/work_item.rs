@@ -143,24 +143,30 @@ async fn require_incident_owned(
 
 /// Guard every present source link on a work item: schedule item (vehicle
 /// scope chain), research finding (via its report), and incident, each
-/// vehicle-scoped.
+/// vehicle-scoped. Returns the schedule item id to store, which is the
+/// vehicle's own copy when the id names an inherited item the vehicle has
+/// copied.
 async fn require_links_owned(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     schedule_item_id: Option<i32>,
     research_finding_id: Option<i32>,
     incident_id: Option<i32>,
-) -> DomainResult<()> {
-    if let Some(id) = schedule_item_id {
-        crate::services::schedule::require_in_vehicle_scope(db, vehicle_id, id).await?;
-    }
+) -> DomainResult<Option<i32>> {
+    let tracked = match schedule_item_id {
+        Some(id) => crate::services::schedule::tracked_ids(db, vehicle_id, &[id])
+            .await?
+            .first()
+            .copied(),
+        None => None,
+    };
     if let Some(id) = research_finding_id {
         require_finding_owned(db, vehicle_id, id).await?;
     }
     if let Some(id) = incident_id {
         require_incident_owned(db, vehicle_id, id).await?;
     }
-    Ok(())
+    Ok(tracked)
 }
 
 pub async fn list(
@@ -294,7 +300,7 @@ pub async fn create(
     }
     validate_revisit(input.revisit_by_date.as_deref(), input.revisit_by_miles)?;
     crate::services::vehicle::require(db, vehicle_id).await?;
-    require_links_owned(
+    let schedule_item_id = require_links_owned(
         db,
         vehicle_id,
         input.schedule_item_id,
@@ -307,7 +313,7 @@ pub async fn create(
         vehicle_id: Set(vehicle_id),
         title: Set(input.title),
         notes: Set(input.notes),
-        schedule_item_id: Set(input.schedule_item_id),
+        schedule_item_id: Set(schedule_item_id),
         research_finding_id: Set(input.research_finding_id),
         incident_id: Set(input.incident_id),
         est_cost_cents: Set(input.est_cost_cents),
@@ -340,7 +346,7 @@ pub async fn update(
         input.revisit_by_miles.flatten(),
     )?;
     // Same guards as create, on the links this update actually changes.
-    require_links_owned(
+    let schedule_item_id = require_links_owned(
         db,
         vehicle_id,
         input.schedule_item_id.flatten(),
@@ -358,7 +364,7 @@ pub async fn update(
         active.notes = Set(v);
     }
     if let Some(v) = input.schedule_item_id {
-        active.schedule_item_id = Set(v);
+        active.schedule_item_id = Set(v.and(schedule_item_id));
     }
     if let Some(v) = input.research_finding_id {
         active.research_finding_id = Set(v);

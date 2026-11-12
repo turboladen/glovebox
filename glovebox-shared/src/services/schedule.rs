@@ -4,7 +4,10 @@ use sea_orm::*;
 use serde::Serialize;
 
 use crate::{
-    entities::{maintenance_schedule_item, model_template, vehicle},
+    entities::{
+        maintenance_schedule_item, model_template, service_record, service_schedule_link, vehicle,
+        work_item,
+    },
     error::{DomainError, DomainResult},
     inputs::schedule::{NewScheduleItem, ScheduleFilter, UpdateScheduleItem},
 };
@@ -139,46 +142,304 @@ pub async fn update(
 /// Creates a schedule item owned by the vehicle. `input.vehicle_id` is
 /// overwritten with `vehicle_id` and the other owner fields are cleared, so
 /// the item can only ever belong to this vehicle.
-pub async fn create_for_vehicle(
-    db: &impl ConnectionTrait,
+///
+/// An item named like one the vehicle inherits replaces it for this vehicle,
+/// and the vehicle's services and planned work linked to the inherited item
+/// move to the new one. A name the vehicle already has its own item for is a
+/// `BadRequest`.
+pub async fn create_for_vehicle<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
     vehicle_id: i32,
     mut input: NewScheduleItem,
 ) -> DomainResult<maintenance_schedule_item::Model> {
-    crate::services::vehicle::require(db, vehicle_id).await?;
+    let v = crate::services::vehicle::require(db, vehicle_id).await?;
     if input.name.trim().is_empty() {
         return Err(DomainError::invalid("name", "must not be blank"));
     }
+    let txn = db.begin().await?;
+    if let Some(own) = own_item_named(&txn, vehicle_id, &input.name).await? {
+        return Err(DomainError::BadRequest(format!(
+            "This vehicle already has a schedule item named '{}' (id {}). Change it with \
+             update_schedule_item, or bring it back with restore_schedule_item if it was \
+             dismissed.",
+            own.name, own.id
+        )));
+    }
+    let shadowed = inherited_named(&txn, &v, &input.name).await?;
     input.vehicle_id = Some(vehicle_id);
     input.platform_id = None;
     input.model_template_id = None;
-    input.overrides_item_id = None;
-    create(db, input).await
+    input.overrides_item_id = effective_inherited(&shadowed).map(|i| i.id);
+    let created = create(&txn, input).await?;
+    repoint_links(&txn, vehicle_id, &shadowed, created.id).await?;
+    txn.commit().await?;
+    Ok(created)
 }
 
-/// Updates a schedule item that the vehicle owns.
+/// Updates a schedule item as this vehicle sees it.
 ///
-/// An id that is not visible to this vehicle reads as nonexistent. An item
-/// inherited from the platform or model template is a `BadRequest`, because
-/// editing it would change every car that shares it; waive it with
-/// `dismiss_schedule_item` or add a vehicle-specific item instead.
-pub async fn update_for_vehicle(
-    db: &impl ConnectionTrait,
+/// A vehicle-owned item is edited in place. An item inherited from the
+/// platform or model template is never edited, since other cars share it:
+/// the change lands on this vehicle's own copy of it, which is created on
+/// first use and reused afterwards, whether the call names the inherited id
+/// or the copy's id. The vehicle's services and planned work linked to the
+/// inherited item move to the copy, so its history and plans still count.
+/// The copy keeps the inherited item's name; a rename is a `BadRequest`.
+///
+/// An id that is not visible to this vehicle reads as nonexistent.
+pub async fn update_for_vehicle<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
     vehicle_id: i32,
     schedule_item_id: i32,
     input: UpdateScheduleItem,
 ) -> DomainResult<maintenance_schedule_item::Model> {
-    let item = require_in_vehicle_scope(db, vehicle_id, schedule_item_id).await?;
-    if item.vehicle_id != Some(vehicle_id) {
-        return Err(DomainError::BadRequest(format!(
-            "Schedule item {schedule_item_id} is inherited from the platform or model template \
-             and is shared with other cars, so it cannot be edited here. Use \
-             dismiss_schedule_item to waive it for this vehicle, or add a vehicle-specific item."
-        )));
-    }
     if input.name.as_deref().is_some_and(|n| n.trim().is_empty()) {
         return Err(DomainError::invalid("name", "must not be blank"));
     }
-    update(db, schedule_item_id, input).await
+    let txn = db.begin().await?;
+    let item = require_in_vehicle_scope(&txn, vehicle_id, schedule_item_id).await?;
+    let v = crate::services::vehicle::require(&txn, vehicle_id).await?;
+
+    let owned = item.vehicle_id == Some(vehicle_id);
+    let is_override = !owned || item.overrides_item_id.is_some();
+    if is_override && input.name.as_deref().is_some_and(|n| n != item.name) {
+        return Err(DomainError::BadRequest(format!(
+            "Schedule item {schedule_item_id} follows the '{}' item from the platform or model \
+             template, so it keeps that name. Add a differently named job with add_schedule_item.",
+            item.name
+        )));
+    }
+    if let Some(name) = input.name.as_deref().filter(|n| *n != item.name)
+        && let Some(other) = own_item_named(&txn, vehicle_id, name).await?
+    {
+        return Err(DomainError::BadRequest(format!(
+            "This vehicle already has a schedule item named '{name}' (id {}).",
+            other.id
+        )));
+    }
+
+    let target = if owned {
+        item
+    } else if let Some(existing) = own_item_named(&txn, vehicle_id, &item.name).await? {
+        existing
+    } else {
+        copy_for_vehicle(&item, vehicle_id).insert(&txn).await?
+    };
+    let updated = update(&txn, target.id, input).await?;
+    let shadowed = inherited_named(&txn, &v, &updated.name).await?;
+    repoint_links(&txn, vehicle_id, &shadowed, updated.id).await?;
+    txn.commit().await?;
+    Ok(updated)
+}
+
+/// The vehicle-owned item called `name`, if the vehicle has one.
+async fn own_item_named(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    name: &str,
+) -> DomainResult<Option<maintenance_schedule_item::Model>> {
+    Ok(maintenance_schedule_item::Entity::find()
+        .filter(maintenance_schedule_item::Column::VehicleId.eq(vehicle_id))
+        .filter(maintenance_schedule_item::Column::Name.eq(name))
+        .order_by_asc(maintenance_schedule_item::Column::Id)
+        .one(db)
+        .await?)
+}
+
+/// The platform and model-template items called `name` that the vehicle
+/// inherits, whether or not one of them shadows another.
+async fn inherited_named(
+    db: &impl ConnectionTrait,
+    v: &vehicle::Model,
+    name: &str,
+) -> DomainResult<Vec<maintenance_schedule_item::Model>> {
+    let Some(owner) = inherited_owner(db, v).await? else {
+        return Ok(Vec::new());
+    };
+    Ok(maintenance_schedule_item::Entity::find()
+        .filter(maintenance_schedule_item::Column::Name.eq(name))
+        .filter(owner)
+        .all(db)
+        .await?)
+}
+
+/// Matches the items the vehicle inherits: its model template's and that
+/// template's platform's. `None` when the vehicle has no template.
+async fn inherited_owner(
+    db: &impl ConnectionTrait,
+    v: &vehicle::Model,
+) -> DomainResult<Option<Condition>> {
+    let Some(mt_id) = v.model_template_id else {
+        return Ok(None);
+    };
+    let mut owner =
+        Condition::any().add(maintenance_schedule_item::Column::ModelTemplateId.eq(mt_id));
+    let platform_id = model_template::Entity::find_by_id(mt_id)
+        .one(db)
+        .await?
+        .and_then(|mt| mt.platform_id);
+    if let Some(platform_id) = platform_id {
+        owner = owner.add(maintenance_schedule_item::Column::PlatformId.eq(platform_id));
+    }
+    Ok(Some(owner))
+}
+
+/// The one of same-named inherited items that [`resolve`] would show: the
+/// model template's over the platform's.
+fn effective_inherited(
+    items: &[maintenance_schedule_item::Model],
+) -> Option<&maintenance_schedule_item::Model> {
+    items
+        .iter()
+        .find(|i| i.model_template_id.is_some())
+        .or_else(|| items.first())
+}
+
+/// A vehicle-owned copy of an inherited item's full definition, pointing back
+/// at it through `overrides_item_id`.
+fn copy_for_vehicle(
+    item: &maintenance_schedule_item::Model,
+    vehicle_id: i32,
+) -> maintenance_schedule_item::ActiveModel {
+    maintenance_schedule_item::ActiveModel {
+        vehicle_id: Set(Some(vehicle_id)),
+        overrides_item_id: Set(Some(item.id)),
+        name: Set(item.name.clone()),
+        description: Set(item.description.clone()),
+        interval_miles: Set(item.interval_miles),
+        interval_months: Set(item.interval_months),
+        warning_miles: Set(item.warning_miles),
+        warning_days: Set(item.warning_days),
+        enabled: Set(item.enabled),
+        source: Set(item.source.clone()),
+        notes: Set(item.notes.clone()),
+        is_factory_recommended: Set(item.is_factory_recommended),
+        labor_categories: Set(item.labor_categories.clone()),
+        est_cost_cents: Set(item.est_cost_cents),
+        ..Default::default()
+    }
+}
+
+/// Moves this vehicle's service links and planned work from the `shadowed`
+/// inherited items to the vehicle's own item `target_id`. Other vehicles'
+/// rows are untouched: a service belongs to one vehicle, and so does a work
+/// item.
+async fn repoint_links(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    shadowed: &[maintenance_schedule_item::Model],
+    target_id: i32,
+) -> DomainResult<()> {
+    let from: Vec<i32> = shadowed.iter().map(|i| i.id).collect();
+    if from.is_empty() {
+        return Ok(());
+    }
+    let own_services = service_record::Entity::find()
+        .select_only()
+        .column(service_record::Column::Id)
+        .filter(service_record::Column::VehicleId.eq(vehicle_id))
+        .into_query();
+    let links = service_schedule_link::Entity::find()
+        .filter(service_schedule_link::Column::ScheduleItemId.is_in(from.clone()))
+        .filter(service_schedule_link::Column::ServiceRecordId.in_subquery(own_services))
+        .all(db)
+        .await?;
+    for link in links {
+        let service_record_id = link.service_record_id;
+        link.delete(db).await?;
+        let already = service_schedule_link::Entity::find_by_id((service_record_id, target_id))
+            .one(db)
+            .await?
+            .is_some();
+        if !already {
+            service_schedule_link::ActiveModel {
+                service_record_id: Set(service_record_id),
+                schedule_item_id: Set(target_id),
+            }
+            .insert(db)
+            .await?;
+        }
+    }
+
+    work_item::Entity::update_many()
+        .set(work_item::ActiveModel {
+            schedule_item_id: Set(Some(target_id)),
+            updated_at: Set(super::now_stamp()),
+            ..Default::default()
+        })
+        .filter(work_item::Column::VehicleId.eq(vehicle_id))
+        .filter(work_item::Column::ScheduleItemId.is_in(from))
+        .exec(db)
+        .await?;
+    Ok(())
+}
+
+/// Checks that every id is in the vehicle's schedule scope and maps each one
+/// to the item the vehicle actually tracks: an inherited id the vehicle has
+/// its own same-named item for becomes that item's id. Duplicates are
+/// dropped, first occurrence kept. An id outside the scope reads as
+/// nonexistent.
+pub(crate) async fn tracked_ids(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    ids: &[i32],
+) -> DomainResult<Vec<i32>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let v = crate::services::vehicle::require(db, vehicle_id).await?;
+    let mut owner =
+        Condition::any().add(maintenance_schedule_item::Column::VehicleId.eq(vehicle_id));
+    if let Some(inherited) = inherited_owner(db, &v).await? {
+        owner = owner.add(inherited);
+    }
+    let found: HashMap<i32, maintenance_schedule_item::Model> =
+        maintenance_schedule_item::Entity::find()
+            .filter(maintenance_schedule_item::Column::Id.is_in(ids.to_vec()))
+            .filter(owner)
+            .all(db)
+            .await?
+            .into_iter()
+            .map(|i| (i.id, i))
+            .collect();
+    if let Some(missing) = ids.iter().find(|id| !found.contains_key(id)) {
+        return Err(DomainError::NotFound(format!(
+            "Schedule item {missing} not found"
+        )));
+    }
+
+    let inherited_names: Vec<String> = found
+        .values()
+        .filter(|i| i.vehicle_id != Some(vehicle_id))
+        .map(|i| i.name.clone())
+        .collect();
+    let mut own_by_name: HashMap<String, i32> = HashMap::new();
+    if !inherited_names.is_empty() {
+        let own = maintenance_schedule_item::Entity::find()
+            .filter(maintenance_schedule_item::Column::VehicleId.eq(vehicle_id))
+            .filter(maintenance_schedule_item::Column::Name.is_in(inherited_names))
+            .order_by_desc(maintenance_schedule_item::Column::Id)
+            .all(db)
+            .await?;
+        // Descending ids, so the lowest id wins when a name repeats.
+        for item in own {
+            own_by_name.insert(item.name, item.id);
+        }
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    Ok(ids
+        .iter()
+        .map(|id| {
+            let item = &found[id];
+            if item.vehicle_id == Some(vehicle_id) {
+                *id
+            } else {
+                own_by_name.get(&item.name).copied().unwrap_or(*id)
+            }
+        })
+        .filter(|id| seen.insert(*id))
+        .collect())
 }
 
 pub async fn delete(db: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
@@ -195,9 +456,21 @@ pub async fn delete(db: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
 
 /// Resolve the effective maintenance schedule for a vehicle.
 /// Implements the 3-level inheritance: Platform → Model Template → Vehicle.
+/// Dismissed and otherwise disabled items are left out.
 pub async fn resolve(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
+) -> DomainResult<Vec<ResolvedScheduleItem>> {
+    resolve_for_listing(db, vehicle_id, false).await
+}
+
+/// [`resolve`], keeping disabled items when `include_dismissed` is true. A
+/// dismissed item then appears as the vehicle's disabled row, whose id is
+/// what [`undismiss_for_vehicle`] takes.
+pub async fn resolve_for_listing(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    include_dismissed: bool,
 ) -> DomainResult<Vec<ResolvedScheduleItem>> {
     let v = vehicle::Entity::find_by_id(vehicle_id)
         .one(db)
@@ -265,10 +538,10 @@ pub async fn resolve(
         );
     }
 
-    // Filter out disabled items and sort by name for stable output
+    // Leave out disabled items unless asked, and sort by name for stable output
     let mut result: Vec<ResolvedScheduleItem> = schedule
         .into_values()
-        .filter(|r| r.effective_item.enabled)
+        .filter(|r| include_dismissed || r.effective_item.enabled)
         .collect();
     result.sort_by(|a, b| a.effective_item.name.cmp(&b.effective_item.name));
 
@@ -320,73 +593,52 @@ fn append_dismiss_reason(notes: Option<String>, reason: Option<&str>) -> Option<
     })
 }
 
-/// Dismiss a schedule item for one vehicle via the existing vehicle-level
-/// `enabled = false` override — no new state (design decision ⑤).
+/// Dismisses a schedule item for one vehicle by disabling the vehicle's own
+/// row for it.
 ///
-/// Vehicle-owned items (including an existing same-name override) are
-/// disabled in place. Inherited platform/template items get a vehicle-owned
-/// shadow row (same `name`, full definition copied, `enabled = false`,
-/// `overrides_item_id` pointing at the source) which `resolve()`'s
-/// name-shadowing already hides. Returns the override row — its id is what
-/// `undismiss_for_vehicle` takes.
-pub async fn dismiss_for_vehicle(
-    db: &impl ConnectionTrait,
+/// A vehicle-owned item is disabled in place. An inherited item gets the
+/// vehicle's own copy of it (created on first use, as
+/// [`update_for_vehicle`] does), disabled, and the vehicle's services and
+/// planned work linked to the inherited item move to the copy. Returns the
+/// disabled row; its id is what [`undismiss_for_vehicle`] takes. A `reason`
+/// is appended to the row's notes.
+pub async fn dismiss_for_vehicle<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
     vehicle_id: i32,
     schedule_item_id: i32,
     reason: Option<String>,
 ) -> DomainResult<maintenance_schedule_item::Model> {
-    let item = require_in_vehicle_scope(db, vehicle_id, schedule_item_id).await?;
+    let txn = db.begin().await?;
+    let item = require_in_vehicle_scope(&txn, vehicle_id, schedule_item_id).await?;
+    let v = crate::services::vehicle::require(&txn, vehicle_id).await?;
 
-    // The row to disable: the item itself when vehicle-owned, else any
-    // existing vehicle-owned override with the same name (re-dismissing an
-    // inherited item must not stack duplicate shadows).
-    let in_place = if item.vehicle_id == Some(vehicle_id) {
-        Some(item.clone())
+    // Re-dismissing an inherited item reuses the vehicle's existing copy
+    // rather than stacking a second one.
+    let target = if item.vehicle_id == Some(vehicle_id) {
+        item
+    } else if let Some(existing) = own_item_named(&txn, vehicle_id, &item.name).await? {
+        existing
     } else {
-        maintenance_schedule_item::Entity::find()
-            .filter(maintenance_schedule_item::Column::VehicleId.eq(vehicle_id))
-            .filter(maintenance_schedule_item::Column::Name.eq(item.name.clone()))
-            .one(db)
-            .await?
+        copy_for_vehicle(&item, vehicle_id).insert(&txn).await?
     };
 
-    if let Some(existing) = in_place {
-        let notes = append_dismiss_reason(existing.notes.clone(), reason.as_deref());
-        let mut active: maintenance_schedule_item::ActiveModel = existing.into();
-        active.enabled = Set(false);
-        active.notes = Set(notes);
-        active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
-        return Ok(active.update(db).await?);
-    }
+    let notes = append_dismiss_reason(target.notes.clone(), reason.as_deref());
+    let mut active: maintenance_schedule_item::ActiveModel = target.into();
+    active.enabled = Set(false);
+    active.notes = Set(notes);
+    active.updated_at = Set(super::now_stamp());
+    let dismissed = active.update(&txn).await?;
 
-    let shadow = maintenance_schedule_item::ActiveModel {
-        vehicle_id: Set(Some(vehicle_id)),
-        overrides_item_id: Set(Some(item.id)),
-        name: Set(item.name.clone()),
-        description: Set(item.description.clone()),
-        interval_miles: Set(item.interval_miles),
-        interval_months: Set(item.interval_months),
-        warning_miles: Set(item.warning_miles),
-        warning_days: Set(item.warning_days),
-        enabled: Set(false),
-        source: Set(item.source.clone()),
-        notes: Set(append_dismiss_reason(item.notes.clone(), reason.as_deref())),
-        is_factory_recommended: Set(item.is_factory_recommended),
-        labor_categories: Set(item.labor_categories.clone()),
-        est_cost_cents: Set(item.est_cost_cents),
-        ..Default::default()
-    };
-    Ok(shadow.insert(db).await?)
+    let shadowed = inherited_named(&txn, &v, &dismissed.name).await?;
+    repoint_links(&txn, vehicle_id, &shadowed, dismissed.id).await?;
+    txn.commit().await?;
+    Ok(dismissed)
 }
 
-/// Reverse a dismissal: re-enable the vehicle-owned override row (the model
-/// `dismiss_for_vehicle` returned). Re-enabling is the single code path for
-/// both dismissal shapes — a shadow copies its source's full definition, so
-/// re-enabling it behaves identically to the inherited item it replaced
-/// (future template edits stop flowing through; the item simply reads as
-/// vehicle-owned from then on, which the schedule UI already renders).
-/// Deleting shadows instead would need a second path for in-place-disabled
-/// items and would drop the recorded dismissal reason.
+/// Reverses a dismissal by re-enabling the vehicle-owned row that
+/// [`dismiss_for_vehicle`] returned. A restored copy of an inherited item
+/// keeps the definition it had when it was copied and no longer follows
+/// later changes to the template.
 ///
 /// Rows not owned by this vehicle are indistinguishable from nonexistent.
 pub async fn undismiss_for_vehicle(
@@ -839,6 +1091,323 @@ mod tests {
         assert!(!get(&db, item.id).await.unwrap().enabled, "untouched");
     }
 
+    fn days_ago(days: i64) -> String {
+        (chrono::Utc::now().date_naive() - chrono::Duration::days(days))
+            .format("%Y-%m-%d")
+            .to_string()
+    }
+
+    async fn service_on(db: &DatabaseConnection, vehicle_id: i32, item_id: i32) -> i32 {
+        crate::services::service_record::create(
+            db,
+            vehicle_id,
+            crate::inputs::service_record::NewServiceRecord {
+                service_date: days_ago(30),
+                schedule_item_ids: Some(vec![item_id]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .record
+        .id
+    }
+
+    fn reminder_for<'a>(
+        rems: &'a crate::services::reminders::RemindersResponse,
+        name: &str,
+    ) -> &'a crate::services::reminders::ReminderStatus {
+        rems.reminders
+            .iter()
+            .find(|r| r.schedule_item.name == name)
+            .unwrap_or_else(|| panic!("no reminder named {name}"))
+    }
+
+    #[tokio::test]
+    async fn changing_an_inherited_item_keeps_its_history_and_planned_work() {
+        use crate::services::{budget, reminders, work_item};
+        let db = test_db().await;
+        let (_pid, template_id, vid) = seed_chain(&db).await;
+        let inherited = create(
+            &db,
+            NewScheduleItem {
+                model_template_id: Some(template_id),
+                interval_miles: None,
+                interval_months: Some(12),
+                ..item_named("Spark Plugs")
+            },
+        )
+        .await
+        .unwrap();
+        let svc = service_on(&db, vid, inherited.id).await;
+        let planned = work_item::create(
+            &db,
+            vid,
+            crate::inputs::work_item::NewWorkItem {
+                title: "Plugs".into(),
+                notes: None,
+                schedule_item_id: Some(inherited.id),
+                research_finding_id: None,
+                incident_id: None,
+                est_cost_cents: Some(9_000),
+                revisit_by_date: None,
+                revisit_by_miles: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let over = update_for_vehicle(
+            &db,
+            vid,
+            inherited.id,
+            UpdateScheduleItem {
+                est_cost_cents: Some(Some(12_000)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_ne!(over.id, inherited.id, "the shared item is never edited");
+        assert_eq!(over.vehicle_id, Some(vid));
+        assert_eq!(over.overrides_item_id, Some(inherited.id));
+        assert_eq!(over.interval_months, Some(12), "definition copied");
+        assert_eq!(over.est_cost_cents, Some(12_000));
+        assert_eq!(get(&db, inherited.id).await.unwrap().est_cost_cents, None);
+
+        let rems = reminders::calculate_reminders(&db, vid).await.unwrap();
+        let plugs = reminder_for(&rems, "Spark Plugs");
+        assert_eq!(plugs.schedule_item.id, over.id);
+        assert_eq!(plugs.status, "ok");
+        assert_eq!(plugs.last_service.as_ref().map(|s| s.id), Some(svc));
+
+        // The planned work now points at the override, so it still stands in
+        // for the first projected occurrence.
+        let moved = work_item::get(&db, vid, planned.id).await.unwrap();
+        assert_eq!(moved.schedule_item_id, Some(over.id));
+        let f = budget::forecast_from(&db, vid, &rems).await.unwrap();
+        assert!(
+            !f.lines.iter().any(|l| l.label == "Spark Plugs"),
+            "first occurrence is already planned: {:?}",
+            f.lines
+        );
+
+        // Calling again, on either id, edits the same override.
+        for id in [inherited.id, over.id] {
+            let again = update_for_vehicle(
+                &db,
+                vid,
+                id,
+                UpdateScheduleItem {
+                    notes: Some(Some(format!("edit via {id}"))),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(again.id, over.id);
+        }
+        let own_rows = list(
+            &db,
+            ScheduleFilter {
+                vehicle_id: Some(vid),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(own_rows.len(), 1, "one override, never two");
+    }
+
+    #[tokio::test]
+    async fn overriding_an_item_on_one_car_leaves_the_other_cars_links_alone() {
+        use crate::services::reminders;
+        let db = test_db().await;
+        let (_pid, template_id, first) = seed_chain(&db).await;
+        let second = seed_vehicle(&db, Some(template_id)).await;
+        let inherited = create(
+            &db,
+            NewScheduleItem {
+                model_template_id: Some(template_id),
+                interval_miles: None,
+                interval_months: Some(12),
+                ..item_named("Spark Plugs")
+            },
+        )
+        .await
+        .unwrap();
+        service_on(&db, first, inherited.id).await;
+        let second_svc = service_on(&db, second, inherited.id).await;
+
+        update_for_vehicle(
+            &db,
+            first,
+            inherited.id,
+            UpdateScheduleItem {
+                est_cost_cents: Some(Some(12_000)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let rems = reminders::calculate_reminders(&db, second).await.unwrap();
+        let plugs = reminder_for(&rems, "Spark Plugs");
+        assert_eq!(plugs.schedule_item.id, inherited.id);
+        assert_eq!(plugs.last_service.as_ref().map(|s| s.id), Some(second_svc));
+    }
+
+    #[tokio::test]
+    async fn adding_an_item_that_shadows_an_inherited_one_keeps_its_history() {
+        use crate::services::reminders;
+        let db = test_db().await;
+        let (_pid, template_id, vid) = seed_chain(&db).await;
+        let inherited = create(
+            &db,
+            NewScheduleItem {
+                model_template_id: Some(template_id),
+                interval_miles: None,
+                interval_months: Some(12),
+                ..item_named("Spark Plugs")
+            },
+        )
+        .await
+        .unwrap();
+        let svc = service_on(&db, vid, inherited.id).await;
+
+        let own = create_for_vehicle(
+            &db,
+            vid,
+            NewScheduleItem {
+                interval_months: Some(24),
+                ..item_named("Spark Plugs")
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(own.overrides_item_id, Some(inherited.id));
+
+        let rems = reminders::calculate_reminders(&db, vid).await.unwrap();
+        let plugs = reminder_for(&rems, "Spark Plugs");
+        assert_eq!(plugs.schedule_item.id, own.id);
+        assert_eq!(plugs.last_service.as_ref().map(|s| s.id), Some(svc));
+
+        // A second item under the same name would make the schedule ambiguous.
+        let err = create_for_vehicle(&db, vid, item_named("Spark Plugs"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, DomainError::BadRequest(m) if m.contains("update_schedule_item")),
+            "got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_inherited_item_keeps_its_name() {
+        let db = test_db().await;
+        let (_pid, template_id, vid) = seed_chain(&db).await;
+        let inherited = create(
+            &db,
+            NewScheduleItem {
+                model_template_id: Some(template_id),
+                ..item_named("Spark Plugs")
+            },
+        )
+        .await
+        .unwrap();
+        let err = update_for_vehicle(
+            &db,
+            vid,
+            inherited.id,
+            UpdateScheduleItem {
+                name: Some("Plugs".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::BadRequest(_)), "got: {err}");
+        assert!(
+            list(
+                &db,
+                ScheduleFilter {
+                    vehicle_id: Some(vid),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .is_empty(),
+            "a refused change leaves no override behind"
+        );
+    }
+
+    #[tokio::test]
+    async fn dismissing_and_restoring_an_inherited_item_keeps_its_history() {
+        use crate::services::reminders;
+        let db = test_db().await;
+        let (_pid, template_id, vid) = seed_chain(&db).await;
+        let inherited = create(
+            &db,
+            NewScheduleItem {
+                model_template_id: Some(template_id),
+                interval_miles: None,
+                interval_months: Some(12),
+                ..item_named("Spark Plugs")
+            },
+        )
+        .await
+        .unwrap();
+        let svc = service_on(&db, vid, inherited.id).await;
+        let shadow = dismiss_for_vehicle(&db, vid, inherited.id, None)
+            .await
+            .unwrap();
+        undismiss_for_vehicle(&db, vid, shadow.id).await.unwrap();
+
+        let rems = reminders::calculate_reminders(&db, vid).await.unwrap();
+        let plugs = reminder_for(&rems, "Spark Plugs");
+        assert_eq!(plugs.last_service.as_ref().map(|s| s.id), Some(svc));
+    }
+
+    #[tokio::test]
+    async fn links_sent_with_a_shadowed_id_land_on_the_cars_own_item() {
+        let db = test_db().await;
+        let (_pid, template_id, vid) = seed_chain(&db).await;
+        let inherited = create(
+            &db,
+            NewScheduleItem {
+                model_template_id: Some(template_id),
+                ..item_named("Spark Plugs")
+            },
+        )
+        .await
+        .unwrap();
+        let over = update_for_vehicle(
+            &db,
+            vid,
+            inherited.id,
+            UpdateScheduleItem {
+                est_cost_cents: Some(Some(1)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let record = crate::services::service_record::create(
+            &db,
+            vid,
+            crate::inputs::service_record::NewServiceRecord {
+                service_date: days_ago(1),
+                schedule_item_ids: Some(vec![inherited.id, over.id]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(record.schedule_item_ids, vec![over.id]);
+    }
+
     #[tokio::test]
     async fn update_for_vehicle_edits_own_items_only() {
         let db = test_db().await;
@@ -880,10 +1449,11 @@ mod tests {
         )
         .await
         .unwrap();
-        let err = update_for_vehicle(&db, vid, shared.id, UpdateScheduleItem::default())
+        let over = update_for_vehicle(&db, vid, shared.id, UpdateScheduleItem::default())
             .await
-            .unwrap_err();
-        assert!(matches!(&err, DomainError::BadRequest(m) if m.contains("dismiss_schedule_item")));
+            .unwrap();
+        assert_eq!(over.overrides_item_id, Some(shared.id));
+        assert_eq!(over.vehicle_id, Some(vid));
 
         let foreign = update_for_vehicle(&db, other, own.id, UpdateScheduleItem::default())
             .await

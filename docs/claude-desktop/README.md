@@ -41,7 +41,8 @@ glovebox conversation inside that project so the instructions apply.
 - [ ] Give Claude the current odometer reading so it calls `log_mileage`.
 - [ ] Ask Claude to research the manufacturer's real maintenance schedule for the car and to
       reconcile it with `list_schedule`. The seeded schedule is thin: it has few items and no cost
-      estimates. Claude fills the gaps with `add_schedule_item` and `update_schedule_item`.
+      estimates. Claude adds missing jobs with `add_schedule_item` and adjusts existing items,
+      inherited ones included, with `update_schedule_item`.
 - [ ] Hand Claude one scanned invoice as a PDF and have it file the invoice. Then ask for the
       service back with `get_service` and check the lines, parts and suppliers.
 - [ ] Ask "what's coming?" and check that the answer reflects what you just filed.

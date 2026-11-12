@@ -161,6 +161,7 @@ async fn the_server_offers_exactly_the_expected_tools() {
             "plan_work",
             "record_part",
             "record_service",
+            "restore_schedule_item",
             "save_note",
             "search_records",
             "set_recall_status",

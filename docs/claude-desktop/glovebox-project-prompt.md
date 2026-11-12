@@ -96,9 +96,14 @@ schedule for each car and bring `list_schedule` in line with it.
 - `add_schedule_item` creates a recurring item for one car, with its mileage interval, month
   interval and `est_cost_cents`. A biennial smog check and a community-recommended preemptive
   replacement are both schedule items.
-- `update_schedule_item` changes an item's interval or estimated cost. Send only the fields to
-  change, and send `null` to clear one.
-- `dismiss_schedule_item` waives an item that does not apply to this car.
+- `update_schedule_item` changes an item's interval or estimated cost. It works on every item
+  `list_schedule` shows, including the ones inherited from the template: the first change to an
+  inherited item gives this car its own copy with a new id, and the services and planned work
+  already linked to it carry over. Send only the fields to change, and send `null` to clear one.
+  Use `add_schedule_item` only for a job the schedule does not have yet.
+- `dismiss_schedule_item` waives an item that does not apply to this car, and
+  `restore_schedule_item` brings it back. `list_schedule` with `include_dismissed: true` shows the
+  dismissed items.
 - Set `is_factory_recommended` to true only for items the manufacturer's own schedule lists.
 
 ## Fixing mistakes

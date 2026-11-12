@@ -3,9 +3,8 @@ use serde::Serialize;
 
 use crate::{
     entities::{
-        incident, incident_service_link, maintenance_schedule_item, mileage_log, model_template,
-        part, service_recall_link, service_record, service_record_line_item, service_schedule_link,
-        work_item as work_item_entity,
+        incident, incident_service_link, mileage_log, part, service_recall_link, service_record,
+        service_record_line_item, service_schedule_link, work_item as work_item_entity,
     },
     error::{DomainError, DomainResult},
     inputs::{
@@ -16,7 +15,7 @@ use crate::{
         incident::{self as incident_svc, ServiceRef},
         part as part_svc,
         recall::{self, RecallRef},
-        work_item,
+        schedule, work_item,
     },
 };
 
@@ -81,50 +80,6 @@ fn validate_payer(paid_by: &str) -> DomainResult<()> {
         paid_by,
         VALID_PAYERS.join(", ")
     )))
-}
-
-/// Verify each schedule item is within the vehicle's schedule scope: owned by
-/// the vehicle itself, by its model template, or by that template's platform.
-/// Anything else must be indistinguishable from a nonexistent item.
-async fn require_schedule_items_in_scope(
-    db: &impl ConnectionTrait,
-    vehicle_id: i32,
-    schedule_item_ids: &[i32],
-) -> DomainResult<()> {
-    if schedule_item_ids.is_empty() {
-        return Ok(());
-    }
-
-    let v = crate::services::vehicle::require(db, vehicle_id).await?;
-    let template = match v.model_template_id {
-        Some(mt_id) => model_template::Entity::find_by_id(mt_id).one(db).await?,
-        None => None,
-    };
-
-    let mut owner =
-        Condition::any().add(maintenance_schedule_item::Column::VehicleId.eq(vehicle_id));
-    if let Some(mt) = &template {
-        owner = owner.add(maintenance_schedule_item::Column::ModelTemplateId.eq(mt.id));
-        if let Some(platform_id) = mt.platform_id {
-            owner = owner.add(maintenance_schedule_item::Column::PlatformId.eq(platform_id));
-        }
-    }
-
-    let in_scope: std::collections::HashSet<i32> = maintenance_schedule_item::Entity::find()
-        .filter(maintenance_schedule_item::Column::Id.is_in(schedule_item_ids.to_vec()))
-        .filter(owner)
-        .all(db)
-        .await?
-        .into_iter()
-        .map(|i| i.id)
-        .collect();
-
-    if let Some(missing) = schedule_item_ids.iter().find(|id| !in_scope.contains(id)) {
-        return Err(DomainError::NotFound(format!(
-            "Schedule item {missing} not found"
-        )));
-    }
-    Ok(())
 }
 
 #[derive(Debug, Serialize)]
@@ -684,7 +639,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     validate_line_items(&line_items_input)?;
 
     let schedule_item_ids = input.schedule_item_ids.unwrap_or_default();
-    require_schedule_items_in_scope(db, vehicle_id, &schedule_item_ids).await?;
+    let schedule_item_ids = schedule::tracked_ids(db, vehicle_id, &schedule_item_ids).await?;
 
     let txn = db.begin().await?;
 
@@ -873,7 +828,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     sync_auto_mileage_log(&txn, vehicle_id, &record).await?;
 
     if let Some(item_ids) = input.schedule_item_ids {
-        require_schedule_items_in_scope(&txn, vehicle_id, &item_ids).await?;
+        let item_ids = schedule::tracked_ids(&txn, vehicle_id, &item_ids).await?;
         service_schedule_link::Entity::delete_many()
             .filter(service_schedule_link::Column::ServiceRecordId.eq(record.id))
             .exec(&txn)
@@ -965,9 +920,9 @@ impl LinkMode {
 
 /// Link a service record to maintenance-schedule items without touching the
 /// rest of the record. Self-guarded: the record must belong to `vehicle_id`,
-/// and every item must be in the vehicle's schedule scope
-/// ([`require_schedule_items_in_scope`]) — wrong-parent ids read as missing.
-/// Linking is what clears the corresponding reminders.
+/// and every item must be in the vehicle's schedule scope; wrong-parent ids
+/// read as missing. An inherited item the vehicle has its own copy of links
+/// to the copy. Linking is what clears the corresponding reminders.
 pub async fn link_schedule_items<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -982,7 +937,7 @@ pub async fn link_schedule_items<C: ConnectionTrait + TransactionTrait>(
         .ok_or_else(|| DomainError::NotFound(format!("Service record {id} not found")))?;
 
     let txn = db.begin().await?;
-    require_schedule_items_in_scope(&txn, vehicle_id, item_ids).await?;
+    let item_ids = schedule::tracked_ids(&txn, vehicle_id, item_ids).await?;
 
     let already_linked: std::collections::HashSet<i32> = match mode {
         LinkMode::Replace => {
@@ -1003,10 +958,10 @@ pub async fn link_schedule_items<C: ConnectionTrait + TransactionTrait>(
 
     let mut inserted = already_linked;
     for item_id in item_ids {
-        if inserted.insert(*item_id) {
+        if inserted.insert(item_id) {
             service_schedule_link::ActiveModel {
                 service_record_id: Set(existing.id),
-                schedule_item_id: Set(*item_id),
+                schedule_item_id: Set(item_id),
             }
             .insert(&txn)
             .await?;
@@ -2017,6 +1972,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_repeated_schedule_item_id_links_once() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let item = seed_schedule_item(&db, vid, "Oil change").await;
+
+        let created = create(&db, vid, minimal_record(Some(vec![item, item])))
+            .await
+            .unwrap();
+        assert_eq!(created.schedule_item_ids, vec![item]);
+
+        let updated = update(
+            &db,
+            vid,
+            created.record.id,
+            UpdateServiceRecord {
+                schedule_item_ids: Some(vec![item, item]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.schedule_item_ids, vec![item]);
+    }
+
+    #[tokio::test]
     async fn update_rejects_other_vehicles_schedule_items() {
         let db = test_db().await;
         let owner = seed_vehicle(&db).await;
@@ -2141,7 +2121,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_allows_inherited_template_and_platform_schedule_items() {
-        use crate::entities::{model_template, platform};
+        use crate::entities::{maintenance_schedule_item, model_template, platform};
         let db = test_db().await;
 
         let platform_id = platform::ActiveModel {

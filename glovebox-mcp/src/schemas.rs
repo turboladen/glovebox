@@ -476,6 +476,24 @@ pub struct DismissScheduleItemInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+pub struct RestoreScheduleItemInput {
+    /// Vehicle id, from `list_vehicles`.
+    pub vehicle_id: i32,
+    /// The dismissed item's id: the `id` `dismiss_schedule_item` returned, or
+    /// an item with `enabled: false` in `list_schedule` with
+    /// `include_dismissed`.
+    pub schedule_item_id: i32,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct ListScheduleInput {
+    /// Vehicle id, from `list_vehicles`.
+    pub vehicle_id: i32,
+    /// Also list dismissed items, shown with `enabled: false`. Default false.
+    pub include_dismissed: Option<bool>,
+}
+
+#[derive(Deserialize, JsonSchema)]
 pub struct SummarizeActivityInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
