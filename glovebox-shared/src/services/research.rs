@@ -4,19 +4,11 @@ use serde::{Deserialize, Serialize};
 use crate::{
     entities::{research_finding, research_report},
     error::{DomainError, DomainResult},
-    inputs::research::UpdateFinding,
     services::{
         nhtsa::{self, RecallInfo},
         recall::{self, RecallWithStatus},
     },
 };
-
-#[derive(Debug, Serialize)]
-pub struct ReportWithFindings {
-    #[serde(flatten)]
-    pub report: research_report::Model,
-    pub findings: Vec<research_finding::Model>,
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct NewFinding {
@@ -218,115 +210,6 @@ async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
     Ok(count)
 }
 
-// --- Research reports ---
-
-pub async fn list_reports(
-    db: &impl ConnectionTrait,
-    vehicle_id: i32,
-) -> DomainResult<Vec<research_report::Model>> {
-    crate::services::vehicle::require(db, vehicle_id).await?;
-
-    Ok(research_report::Entity::find()
-        .filter(research_report::Column::VehicleId.eq(vehicle_id))
-        .order_by_desc(research_report::Column::GeneratedAt)
-        .all(db)
-        .await?)
-}
-
-pub async fn get_report(
-    db: &impl ConnectionTrait,
-    vehicle_id: i32,
-    id: i32,
-) -> DomainResult<ReportWithFindings> {
-    let report = research_report::Entity::find_by_id(id)
-        .filter(research_report::Column::VehicleId.eq(vehicle_id))
-        .one(db)
-        .await?
-        .ok_or_else(|| DomainError::NotFound("Research report not found".to_string()))?;
-
-    let findings = research_finding::Entity::find()
-        .filter(research_finding::Column::ReportId.eq(id))
-        .order_by_asc(research_finding::Column::Id)
-        .all(db)
-        .await?;
-
-    Ok(ReportWithFindings { report, findings })
-}
-
-// --- List findings by status (cross-report) ---
-
-pub async fn list_findings(
-    db: &impl ConnectionTrait,
-    vehicle_id: i32,
-    status: Option<String>,
-) -> DomainResult<Vec<research_finding::Model>> {
-    // Get all report IDs for this vehicle
-    let report_ids: Vec<i32> = research_report::Entity::find()
-        .filter(research_report::Column::VehicleId.eq(vehicle_id))
-        .all(db)
-        .await?
-        .into_iter()
-        .map(|r| r.id)
-        .collect();
-
-    if report_ids.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let mut select = research_finding::Entity::find()
-        .filter(research_finding::Column::ReportId.is_in(report_ids));
-
-    if let Some(status) = status {
-        select = select.filter(research_finding::Column::Status.eq(status));
-    }
-
-    Ok(select
-        .order_by_desc(research_finding::Column::Id)
-        .all(db)
-        .await?)
-}
-
-// --- Finding management ---
-
-pub async fn update_finding(
-    db: &impl ConnectionTrait,
-    vehicle_id: i32,
-    report_id: i32,
-    id: i32,
-    input: UpdateFinding,
-) -> DomainResult<research_finding::Model> {
-    // Verify the report belongs to the vehicle
-    research_report::Entity::find_by_id(report_id)
-        .filter(research_report::Column::VehicleId.eq(vehicle_id))
-        .one(db)
-        .await?
-        .ok_or_else(|| DomainError::NotFound("Research report not found".to_string()))?;
-
-    let finding = research_finding::Entity::find_by_id(id)
-        .filter(research_finding::Column::ReportId.eq(report_id))
-        .one(db)
-        .await?
-        .ok_or_else(|| DomainError::NotFound("Finding not found".to_string()))?;
-
-    let mut active: research_finding::ActiveModel = finding.into();
-
-    if let Some(status) = input.status {
-        let valid = ["new", "dismissed", "planned", "completed"];
-        if !valid.contains(&status.as_str()) {
-            return Err(DomainError::BadRequest(format!(
-                "Invalid status '{}'. Must be one of: {}",
-                status,
-                valid.join(", ")
-            )));
-        }
-        active.status = Set(status);
-    }
-
-    active.updated_at = Set(super::now_stamp());
-
-    Ok(active.update(db).await?)
-}
-
 /// Persist an externally-researched finding (e.g. filed by an MCP client)
 /// under this vehicle's `external_research` anchor report — created on first
 /// use, reused thereafter (mirrors how recalls anchor to `recalls_only`).
@@ -348,9 +231,8 @@ pub async fn file_finding(
         .await?
     {
         Some(r) => {
-            // Touch generated_at so the anchor sorts by its NEWEST filing in
-            // list_reports (order_by_desc(GeneratedAt)) instead of sinking
-            // below old recall reports with a stale first-filing date.
+            // Touch generated_at so the anchor dates from its newest filing,
+            // not a stale first-filing date.
             let mut active: research_report::ActiveModel = r.into();
             active.generated_at = Set(super::now_stamp());
             active.update(db).await?
@@ -467,12 +349,18 @@ mod tests {
         .unwrap();
         // Same anchor report, created once, type external_research.
         assert_eq!(f1.report_id, f2.report_id);
-        let report = get_report(&db, vid, f1.report_id).await.unwrap();
-        assert_eq!(
-            report.report.report_type.as_deref(),
-            Some("external_research")
-        );
-        assert_eq!(report.findings.len(), 2);
+        let report = research_report::Entity::find_by_id(f1.report_id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(report.report_type.as_deref(), Some("external_research"));
+        let findings = research_finding::Entity::find()
+            .filter(research_finding::Column::ReportId.eq(f1.report_id))
+            .count(&db)
+            .await
+            .unwrap();
+        assert_eq!(findings, 2);
         // Another vehicle gets its own anchor, never vehicle A's, which is
         // what a lookup missing its VehicleId filter would return.
         let other = seed_vehicle(&db).await;
@@ -508,117 +396,5 @@ mod tests {
             .unwrap_err(),
             DomainError::NotFound(_)
         ));
-    }
-
-    #[tokio::test]
-    async fn update_finding_validates_status_and_persists() {
-        let db = test_db().await;
-        let vid = seed_vehicle(&db).await;
-        // Manually create a report + finding to update
-        let report = research_report::ActiveModel {
-            vehicle_id: Set(vid),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap();
-        let finding = research_finding::ActiveModel {
-            report_id: Set(report.id),
-            category: Set("recall".into()),
-            title: Set("Fix".into()),
-            status: Set("new".into()),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap();
-
-        // Invalid status is rejected
-        let err = update_finding(
-            &db,
-            vid,
-            report.id,
-            finding.id,
-            UpdateFinding {
-                status: Some("bogus".into()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, DomainError::BadRequest(_)));
-
-        // Valid status is applied
-        let updated = update_finding(
-            &db,
-            vid,
-            report.id,
-            finding.id,
-            UpdateFinding {
-                status: Some("dismissed".into()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(updated.status, "dismissed");
-    }
-
-    #[tokio::test]
-    async fn list_reports_missing_vehicle_is_not_found() {
-        let db = test_db().await;
-        assert!(matches!(
-            list_reports(&db, 999).await.unwrap_err(),
-            DomainError::NotFound(_)
-        ));
-    }
-
-    #[tokio::test]
-    async fn update_finding_sets_status_and_rejects_unknown_values() {
-        let db = test_db().await;
-        let vid = seed_vehicle(&db).await;
-        let report = research_report::ActiveModel {
-            vehicle_id: Set(vid),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap();
-        let finding = research_finding::ActiveModel {
-            report_id: Set(report.id),
-            category: Set("recall".into()),
-            title: Set("Fix".into()),
-            status: Set("new".into()),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap();
-
-        let dismissed = update_finding(
-            &db,
-            vid,
-            report.id,
-            finding.id,
-            UpdateFinding {
-                status: Some("dismissed".into()),
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(dismissed.status, "dismissed");
-
-        let err = update_finding(
-            &db,
-            vid,
-            report.id,
-            finding.id,
-            UpdateFinding {
-                status: Some("bogus".into()),
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, DomainError::BadRequest(_)));
     }
 }

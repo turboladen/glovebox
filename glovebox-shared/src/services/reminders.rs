@@ -103,7 +103,7 @@ fn warranty_status(v: &vehicle::Model, estimated_mileage: i32) -> Option<Warrant
 /// Estimate current mileage from `mileage_log` entries.
 /// Calculates average daily miles from the oldest and newest of the last 50 entries,
 /// then extrapolates forward from the most recent entry to today.
-pub async fn estimate_mileage(
+pub(crate) async fn estimate_mileage(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     v: &vehicle::Model,
@@ -422,11 +422,7 @@ fn parse_date(s: &str) -> Option<NaiveDate> {
     NaiveDate::parse_from_str(date_part, "%Y-%m-%d").ok()
 }
 
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap
-)]
+#[allow(clippy::cast_sign_loss, clippy::cast_possible_wrap)]
 fn add_months(date: NaiveDate, months: i32) -> NaiveDate {
     if months <= 0 {
         return date;

@@ -75,7 +75,7 @@ mod tests {
     use super::*;
     use crate::{
         inputs::service_record::NewServiceRecord,
-        services::{schedule, service_record, vehicle},
+        services::{schedule, service_record},
         test_support::VehicleFixture,
     };
 
@@ -190,8 +190,10 @@ mod tests {
             1
         );
 
-        vehicle::archive(&db, v.id).await.unwrap();
-        vehicle::delete(&db, v.id).await.unwrap();
+        crate::entities::vehicle::Entity::delete_by_id(v.id)
+            .exec(&db)
+            .await
+            .unwrap();
 
         assert_eq!(
             scalar(

@@ -105,7 +105,6 @@ pub async fn create_with_vin_decode<C: ConnectionTrait + TransactionTrait>(
     Ok(created)
 }
 
-#[allow(clippy::too_many_lines)]
 pub async fn update(
     db: &impl ConnectionTrait,
     id: i32,
@@ -214,20 +213,6 @@ pub async fn unarchive(db: &impl ConnectionTrait, id: i32) -> DomainResult<vehic
     active.archived_at = Set(None);
     active.updated_at = Set(super::now_stamp());
     Ok(active.update(db).await?)
-}
-
-/// Delete a vehicle. It must be archived first. File cleanup is the caller's responsibility.
-pub async fn delete(db: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
-    let existing = require(db, id).await?;
-
-    if existing.archived_at.is_none() {
-        return Err(DomainError::BadRequest(
-            "Vehicle must be archived before it can be deleted".to_string(),
-        ));
-    }
-
-    vehicle::Entity::delete_by_id(id).exec(db).await?;
-    Ok(())
 }
 
 /// Deletes a vehicle that has no history yet, undoing a mistaken
@@ -353,24 +338,6 @@ mod tests {
         .unwrap();
         assert_eq!(updated.name, "New");
         assert_eq!(updated.make.as_deref(), Some("Toyota"));
-    }
-
-    #[tokio::test]
-    async fn delete_requires_archived() {
-        let db = test_db().await;
-        let v = seed(&db, "Car").await;
-        // Not archived -> rejected
-        assert!(matches!(
-            delete(&db, v.id).await.unwrap_err(),
-            DomainError::BadRequest(_)
-        ));
-        // Archive then delete succeeds
-        archive(&db, v.id).await.unwrap();
-        delete(&db, v.id).await.unwrap();
-        assert!(matches!(
-            require(&db, v.id).await.unwrap_err(),
-            DomainError::NotFound(_)
-        ));
     }
 
     #[tokio::test]

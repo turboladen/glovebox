@@ -6,7 +6,6 @@ pub mod mileage;
 pub mod model_template;
 pub mod part;
 pub mod platform;
-pub mod research;
 pub mod schedule;
 pub mod service_record;
 pub mod shop;

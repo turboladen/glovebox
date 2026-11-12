@@ -64,7 +64,6 @@ pub struct ForecastLine {
 /// no projectable due date (e.g. mileage-only interval on a vehicle with no
 /// mileage history) are skipped unless overdue.
 #[allow(clippy::cast_possible_truncation)] // day counts, not money
-#[allow(clippy::too_many_lines)] // one linear pass over the buckets
 pub async fn forecast_from(
     db: &impl ConnectionTrait,
     vehicle_id: i32,

@@ -144,7 +144,7 @@ pub async fn decode_vin(vin: &str) -> Result<VinDecodeResult, String> {
 
 /// Replace a vehicle's `vin_decode`-sourced attributes with the freshly decoded set.
 /// Verifies the vehicle exists (`NotFound` otherwise) so direct callers are self-guarded.
-pub async fn store_attributes<C: ConnectionTrait + TransactionTrait>(
+pub(crate) async fn store_attributes<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
     decoded: &VinDecodeResult,
