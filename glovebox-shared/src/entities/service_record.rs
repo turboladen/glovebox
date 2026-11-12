@@ -21,12 +21,15 @@ pub struct Model {
     pub created_at: String,
     pub updated_at: String,
     pub shop_id: Option<i32>,
-    pub build_id: Option<i32>,
     pub paid_by: String,
     pub payer_note: Option<String>,
     /// Invoice/receipt number off the scan. Unique per vehicle when present;
     /// re-recording the same ref is idempotent (returns the existing record).
     pub invoice_ref: Option<String>,
+    /// Who did the work: `shop` or `self`.
+    pub performed_by: String,
+    /// Last day of a multi-day job; `service_date` is the first day.
+    pub end_date: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -43,20 +46,8 @@ pub enum Relation {
         to = "super::shop::Column::Id"
     )]
     Shop,
-    #[sea_orm(
-        belongs_to = "super::build::Entity",
-        from = "Column::BuildId",
-        to = "super::build::Column::Id"
-    )]
-    Build,
     #[sea_orm(has_many = "super::service_record_line_item::Entity")]
     LineItems,
-}
-
-impl Related<super::build::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::Build.def()
-    }
 }
 
 impl Related<super::shop::Entity> for Entity {

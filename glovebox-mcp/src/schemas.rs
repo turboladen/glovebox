@@ -239,7 +239,6 @@ impl RecordPartInput {
                 purchase_date: self.purchase_date,
                 cost_cents: self.cost_cents,
                 cost_currency: None,
-                invoice_url: None,
                 manufacturer_url: None,
                 retailer_url: self.retailer_url,
                 status: self.status,

@@ -1,7 +1,7 @@
 use sea_orm::*;
 
 use crate::{
-    entities::{part, research_finding, service_record},
+    entities::{part, service_record},
     error::{DomainError, DomainResult},
     inputs::part::{NewPart, PartFilter, UpdatePart},
 };
@@ -62,7 +62,6 @@ pub async fn create(
         purchase_date: Set(input.purchase_date),
         cost_cents: Set(input.cost_cents),
         cost_currency: Set(input.cost_currency),
-        invoice_url: Set(input.invoice_url),
         manufacturer_url: Set(input.manufacturer_url),
         retailer_url: Set(input.retailer_url),
         status: Set(input.status.unwrap_or_else(|| "purchased".to_string())),
@@ -73,6 +72,7 @@ pub async fn create(
         location: Set(input.location),
         warranty_expires_on: Set(input.warranty_expires_on),
         warranty_expires_miles: Set(input.warranty_expires_miles),
+        supplied_by: Set("self".to_string()),
         ..Default::default()
     };
     Ok(model.insert(db).await?)
@@ -116,9 +116,6 @@ pub async fn update(
     if let Some(v) = input.cost_currency {
         active.cost_currency = Set(v);
     }
-    if let Some(v) = input.invoice_url {
-        active.invoice_url = Set(v);
-    }
     if let Some(v) = input.manufacturer_url {
         active.manufacturer_url = Set(v);
     }
@@ -160,31 +157,9 @@ pub async fn update(
     Ok(active.update(db).await?)
 }
 
-/// Delete a part and clear any research finding links that point at it.
-pub async fn delete<C: ConnectionTrait + TransactionTrait>(
-    db: &C,
-    vehicle_id: i32,
-    id: i32,
-) -> DomainResult<()> {
-    let existing = get(db, vehicle_id, id).await?;
-
-    let txn = db.begin().await?;
-    // Research findings may soft-link to a part (no FK) — clear the link so
-    // a finding never points at a deleted part, mirroring service delete.
-    research_finding::Entity::update_many()
-        .set(research_finding::ActiveModel {
-            linked_entity_type: Set(None),
-            linked_entity_id: Set(None),
-            updated_at: Set(super::now_stamp()),
-            ..Default::default()
-        })
-        .filter(research_finding::Column::LinkedEntityType.eq("part"))
-        .filter(research_finding::Column::LinkedEntityId.eq(id))
-        .exec(&txn)
-        .await?;
-    existing.delete(&txn).await?;
-    txn.commit().await?;
-
+/// Delete a part.
+pub async fn delete(db: &impl ConnectionTrait, vehicle_id: i32, id: i32) -> DomainResult<()> {
+    get(db, vehicle_id, id).await?.delete(db).await?;
     Ok(())
 }
 
@@ -220,7 +195,6 @@ mod tests {
             purchase_date: None,
             cost_cents: None,
             cost_currency: None,
-            invoice_url: None,
             manufacturer_url: None,
             retailer_url: None,
             status: None,
@@ -435,64 +409,6 @@ mod tests {
     }
 
     // --- delete ----------------------------------------------------------
-
-    #[tokio::test]
-    async fn delete_clears_research_finding_links() {
-        let db = test_db().await;
-        let vid = seed_vehicle(&db).await;
-        let part = create(&db, vid, minimal_part("Researched", None))
-            .await
-            .unwrap();
-        let report = crate::entities::research_report::ActiveModel {
-            vehicle_id: Set(vid),
-            generated_at: Set("2024-01-01".into()),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap();
-        let seed_finding = |part_id: i32, title: &str| research_finding::ActiveModel {
-            report_id: Set(report.id),
-            category: Set("upgrade".into()),
-            title: Set(title.into()),
-            status: Set("completed".into()),
-            linked_entity_type: Set(Some("part".into())),
-            linked_entity_id: Set(Some(part_id)),
-            created_at: Set("2024-01-01 00:00:00".into()),
-            updated_at: Set("2024-01-01 00:00:00".into()),
-            ..Default::default()
-        };
-        let finding = seed_finding(part.id, "Better part exists")
-            .insert(&db)
-            .await
-            .unwrap();
-        // Negative control: a finding linked to a DIFFERENT part must keep
-        // its link — guards the update_many's id predicate.
-        let other_part = create(&db, vid, minimal_part("Bystander", None))
-            .await
-            .unwrap();
-        let bystander = seed_finding(other_part.id, "Unrelated")
-            .insert(&db)
-            .await
-            .unwrap();
-
-        delete(&db, vid, part.id).await.unwrap();
-
-        let f = research_finding::Entity::find_by_id(finding.id)
-            .one(&db)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(f.linked_entity_type, None);
-        assert_eq!(f.linked_entity_id, None);
-        let b = research_finding::Entity::find_by_id(bystander.id)
-            .one(&db)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(b.linked_entity_type.as_deref(), Some("part"));
-        assert_eq!(b.linked_entity_id, Some(other_part.id));
-    }
 
     #[tokio::test]
     async fn delete_wrong_vehicle_is_byte_identical_to_nonexistent() {

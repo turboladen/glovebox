@@ -1,5 +1,3 @@
-pub mod build;
-pub mod document;
 pub mod incident;
 pub mod incident_followup;
 pub mod incident_service_link;
@@ -10,11 +8,11 @@ pub mod part;
 pub mod platform;
 pub mod research_finding;
 pub mod research_report;
+pub mod service_recall_link;
 pub mod service_record;
 pub mod service_record_line_item;
 pub mod service_schedule_link;
 pub mod shop;
 pub mod vehicle;
 pub mod vehicle_attribute;
-pub mod visit;
 pub mod work_item;

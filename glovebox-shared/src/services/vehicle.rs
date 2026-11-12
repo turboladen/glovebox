@@ -43,7 +43,6 @@ pub async fn create(db: &impl ConnectionTrait, input: NewVehicle) -> DomainResul
         purchase_price_cents: Set(input.purchase_price_cents),
         purchase_price_currency: Set(input.purchase_price_currency),
         purchase_mileage: Set(input.purchase_mileage),
-        photo_path: Set(input.photo_path),
         notes: Set(input.notes),
         warranty_expires_on: Set(input.warranty_expires_on),
         warranty_expires_miles: Set(input.warranty_expires_miles),
@@ -124,9 +123,6 @@ pub async fn update(
     if let Some(v) = input.sold_mileage {
         active.sold_mileage = Set(v);
     }
-    if let Some(v) = input.photo_path {
-        active.photo_path = Set(v);
-    }
     if let Some(v) = input.notes {
         active.notes = Set(v);
     }
@@ -138,19 +134,6 @@ pub async fn update(
     }
     active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
 
-    Ok(active.update(db).await?)
-}
-
-/// Set the vehicle's photo path (after the file has been written to disk by the caller).
-pub async fn set_photo_path(
-    db: &impl ConnectionTrait,
-    id: i32,
-    relative_path: String,
-) -> DomainResult<vehicle::Model> {
-    let existing = require(db, id).await?;
-    let mut active: vehicle::ActiveModel = existing.into();
-    active.photo_path = Set(Some(relative_path));
-    active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
     Ok(active.update(db).await?)
 }
 
@@ -211,7 +194,6 @@ mod tests {
                 purchase_price_cents: None,
                 purchase_price_currency: None,
                 purchase_mileage: None,
-                photo_path: None,
                 notes: None,
                 warranty_expires_on: None,
                 warranty_expires_miles: None,

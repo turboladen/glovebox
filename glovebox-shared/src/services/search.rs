@@ -1,6 +1,6 @@
 //! Full-text search across vehicle, event, and planning text — one
-//! domain operation over the FTS5 indexes created by migrations 000013 and
-//! 000021.
+//! domain operation over the FTS5 indexes created by the initial schema
+//! migration.
 //!
 //! Each FTS5 table is external-content (index only), so every subquery joins
 //! back to its content table to produce domain-shaped hits: `vehicle_id` is
@@ -446,6 +446,7 @@ mod tests {
         entities::service_record_line_item::ActiveModel {
             service_record_id: Set(sid),
             description: Set("OEM brake pad set".into()),
+            work_kind: Set("maintenance".into()),
             ..Default::default()
         }
         .insert(&db)
@@ -454,6 +455,7 @@ mod tests {
         entities::service_record_line_item::ActiveModel {
             service_record_id: Set(sid),
             description: Set("brake rotor pair".into()),
+            work_kind: Set("maintenance".into()),
             ..Default::default()
         }
         .insert(&db)
@@ -480,6 +482,7 @@ mod tests {
             entities::service_record_line_item::ActiveModel {
                 service_record_id: Set(sid_a),
                 description: Set(format!("brake part {i}")),
+                work_kind: Set("maintenance".into()),
                 ..Default::default()
             }
             .insert(&db)

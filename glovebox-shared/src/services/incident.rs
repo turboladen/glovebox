@@ -233,6 +233,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
         incident_service_link::ActiveModel {
             incident_id: Set(inc.id),
             service_record_id: Set(*sid),
+            role: Set("resolved".to_string()),
         }
         .insert(&txn)
         .await?;
@@ -386,6 +387,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
             incident_service_link::ActiveModel {
                 incident_id: Set(inc.id),
                 service_record_id: Set(*sid),
+                role: Set("resolved".to_string()),
             }
             .insert(&txn)
             .await?;
@@ -448,8 +450,8 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .filter(incident::Column::RecurrenceOfId.eq(existing.id))
         .exec(&txn)
         .await?;
-    // Work items reference incidents via a soft link (no FK in migration
-    // 000020) — clear it or planning rows point at a deleted incident.
+    // Work items reference incidents through a plain integer column, so clear
+    // it here or planning rows point at a deleted incident.
     work_item::Entity::update_many()
         .set(work_item::ActiveModel {
             incident_id: Set(None),
@@ -1156,10 +1158,7 @@ mod tests {
         );
     }
 
-    // --- migrated-shape queries -----------------------------------------------
-    // (The migration itself is proven by test_db() running 000018 plus the
-    // populated-DB verification; this covers querying rows shaped like
-    // migrated data — e.g. an accident-category incident with links.)
+    // --- queries over accident-category incidents with links -------------------
 
     #[tokio::test]
     async fn migrated_shape_accident_with_followups_and_links_lists_correctly() {

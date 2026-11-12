@@ -4,7 +4,7 @@ use serde::Serialize;
 use crate::{
     entities::{
         incident_service_link, maintenance_schedule_item, mileage_log, model_template, part,
-        research_finding, service_record, service_record_line_item, service_schedule_link,
+        service_record, service_record_line_item, service_schedule_link,
     },
     error::{DomainError, DomainResult},
     inputs::service_record::{NewLineItem, NewServiceRecord, UpdateServiceRecord},
@@ -128,7 +128,7 @@ async fn insert_line_items(
         let li = service_record_line_item::ActiveModel {
             service_record_id: Set(record_id),
             description: Set(item.description),
-            category: Set(item.category),
+            work_kind: Set("maintenance".to_string()),
             quantity: Set(item.quantity),
             unit_cost_cents: Set(item.unit_cost_cents),
             cost_cents: Set(item.cost_cents),
@@ -740,20 +740,6 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .exec(&txn)
         .await?;
 
-    // Research findings mark their resolving record via a polymorphic soft
-    // link (no FK); clear it so a finding never points at a deleted service.
-    research_finding::Entity::update_many()
-        .set(research_finding::ActiveModel {
-            linked_entity_type: Set(None),
-            linked_entity_id: Set(None),
-            updated_at: Set(super::now_stamp()),
-            ..Default::default()
-        })
-        .filter(research_finding::Column::LinkedEntityType.eq("service"))
-        .filter(research_finding::Column::LinkedEntityId.eq(existing.id))
-        .exec(&txn)
-        .await?;
-
     // Delete the service record
     existing.delete(&txn).await?;
 
@@ -1039,80 +1025,13 @@ mod tests {
         incident_service_link::ActiveModel {
             incident_id: Set(inc.id),
             service_record_id: Set(svc_id),
-        }
-        .insert(&db)
-        .await
-        .unwrap();
-
-        // A research finding resolved by this record (polymorphic soft link,
-        // no FK).
-        let report = crate::entities::research_report::ActiveModel {
-            vehicle_id: Set(vid),
-            generated_at: Set("2024-01-01".into()),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap();
-        let finding = research_finding::ActiveModel {
-            report_id: Set(report.id),
-            category: Set("recall".into()),
-            title: Set("Recall fixed here".into()),
-            status: Set("completed".into()),
-            linked_entity_type: Set(Some("service".into())),
-            linked_entity_id: Set(Some(svc_id)),
-            created_at: Set("2024-01-01 00:00:00".into()),
-            updated_at: Set("2024-01-01 00:00:00".into()),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap();
-
-        // Negative control: a finding linked to a DIFFERENT service must keep
-        // its link — guards the update_many's id predicate.
-        let other_svc = service_record::ActiveModel {
-            vehicle_id: Set(vid),
-            service_date: Set("2024-04-01".into()),
-            paid_by: Set("self".into()),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap();
-        let bystander = research_finding::ActiveModel {
-            report_id: Set(report.id),
-            category: Set("recall".into()),
-            title: Set("Unrelated".into()),
-            status: Set("completed".into()),
-            linked_entity_type: Set(Some("service".into())),
-            linked_entity_id: Set(Some(other_svc.id)),
-            created_at: Set("2024-01-01 00:00:00".into()),
-            updated_at: Set("2024-01-01 00:00:00".into()),
-            ..Default::default()
+            role: Set("resolved".into()),
         }
         .insert(&db)
         .await
         .unwrap();
 
         delete(&db, vid, svc_id).await.unwrap();
-
-        // The research finding survives, its resolving link cleared.
-        let f = research_finding::Entity::find_by_id(finding.id)
-            .one(&db)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(f.linked_entity_type, None);
-        assert_eq!(f.linked_entity_id, None);
-        assert_eq!(f.status, "completed");
-        let b = research_finding::Entity::find_by_id(bystander.id)
-            .one(&db)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(b.linked_entity_type.as_deref(), Some("service"));
-        assert_eq!(b.linked_entity_id, Some(other_svc.id));
 
         // The incident link rows are gone.
         let links = incident_service_link::Entity::find()

@@ -1,28 +1,12 @@
-use sea_orm::{ConnectOptions, Database, DatabaseConnection};
-use sea_orm_migration::MigratorTrait;
+use sea_orm::{ActiveModelTrait, ConnectionTrait, DatabaseConnection, Set};
 
-use crate::migration::Migrator;
-
-#[cfg(any(test, feature = "test-support"))]
 use crate::entities::vehicle;
-#[cfg(any(test, feature = "test-support"))]
-use sea_orm::{ActiveModelTrait, ConnectionTrait, Set};
 
-/// A fresh in-memory `SQLite` DB with all migrations applied. For service-layer unit tests.
-///
-/// `sqlite::memory:` databases are per-connection, so the pool is pinned to a single
-/// connection: migrations and the test's queries share one physical connection, and the
-/// migrated schema cannot vanish under a second connection. Pinning it explicitly (rather
-/// than relying on SeaORM's implicit max-connections default) keeps each test's DB isolated
-/// and non-flaky.
+/// A fresh in-memory `SQLite` DB with all migrations applied, opened with the
+/// same options as `db::connect` (WAL, foreign keys on). For service-layer
+/// unit tests.
 pub async fn test_db() -> DatabaseConnection {
-    let mut opt = ConnectOptions::new("sqlite::memory:");
-    opt.max_connections(1).min_connections(1);
-    let db = Database::connect(opt)
-        .await
-        .expect("connect in-memory sqlite");
-    Migrator::up(&db, None).await.expect("run migrations");
-    db
+    crate::db::connect_in_memory().await
 }
 
 /// Test-only builder for a `vehicle` row. The single construction point for

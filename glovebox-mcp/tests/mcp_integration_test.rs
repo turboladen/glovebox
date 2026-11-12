@@ -47,7 +47,6 @@ fn new_vehicle(name: &str) -> NewVehicle {
         purchase_price_cents: None,
         purchase_price_currency: None,
         purchase_mileage: None,
-        photo_path: None,
         notes: None,
         warranty_expires_on: None,
         warranty_expires_miles: None,

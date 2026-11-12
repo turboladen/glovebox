@@ -15,7 +15,6 @@ pub struct Model {
     pub purchase_date: Option<String>,
     pub cost_cents: Option<i32>,
     pub cost_currency: Option<String>,
-    pub invoice_url: Option<String>,
     pub status: String,
     pub installed_date: Option<String>,
     pub installed_odometer: Option<i32>,
@@ -27,11 +26,11 @@ pub struct Model {
     pub updated_at: String,
     pub manufacturer_url: Option<String>,
     pub retailer_url: Option<String>,
-    pub build_id: Option<i32>,
     pub location: Option<String>,
-    // Added by migration 20 (ALTER TABLE appends to end)
     pub warranty_expires_on: Option<String>,
     pub warranty_expires_miles: Option<i32>,
+    /// Who bought the part: `self` or `shop`.
+    pub supplied_by: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -48,18 +47,6 @@ pub enum Relation {
         to = "super::service_record::Column::Id"
     )]
     ServiceRecord,
-    #[sea_orm(
-        belongs_to = "super::build::Entity",
-        from = "Column::BuildId",
-        to = "super::build::Column::Id"
-    )]
-    Build,
-}
-
-impl Related<super::build::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::Build.def()
-    }
 }
 
 impl Related<super::vehicle::Entity> for Entity {

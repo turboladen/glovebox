@@ -33,7 +33,6 @@ pub struct Model {
     /// Self-FK: this incident is a recurrence of an earlier one (same
     /// vehicle, enforced by the service layer). ON DELETE SET NULL.
     pub recurrence_of_id: Option<i32>,
-    pub build_id: Option<i32>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -46,12 +45,6 @@ pub enum Relation {
         to = "super::vehicle::Column::Id"
     )]
     Vehicle,
-    #[sea_orm(
-        belongs_to = "super::build::Entity",
-        from = "Column::BuildId",
-        to = "super::build::Column::Id"
-    )]
-    Build,
     /// Self-referencing recurrence link (queried by column in the service
     /// layer; the relation exists for completeness).
     #[sea_orm(
@@ -67,12 +60,6 @@ pub enum Relation {
 impl Related<super::vehicle::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Vehicle.def()
-    }
-}
-
-impl Related<super::build::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::Build.def()
     }
 }
 
