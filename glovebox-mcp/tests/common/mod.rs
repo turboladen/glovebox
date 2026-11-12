@@ -214,11 +214,11 @@ pub fn schedule_item_every_12_months(vehicle_id: i32, name: &str) -> NewSchedule
     }
 }
 
-/// Status of one named reminder out of a `check_due_maintenance` call.
+/// Status of one named reminder out of a `whats_coming` call.
 pub async fn reminder_status(client: &TestClient, vehicle_id: i32, name: &str) -> String {
     let payload = client
         .call(
-            "check_due_maintenance",
+            "whats_coming",
             serde_json::json!({ "vehicle_id": vehicle_id }),
         )
         .await;

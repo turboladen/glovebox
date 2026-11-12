@@ -184,7 +184,7 @@ pub async fn list(
 /// today and the estimated odometer. A vehicle with no mileage data is
 /// judged on dates alone.
 pub async fn list_with_status(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     vehicle_id: i32,
     include_done: bool,
 ) -> DomainResult<Vec<PlannedItem>> {
@@ -215,7 +215,7 @@ pub async fn list_with_status(
 }
 
 async fn estimate_odometer(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     vehicle_id: i32,
     v: &vehicle::Model,
 ) -> DomainResult<i32> {

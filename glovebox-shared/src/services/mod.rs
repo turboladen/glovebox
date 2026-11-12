@@ -14,6 +14,7 @@ pub mod schedule;
 pub mod search;
 pub mod service_record;
 pub mod shop;
+pub mod upcoming;
 pub mod vehicle;
 pub mod vin_decode;
 pub mod work_item;

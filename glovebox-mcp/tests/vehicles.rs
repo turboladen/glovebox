@@ -88,7 +88,7 @@ async fn tools_list_advertises_the_remaining_verb_set() {
         "log_incident",
         "save_note",
         "log_mileage",
-        "check_due_maintenance",
+        "whats_coming",
         "dismiss_schedule_item",
         "summarize_recent_activity",
         "search_records",
@@ -107,6 +107,10 @@ async fn tools_list_advertises_the_remaining_verb_set() {
             "tools/list must advertise {tool}"
         );
     }
+    assert!(
+        !names.contains(&"check_due_maintenance".to_string()),
+        "check_due_maintenance is replaced by whats_coming"
+    );
     assert_eq!(tools.len(), 20, "expected exactly 20 tools; got: {names:?}");
     // Every argument-taking tool must advertise a real, non-empty input
     // schema. Forgetting the `input_schema =` override on a #[tool] silently

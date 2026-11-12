@@ -102,7 +102,7 @@ fn warranty_status(v: &vehicle::Model, estimated_mileage: i32) -> Option<Warrant
 /// Calculates average daily miles from the oldest and newest of the last 50 entries,
 /// then extrapolates forward from the most recent entry to today.
 pub async fn estimate_mileage(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     vehicle_id: i32,
     v: &vehicle::Model,
 ) -> DomainResult<(i32, String, f64, bool)> {
@@ -161,7 +161,7 @@ pub async fn estimate_mileage(
 /// Calculate reminders for a vehicle.
 #[allow(clippy::too_many_lines)]
 pub async fn calculate_reminders(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     vehicle_id: i32,
 ) -> DomainResult<RemindersResponse> {
     let v = vehicle::Entity::find_by_id(vehicle_id)
@@ -324,7 +324,7 @@ pub async fn calculate_reminders(
 
 /// Resolve effective schedule items for a vehicle (Platform → Model Template → Vehicle).
 async fn resolve_schedule(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     v: &vehicle::Model,
 ) -> DomainResult<Vec<maintenance_schedule_item::Model>> {
     let mut schedule: HashMap<String, maintenance_schedule_item::Model> = HashMap::new();

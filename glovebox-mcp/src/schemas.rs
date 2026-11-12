@@ -66,7 +66,7 @@ pub struct RecordServiceInput {
     /// service, at its mileage and date, so no separate `record_part` call is
     /// needed.
     pub parts: Option<Vec<InlinePartInput>>,
-    /// Ids of schedule items (from `check_due_maintenance`) this work
+    /// Ids of schedule items (from `whats_coming`) this work
     /// satisfies — linking clears the reminder and restarts its interval.
     pub schedule_item_ids: Option<Vec<i32>>,
     /// The number printed on the invoice or repair order (e.g. "RO-1182").
@@ -384,7 +384,7 @@ pub struct PlanWorkInput {
     /// Free-form notes.
     pub notes: Option<String>,
     /// The overdue/due schedule item this satisfies (from
-    /// `check_due_maintenance`) — completing the work then clears the
+    /// `whats_coming`) — completing the work then clears the
     /// reminder.
     pub schedule_item_id: Option<i32>,
     /// The research finding (e.g. a recall from `check_recalls`) this
@@ -459,7 +459,7 @@ impl LogMileageInput {
 pub struct DismissScheduleItemInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
-    /// Schedule item id, from `check_due_maintenance`.
+    /// Schedule item id, from `whats_coming`.
     pub schedule_item_id: i32,
     /// Why it's being waived, e.g. "independent shop handles this".
     pub reason: Option<String>,
@@ -523,7 +523,7 @@ pub struct LinkServiceToMaintenanceInput {
     /// The existing service record to link, e.g. an id returned by
     /// `record_service` or found via `summarize_recent_activity`.
     pub service_record_id: i32,
-    /// Schedule item ids (from `check_due_maintenance`) this service
+    /// Schedule item ids (from `whats_coming`) this service
     /// satisfies — linking clears their reminders.
     pub schedule_item_ids: Vec<i32>,
     /// `add` (default) keeps the record's existing links and adds these;

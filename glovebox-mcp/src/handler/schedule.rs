@@ -11,7 +11,7 @@ use crate::schemas::DismissScheduleItemInput;
 impl GloveboxMcp {
     #[tool(
         name = "dismiss_schedule_item",
-        description = "Waive a maintenance schedule item for this vehicle — it stops appearing in the schedule and in `check_due_maintenance`. Use for items that genuinely don't apply (e.g. a dealer-only service the owner skips deliberately). For work that was actually done before tracking started, prefer `record_service` with a minimal past-dated entry linked via `schedule_item_ids` instead, so history stays honest.",
+        description = "Waive a maintenance schedule item for this vehicle — it stops appearing in the schedule and in `whats_coming`. Use for items that genuinely don't apply (e.g. a dealer-only service the owner skips deliberately). For work that was actually done before tracking started, prefer `record_service` with a minimal past-dated entry linked via `schedule_item_ids` instead, so history stays honest.",
         input_schema = rmcp::handler::server::common::schema_for_type::<DismissScheduleItemInput>()
     )]
     async fn dismiss_schedule_item(

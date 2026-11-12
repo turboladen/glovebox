@@ -47,9 +47,7 @@ async fn dismiss_schedule_item_hides_it_and_rejects_wrong_vehicle() {
 
     // Gone from the resolved schedule and from the reminders.
     assert!(schedule_svc::resolve(&t.db, v.id).await.unwrap().is_empty());
-    let due = t
-        .call("check_due_maintenance", json!({ "vehicle_id": v.id }))
-        .await;
+    let due = t.call("whats_coming", json!({ "vehicle_id": v.id })).await;
     assert_eq!(
         due["reminders"].as_array().map(Vec::len),
         Some(0),

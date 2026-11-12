@@ -1,7 +1,7 @@
 //! MCP (Model Context Protocol) server for glovebox.
 //!
 //! Exposes the domain in `glovebox-shared` to AI clients as semantic
-//! domain-verb tools (`record_service`, `check_due_maintenance`, …) and
+//! domain-verb tools (`record_service`, `whats_coming`, …) and
 //! read-only resources (`glovebox://vehicles/{id}`, …). The `glovebox-mcp`
 //! binary serves [`GloveboxMcp`] over stdio, which is how Claude Desktop
 //! launches it.

@@ -80,10 +80,11 @@ impl ServerHandler for GloveboxMcp {
             .with_instructions(
                 "glovebox MCP: car maintenance tracking. Canonical workflow: (1) ORIENT — \
                  `list_vehicles` for ids, then `summarize_recent_activity` for the vehicle's \
-                 recent history. (2) ANSWER \"what does it need?\" — `check_due_maintenance` \
-                 before recommending any work (it includes the 12-month budget forecast and \
-                 warranty status); `check_recalls` for safety recalls. Resolve due/overdue items \
-                 by linking completed work (`record_service` with `schedule_item_ids`, or \
+                 recent history. (2) ANSWER \"what does it need?\" — `whats_coming` before \
+                 recommending any work (one call covers the schedule, planned work, open recalls, \
+                 unresolved incidents, the 12-month budget forecast and warranty status); \
+                 `check_recalls` to refresh safety recalls. Resolve due/overdue items by linking \
+                 completed work (`record_service` with `schedule_item_ids`, or \
                  `link_service_to_maintenance` for records that already exist — the import \
                  reconciliation loop) or waiving ones that don't apply (`dismiss_schedule_item`). \
                  (3) PLAN — when the user intends to do something about a recall, an overdue \

@@ -8,18 +8,21 @@ use glovebox_shared::{
 use serde_json::json;
 
 #[tokio::test]
-async fn check_due_maintenance_returns_without_error() {
+async fn whats_coming_returns_every_section_for_a_bare_vehicle() {
     let t = connect().await;
     let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
 
-    let due = t
-        .call("check_due_maintenance", json!({ "vehicle_id": v.id }))
-        .await
-        .to_string();
-    assert!(
-        due.contains("estimated_mileage") && due.contains("reminders"),
-        "reminders payload must round-trip; got: {due}"
-    );
+    let due = t.call("whats_coming", json!({ "vehicle_id": v.id })).await;
+    for key in [
+        "reminders",
+        "budget",
+        "planned_work",
+        "recalls",
+        "open_incidents",
+    ] {
+        assert!(due.get(key).is_some(), "missing {key}; got: {due}");
+    }
+    assert!(due.get("estimated_mileage").is_some(), "got: {due}");
 }
 
 // Plans work from a recall finding and from an overdue schedule item, then
@@ -90,9 +93,7 @@ async fn recall_and_schedule_item_plan_into_the_todo_list_and_forecast() {
     );
 
     // The forecast counts the planned estimates once.
-    let due = t
-        .call("check_due_maintenance", json!({ "vehicle_id": v.id }))
-        .await;
+    let due = t.call("whats_coming", json!({ "vehicle_id": v.id })).await;
     assert_eq!(due["budget"]["planned_work_cents"], 65_000);
     assert!(due["budget"].get("planned_visits_cents").is_none());
 }

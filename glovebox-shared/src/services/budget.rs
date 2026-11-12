@@ -66,13 +66,12 @@ pub async fn forecast(db: &DatabaseConnection, vehicle_id: i32) -> DomainResult<
     forecast_from(db, vehicle_id, &rems).await
 }
 
-/// [`forecast`] with the reminders precomputed — for callers (the MCP's
-/// `check_due_maintenance`) that already have a [`RemindersResponse`] and
+/// [`forecast`] with the reminders precomputed — for callers that already have a [`RemindersResponse`] and
 /// must not compute it twice.
 #[allow(clippy::cast_possible_truncation)] // day counts, not money
 #[allow(clippy::too_many_lines)] // one linear pass over the buckets
 pub async fn forecast_from(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     vehicle_id: i32,
     rems: &RemindersResponse,
 ) -> DomainResult<BudgetForecast> {
