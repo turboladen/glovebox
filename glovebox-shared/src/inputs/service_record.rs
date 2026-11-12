@@ -76,4 +76,8 @@ pub struct UpdateServiceRecord {
     pub schedule_item_ids: Option<Vec<i32>>,
     pub part_ids: Option<Vec<i32>>,
     pub line_items: Option<Vec<NewLineItem>>,
+    /// Set, change or clear the invoice number. A blank value clears it.
+    pub invoice_ref: Option<Option<String>>,
+    /// When present, replaces the recalls this service performed.
+    pub recall_finding_ids: Option<Vec<i32>>,
 }

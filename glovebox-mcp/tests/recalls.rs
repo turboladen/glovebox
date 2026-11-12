@@ -1,37 +1,8 @@
 mod common;
 
-use common::{connect, new_vehicle};
-use glovebox_shared::{
-    entities::{research_finding, research_report},
-    services::vehicle,
-};
-use sea_orm::{ActiveModelTrait, DatabaseConnection, Set};
+use common::{connect, new_vehicle, seed_recall};
+use glovebox_shared::services::vehicle;
 use serde_json::json;
-
-async fn seed_recall(db: &DatabaseConnection, vehicle_id: i32, campaign: &str) -> i32 {
-    let report = research_report::ActiveModel {
-        vehicle_id: Set(vehicle_id),
-        report_type: Set(Some("recalls_only".into())),
-        ..Default::default()
-    }
-    .insert(db)
-    .await
-    .unwrap();
-    research_finding::ActiveModel {
-        report_id: Set(report.id),
-        category: Set("recall".into()),
-        title: Set("Suction Jet Pump".into()),
-        source_url: Set(Some(format!(
-            "https://www.nhtsa.gov/recalls?nhtsaId={campaign}"
-        ))),
-        status: Set("new".into()),
-        ..Default::default()
-    }
-    .insert(db)
-    .await
-    .unwrap()
-    .id
-}
 
 #[tokio::test]
 async fn a_recall_named_on_a_service_reads_as_done_with_that_service() {

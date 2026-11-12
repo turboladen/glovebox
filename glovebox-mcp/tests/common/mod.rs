@@ -6,6 +6,7 @@
 
 use glovebox_mcp::GloveboxMcp;
 use glovebox_shared::{
+    entities::{research_finding, research_report},
     inputs::{schedule::NewScheduleItem, service_record::NewServiceRecord, vehicle::NewVehicle},
     test_support::test_db,
 };
@@ -14,7 +15,7 @@ use rmcp::{
     model::{CallToolRequestParams, ReadResourceRequestParams},
     service::RunningService,
 };
-use sea_orm::DatabaseConnection;
+use sea_orm::{ActiveModelTrait, DatabaseConnection, Set};
 use serde_json::Value;
 
 pub struct TestClient {
@@ -245,4 +246,31 @@ pub async fn assert_unknown_field_rejected(
         err.contains("unknown field") && err.contains(&format!("`{field}`")),
         "{tool} must reject the unknown field {field}; got: {err}"
     );
+}
+
+/// Files a recall finding for the vehicle with the given NHTSA campaign
+/// number and returns its id.
+pub async fn seed_recall(db: &DatabaseConnection, vehicle_id: i32, campaign: &str) -> i32 {
+    let report = research_report::ActiveModel {
+        vehicle_id: Set(vehicle_id),
+        report_type: Set(Some("recalls_only".into())),
+        ..Default::default()
+    }
+    .insert(db)
+    .await
+    .unwrap();
+    research_finding::ActiveModel {
+        report_id: Set(report.id),
+        category: Set("recall".into()),
+        title: Set("Suction Jet Pump".into()),
+        source_url: Set(Some(format!(
+            "https://www.nhtsa.gov/recalls?nhtsaId={campaign}"
+        ))),
+        status: Set("new".into()),
+        ..Default::default()
+    }
+    .insert(db)
+    .await
+    .unwrap()
+    .id
 }

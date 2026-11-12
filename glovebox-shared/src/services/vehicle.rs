@@ -1,7 +1,9 @@
 use sea_orm::*;
 
 use crate::{
-    entities::vehicle,
+    entities::{
+        incident, part, research_finding, research_report, service_record, vehicle, work_item,
+    },
     error::{DomainError, DomainResult},
     inputs::vehicle::{NewVehicle, UpdateVehicle},
     services::vin_decode::{self, VinDecodeResult},
@@ -219,6 +221,70 @@ pub async fn delete(db: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
     Ok(())
 }
 
+/// Deletes a vehicle that has no history yet, undoing a mistaken
+/// `create`. A vehicle with any service record, part, incident, work item or
+/// research finding is a `BadRequest` naming what it has. Its odometer
+/// readings, own schedule items and decoded attributes go with it.
+pub async fn delete_unused(db: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
+    require(db, id).await?;
+    let report_ids = research_report::Entity::find()
+        .select_only()
+        .column(research_report::Column::Id)
+        .filter(research_report::Column::VehicleId.eq(id))
+        .into_query();
+    let counts = [
+        (
+            "service records",
+            service_record::Entity::find()
+                .filter(service_record::Column::VehicleId.eq(id))
+                .count(db)
+                .await?,
+        ),
+        (
+            "parts",
+            part::Entity::find()
+                .filter(part::Column::VehicleId.eq(id))
+                .count(db)
+                .await?,
+        ),
+        (
+            "incidents",
+            incident::Entity::find()
+                .filter(incident::Column::VehicleId.eq(id))
+                .count(db)
+                .await?,
+        ),
+        (
+            "planned work",
+            work_item::Entity::find()
+                .filter(work_item::Column::VehicleId.eq(id))
+                .count(db)
+                .await?,
+        ),
+        (
+            "research findings",
+            research_finding::Entity::find()
+                .filter(research_finding::Column::ReportId.in_subquery(report_ids))
+                .count(db)
+                .await?,
+        ),
+    ];
+    let held: Vec<&str> = counts
+        .iter()
+        .filter(|(_, n)| *n > 0)
+        .map(|(what, _)| *what)
+        .collect();
+    if !held.is_empty() {
+        return Err(DomainError::BadRequest(format!(
+            "Vehicle {id} has {} recorded, so it cannot be deleted. Only a vehicle with no \
+             history can be deleted.",
+            held.join(", ")
+        )));
+    }
+    vehicle::Entity::delete_by_id(id).exec(db).await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -425,5 +491,45 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(err, DomainError::NotFound(_)), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn delete_unused_removes_a_fresh_vehicle_and_refuses_one_with_history() {
+        let db = test_db().await;
+        let fresh = seed(&db, "Duplicate").await;
+        crate::services::mileage::create(
+            &db,
+            fresh.id,
+            crate::inputs::mileage::NewMileageEntry {
+                mileage: 10,
+                recorded_at: None,
+                source: None,
+                notes: None,
+            },
+        )
+        .await
+        .unwrap();
+        delete_unused(&db, fresh.id).await.unwrap();
+        assert!(matches!(
+            require(&db, fresh.id).await.unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+
+        let used = seed(&db, "Daily").await;
+        part::ActiveModel {
+            vehicle_id: Set(used.id),
+            name: Set("Pads".into()),
+            status: Set("purchased".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        let err = delete_unused(&db, used.id).await.unwrap_err();
+        assert!(
+            matches!(&err, DomainError::BadRequest(m) if m.contains("parts")),
+            "got: {err}"
+        );
+        require(&db, used.id).await.unwrap();
     }
 }

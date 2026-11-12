@@ -2,7 +2,7 @@
 
 use rmcp::{ErrorData as McpError, model::CallToolResult, tool, tool_router};
 
-use super::{GloveboxMcp, LenientParameters, domain_error, domain_result};
+use super::{GloveboxMcp, LenientParameters, deleted_result, domain_error, domain_result};
 use glovebox_shared::{
     entities,
     services::{mileage, model_template, vehicle, vin_decode},
@@ -10,7 +10,8 @@ use glovebox_shared::{
 use serde::Serialize;
 
 use crate::schemas::{
-    AddVehicleInput, EmptyParams, LogMileageInput, UpdateVehicleInput, VehicleBrief, VehicleParams,
+    AddVehicleInput, DeleteMileageInput, EmptyParams, LogMileageInput, UpdateVehicleInput,
+    VehicleBrief, VehicleParams,
 };
 
 /// The created vehicle plus what the VIN lookup did, when one was asked for.
@@ -78,6 +79,62 @@ impl GloveboxMcp {
             return domain_error(e);
         }
         domain_result(mileage::create(&*self.db, vehicle_id, input).await)
+    }
+
+    #[tool(
+        name = "list_mileage",
+        description = "List the car's odometer readings, newest first, each with its `id`, `mileage`, `recorded_at` and source. A reading a service logged carries that service's `service_record_id`. Use it to find a mistyped reading for `delete_mileage`.",
+        input_schema = rmcp::handler::server::common::schema_for_type::<VehicleParams>()
+    )]
+    async fn list_mileage(
+        &self,
+        params: LenientParameters<VehicleParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = match params.into_tool_input("list_mileage") {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        };
+        domain_result(mileage::list(&*self.db, p.vehicle_id).await)
+    }
+
+    #[tool(
+        name = "delete_mileage",
+        description = "Delete one odometer reading, e.g. a mistyped `log_mileage` entry, by its id from `list_mileage`. A reading that carries a `service_record_id` follows that service: fix it with `correct_service` (`mileage`) instead; deleting it here is an error.",
+        input_schema = rmcp::handler::server::common::schema_for_type::<DeleteMileageInput>()
+    )]
+    async fn delete_mileage(
+        &self,
+        params: LenientParameters<DeleteMileageInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = match params.into_tool_input("delete_mileage") {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        };
+        deleted_result(
+            "mileage",
+            p.mileage_id,
+            mileage::delete(&*self.db, p.vehicle_id, p.mileage_id).await,
+        )
+    }
+
+    #[tool(
+        name = "delete_vehicle",
+        description = "Delete a vehicle that has no history, to undo a mistaken or duplicate `add_vehicle`. It is refused when the vehicle has any service record, part, incident, planned work or research finding; its odometer readings and car-specific schedule items go with it. There is no way to delete a car with history through this tool.",
+        input_schema = rmcp::handler::server::common::schema_for_type::<VehicleParams>()
+    )]
+    async fn delete_vehicle(
+        &self,
+        params: LenientParameters<VehicleParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = match params.into_tool_input("delete_vehicle") {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        };
+        deleted_result(
+            "vehicle",
+            p.vehicle_id,
+            vehicle::delete_unused(&*self.db, p.vehicle_id).await,
+        )
     }
 
     #[tool(

@@ -98,13 +98,14 @@ impl ServerHandler for GloveboxMcp {
                  `update_schedule_item` (any item, inherited ones included; history carries \
                  over), `add_schedule_item` for a job the schedule lacks, and \
                  `dismiss_schedule_item` / `restore_schedule_item`. Also: `log_mileage` whenever \
-                 the user mentions an odometer reading, `record_part` and `list_parts` / \
-                 `correct_part` / `delete_part` for parts, `save_note` for facts worth keeping, \
-                 `search_records` and `cost_summary` to look things up, `check_recalls` and \
-                 `set_recall_status` for recalls. Every record can be listed, corrected and \
-                 deleted; a correct or update tool leaves absent fields alone and clears a field \
-                 sent as null, and an argument a tool does not define is an error. All money is \
-                 integer cents; all dates are YYYY-MM-DD.",
+                 the user mentions an odometer reading (`list_mileage` / `delete_mileage` fix a \
+                 typo, `delete_vehicle` undoes a mistaken `add_vehicle`), `record_part` and \
+                 `list_parts` / `correct_part` / `delete_part` for parts, `save_note` for facts \
+                 worth keeping, `search_records` and `cost_summary` to look things up, \
+                 `check_recalls` and `set_recall_status` for recalls. Every record can be listed, \
+                 corrected and deleted; a correct or update tool leaves absent fields alone and \
+                 clears a field sent as null, and an argument a tool does not define is an error. \
+                 All money is integer cents; all dates are YYYY-MM-DD.",
             )
     }
 

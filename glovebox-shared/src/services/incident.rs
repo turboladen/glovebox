@@ -465,6 +465,17 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         }
     }
 
+    if let Some(noticed) = input.noticed_during_service_id {
+        incident_service_link::Entity::delete_many()
+            .filter(incident_service_link::Column::IncidentId.eq(inc.id))
+            .filter(incident_service_link::Column::Role.eq(ROLE_NOTICED))
+            .exec(&txn)
+            .await?;
+        if let Some(sid) = noticed {
+            link_service(&txn, vehicle_id, inc.id, sid, ROLE_NOTICED).await?;
+        }
+    }
+
     // An explicit `resolved` wins over the flag the links just set.
     let resolved_override = input.resolved.or(cleared_all_resolvers.then_some(false));
     let inc = if let Some(resolved) = resolved_override {

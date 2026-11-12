@@ -1,7 +1,7 @@
 # Using glovebox with Claude Desktop
 
 `glovebox-mcp` is a local MCP server that Claude Desktop starts over stdio. It keeps the garage in
-a SQLite database and exposes 38 tools for recording services, planning work, and answering "what
+a SQLite database and exposes tools for recording services, planning work, and answering "what
 does the car need?". Claude Desktop is the only interface to the data.
 
 ## Build and install
@@ -38,7 +38,9 @@ glovebox conversation inside that project so the instructions apply.
 
 - [ ] Ask Claude to add the car. It calls `list_model_templates` and then `add_vehicle` with the
       matching template, so the car inherits its maintenance schedule.
-- [ ] Give Claude the current odometer reading so it calls `log_mileage`.
+- [ ] Give Claude the current odometer reading so it calls `log_mileage`. A mistyped reading is
+      found with `list_mileage` and removed with `delete_mileage`; a car added twice by mistake is
+      removed with `delete_vehicle`, which only works while the car has no history.
 - [ ] Ask Claude to research the manufacturer's real maintenance schedule for the car and to
       reconcile it with `list_schedule`. The seeded schedule is thin: it has few items and no cost
       estimates. Claude adds missing jobs with `add_schedule_item` and adjusts existing items,

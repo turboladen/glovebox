@@ -47,6 +47,8 @@ for the records you link.
      does not make it clear. For a self-supplied part, record the `seller` (for example "FCP
      Euro"), the `part_number`, the `purchase_date`, and any warranty expiry, because those are the
      facts a warranty claim needs.
+   - A part recorded earlier with `record_part`, such as one Steve bought before the visit, is
+     attached with `part_ids`, not listed again under `parts`. `list_parts` has the ids.
    - `schedule_item_ids` names the schedule items the work satisfies, `work_item_ids` the planned
      work it completes, `resolved_incident_ids` the incidents it fixed, `noticed_incident_ids` the
      incidents first noticed during it, and `recall_finding_ids` the recalls it performed. If one id
@@ -114,8 +116,13 @@ second service to patch the first.
 - `correct_service`, `correct_part`, `update_incident`, `update_planned_work`, `update_vehicle` and
   `update_schedule_item` change a record. A field you leave out is untouched, and a field you send
   as `null` is cleared.
+- `correct_service` also fixes the `invoice_ref` and replaces the recalls a service performed
+  (`recall_finding_ids`). `update_incident` sets, changes or clears `noticed_during_service_id`.
 - `delete_service`, `delete_part`, `delete_incident` and `delete_planned_work` remove a record.
   Deleting a service reopens what it closed.
+- A mistyped odometer reading is found with `list_mileage` and removed with `delete_mileage`. A
+  reading that came from a service is fixed with `correct_service` instead.
+- `delete_vehicle` removes a car added by mistake. It refuses once the car has any history.
 - `set_recall_status` marks a recall `done` when the work left no paperwork, `not_applicable` when
   it does not apply to this car, or `open` to undo either.
 - Do not set planned work to `done` by hand. File the work with `record_service` so the service,

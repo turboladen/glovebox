@@ -68,6 +68,16 @@ fn validate_who_and_when(
     Ok(())
 }
 
+/// Trims an invoice number and treats a blank one as absent. An LLM may send
+/// "" or spaces rather than omitting the field, and a blank ref stored as a
+/// real one would make the partial unique index reject a second ref-less
+/// record as a duplicate.
+fn normalize_invoice_ref(invoice_ref: Option<&str>) -> Option<String> {
+    invoice_ref
+        .map(|r| r.trim().to_string())
+        .filter(|r| !r.is_empty())
+}
+
 /// Payer whitelist for `service_records.paid_by`.
 const VALID_PAYERS: [&str; 3] = ["self", "insurance", "third_party"];
 
@@ -600,15 +610,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
         validate_payer(paid_by)?;
     }
 
-    // Normalize a blank invoice_ref to absent. An LLM may send "" (or spaces)
-    // rather than omitting the field; treating that as a real ref would let the
-    // partial unique index reject a SECOND ref-less record as a false
-    // duplicate. Trim so "INV-1 " and "INV-1" are the same identity signal.
-    let invoice_ref = input
-        .invoice_ref
-        .as_deref()
-        .map(|r| r.trim().to_string())
-        .filter(|r| !r.is_empty());
+    let invoice_ref = normalize_invoice_ref(input.invoice_ref.as_deref());
 
     // Hard-idempotency: an invoice_ref is a deterministic identity signal.
     // If this vehicle already has a record with the same ref, return it
@@ -765,10 +767,19 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     if let Some(items) = &input.line_items {
         validate_line_items(items)?;
     }
+    let invoice_ref = input
+        .invoice_ref
+        .map(|r| normalize_invoice_ref(r.as_deref()));
+    if let Some(Some(invoice_ref)) = &invoice_ref {
+        require_invoice_ref_free(db, vehicle_id, id, invoice_ref).await?;
+    }
 
     let txn = db.begin().await?;
 
     let mut active: service_record::ActiveModel = existing.into();
+    if let Some(v) = invoice_ref {
+        active.invoice_ref = Set(v);
+    }
 
     if let Some(v) = input.service_date {
         active.service_date = Set(v);
@@ -880,6 +891,14 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         }
     }
 
+    if let Some(recall_ids) = input.recall_finding_ids {
+        service_recall_link::Entity::delete_many()
+            .filter(service_recall_link::Column::ServiceRecordId.eq(record.id))
+            .exec(&txn)
+            .await?;
+        recall::link_service(&txn, vehicle_id, &recall_ids, record.id).await?;
+    }
+
     // Handle line items: replace-all semantics when provided
     if let Some(new_line_items) = input.line_items {
         service_record_line_item::Entity::delete_many()
@@ -894,6 +913,29 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     txn.commit().await?;
 
     Ok(updated)
+}
+
+/// Refuses an invoice number that another service on the vehicle already
+/// carries, naming that service.
+async fn require_invoice_ref_free(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    service_id: i32,
+    invoice_ref: &str,
+) -> DomainResult<()> {
+    let other = service_record::Entity::find()
+        .filter(service_record::Column::VehicleId.eq(vehicle_id))
+        .filter(service_record::Column::InvoiceRef.eq(invoice_ref))
+        .filter(service_record::Column::Id.ne(service_id))
+        .one(db)
+        .await?;
+    match other {
+        Some(other) => Err(DomainError::BadRequest(format!(
+            "Invoice ref '{invoice_ref}' already belongs to service {} on this vehicle",
+            other.id
+        ))),
+        None => Ok(()),
+    }
 }
 
 /// How [`link_schedule_items`] treats the record's existing schedule links.

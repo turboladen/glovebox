@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Car maintenance tracker, used only through Claude Desktop. A Rust cargo workspace with two crates:
 `glovebox-shared` (the domain library: SeaORM 2.0 + SQLite) and `glovebox-mcp` (an rmcp stdio
-server with 38 tools and read-only `glovebox://` resources). Claude Desktop launches the
+server with domain-verb tools and read-only `glovebox://` resources). Claude Desktop launches the
 `glovebox-mcp` binary itself, so there is no server to keep running and no web UI. The question
 the app answers: given what has been done to the car, its mileage and its age, what maintenance is
 coming, when, how much will it cost, and what parts are worth buying and bringing to the shop.
@@ -89,8 +89,8 @@ add a `println!` to this crate or to code it calls.
 **Tools** (`src/handler/*.rs`, one `#[tool_router]` impl per area, combined in `handler/mod.rs`),
 named as things a person would say:
 
-- `vehicles.rs`: `list_vehicles`, `get_vehicle`, `add_vehicle`, `update_vehicle`, `log_mileage`,
-  `list_model_templates`
+- `vehicles.rs`: `list_vehicles`, `get_vehicle`, `add_vehicle`, `update_vehicle`, `delete_vehicle`,
+  `log_mileage`, `list_mileage`, `delete_mileage`, `list_model_templates`
 - `services.rs`: `record_service`, `link_service_to_maintenance`, `list_services`,
   `correct_service`, `delete_service`
 - `parts.rs`: `record_part`, `list_parts`, `correct_part`, `delete_part`
@@ -116,8 +116,8 @@ it. Serde does not support it together with `#[serde(flatten)]`, so input struct
 **`record_service` is transactional.** One call writes the service, its lines, its parts and every
 link (schedule items, work items, recalls, incidents) in one transaction. One bad id fails the call
 and commits nothing. Re-recording an existing `invoice_ref` for the vehicle returns the stored
-record with `already_recorded: true` and writes nothing. Completing planned work happens by naming `work_item_ids` in
-`record_service`.
+record with `already_recorded: true` and writes nothing. Completing planned work happens by naming
+`work_item_ids` in `record_service`.
 
 **Resources**: `glovebox://vehicles`, `glovebox://vehicles/{id}` and `…/{id}/activity`.
 `list_resources` enumerates concrete URIs from the database and `read_resource` parses them.

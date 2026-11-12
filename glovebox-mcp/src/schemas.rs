@@ -72,10 +72,15 @@ pub struct RecordServiceInput {
     pub payer_note: Option<String>,
     /// Itemized invoice lines, one per job on the paperwork.
     pub line_items: Option<Vec<LineItemInput>>,
-    /// Parts this invoice lists. Each is created already installed by this
-    /// service, at its mileage and date, so no separate `record_part` call is
-    /// needed.
+    /// Parts this invoice lists that are not recorded yet. Each is created
+    /// already installed by this service, at its mileage and date, so no
+    /// separate `record_part` call is needed.
     pub parts: Option<Vec<InlinePartInput>>,
+    /// Ids of parts already recorded for this vehicle (from `record_part` or
+    /// `list_parts`) that this service installed. Each is marked installed
+    /// at this service's date and mileage. Do not list such a part again
+    /// under `parts`.
+    pub part_ids: Option<Vec<i32>>,
     /// Ids of schedule items (from `whats_coming`) this work
     /// satisfies — linking clears the reminder and restarts its interval.
     pub schedule_item_ids: Option<Vec<i32>>,
@@ -151,7 +156,7 @@ impl RecordServiceInput {
                 paid_by: self.paid_by,
                 payer_note: self.payer_note,
                 schedule_item_ids: self.schedule_item_ids,
-                part_ids: None,
+                part_ids: self.part_ids,
                 work_item_ids: self.work_item_ids,
                 resolved_incident_ids: self.resolved_incident_ids,
                 noticed_incident_ids: self.noticed_incident_ids,
@@ -477,6 +482,15 @@ impl LogMileageInput {
             },
         )
     }
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DeleteMileageInput {
+    /// Vehicle id, from `list_vehicles`.
+    pub vehicle_id: i32,
+    /// Reading id, from `list_mileage`.
+    pub mileage_id: i32,
 }
 
 #[derive(Deserialize, JsonSchema)]

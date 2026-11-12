@@ -367,6 +367,15 @@ pub struct CorrectServiceInput {
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<String>")]
     pub payer_note: Option<Option<String>>,
+    /// The number printed on the invoice or repair order. Another service on
+    /// this vehicle with the same number is an error that names it.
+    ///
+    /// Send `null` to clear it; omit the key to leave it unchanged.
+    #[serde(default, deserialize_with = "nullable")]
+    #[schemars(with = "Option<String>")]
+    pub invoice_ref: Option<Option<String>>,
+    /// REPLACES the recalls this service performed with exactly this list (`finding_id`s from `whats_coming` or `check_recalls`). A recall taken off the list reads as open again unless it was marked done by hand. Send `[]` to remove them all; omit to leave them alone.
+    pub recall_finding_ids: Option<Vec<i32>>,
 }
 
 impl CorrectServiceInput {
@@ -389,6 +398,8 @@ impl CorrectServiceInput {
                 shop_name: self.shop_name,
                 notes: self.notes,
                 payer_note: self.payer_note,
+                invoice_ref: self.invoice_ref,
+                recall_finding_ids: self.recall_finding_ids,
                 line_items: self
                     .line_items
                     .map(|items| items.into_iter().map(LineItemInput::into_domain).collect()),
@@ -670,6 +681,12 @@ pub struct UpdateIncidentInput {
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<i32>")]
     pub recurrence_of_id: Option<Option<i32>>,
+    /// The service record (same vehicle) during which this was noticed.
+    ///
+    /// Send `null` to clear it; omit the key to leave it unchanged.
+    #[serde(default, deserialize_with = "nullable")]
+    #[schemars(with = "Option<i32>")]
+    pub noticed_during_service_id: Option<Option<i32>>,
 }
 
 impl UpdateIncidentInput {
@@ -700,6 +717,7 @@ impl UpdateIncidentInput {
                 deductible_cents: self.deductible_cents,
                 insurance_payout_cents: self.insurance_payout_cents,
                 recurrence_of_id: self.recurrence_of_id,
+                noticed_during_service_id: self.noticed_during_service_id,
                 ..Default::default()
             },
         )

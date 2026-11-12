@@ -565,3 +565,159 @@ async fn services_tools_reject_unknown_arguments() {
     common::assert_unknown_field_rejected(&t, "record_service", json!({ "vehicle_id": 1, "service_date": "2026-11-10", "line_items": [{ "description": "Oil", "work_kind": "maintenance", "category": "x" }] }), "category").await;
     common::assert_unknown_field_rejected(&t, "record_service", json!({ "vehicle_id": 1, "service_date": "2026-11-10", "parts": [{ "name": "Filter", "brand": "Mann" }] }), "brand").await;
 }
+
+#[tokio::test]
+async fn correct_service_sets_changes_and_clears_the_invoice_ref() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let first = t
+        .call(
+            "record_service",
+            json!({ "vehicle_id": v.id, "service_date": "2026-01-10", "invoice_ref": "RO-1" }),
+        )
+        .await;
+    let second = t
+        .call(
+            "record_service",
+            json!({ "vehicle_id": v.id, "service_date": "2026-02-10" }),
+        )
+        .await;
+
+    let clash = t
+        .call_err(
+            "correct_service",
+            json!({ "vehicle_id": v.id, "service_id": second["id"], "invoice_ref": " RO-1 " }),
+        )
+        .await;
+    assert!(
+        clash.contains(&format!("service {}", first["id"])) && clash.contains("RO-1"),
+        "a clash names the other service; got: {clash}"
+    );
+
+    let set = t
+        .call(
+            "correct_service",
+            json!({ "vehicle_id": v.id, "service_id": second["id"], "invoice_ref": "RO-2" }),
+        )
+        .await;
+    assert_eq!(set["invoice_ref"], "RO-2");
+    let cleared = t
+        .call(
+            "correct_service",
+            json!({ "vehicle_id": v.id, "service_id": second["id"], "invoice_ref": null }),
+        )
+        .await;
+    assert!(cleared["invoice_ref"].is_null(), "got: {cleared}");
+    // Keeping a service's own ref is not a clash.
+    t.call(
+        "correct_service",
+        json!({ "vehicle_id": v.id, "service_id": first["id"], "invoice_ref": "RO-1" }),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn correct_service_replaces_the_recalls_it_performed() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let wrong = common::seed_recall(&t.db, v.id, "24V110000").await;
+    let right = common::seed_recall(&t.db, v.id, "24V220000").await;
+    let service = t
+        .call(
+            "record_service",
+            json!({ "vehicle_id": v.id, "service_date": "2026-03-01", "recall_finding_ids": [wrong] }),
+        )
+        .await;
+
+    let fixed = t
+        .call(
+            "correct_service",
+            json!({ "vehicle_id": v.id, "service_id": service["id"], "recall_finding_ids": [right] }),
+        )
+        .await;
+    let performed: Vec<&serde_json::Value> = fixed["performed_recalls"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| &r["finding_id"])
+        .collect();
+    assert_eq!(performed, [&json!(right)]);
+    // The recall no longer named reads as open again.
+    let coming = t.call("whats_coming", json!({ "vehicle_id": v.id })).await;
+    let open: Vec<&serde_json::Value> = coming["recalls"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| &r["finding_id"])
+        .collect();
+    assert_eq!(open, [&json!(wrong)], "got: {coming}");
+
+    let other = vehicle::create(&t.db, new_vehicle("Other")).await.unwrap();
+    let foreign = common::seed_recall(&t.db, other.id, "24V330000").await;
+    let wrong_vehicle = t
+        .call_err(
+            "correct_service",
+            json!({ "vehicle_id": v.id, "service_id": service["id"], "recall_finding_ids": [foreign] }),
+        )
+        .await;
+    let missing = t
+        .call_err(
+            "correct_service",
+            json!({ "vehicle_id": v.id, "service_id": service["id"], "recall_finding_ids": [99_999] }),
+        )
+        .await;
+    assert_eq!(
+        wrong_vehicle.replace(&foreign.to_string(), "N"),
+        missing.replace("99999", "N")
+    );
+}
+
+#[tokio::test]
+async fn record_service_installs_parts_recorded_earlier() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let pads = t
+        .call(
+            "record_part",
+            json!({ "vehicle_id": v.id, "name": "Front pads", "seller": "FCP Euro" }),
+        )
+        .await;
+    let service = t
+        .call(
+            "record_service",
+            json!({
+                "vehicle_id": v.id,
+                "service_date": "2026-04-01",
+                "mileage": 50_000,
+                "part_ids": [pads["id"]]
+            }),
+        )
+        .await;
+    assert_eq!(service["part_ids"], json!([pads["id"]]));
+    assert_eq!(service["parts"][0]["status"], "installed");
+    assert_eq!(service["parts"][0]["installed_odometer"], 50_000);
+
+    let other = vehicle::create(&t.db, new_vehicle("Other")).await.unwrap();
+    let foreign = t
+        .call(
+            "record_part",
+            json!({ "vehicle_id": other.id, "name": "Rotor" }),
+        )
+        .await;
+    let wrong_vehicle = t
+        .call_err(
+            "record_service",
+            json!({ "vehicle_id": v.id, "service_date": "2026-04-02", "part_ids": [foreign["id"]] }),
+        )
+        .await;
+    let missing = t
+        .call_err(
+            "record_service",
+            json!({ "vehicle_id": v.id, "service_date": "2026-04-02", "part_ids": [99_999] }),
+        )
+        .await;
+    assert_eq!(
+        wrong_vehicle.replace(&foreign["id"].to_string(), "N"),
+        missing.replace("99999", "N")
+    );
+}

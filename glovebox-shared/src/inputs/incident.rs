@@ -86,6 +86,9 @@ pub struct UpdateIncident {
     /// unresolved unless `resolved` says otherwise. The service that noticed
     /// the incident is left alone.
     pub resolved_by_service_ids: Option<Vec<i32>>,
+    /// Set, change or clear the same-vehicle service during which the
+    /// incident was noticed.
+    pub noticed_during_service_id: Option<Option<i32>>,
 }
 
 pub struct NewFollowup {

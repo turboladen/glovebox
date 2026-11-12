@@ -73,7 +73,7 @@ impl GloveboxMcp {
 
     #[tool(
         name = "update_incident",
-        description = "Correct or progress an incident: title, category, description, odometer, codes, notes, accident and insurance details, repair cost, deductible, payout, recurrence link. Send only the fields to change; null clears a field, and a field left out is untouched. Set `resolved` to close it by hand (e.g. fixed without an invoice) or reopen it. `resolved_by_service_ids` REPLACES the services that fixed it: a non-empty list marks it resolved and an empty list marks it unresolved (unless `resolved` is sent too). For a fix that has paperwork, prefer `record_service` with `resolved_incident_ids`. To note a phone call or email about it, use `add_incident_followup`.",
+        description = "Correct or progress an incident: title, category, description, odometer, codes, notes, accident and insurance details, repair cost, deductible, payout, recurrence link, and `noticed_during_service_id` (the service during which it was noticed). Send only the fields to change; null clears a field, and a field left out is untouched. Set `resolved` to close it by hand (e.g. fixed without an invoice) or reopen it. `resolved_by_service_ids` REPLACES the services that fixed it: a non-empty list marks it resolved and an empty list marks it unresolved (unless `resolved` is sent too). For a fix that has paperwork, prefer `record_service` with `resolved_incident_ids`. To note a phone call or email about it, use `add_incident_followup`.",
         input_schema = rmcp::handler::server::common::schema_for_type::<UpdateIncidentInput>()
     )]
     async fn update_incident(

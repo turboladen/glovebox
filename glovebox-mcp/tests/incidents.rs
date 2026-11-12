@@ -380,3 +380,56 @@ async fn incidents_tools_reject_unknown_arguments() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn update_incident_sets_changes_and_clears_where_it_was_noticed() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let first = t
+        .call(
+            "record_service",
+            json!({ "vehicle_id": v.id, "service_date": "2026-01-10" }),
+        )
+        .await;
+    let second = t
+        .call(
+            "record_service",
+            json!({ "vehicle_id": v.id, "service_date": "2026-02-10" }),
+        )
+        .await;
+    let incident = t
+        .call(
+            "log_incident",
+            json!({ "vehicle_id": v.id, "title": "Water pump weeping", "category": "shop_observation" }),
+        )
+        .await;
+    let update = |service: serde_json::Value| json!({ "vehicle_id": v.id, "incident_id": incident["id"], "noticed_during_service_id": service });
+
+    let set = t.call("update_incident", update(first["id"].clone())).await;
+    assert_eq!(set["noticed_during"]["id"], first["id"], "got: {set}");
+    let changed = t
+        .call("update_incident", update(second["id"].clone()))
+        .await;
+    assert_eq!(
+        changed["noticed_during"]["id"], second["id"],
+        "got: {changed}"
+    );
+    let cleared = t.call("update_incident", update(json!(null))).await;
+    assert!(cleared["noticed_during"].is_null(), "got: {cleared}");
+
+    let other = vehicle::create(&t.db, new_vehicle("Other")).await.unwrap();
+    let foreign = t
+        .call(
+            "record_service",
+            json!({ "vehicle_id": other.id, "service_date": "2026-02-10" }),
+        )
+        .await;
+    let wrong_vehicle = t
+        .call_err("update_incident", update(foreign["id"].clone()))
+        .await;
+    let missing = t.call_err("update_incident", update(json!(99_999))).await;
+    assert_eq!(
+        wrong_vehicle.replace(&foreign["id"].to_string(), "N"),
+        missing.replace("99999", "N")
+    );
+}

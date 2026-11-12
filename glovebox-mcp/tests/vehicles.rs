@@ -237,3 +237,111 @@ async fn vehicles_tools_reject_unknown_arguments() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn a_mistyped_reading_can_be_listed_and_deleted() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let typo = t
+        .call(
+            "log_mileage",
+            json!({ "vehicle_id": v.id, "mileage": 480_000, "recorded_at": "2026-05-01 09:00:00" }),
+        )
+        .await;
+    let service = t
+        .call(
+            "record_service",
+            json!({ "vehicle_id": v.id, "service_date": "2026-05-02", "mileage": 48_100 }),
+        )
+        .await;
+
+    let listed = t.call("list_mileage", json!({ "vehicle_id": v.id })).await;
+    let readings = listed.as_array().expect("readings");
+    assert_eq!(readings.len(), 2, "got: {listed}");
+    let from_service = readings
+        .iter()
+        .find(|r| r["service_record_id"] == service["id"])
+        .unwrap_or_else(|| panic!("the service's reading is listed: {listed}"));
+
+    let refused = t
+        .call_err(
+            "delete_mileage",
+            json!({ "vehicle_id": v.id, "mileage_id": from_service["id"] }),
+        )
+        .await;
+    assert!(refused.contains("correct_service"), "got: {refused}");
+
+    let other = vehicle::create(&t.db, new_vehicle("Other")).await.unwrap();
+    let wrong_vehicle = t
+        .call_err(
+            "delete_mileage",
+            json!({ "vehicle_id": other.id, "mileage_id": typo["id"] }),
+        )
+        .await;
+    let missing = t
+        .call_err(
+            "delete_mileage",
+            json!({ "vehicle_id": other.id, "mileage_id": 99_999 }),
+        )
+        .await;
+    assert_eq!(
+        wrong_vehicle.replace(&typo["id"].to_string(), "N"),
+        missing.replace("99999", "N")
+    );
+
+    let deleted = t
+        .call(
+            "delete_mileage",
+            json!({ "vehicle_id": v.id, "mileage_id": typo["id"] }),
+        )
+        .await;
+    assert_eq!(deleted["id"], typo["id"]);
+    let left = t.call("list_mileage", json!({ "vehicle_id": v.id })).await;
+    assert_eq!(left.as_array().map(Vec::len), Some(1), "got: {left}");
+}
+
+#[tokio::test]
+async fn only_a_vehicle_with_no_history_can_be_deleted() {
+    let t = connect().await;
+    let template = glovebox_shared::services::model_template::list(&t.db)
+        .await
+        .unwrap()[0]
+        .id;
+    let added = t
+        .call(
+            "add_vehicle",
+            json!({ "name": "Duplicate", "model_template_id": template }),
+        )
+        .await;
+    t.call(
+        "log_mileage",
+        json!({ "vehicle_id": added["id"], "mileage": 1_000 }),
+    )
+    .await;
+    let deleted = t
+        .call("delete_vehicle", json!({ "vehicle_id": added["id"] }))
+        .await;
+    assert_eq!(deleted["id"], added["id"]);
+    let gone = t
+        .call_err("get_vehicle", json!({ "vehicle_id": added["id"] }))
+        .await;
+    assert!(gone.contains("not found"), "got: {gone}");
+
+    let kept = t.call("add_vehicle", json!({ "name": "Real car" })).await;
+    t.call(
+        "plan_work",
+        json!({ "vehicle_id": kept["id"], "title": "Wipers" }),
+    )
+    .await;
+    let refused = t
+        .call_err("delete_vehicle", json!({ "vehicle_id": kept["id"] }))
+        .await;
+    assert!(refused.contains("planned work"), "got: {refused}");
+    t.call("get_vehicle", json!({ "vehicle_id": kept["id"] }))
+        .await;
+
+    let missing = t
+        .call_err("delete_vehicle", json!({ "vehicle_id": 99_999 }))
+        .await;
+    assert!(missing.contains("not found"), "got: {missing}");
+}
