@@ -11,7 +11,7 @@ use crate::schemas::{LogIncidentInput, SaveNoteInput};
 impl GloveboxMcp {
     #[tool(
         name = "log_incident",
-        description = "Log something that happened to a vehicle that isn't a completed repair: a noise, a leak, a warning light, an OBD code, damage, a collision. Collisions/crashes with another party go here with category `accident`. If it's the same problem coming back, set `recurrence_of_id` to the earlier incident. Use `record_service` for work that was actually done, and `save_note` for plain facts to remember.",
+        description = "Log something that happened to a vehicle that isn't a completed repair: a noise, a leak, a warning light, an OBD code, damage, a collision. Collisions/crashes with another party go here with category `accident`. If it's the same problem coming back, set `recurrence_of_id` to the earlier incident. Use `shop_observation` with `noticed_during_service_id` for anything a shop flagged but did not fix, then `plan_work` the fix with a revisit-by. Use `record_service` for work that was actually done (pass `resolved_incident_ids` to close incidents it fixed), and `save_note` for plain facts to remember.",
         input_schema = rmcp::handler::server::common::schema_for_type::<LogIncidentInput>()
     )]
     async fn log_incident(

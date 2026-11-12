@@ -125,3 +125,105 @@ async fn save_note_is_searchable_via_search_records() {
     t.call_err("save_note", json!({ "vehicle_id": 999, "note": "orphan" }))
         .await;
 }
+
+#[tokio::test]
+async fn a_shop_observation_is_linked_to_the_services_that_noticed_and_fixed_it() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let other = vehicle::create(&t.db, new_vehicle("Other")).await.unwrap();
+
+    let svc_2023 = t
+        .call(
+            "record_service",
+            json!({ "vehicle_id": v.id, "service_date": "2023-05-03", "description": "Inspection" }),
+        )
+        .await["id"]
+        .as_i64()
+        .expect("service id");
+    let incident = t
+        .call(
+            "log_incident",
+            json!({
+                "vehicle_id": v.id,
+                "title": "N80 purge valve failing",
+                "category": "shop_observation",
+                "noticed_during_service_id": svc_2023
+            }),
+        )
+        .await;
+    assert_eq!(incident["noticed_during"]["id"], svc_2023);
+    let incident_id = incident["id"].as_i64().expect("incident id");
+
+    // Before the fix, the observation is open on the 2023 service.
+    let open = t
+        .call(
+            "get_service",
+            json!({ "vehicle_id": v.id, "service_id": svc_2023 }),
+        )
+        .await;
+    assert_eq!(open["noticed_incidents"][0]["resolved"], false);
+    assert!(open["noticed_incidents"][0]["other_service"].is_null());
+
+    let svc_2024 = t
+        .call(
+            "record_service",
+            json!({
+                "vehicle_id": v.id,
+                "service_date": "2024-06-12",
+                "resolved_incident_ids": [incident_id]
+            }),
+        )
+        .await["id"]
+        .as_i64()
+        .expect("service id");
+
+    let s23 = t
+        .call(
+            "get_service",
+            json!({ "vehicle_id": v.id, "service_id": svc_2023 }),
+        )
+        .await;
+    assert_eq!(
+        s23["noticed_incidents"][0]["title"],
+        "N80 purge valve failing"
+    );
+    assert_eq!(s23["noticed_incidents"][0]["resolved"], true);
+    assert_eq!(
+        s23["noticed_incidents"][0]["other_service"]["service_date"],
+        "2024-06-12"
+    );
+    let s24 = t
+        .call(
+            "get_service",
+            json!({ "vehicle_id": v.id, "service_id": svc_2024 }),
+        )
+        .await;
+    assert_eq!(
+        s24["resolved_incidents"][0]["other_service"]["service_date"],
+        "2023-05-03"
+    );
+    let inc = t
+        .call(
+            "get_incident",
+            json!({ "vehicle_id": v.id, "incident_id": incident_id }),
+        )
+        .await;
+    assert_eq!(inc["noticed_during"]["id"], svc_2023);
+    assert_eq!(inc["resolved_by"][0]["id"], svc_2024);
+
+    // Another vehicle's ids read as missing.
+    let err = t
+        .call_err(
+            "get_service",
+            json!({ "vehicle_id": other.id, "service_id": svc_2023 }),
+        )
+        .await;
+    assert!(err.contains("not found"), "got: {err}");
+    let err = t
+        .call_err(
+            "get_incident",
+            json!({ "vehicle_id": other.id, "incident_id": incident_id }),
+        )
+        .await;
+    assert!(err.contains("not found"), "got: {err}");
+}

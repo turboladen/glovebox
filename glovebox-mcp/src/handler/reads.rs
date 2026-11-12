@@ -4,11 +4,14 @@ use rmcp::{ErrorData as McpError, model::CallToolResult, tool, tool_router};
 
 use super::{GloveboxMcp, LenientParameters, domain_error, domain_result};
 use glovebox_shared::services::{
-    activity, costs,
+    activity, costs, incident,
     search::{self, SearchScope},
+    service_record,
 };
 
-use crate::schemas::{SearchRecordsInput, SummarizeActivityInput, VehicleParams};
+use crate::schemas::{
+    GetIncidentInput, GetServiceInput, SearchRecordsInput, SummarizeActivityInput, VehicleParams,
+};
 
 #[tool_router(router = reads_router, vis = "pub(super)")]
 impl GloveboxMcp {
@@ -63,5 +66,37 @@ impl GloveboxMcp {
             Err(e) => return Ok(e),
         };
         domain_result(costs::summary(&*self.db, p.vehicle_id).await)
+    }
+
+    #[tool(
+        name = "get_service",
+        description = "One service record in full: line items, parts, schedule links, and the incidents it noticed or fixed. Each noticed incident names the service that later fixed it (if any), and each fixed incident names the service where it was first noticed.",
+        input_schema = rmcp::handler::server::common::schema_for_type::<GetServiceInput>()
+    )]
+    async fn get_service(
+        &self,
+        params: LenientParameters<GetServiceInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = match params.into_tool_input("get_service") {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        };
+        domain_result(service_record::get(&*self.db, p.vehicle_id, p.service_id).await)
+    }
+
+    #[tool(
+        name = "get_incident",
+        description = "One incident in full: followups, the service during which it was noticed, and the services that fixed it.",
+        input_schema = rmcp::handler::server::common::schema_for_type::<GetIncidentInput>()
+    )]
+    async fn get_incident(
+        &self,
+        params: LenientParameters<GetIncidentInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = match params.into_tool_input("get_incident") {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        };
+        domain_result(incident::get(&*self.db, p.vehicle_id, p.incident_id).await)
     }
 }

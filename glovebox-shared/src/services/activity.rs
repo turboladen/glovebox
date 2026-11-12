@@ -277,6 +277,8 @@ mod tests {
             end_date: None,
             performed_by: None,
             work_item_ids: None,
+            resolved_incident_ids: None,
+            noticed_incident_ids: None,
             parts: None,
         }
     }

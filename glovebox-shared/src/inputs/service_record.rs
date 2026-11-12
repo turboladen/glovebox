@@ -43,6 +43,11 @@ pub struct NewServiceRecord {
     /// same vehicle; its schedule item, if any, is linked so the reminder
     /// clears.
     pub work_item_ids: Option<Vec<i32>>,
+    /// Same-vehicle incidents this service fixed. Each is marked resolved.
+    pub resolved_incident_ids: Option<Vec<i32>>,
+    /// Same-vehicle incidents first noticed during this service. An incident
+    /// can be noticed during only one service.
+    pub noticed_incident_ids: Option<Vec<i32>>,
 }
 
 #[derive(Default)]

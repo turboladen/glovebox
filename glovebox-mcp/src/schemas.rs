@@ -78,6 +78,13 @@ pub struct RecordServiceInput {
     /// completes. Each is marked done, and its schedule item, if any, is
     /// linked so the reminder clears.
     pub work_item_ids: Option<Vec<i32>>,
+    /// Ids of incidents (from `log_incident`) this service fixed. Each is
+    /// marked resolved and linked to this service.
+    pub resolved_incident_ids: Option<Vec<i32>>,
+    /// Ids of incidents first noticed during this service, e.g. a shop
+    /// observation logged beforehand. An incident is noticed during one
+    /// service only.
+    pub noticed_incident_ids: Option<Vec<i32>>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -128,6 +135,8 @@ impl RecordServiceInput {
                 schedule_item_ids: self.schedule_item_ids,
                 part_ids: None,
                 work_item_ids: self.work_item_ids,
+                resolved_incident_ids: self.resolved_incident_ids,
+                noticed_incident_ids: self.noticed_incident_ids,
                 line_items,
                 invoice_ref: self.invoice_ref,
                 end_date: self.end_date,
@@ -147,9 +156,10 @@ pub struct LogIncidentInput {
     /// Short title, e.g. "Squeak from front left on braking".
     pub title: String,
     /// One of: `general`, `noise`, `leak`, `warning_light`, `cosmetic`,
-    /// `performance`, `obd_code`, `damage`, `accident`, `note`. Defaults to
-    /// `general`. Collisions/crashes with another party belong under
-    /// category `accident`.
+    /// `performance`, `obd_code`, `damage`, `accident`, `note`,
+    /// `shop_observation`. Defaults to `general`. Collisions/crashes with
+    /// another party belong under category `accident`; anything a shop flagged
+    /// but did not fix belongs under `shop_observation`.
     pub category: Option<String>,
     /// Longer description of what happened or was noticed.
     pub description: Option<String>,
@@ -164,6 +174,25 @@ pub struct LogIncidentInput {
     /// If this is the same problem coming back, the id of the earlier
     /// incident it recurs from (same vehicle).
     pub recurrence_of_id: Option<i32>,
+    /// The service record (same vehicle) during which this was noticed, e.g.
+    /// the visit where the shop flagged it.
+    pub noticed_during_service_id: Option<i32>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct GetServiceInput {
+    /// Vehicle id, from `list_vehicles`.
+    pub vehicle_id: i32,
+    /// Service record id.
+    pub service_id: i32,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct GetIncidentInput {
+    /// Vehicle id, from `list_vehicles`.
+    pub vehicle_id: i32,
+    /// Incident id, from `log_incident` or `summarize_recent_activity`.
+    pub incident_id: i32,
 }
 
 impl LogIncidentInput {
@@ -179,6 +208,7 @@ impl LogIncidentInput {
                 obd_codes: self.obd_codes,
                 notes: self.notes,
                 recurrence_of_id: self.recurrence_of_id,
+                noticed_during_service_id: self.noticed_during_service_id,
                 ..Default::default()
             },
         )
