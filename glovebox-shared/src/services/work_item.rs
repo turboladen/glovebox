@@ -376,6 +376,10 @@ pub async fn update(
         active.revisit_by_miles = Set(v);
     }
     if let Some(v) = input.status {
+        // Only a service completes an item, so any other status drops the link.
+        if v != "done" {
+            active.completed_service_id = Set(None);
+        }
         active.status = Set(v);
     }
 
@@ -1022,5 +1026,41 @@ mod tests {
             get(&db, owner, created.id).await.unwrap_err(),
             DomainError::NotFound(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn moving_a_completed_item_off_done_clears_its_completing_service() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let created = create(&db, v, item("Do it")).await.unwrap();
+        let svc = crate::services::service_record::create(
+            &db,
+            v,
+            NewServiceRecord {
+                service_date: "2024-01-01".into(),
+                work_item_ids: Some(vec![created.id]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            get(&db, v, created.id).await.unwrap().completed_service_id,
+            Some(svc.record.id)
+        );
+
+        let reopened = update(
+            &db,
+            v,
+            created.id,
+            UpdateWorkItem {
+                status: Some("planned".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(reopened.status, "planned");
+        assert_eq!(reopened.completed_service_id, None);
     }
 }

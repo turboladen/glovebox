@@ -4,6 +4,7 @@ use crate::{
     entities::vehicle,
     error::{DomainError, DomainResult},
     inputs::vehicle::{NewVehicle, UpdateVehicle},
+    services::vin_decode::{self, VinDecodeResult},
 };
 
 /// Verify a vehicle exists, returning the model or a `NotFound` error.
@@ -49,6 +50,38 @@ pub async fn create(db: &impl ConnectionTrait, input: NewVehicle) -> DomainResul
         ..Default::default()
     };
     Ok(model.insert(db).await?)
+}
+
+/// Creates a vehicle, filling the fields the caller left empty from a VIN
+/// decode and storing the decoded attributes.
+///
+/// Year, make, model, trim, body style, engine, transmission and drivetrain
+/// each take the decoded value only when the input has none; a supplied value
+/// always wins. With `decoded` of `None` this behaves like [`create`]. The
+/// decode is a parameter so the lookup (a live web request) stays with the
+/// caller and this function stays testable offline.
+pub async fn create_with_vin_decode<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    mut input: NewVehicle,
+    decoded: Option<&VinDecodeResult>,
+) -> DomainResult<vehicle::Model> {
+    if let Some(d) = decoded {
+        input.year = input.year.or(d.year);
+        input.make = input.make.or_else(|| d.make.clone());
+        input.model = input.model.or_else(|| d.model.clone());
+        input.trim_level = input.trim_level.or_else(|| d.trim.clone());
+        input.body_style = input.body_style.or_else(|| d.body_style.clone());
+        input.engine = input.engine.or_else(|| d.engine.clone());
+        input.transmission = input.transmission.or_else(|| d.transmission.clone());
+        input.drivetrain = input.drivetrain.or_else(|| d.drivetrain.clone());
+    }
+    let txn = db.begin().await?;
+    let created = create(&txn, input).await?;
+    if let Some(d) = decoded {
+        vin_decode::store_attributes(&txn, created.id, d).await?;
+    }
+    txn.commit().await?;
+    Ok(created)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -253,5 +286,93 @@ mod tests {
         let v = seed(&db, "Car").await;
         assert!(archive(&db, v.id).await.unwrap().archived_at.is_some());
         assert!(unarchive(&db, v.id).await.unwrap().archived_at.is_none());
+    }
+
+    fn decoded() -> VinDecodeResult {
+        VinDecodeResult {
+            year: Some(2019),
+            make: Some("Volkswagen".into()),
+            model: Some("Golf R".into()),
+            trim: Some("Base".into()),
+            body_style: Some("Hatchback".into()),
+            engine: Some("2.0L I4 turbo".into()),
+            transmission: Some("Manual".into()),
+            drivetrain: Some("AWD".into()),
+            all_attributes: std::collections::HashMap::from([(
+                "Plant City".to_string(),
+                "Wolfsburg".to_string(),
+            )]),
+        }
+    }
+
+    async fn attribute_count(db: &impl ConnectionTrait, vehicle_id: i32) -> u64 {
+        use crate::entities::vehicle_attribute;
+        vehicle_attribute::Entity::find()
+            .filter(vehicle_attribute::Column::VehicleId.eq(vehicle_id))
+            .count(db)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn create_with_vin_decode_fills_blanks_from_the_decode() {
+        let db = test_db().await;
+        let made = create_with_vin_decode(
+            &db,
+            NewVehicle {
+                name: "Daily".into(),
+                vin: Some("WVWQ12345678901234".into()),
+                ..Default::default()
+            },
+            Some(&decoded()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(made.year, Some(2019));
+        assert_eq!(made.make.as_deref(), Some("Volkswagen"));
+        assert_eq!(made.model.as_deref(), Some("Golf R"));
+        assert_eq!(made.trim_level.as_deref(), Some("Base"));
+        assert_eq!(made.body_style.as_deref(), Some("Hatchback"));
+        assert_eq!(made.engine.as_deref(), Some("2.0L I4 turbo"));
+        assert_eq!(made.transmission.as_deref(), Some("Manual"));
+        assert_eq!(made.drivetrain.as_deref(), Some("AWD"));
+        assert_eq!(attribute_count(&db, made.id).await, 1);
+    }
+
+    #[tokio::test]
+    async fn create_with_vin_decode_keeps_supplied_values() {
+        let db = test_db().await;
+        let made = create_with_vin_decode(
+            &db,
+            NewVehicle {
+                name: "Daily".into(),
+                make: Some("VW".into()),
+                year: Some(2020),
+                ..Default::default()
+            },
+            Some(&decoded()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(made.make.as_deref(), Some("VW"));
+        assert_eq!(made.year, Some(2020));
+        assert_eq!(made.model.as_deref(), Some("Golf R"));
+    }
+
+    #[tokio::test]
+    async fn create_with_vin_decode_without_a_decode_is_plain_create() {
+        let db = test_db().await;
+        let made = create_with_vin_decode(
+            &db,
+            NewVehicle {
+                name: "Daily".into(),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(made.make, None);
+        assert_eq!(attribute_count(&db, made.id).await, 0);
     }
 }

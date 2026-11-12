@@ -435,6 +435,12 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
 
     let inc = active.update(&txn).await?;
 
+    // Replacing the resolving services with none leaves nothing that resolved
+    // the incident, so it reads as unresolved unless the caller says otherwise.
+    let cleared_all_resolvers = input
+        .resolved_by_service_ids
+        .as_ref()
+        .is_some_and(Vec::is_empty);
     if let Some(sids) = input.resolved_by_service_ids {
         incident_service_link::Entity::delete_many()
             .filter(incident_service_link::Column::IncidentId.eq(inc.id))
@@ -447,7 +453,8 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     }
 
     // An explicit `resolved` wins over the flag the links just set.
-    let inc = if let Some(resolved) = input.resolved {
+    let resolved_override = input.resolved.or(cleared_all_resolvers.then_some(false));
+    let inc = if let Some(resolved) = resolved_override {
         let mut active: incident::ActiveModel =
             require_incident(&txn, vehicle_id, inc.id).await?.into();
         active.resolved = Set(resolved);
@@ -931,6 +938,66 @@ mod tests {
             updated.resolved_by.iter().map(|s| s.id).collect::<Vec<_>>(),
             vec![svc_b]
         );
+    }
+
+    #[tokio::test]
+    async fn clearing_every_resolving_service_marks_the_incident_unresolved() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let svc = seed_service(&db, vid).await;
+        let inc = create(
+            &db,
+            vid,
+            NewIncident {
+                resolved_by_service_ids: Some(vec![svc]),
+                ..new_incident("t", "general")
+            },
+        )
+        .await
+        .unwrap();
+        assert!(inc.incident.resolved);
+
+        let cleared = update(
+            &db,
+            vid,
+            inc.incident.id,
+            UpdateIncident {
+                resolved_by_service_ids: Some(vec![]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(cleared.resolved_by.is_empty());
+        assert!(!cleared.incident.resolved);
+
+        // An explicit flag in the same call wins over the derived one.
+        let relinked = update(
+            &db,
+            vid,
+            inc.incident.id,
+            UpdateIncident {
+                resolved_by_service_ids: Some(vec![svc]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(relinked.incident.resolved);
+        let explicit = update(
+            &db,
+            vid,
+            inc.incident.id,
+            UpdateIncident {
+                resolved: Some(true),
+                resolved_by_service_ids: Some(vec![]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(explicit.resolved_by.is_empty());
+        assert!(explicit.incident.resolved);
     }
 
     // --- recurrence ---------------------------------------------------------

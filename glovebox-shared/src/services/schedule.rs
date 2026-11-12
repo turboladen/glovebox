@@ -136,6 +136,51 @@ pub async fn update(
     Ok(active.update(db).await?)
 }
 
+/// Creates a schedule item owned by the vehicle. `input.vehicle_id` is
+/// overwritten with `vehicle_id` and the other owner fields are cleared, so
+/// the item can only ever belong to this vehicle.
+pub async fn create_for_vehicle(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    mut input: NewScheduleItem,
+) -> DomainResult<maintenance_schedule_item::Model> {
+    crate::services::vehicle::require(db, vehicle_id).await?;
+    if input.name.trim().is_empty() {
+        return Err(DomainError::invalid("name", "must not be blank"));
+    }
+    input.vehicle_id = Some(vehicle_id);
+    input.platform_id = None;
+    input.model_template_id = None;
+    input.overrides_item_id = None;
+    create(db, input).await
+}
+
+/// Updates a schedule item that the vehicle owns.
+///
+/// An id that is not visible to this vehicle reads as nonexistent. An item
+/// inherited from the platform or model template is a `BadRequest`, because
+/// editing it would change every car that shares it; waive it with
+/// `dismiss_schedule_item` or add a vehicle-specific item instead.
+pub async fn update_for_vehicle(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    schedule_item_id: i32,
+    input: UpdateScheduleItem,
+) -> DomainResult<maintenance_schedule_item::Model> {
+    let item = require_in_vehicle_scope(db, vehicle_id, schedule_item_id).await?;
+    if item.vehicle_id != Some(vehicle_id) {
+        return Err(DomainError::BadRequest(format!(
+            "Schedule item {schedule_item_id} is inherited from the platform or model template \
+             and is shared with other cars, so it cannot be edited here. Use \
+             dismiss_schedule_item to waive it for this vehicle, or add a vehicle-specific item."
+        )));
+    }
+    if input.name.as_deref().is_some_and(|n| n.trim().is_empty()) {
+        return Err(DomainError::invalid("name", "must not be blank"));
+    }
+    update(db, schedule_item_id, input).await
+}
+
 pub async fn delete(db: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
     let result = maintenance_schedule_item::Entity::delete_by_id(id)
         .exec(db)
@@ -792,5 +837,63 @@ mod tests {
             "wrong-vehicle must be indistinguishable from nonexistent"
         );
         assert!(!get(&db, item.id).await.unwrap().enabled, "untouched");
+    }
+
+    #[tokio::test]
+    async fn update_for_vehicle_edits_own_items_only() {
+        let db = test_db().await;
+        let template_id = crate::services::model_template::list(&db).await.unwrap()[0].id;
+        let vid = seed_vehicle(&db, Some(template_id)).await;
+        let other = seed_vehicle(&db, None).await;
+
+        let own = create_for_vehicle(
+            &db,
+            vid,
+            NewScheduleItem {
+                name: "Smog check".into(),
+                interval_months: Some(24),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let updated = update_for_vehicle(
+            &db,
+            vid,
+            own.id,
+            UpdateScheduleItem {
+                est_cost_cents: Some(Some(5800)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.est_cost_cents, Some(5800));
+
+        let shared = create(
+            &db,
+            NewScheduleItem {
+                model_template_id: Some(template_id),
+                name: "Shared item".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let err = update_for_vehicle(&db, vid, shared.id, UpdateScheduleItem::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(&err, DomainError::BadRequest(m) if m.contains("dismiss_schedule_item")));
+
+        let foreign = update_for_vehicle(&db, other, own.id, UpdateScheduleItem::default())
+            .await
+            .unwrap_err();
+        let missing = update_for_vehicle(&db, other, 99_999, UpdateScheduleItem::default())
+            .await
+            .unwrap_err();
+        assert_eq!(
+            foreign.to_string().replace(&own.id.to_string(), "N"),
+            missing.to_string().replace("99999", "N")
+        );
     }
 }

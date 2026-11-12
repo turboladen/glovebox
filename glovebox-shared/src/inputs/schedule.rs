@@ -1,3 +1,4 @@
+#[derive(Default)]
 pub struct NewScheduleItem {
     pub platform_id: Option<i32>,
     pub model_template_id: Option<i32>,

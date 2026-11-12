@@ -1,3 +1,4 @@
+#[derive(Default)]
 pub struct NewVehicle {
     pub name: String,
     pub model_template_id: Option<i32>,

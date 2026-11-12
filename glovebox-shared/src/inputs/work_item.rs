@@ -1,3 +1,4 @@
+#[derive(Default)]
 pub struct NewWorkItem {
     pub title: String,
     pub notes: Option<String>,

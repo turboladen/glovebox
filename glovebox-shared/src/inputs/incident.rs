@@ -81,8 +81,10 @@ pub struct UpdateIncident {
     pub insurance_payout_currency: Option<Option<String>>,
     pub recurrence_of_id: Option<Option<i32>>,
     /// When present, replaces the services that resolved the incident
-    /// wholesale and marks it resolved unless `resolved` says otherwise. The
-    /// service that noticed the incident is left alone.
+    /// wholesale and marks it resolved unless `resolved` says otherwise. An
+    /// empty list removes every resolving service and marks the incident
+    /// unresolved unless `resolved` says otherwise. The service that noticed
+    /// the incident is left alone.
     pub resolved_by_service_ids: Option<Vec<i32>>,
 }
 

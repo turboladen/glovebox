@@ -4,7 +4,8 @@ use serde::Serialize;
 use crate::{
     entities::{
         incident, incident_service_link, maintenance_schedule_item, mileage_log, model_template,
-        part, service_recall_link, service_record, service_record_line_item, service_schedule_link,
+        part, research_finding, service_recall_link, service_record, service_record_line_item,
+        service_schedule_link, work_item as work_item_entity,
     },
     error::{DomainError, DomainResult},
     inputs::{
@@ -434,8 +435,27 @@ pub async fn list(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
 ) -> DomainResult<Vec<ServiceRecordWithLinks>> {
-    let records = service_record::Entity::find()
-        .filter(service_record::Column::VehicleId.eq(vehicle_id))
+    list_between(db, vehicle_id, None, None).await
+}
+
+/// Lists a vehicle's services newest first, keeping those whose service date
+/// falls on or after `from` and on or before `to` (both `YYYY-MM-DD`; either
+/// bound may be omitted).
+pub async fn list_between(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    from: Option<&str>,
+    to: Option<&str>,
+) -> DomainResult<Vec<ServiceRecordWithLinks>> {
+    let mut query =
+        service_record::Entity::find().filter(service_record::Column::VehicleId.eq(vehicle_id));
+    if let Some(from) = from {
+        query = query.filter(service_record::Column::ServiceDate.gte(from));
+    }
+    if let Some(to) = to {
+        query = query.filter(service_record::Column::ServiceDate.lte(to));
+    }
+    let records = query
         .order_by_desc(service_record::Column::ServiceDate)
         .all(db)
         .await?;
@@ -1002,7 +1022,13 @@ pub async fn link_schedule_items<C: ConnectionTrait + TransactionTrait>(
     load_service_links(db, record).await
 }
 
-/// Delete a service record and its owned rows.
+/// Deletes a service record and its owned rows, and reopens what it closed.
+///
+/// Recalls it performed read as `open` again, each incident it resolved goes
+/// back to unresolved unless another service also resolved it, and each work
+/// item it completed returns to `planned`. Parts it installed stay, reverted
+/// to `purchased` with their install fields cleared, including parts that were
+/// created inline by this service; delete them with `part::delete`.
 pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -1015,6 +1041,8 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .ok_or_else(|| DomainError::NotFound(format!("Service record {id} not found")))?;
 
     let txn = db.begin().await?;
+
+    reopen_what_it_closed(&txn, existing.id).await?;
 
     // Unlink parts installed during this service (revert to purchased)
     let linked_parts = part::Entity::find()
@@ -1064,6 +1092,76 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
 
     txn.commit().await?;
 
+    Ok(())
+}
+
+/// Undoes the closing effects of a service that is about to be deleted. Runs
+/// before the link rows are removed because it reads them.
+async fn reopen_what_it_closed(txn: &impl ConnectionTrait, service_id: i32) -> DomainResult<()> {
+    let stamp = super::now_stamp();
+
+    work_item_entity::Entity::update_many()
+        .set(work_item_entity::ActiveModel {
+            status: Set("planned".to_string()),
+            completed_service_id: Set(None),
+            updated_at: Set(stamp.clone()),
+            ..Default::default()
+        })
+        .filter(work_item_entity::Column::CompletedServiceId.eq(service_id))
+        .exec(txn)
+        .await?;
+
+    let resolved_here: Vec<i32> = incident_service_link::Entity::find()
+        .filter(incident_service_link::Column::ServiceRecordId.eq(service_id))
+        .filter(incident_service_link::Column::Role.eq("resolved"))
+        .all(txn)
+        .await?
+        .into_iter()
+        .map(|l| l.incident_id)
+        .collect();
+    for incident_id in resolved_here {
+        let resolved_elsewhere = incident_service_link::Entity::find()
+            .filter(incident_service_link::Column::IncidentId.eq(incident_id))
+            .filter(incident_service_link::Column::Role.eq("resolved"))
+            .filter(incident_service_link::Column::ServiceRecordId.ne(service_id))
+            .count(txn)
+            .await?
+            > 0;
+        if !resolved_elsewhere {
+            incident::Entity::update_many()
+                .set(incident::ActiveModel {
+                    resolved: Set(false),
+                    updated_at: Set(stamp.clone()),
+                    ..Default::default()
+                })
+                .filter(incident::Column::Id.eq(incident_id))
+                .exec(txn)
+                .await?;
+        }
+    }
+
+    // A recall reads as done while a service link or a stored `completed`
+    // status exists. Clear the stored status too, so the recall reads as open
+    // once the link goes.
+    let performed: Vec<i32> = service_recall_link::Entity::find()
+        .filter(service_recall_link::Column::ServiceRecordId.eq(service_id))
+        .all(txn)
+        .await?
+        .into_iter()
+        .map(|l| l.research_finding_id)
+        .collect();
+    if !performed.is_empty() {
+        research_finding::Entity::update_many()
+            .set(research_finding::ActiveModel {
+                status: Set("new".to_string()),
+                updated_at: Set(stamp),
+                ..Default::default()
+            })
+            .filter(research_finding::Column::Id.is_in(performed))
+            .filter(research_finding::Column::Status.eq("completed"))
+            .exec(txn)
+            .await?;
+    }
     Ok(())
 }
 
@@ -2714,5 +2812,201 @@ mod tests {
                 .incident
                 .resolved
         );
+    }
+
+    // --- deleting a service reopens what it closed --------------------------
+
+    #[tokio::test]
+    async fn deleting_a_service_reopens_what_it_closed() {
+        use crate::{
+            inputs::{service_record::NewServiceRecord, work_item::NewWorkItem},
+            services::{recall, research, work_item as work_item_svc},
+        };
+
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+
+        let earlier = service_dated(&db, v, "2023-01-10").await;
+        let incident_a = observation(&db, v, None).await;
+        let incident_b = observation(&db, v, None).await;
+        incident::update(
+            &db,
+            v,
+            incident_b,
+            crate::inputs::incident::UpdateIncident {
+                resolved_by_service_ids: Some(vec![earlier]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let finding_id = research::record_recalls(
+            &db,
+            v,
+            &[crate::services::nhtsa::RecallInfo {
+                campaign_number: "24V123".into(),
+                manufacturer: None,
+                subject: "Pump".into(),
+                summary: None,
+                consequence: None,
+                remedy: None,
+                report_date: None,
+                component: None,
+                action_number: None,
+            }],
+        )
+        .await
+        .unwrap()
+        .recalls[0]
+            .finding_id;
+        let work_item = work_item_svc::create(
+            &db,
+            v,
+            NewWorkItem {
+                title: "Do the thing".into(),
+                notes: None,
+                schedule_item_id: None,
+                research_finding_id: None,
+                incident_id: None,
+                est_cost_cents: None,
+                revisit_by_date: None,
+                revisit_by_miles: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let closing = create(
+            &db,
+            v,
+            NewServiceRecord {
+                service_date: "2024-06-01".into(),
+                work_item_ids: Some(vec![work_item.id]),
+                resolved_incident_ids: Some(vec![incident_a, incident_b]),
+                recall_finding_ids: Some(vec![finding_id]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let work_item_before = work_item_svc::get(&db, v, work_item.id).await.unwrap();
+        assert_eq!(work_item_before.status, "done");
+        assert_eq!(recall::list(&db, v).await.unwrap()[0].status, "done");
+
+        delete(&db, v, closing.record.id).await.unwrap();
+
+        let work_item_after = work_item_svc::get(&db, v, work_item.id).await.unwrap();
+        assert_eq!(work_item_after.status, "planned");
+        assert_eq!(work_item_after.completed_service_id, None);
+        let incident_a_after = incident::get(&db, v, incident_a).await.unwrap();
+        let incident_b_after = incident::get(&db, v, incident_b).await.unwrap();
+        assert!(!incident_a_after.incident.resolved);
+        assert!(incident_b_after.incident.resolved);
+        assert_eq!(recall::list(&db, v).await.unwrap()[0].status, "open");
+    }
+
+    #[tokio::test]
+    async fn deleting_a_service_clears_a_stored_done_status_on_its_recalls() {
+        use crate::services::{recall, research};
+
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let finding_id = research::record_recalls(
+            &db,
+            v,
+            &[crate::services::nhtsa::RecallInfo {
+                campaign_number: "24V999".into(),
+                manufacturer: None,
+                subject: "Pump".into(),
+                summary: None,
+                consequence: None,
+                remedy: None,
+                report_date: None,
+                component: None,
+                action_number: None,
+            }],
+        )
+        .await
+        .unwrap()
+        .recalls[0]
+            .finding_id;
+        let svc = create(
+            &db,
+            v,
+            NewServiceRecord {
+                service_date: "2024-06-01".into(),
+                recall_finding_ids: Some(vec![finding_id]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        recall::set_status(&db, v, finding_id, "done")
+            .await
+            .unwrap();
+
+        delete(&db, v, svc.record.id).await.unwrap();
+
+        assert_eq!(recall::list(&db, v).await.unwrap()[0].status, "open");
+    }
+
+    #[tokio::test]
+    async fn deleting_a_service_keeps_its_inline_parts_as_purchased() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let svc = create(
+            &db,
+            v,
+            NewServiceRecord {
+                service_date: "2024-06-01".into(),
+                mileage: Some(40_000),
+                parts: Some(vec![NewPart {
+                    name: "Brake pads".into(),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let part_id = svc.parts[0].id;
+
+        delete(&db, v, svc.record.id).await.unwrap();
+
+        let kept = part_svc::get(&db, v, part_id).await.unwrap();
+        assert_eq!(kept.status, "purchased");
+        assert_eq!(kept.installed_service_id, None);
+    }
+
+    #[tokio::test]
+    async fn list_between_keeps_only_services_inside_the_bounds() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        for date in ["2023-01-05", "2024-03-01", "2025-07-09"] {
+            service_dated(&db, v, date).await;
+        }
+        let dates = |rows: Vec<ServiceRecordWithLinks>| {
+            rows.into_iter()
+                .map(|r| r.record.service_date)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            dates(
+                list_between(&db, v, Some("2024-01-01"), None)
+                    .await
+                    .unwrap()
+            ),
+            vec!["2025-07-09", "2024-03-01"]
+        );
+        assert_eq!(
+            dates(
+                list_between(&db, v, None, Some("2024-03-01"))
+                    .await
+                    .unwrap()
+            ),
+            vec!["2024-03-01", "2023-01-05"]
+        );
+        assert_eq!(list_between(&db, v, None, None).await.unwrap().len(), 3);
     }
 }
