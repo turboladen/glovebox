@@ -4,9 +4,9 @@
 //! touches floats (the mileage rate).
 //!
 //! Baselines, due dates, and the mileage rate all come from
-//! [`reminders::calculate_reminders`] (extract-don't-duplicate: the rate
-//! machinery lives in `reminders::estimate_mileage`, which the reminders
-//! response already surfaces as `avg_daily_miles`).
+//! [`calculate_reminders`](crate::services::reminders::calculate_reminders):
+//! the rate machinery lives in `reminders::estimate_mileage`, which the
+//! reminders response surfaces as `avg_daily_miles`.
 
 use std::collections::{HashMap, HashSet};
 
@@ -16,7 +16,7 @@ use serde::Serialize;
 use crate::{
     entities::{maintenance_schedule_item, work_item},
     error::DomainResult,
-    services::{reminders, reminders::RemindersResponse},
+    services::reminders::RemindersResponse,
 };
 
 /// Forecast horizon: days `0..HORIZON_DAYS` from today (an occurrence
@@ -54,7 +54,8 @@ pub struct ForecastLine {
 }
 
 /// Projects the vehicle's next 12 months of maintenance spend from reminders
-/// the caller has already computed with [`reminders::calculate_reminders`].
+/// the caller has already computed with
+/// [`calculate_reminders`](crate::services::reminders::calculate_reminders).
 ///
 /// For each enabled resolved schedule item carrying `est_cost_cents`:
 /// occurrences repeat at the item's interval — `interval_months`, and/or
@@ -186,7 +187,7 @@ mod tests {
         entities::{mileage_log, service_record, service_schedule_link},
         error::DomainError,
         inputs::work_item::{NewWorkItem, UpdateWorkItem},
-        services::work_item as work_item_svc,
+        services::{reminders, work_item as work_item_svc},
         test_support::{VehicleFixture, test_db},
     };
 
