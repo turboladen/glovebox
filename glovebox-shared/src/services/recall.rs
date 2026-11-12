@@ -232,6 +232,25 @@ pub async fn set_status(
     Ok(with_status(db, vec![updated]).await?.remove(0))
 }
 
+/// The ids among `finding_ids` whose findings are recalls, in one query.
+/// Ownership is not checked; callers pass ids that are already vehicle-scoped.
+pub(crate) async fn recall_ids_among(
+    db: &impl ConnectionTrait,
+    finding_ids: &[i32],
+) -> DomainResult<Vec<i32>> {
+    if finding_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(research_finding::Entity::find()
+        .filter(research_finding::Column::Id.is_in(finding_ids.to_vec()))
+        .filter(research_finding::Column::Category.eq("recall"))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|f| f.id)
+        .collect())
+}
+
 /// Links a service to the recalls it performed, inside the caller's
 /// transaction when there is one. Every id must be a recall on the vehicle,
 /// and linking the same recall twice is a no-op.
@@ -395,9 +414,27 @@ mod tests {
             .await
             .unwrap()
             .recalls
-            .last()
+            .into_iter()
+            .find(|r| r.campaign_number.as_deref() == Some(campaign))
             .unwrap()
             .finding_id
+    }
+
+    async fn seed_non_recall(db: &DatabaseConnection, vehicle_id: i32) -> i32 {
+        research::file_finding(
+            db,
+            vehicle_id,
+            research::NewFiledFinding {
+                category: "maintenance".into(),
+                title: "Community fix".into(),
+                description: None,
+                source_url: None,
+                severity: None,
+            },
+        )
+        .await
+        .unwrap()
+        .id
     }
 
     #[tokio::test]
@@ -594,6 +631,67 @@ mod tests {
         let r = &list(&db, v).await.unwrap()[0];
         assert_eq!((r.status.as_str(), r.planned_work_item_id), ("done", None));
         assert_eq!(r.done_service.as_ref().unwrap().id, svc.record.id);
+    }
+
+    #[tokio::test]
+    async fn completing_work_from_a_non_recall_finding_links_no_recall() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let tip = seed_non_recall(&db, v).await;
+        let item = plan_work_for_recall(&db, v, tip).await;
+
+        let svc = service_svc::create(
+            &db,
+            v,
+            NewServiceRecord {
+                work_item_ids: Some(vec![item.id]),
+                ..service("2025-03-25")
+            },
+        )
+        .await
+        .unwrap();
+        assert!(svc.performed_recalls.is_empty());
+        assert_eq!(
+            work_item_svc::get(&db, v, item.id).await.unwrap().status,
+            "done"
+        );
+        assert_eq!(
+            service_recall_link::Entity::find()
+                .count(&db)
+                .await
+                .unwrap(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn a_mixed_batch_of_work_items_links_only_the_recall() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let recall_id = seed_recall(&db, v, "24V110000").await;
+        let tip = seed_non_recall(&db, v).await;
+        let from_recall = plan_work_for_recall(&db, v, recall_id).await;
+        let from_tip = plan_work_for_recall(&db, v, tip).await;
+
+        let svc = service_svc::create(
+            &db,
+            v,
+            NewServiceRecord {
+                work_item_ids: Some(vec![from_recall.id, from_tip.id]),
+                ..service("2025-03-25")
+            },
+        )
+        .await
+        .unwrap();
+        let linked: Vec<i32> = svc.performed_recalls.iter().map(|r| r.finding_id).collect();
+        assert_eq!(linked, vec![recall_id]);
+        assert_eq!(
+            service_recall_link::Entity::find()
+                .count(&db)
+                .await
+                .unwrap(),
+            1
+        );
     }
 
     #[test]

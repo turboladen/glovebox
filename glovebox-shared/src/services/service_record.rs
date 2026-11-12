@@ -4,7 +4,7 @@ use serde::Serialize;
 use crate::{
     entities::{
         incident, incident_service_link, maintenance_schedule_item, mileage_log, model_template,
-        part, service_record, service_record_line_item, service_schedule_link,
+        part, service_recall_link, service_record, service_record_line_item, service_schedule_link,
     },
     error::{DomainError, DomainResult},
     inputs::{
@@ -714,7 +714,13 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     .await?;
 
     let mut recall_ids = input.recall_finding_ids.unwrap_or_default();
-    recall_ids.extend(completed.iter().filter_map(|w| w.research_finding_id));
+    // Only the explicit ids must be recalls; a completed to-do may come from
+    // any kind of finding, and only a recall-sourced one links a recall.
+    let from_work: Vec<i32> = completed
+        .iter()
+        .filter_map(|w| w.research_finding_id)
+        .collect();
+    recall_ids.extend(recall::recall_ids_among(&txn, &from_work).await?);
     recall::link_service(&txn, vehicle_id, &recall_ids, record.id).await?;
 
     install_parts(
@@ -1041,8 +1047,8 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .exec(&txn)
         .await?;
 
-    crate::entities::service_recall_link::Entity::delete_many()
-        .filter(crate::entities::service_recall_link::Column::ServiceRecordId.eq(existing.id))
+    service_recall_link::Entity::delete_many()
+        .filter(service_recall_link::Column::ServiceRecordId.eq(existing.id))
         .exec(&txn)
         .await?;
 
