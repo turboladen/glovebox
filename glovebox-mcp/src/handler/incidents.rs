@@ -2,8 +2,8 @@
 
 use rmcp::{ErrorData as McpError, model::CallToolResult, tool, tool_router};
 
-use super::{GloveboxMcp, LenientParameters, deleted_result, domain_error, domain_result};
-use glovebox_shared::services::{incident, vehicle};
+use super::{GloveboxMcp, LenientParameters, deleted_result, domain_result};
+use glovebox_shared::services::incident;
 
 use crate::schemas::{
     AddIncidentFollowupInput, DeleteIncidentInput, ListIncidentsInput, LogIncidentInput,
@@ -26,9 +26,6 @@ impl GloveboxMcp {
             Err(e) => return Ok(e),
         };
         let (vehicle_id, input) = p.into_domain();
-        if let Err(e) = vehicle::require(&*self.db, vehicle_id).await {
-            return domain_error(e);
-        }
         domain_result(incident::create(&*self.db, vehicle_id, input).await)
     }
 
@@ -46,9 +43,6 @@ impl GloveboxMcp {
             Err(e) => return Ok(e),
         };
         let (vehicle_id, input) = p.into_domain();
-        if let Err(e) = vehicle::require(&*self.db, vehicle_id).await {
-            return domain_error(e);
-        }
         domain_result(incident::create(&*self.db, vehicle_id, input).await)
     }
 
@@ -65,9 +59,6 @@ impl GloveboxMcp {
             Ok(v) => v,
             Err(e) => return Ok(e),
         };
-        if let Err(e) = vehicle::require(&*self.db, p.vehicle_id).await {
-            return domain_error(e);
-        }
         domain_result(incident::list_filtered(&*self.db, p.vehicle_id, p.resolved).await)
     }
 

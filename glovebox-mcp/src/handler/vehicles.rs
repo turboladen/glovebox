@@ -2,7 +2,7 @@
 
 use rmcp::{ErrorData as McpError, model::CallToolResult, tool, tool_router};
 
-use super::{GloveboxMcp, LenientParameters, deleted_result, domain_error, domain_result};
+use super::{GloveboxMcp, LenientParameters, deleted_result, domain_result};
 use glovebox_shared::{
     entities,
     services::{mileage, model_template, vehicle, vin_decode},
@@ -75,9 +75,6 @@ impl GloveboxMcp {
             Err(e) => return Ok(e),
         };
         let (vehicle_id, input) = p.into_domain();
-        if let Err(e) = vehicle::require(&*self.db, vehicle_id).await {
-            return domain_error(e);
-        }
         domain_result(mileage::create(&*self.db, vehicle_id, input).await)
     }
 

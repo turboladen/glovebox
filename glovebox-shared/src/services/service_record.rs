@@ -397,6 +397,7 @@ pub async fn list_between(
     from: Option<&str>,
     to: Option<&str>,
 ) -> DomainResult<Vec<ServiceRecordWithLinks>> {
+    super::vehicle::require(db, vehicle_id).await?;
     super::validate_optional_date("from", from)?;
     super::validate_optional_date("to", to)?;
     let mut query =
@@ -581,6 +582,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     vehicle_id: i32,
     input: NewServiceRecord,
 ) -> DomainResult<ServiceRecordWithLinks> {
+    super::vehicle::require(db, vehicle_id).await?;
     if let Some(paid_by) = &input.paid_by {
         validate_payer(paid_by)?;
     }

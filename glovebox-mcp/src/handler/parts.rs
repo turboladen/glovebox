@@ -2,11 +2,8 @@
 
 use rmcp::{ErrorData as McpError, model::CallToolResult, tool, tool_router};
 
-use super::{GloveboxMcp, LenientParameters, deleted_result, domain_error, domain_result};
-use glovebox_shared::{
-    inputs::part::PartFilter,
-    services::{part, vehicle},
-};
+use super::{GloveboxMcp, LenientParameters, deleted_result, domain_result};
+use glovebox_shared::{inputs::part::PartFilter, services::part};
 
 use crate::schemas::{CorrectPartInput, DeletePartInput, ListPartsInput, RecordPartInput};
 
@@ -26,9 +23,6 @@ impl GloveboxMcp {
             Err(e) => return Ok(e),
         };
         let (vehicle_id, input) = p.into_domain();
-        if let Err(e) = vehicle::require(&*self.db, vehicle_id).await {
-            return domain_error(e);
-        }
         domain_result(part::create(&*self.db, vehicle_id, input).await)
     }
 
@@ -45,9 +39,6 @@ impl GloveboxMcp {
             Ok(v) => v,
             Err(e) => return Ok(e),
         };
-        if let Err(e) = vehicle::require(&*self.db, p.vehicle_id).await {
-            return domain_error(e);
-        }
         domain_result(part::list(&*self.db, p.vehicle_id, PartFilter { status: p.status }).await)
     }
 

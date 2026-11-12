@@ -229,6 +229,7 @@ pub async fn list_filtered(
     vehicle_id: i32,
     resolved: Option<bool>,
 ) -> DomainResult<Vec<IncidentWithDetails>> {
+    super::vehicle::require(db, vehicle_id).await?;
     let mut query = incident::Entity::find().filter(incident::Column::VehicleId.eq(vehicle_id));
     if let Some(resolved) = resolved {
         query = query.filter(incident::Column::Resolved.eq(resolved));
@@ -272,6 +273,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     vehicle_id: i32,
     input: NewIncident,
 ) -> DomainResult<IncidentWithDetails> {
+    super::vehicle::require(db, vehicle_id).await?;
     validate_category(&input.category)?;
     if let Some(at) = &input.occurred_at {
         super::validate_datetime("occurred_at", at)?;

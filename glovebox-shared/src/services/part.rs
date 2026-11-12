@@ -42,6 +42,7 @@ pub async fn list(
     vehicle_id: i32,
     filter: PartFilter,
 ) -> DomainResult<Vec<part::Model>> {
+    super::vehicle::require(db, vehicle_id).await?;
     let mut query = part::Entity::find().filter(part::Column::VehicleId.eq(vehicle_id));
 
     if let Some(status) = filter.status {
@@ -64,6 +65,7 @@ pub async fn create(
     vehicle_id: i32,
     input: NewPart,
 ) -> DomainResult<part::Model> {
+    super::vehicle::require(db, vehicle_id).await?;
     let supplied_by = input.supplied_by.unwrap_or_else(|| "self".to_string());
     validate_supplied_by(&supplied_by)?;
     super::validate_optional_date("purchase_date", input.purchase_date.as_deref())?;

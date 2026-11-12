@@ -25,6 +25,7 @@ pub async fn create(
     vehicle_id: i32,
     input: NewMileageEntry,
 ) -> DomainResult<mileage_log::Model> {
+    super::vehicle::require(db, vehicle_id).await?;
     if let Some(at) = &input.recorded_at {
         super::validate_datetime("recorded_at", at)?;
     }

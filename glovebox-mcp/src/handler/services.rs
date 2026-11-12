@@ -3,10 +3,7 @@
 use rmcp::{ErrorData as McpError, model::CallToolResult, tool, tool_router};
 
 use super::{GloveboxMcp, LenientParameters, domain_error, domain_result};
-use glovebox_shared::services::{
-    service_record::{self, LinkMode},
-    vehicle,
-};
+use glovebox_shared::services::service_record::{self, LinkMode};
 
 use crate::schemas::{
     CorrectServiceInput, DeleteServiceInput, LinkServiceToMaintenanceInput, ListServicesInput,
@@ -29,9 +26,6 @@ impl GloveboxMcp {
             Err(e) => return Ok(e),
         };
         let (vehicle_id, input) = p.into_domain();
-        if let Err(e) = vehicle::require(&*self.db, vehicle_id).await {
-            return domain_error(e);
-        }
         domain_result(service_record::create(&*self.db, vehicle_id, input).await)
     }
 
@@ -77,9 +71,6 @@ impl GloveboxMcp {
             Ok(v) => v,
             Err(e) => return Ok(e),
         };
-        if let Err(e) = vehicle::require(&*self.db, p.vehicle_id).await {
-            return domain_error(e);
-        }
         domain_result(
             service_record::list_between(
                 &*self.db,
