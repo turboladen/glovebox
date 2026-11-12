@@ -20,24 +20,19 @@ use sea_orm::DatabaseConnection;
 use serde::{Serialize, de::DeserializeOwned};
 
 use glovebox_shared::{
-    config::AppConfig,
     entities::work_item,
     error::{DomainError, DomainResult},
-    inputs::build::UpdateBuild,
     services::{
-        activity, budget, budget::BudgetForecast, build, costs, document, incident, mileage, part,
-        reminders, reminders::RemindersResponse, research, schedule, search, search::SearchScope,
-        service_record, service_record::LinkMode, vehicle, visit, visit::VisitWithItems,
-        work_item as work_item_svc,
+        activity, budget, budget::BudgetForecast, costs, incident, mileage, part, reminders,
+        reminders::RemindersResponse, research, schedule, search, search::SearchScope,
+        service_record, service_record::LinkMode, vehicle, work_item as work_item_svc,
     },
 };
 
 use crate::schemas::{
-    AttachDocumentInput, BuildParams, CancelVisitInput, CompleteVisitInput,
-    DismissScheduleItemInput, EmptyParams, FileResearchFindingInput, FindDocumentsInput,
-    LinkServiceToMaintenanceInput, ListPlannedWorkInput, LogIncidentInput, LogMileageInput,
-    PlanWorkInput, RecordPartInput, RecordServiceInput, SaveNoteInput, ScheduleVisitInput,
-    SearchRecordsInput, SummarizeActivityInput, UpdateBuildStatusInput, VehicleBrief,
+    DismissScheduleItemInput, EmptyParams, FileResearchFindingInput, LinkServiceToMaintenanceInput,
+    ListPlannedWorkInput, LogIncidentInput, LogMileageInput, PlanWorkInput, RecordPartInput,
+    RecordServiceInput, SaveNoteInput, SearchRecordsInput, SummarizeActivityInput, VehicleBrief,
     VehicleParams,
 };
 
@@ -46,23 +41,12 @@ pub const VEHICLES_URI: &str = "glovebox://vehicles";
 #[derive(Clone)]
 pub struct GloveboxMcp {
     db: Arc<DatabaseConnection>,
-    config: Arc<AppConfig>,
-    /// Comma-joined candidate base URLs for the HTTP multipart upload route
-    /// (non-loopback IPv4 addresses + localhost, port from `config.listen`),
-    /// baked
-    /// into the served instructions so sandboxed-but-networked clients can
-    /// reach `/api/documents` directly. Built once in [`crate::router`].
-    base_urls: Arc<str>,
 }
 
 #[tool_router]
 impl GloveboxMcp {
-    pub fn new(db: DatabaseConnection, config: Arc<AppConfig>, base_urls: Arc<str>) -> Self {
-        Self {
-            db: Arc::new(db),
-            config,
-            base_urls,
-        }
+    pub fn new(db: DatabaseConnection) -> Self {
+        Self { db: Arc::new(db) }
     }
 
     #[tool(
@@ -102,7 +86,7 @@ impl GloveboxMcp {
 
     #[tool(
         name = "record_service",
-        description = "Record maintenance or repair work that was done: what, when, at what mileage, and what it cost (integer cents). Providing `mileage` also logs an odometer reading. Use `line_items` for itemized invoices and `build_id` to link the work to a build project. If the work satisfies due/overdue schedule items from `check_due_maintenance`, pass their ids in `schedule_item_ids` so the reminders clear; for records you already created (e.g. a bulk import), reconcile afterwards with `link_service_to_maintenance` instead of re-recording. When importing a scanned invoice, follow up with `attach_document` (linked to the returned record id) so the original file and its text are kept; if you can't reach the file, hand the user the browser deep link returned alongside this record so they can drag-drop the original from their (non-sandboxed) browser.",
+        description = "Record maintenance or repair work that was done: what, when, at what mileage, and what it cost (integer cents). Providing `mileage` also logs an odometer reading. Use `line_items` for itemized invoices. If the work satisfies due/overdue schedule items from `check_due_maintenance`, pass their ids in `schedule_item_ids` so the reminders clear; for records you already created (e.g. a bulk import), reconcile afterwards with `link_service_to_maintenance` instead of re-recording.",
         input_schema = rmcp::handler::server::common::schema_for_type::<RecordServiceInput>()
     )]
     async fn record_service(
@@ -117,35 +101,12 @@ impl GloveboxMcp {
         if let Err(e) = vehicle::require(&*self.db, vehicle_id).await {
             return domain_error(e);
         }
-        match service_record::create(&*self.db, vehicle_id, input).await {
-            Ok(rec) => {
-                // Hand the user a browser deep link to attach the original
-                // invoice/receipt file: their (non-sandboxed) browser can
-                // upload the bytes where the model context can't carry them.
-                // Path-mode router (history, not hash) — NO `/#/`; the
-                // backend's SPA fallback serves index.html for this path.
-                let link = format!(
-                    "{}/vehicles/{}/records/documents?attach=service:{}",
-                    self.config.public_url.trim_end_matches('/'),
-                    rec.record.vehicle_id,
-                    rec.record.id,
-                );
-                let note = format!(
-                    "The service record is filed. The invoice/receipt FILE cannot be attached \
-                     through this chat (its bytes can't cross the sandbox). Give the user this \
-                     link — opening it in their browser lands on a drop zone already scoped to \
-                     this record, where they drag the file in: {link} — do NOT call \
-                     attach_document for a file that is only in this chat."
-                );
-                tool_json_result_with_link(&rec, note)
-            }
-            Err(e) => domain_error(e),
-        }
+        domain_result(service_record::create(&*self.db, vehicle_id, input).await)
     }
 
     #[tool(
         name = "record_part",
-        description = "Record a part you bought or installed for this vehicle — purchase info, cost (integer cents), where it goes (location), and optional links to the installing service or a build project. Use record_service for the labor; this is the part itself.",
+        description = "Record a part you bought or installed for this vehicle — purchase info, cost (integer cents), where it goes (location), and an optional link to the installing service. Use record_service for the labor; this is the part itself.",
         input_schema = rmcp::handler::server::common::schema_for_type::<RecordPartInput>()
     )]
     async fn record_part(
@@ -293,32 +254,8 @@ impl GloveboxMcp {
     }
 
     #[tool(
-        name = "find_documents",
-        description = "Full-text search a vehicle's documents (receipts, manuals, invoices, photos with extracted text). Returns ranked hits with snippets. Use `search_records` to search other record kinds or the whole garage.",
-        input_schema = rmcp::handler::server::common::schema_for_type::<FindDocumentsInput>()
-    )]
-    async fn find_documents(
-        &self,
-        params: LenientParameters<FindDocumentsInput>,
-    ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("find_documents") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
-        domain_result(
-            search::search(
-                &*self.db,
-                &p.query,
-                SearchScope::Documents,
-                Some(p.vehicle_id),
-            )
-            .await,
-        )
-    }
-
-    #[tool(
         name = "search_records",
-        description = "Full-text search across everything: vehicles, service history, incidents (and their followups), builds, documents, and research findings. Returns ranked hits with snippets. Narrow with `scope` and/or `vehicle_id`; use `find_documents` for the common documents-only case.",
+        description = "Full-text search across everything: vehicles, service history, incidents (and their followups), research findings, maintenance schedule items, and planned work. Returns ranked hits with snippets. Narrow with `scope` and/or `vehicle_id`.",
         input_schema = rmcp::handler::server::common::schema_for_type::<SearchRecordsInput>()
     )]
     async fn search_records(
@@ -386,67 +323,8 @@ impl GloveboxMcp {
     }
 
     #[tool(
-        name = "list_builds",
-        description = "List a vehicle's builds — one-shot upgrade/restoration projects (turbo upgrade, engine swap, road-legal) with lifecycle status. Use `get_build_progress` for a build's linked work and spend.",
-        input_schema = rmcp::handler::server::common::schema_for_type::<VehicleParams>()
-    )]
-    async fn list_builds(
-        &self,
-        params: LenientParameters<VehicleParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("list_builds") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
-        domain_result(build::list(&*self.db, p.vehicle_id).await)
-    }
-
-    #[tool(
-        name = "get_build_progress",
-        description = "How a build is going: linked services, parts (installed vs pending), incidents, and total spend (integer cents) — all derived live from the linked records.",
-        input_schema = rmcp::handler::server::common::schema_for_type::<BuildParams>()
-    )]
-    async fn get_build_progress(
-        &self,
-        params: LenientParameters<BuildParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("get_build_progress") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
-        domain_result(build::progress(&*self.db, p.vehicle_id, p.build_id).await)
-    }
-
-    #[tool(
-        name = "update_build_status",
-        description = "Move a build through its lifecycle: planned -> active -> completed (or on_hold / abandoned). Use when the user says they're starting, pausing, finishing, or giving up on a project.",
-        input_schema = rmcp::handler::server::common::schema_for_type::<UpdateBuildStatusInput>()
-    )]
-    async fn update_build_status(
-        &self,
-        params: LenientParameters<UpdateBuildStatusInput>,
-    ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("update_build_status") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
-        domain_result(
-            build::update(
-                &*self.db,
-                p.vehicle_id,
-                p.build_id,
-                UpdateBuild {
-                    status: Some(p.status),
-                    ..Default::default()
-                },
-            )
-            .await,
-        )
-    }
-
-    #[tool(
         name = "plan_work",
-        description = "Add something to the vehicle's to-do list — work the user intends to do or have done. Link the source so completing the work closes the loop (a recall finding from check_recalls, an overdue schedule item from check_due_maintenance, an incident, a build). Group planned items into a visit with schedule_visit; close them out with complete_visit.",
+        description = "Add something to the vehicle's to-do list — work the user intends to do or have done. Link the source so completing the work closes the loop (a recall finding from check_recalls, an overdue schedule item from check_due_maintenance, or an incident). Review the list with list_planned_work.",
         input_schema = rmcp::handler::server::common::schema_for_type::<PlanWorkInput>()
     )]
     async fn plan_work(
@@ -463,7 +341,7 @@ impl GloveboxMcp {
 
     #[tool(
         name = "list_planned_work",
-        description = "The vehicle's planning state: open work items (the to-do list) and open visits with their attached items and estimated-cost rollups. Set include_done to also see finished/dropped work and completed/canceled visits.",
+        description = "The vehicle's planning state: the open work items (the to-do list). Set include_done to also see finished and dropped work.",
         input_schema = rmcp::handler::server::common::schema_for_type::<ListPlannedWorkInput>()
     )]
     async fn list_planned_work(
@@ -473,7 +351,6 @@ impl GloveboxMcp {
         #[derive(Serialize)]
         struct PlannedWork {
             items: Vec<work_item::Model>,
-            visits: Vec<VisitWithItems>,
         }
         let p = match params.into_tool_input("list_planned_work") {
             Ok(v) => v,
@@ -484,81 +361,7 @@ impl GloveboxMcp {
             Ok(v) => v,
             Err(e) => return domain_error(e),
         };
-        let visits = match visit::list(&*self.db, p.vehicle_id, include_done).await {
-            Ok(v) => v,
-            Err(e) => return domain_error(e),
-        };
-        tool_json_result(&PlannedWork { items, visits })
-    }
-
-    #[tool(
-        name = "schedule_visit",
-        description = "Group planned work into a shop visit (or DIY session) with a date and estimated cost. Attached work items (from plan_work) flip to scheduled and their est_cost_cents roll up. Name the shop with shop_name (free text; shop_id also accepts a saved shop from the shops list). When the visit happens, close it out with complete_visit; if it won't happen, cancel_visit returns the items to the to-do list.",
-        input_schema = rmcp::handler::server::common::schema_for_type::<ScheduleVisitInput>()
-    )]
-    async fn schedule_visit(
-        &self,
-        params: LenientParameters<ScheduleVisitInput>,
-    ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("schedule_visit") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
-        let (vehicle_id, input) = p.into_domain();
-        domain_result(visit::create(&*self.db, vehicle_id, input).await)
-    }
-
-    #[tool(
-        name = "complete_visit",
-        description = "Close out a visit with the actuals: creates the service record (payer-aware), clears satisfied reminders via the items' schedule links, resolves linked recalls and incidents, and marks the work done — one atomic operation. Providing `mileage` also logs an odometer reading.",
-        input_schema = rmcp::handler::server::common::schema_for_type::<CompleteVisitInput>()
-    )]
-    async fn complete_visit(
-        &self,
-        params: LenientParameters<CompleteVisitInput>,
-    ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("complete_visit") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
-        let (vehicle_id, visit_id, input) = p.into_domain();
-        domain_result(visit::complete(&*self.db, vehicle_id, visit_id, input).await)
-    }
-
-    #[tool(
-        name = "cancel_visit",
-        description = "Cancel a visit that won't happen; its work items return to the to-do list. Completed visits are history and can't be canceled — nothing that already happened is undone.",
-        input_schema = rmcp::handler::server::common::schema_for_type::<CancelVisitInput>()
-    )]
-    async fn cancel_visit(
-        &self,
-        params: LenientParameters<CancelVisitInput>,
-    ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("cancel_visit") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
-        domain_result(visit::cancel(&*self.db, p.vehicle_id, p.visit_id).await)
-    }
-
-    #[tool(
-        name = "attach_document",
-        description = "Store a file that is ALREADY on the server's disk against a vehicle: the server reads the bytes off its own inbox and creates a document record. **Do NOT call this tool for a file the user uploaded to THIS CHAT** — that file lives in your sandbox, not the server's inbox, and its bytes cannot cross to the server. In that (common) case, don't attempt an attach at all: `record_service` returns a browser deep link — give that link to the user and they attach the file themselves in one drag. There is NO inline-bytes option; files are attached ONLY by `source_path`, resolved on the SERVER inside its inbox directory. Legitimate uses: (a) the file is already in the inbox (the user put it there or told you its name) → pass that name verbatim as `source_path`; (b) your file tools genuinely share this server's filesystem → save it into the inbox first, then `source_path`; (c) your shell has network to the server → `curl -F` multipart to `POST /api/documents` instead (base URLs in the server instructions). NEVER compress, downsize, or re-emit an existing file to force it through. Max 10 MiB. Pass `extracted_text` (the text you read out) so it's findable via `find_documents`, and link it via `linked_entity_type` + `linked_entity_id`.",
-        input_schema = rmcp::handler::server::common::schema_for_type::<AttachDocumentInput>()
-    )]
-    async fn attach_document(
-        &self,
-        params: LenientParameters<AttachDocumentInput>,
-    ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("attach_document") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
-        let input = match p.into_domain() {
-            Ok(v) => v,
-            Err(e) => return domain_error(e),
-        };
-        domain_result(document::store(&*self.db, &self.config, input).await)
+        tool_json_result(&PlannedWork { items })
     }
 
     #[tool(
@@ -604,7 +407,7 @@ impl ServerHandler for GloveboxMcp {
                 "glovebox-mcp",
                 env!("CARGO_PKG_VERSION"),
             ))
-            .with_instructions(format!(
+            .with_instructions(
                 "glovebox MCP: car maintenance tracking. Canonical workflow: (1) ORIENT — \
                  `list_vehicles` for ids, then `summarize_recent_activity` for the vehicle's \
                  recent history. (2) ANSWER \"what does it need?\" — `check_due_maintenance` \
@@ -614,39 +417,14 @@ impl ServerHandler for GloveboxMcp {
                  `link_service_to_maintenance` for records that already exist — the import \
                  reconciliation loop) or waiving ones that don't apply (`dismiss_schedule_item`). \
                  (3) PLAN — when the user intends to do something about a recall, an overdue \
-                 item, or an incident, `plan_work` it with the source linked; group items into a \
-                 shop visit or DIY session with `schedule_visit`; review with \
-                 `list_planned_work`; when the work happens, `complete_visit` records the \
-                 service, clears the reminders, and closes the linked recalls/incidents in one \
-                 step; a visit that won't happen is `cancel_visit`-ed and its items return to the \
-                 to-do list. (4) CAPTURE what happened outside a visit — `record_service` for \
-                 completed work, `record_part` for parts bought or installed, `log_incident` for \
+                 item, or an incident, `plan_work` it with the source linked; review the to-do \
+                 list with `list_planned_work`. (4) CAPTURE — `record_service` for completed \
+                 work, `record_part` for parts bought or installed, `log_incident` for \
                  symptoms/damage/accidents, `save_note` for facts worth remembering, \
-                 `log_mileage` whenever the user mentions an odometer reading, `attach_document` \
-                 for a file ALREADY on the server. ATTACHING A FILE — decide by WHERE the file \
-                 is, in this order: (1) THE COMMON CASE — the user uploaded/attached the file to \
-                 THIS chat. Its bytes live in your sandbox and CANNOT reach the server; do NOT \
-                 try to move them and do NOT call `attach_document`. `record_service` already \
-                 returned a browser deep link — hand THAT link to the user; their (non-sandboxed) \
-                 browser opens a drop zone pre-scoped to the record and they drag the file in. \
-                 This is the primary path — reach for it first. (2) The file is genuinely already \
-                 in the server inbox `{inbox_dir}` (the user put it there or told you its name) → \
-                 `attach_document` with `source_path` = that name. (3) Your file tools truly \
-                 share the server's filesystem → save into `{inbox_dir}`, then `source_path`. (4) \
-                 Your shell has network TO THE SERVER → `curl -sS -F \"file=@<path>\" -F \
-                 \"vehicle_id=<id>\" -F \"linked_entity_type=service\" -F \
-                 \"linked_entity_id=<id>\" -F \"extracted_text=<text>\" <BASE>/api/documents` \
-                 (candidate <BASE>, first whose `/api/health` answers: {base_urls}). NEVER \
-                 compress, downsize, or re-emit a file to force it through — if none of (2)–(4) \
-                 apply, use (1). Whichever route, pass `extracted_text` and link the service \
-                 record so one conversation yields record + document. (5) LOOK THINGS UP — \
-                 `find_documents` for receipts/manuals, `search_records` for anything else, \
-                 `cost_summary` for spend. (6) PROJECTS — `list_builds` / `get_build_progress` / \
-                 `update_build_status` for upgrade or restoration builds. All money is integer \
+                 `log_mileage` whenever the user mentions an odometer reading. (5) LOOK THINGS UP \
+                 — `search_records` for anything, `cost_summary` for spend. All money is integer \
                  cents; all dates are YYYY-MM-DD.",
-                inbox_dir = self.config.inbox_dir,
-                base_urls = self.base_urls,
-            ))
+            )
     }
 
     async fn list_resources(
@@ -661,7 +439,6 @@ impl ServerHandler for GloveboxMcp {
         }
 
         let vehicles = vehicle::list(&*self.db).await.map_err(resource_error)?;
-        let builds = build::list_all(&*self.db).await.map_err(resource_error)?;
 
         let mut resources: Vec<Resource> = vec![json_resource(
             VEHICLES_URI.to_string(),
@@ -683,20 +460,6 @@ impl ServerHandler for GloveboxMcp {
                 ),
             ));
         }
-        for b in &builds {
-            let vehicle_name = vehicles
-                .iter()
-                .find(|v| v.id == b.vehicle_id)
-                .map_or("unknown vehicle", |v| v.name.as_str());
-            resources.push(json_resource(
-                format!("{VEHICLES_URI}/{}/builds/{}", b.vehicle_id, b.id),
-                format!("{} — build: {}", vehicle_name, b.name),
-                format!(
-                    "Progress for the '{}' build on {}: linked work, parts, and spend.",
-                    b.name, vehicle_name
-                ),
-            ));
-        }
         Ok(ListResourcesResult::with_all_items(resources))
     }
 
@@ -710,9 +473,8 @@ impl ServerHandler for GloveboxMcp {
             return Err(McpError::invalid_params(
                 format!(
                     "unknown resource uri: {uri}. Known forms: {VEHICLES_URI}, \
-                     {VEHICLES_URI}/{{id}}, {VEHICLES_URI}/{{id}}/activity, \
-                     {VEHICLES_URI}/{{id}}/builds/{{build_id}}. Call resources/list to enumerate \
-                     them."
+                     {VEHICLES_URI}/{{id}}, {VEHICLES_URI}/{{id}}/activity. Call resources/list \
+                     to enumerate them."
                 ),
                 None,
             ));
@@ -734,15 +496,6 @@ impl ServerHandler for GloveboxMcp {
                     .map_err(resource_error)?;
                 resource_json(&feed)?
             }
-            ResourceRef::Build {
-                vehicle_id,
-                build_id,
-            } => {
-                let progress = build::progress(&*self.db, vehicle_id, build_id)
-                    .await
-                    .map_err(resource_error)?;
-                resource_json(&progress)?
-            }
         };
         Ok(ReadResourceResult::new(vec![
             ResourceContents::text(json, &request.uri).with_mime_type("application/json"),
@@ -756,7 +509,6 @@ enum ResourceRef {
     Vehicles,
     Vehicle(i32),
     Activity(i32),
-    Build { vehicle_id: i32, build_id: i32 },
 }
 
 /// Parse a `glovebox://vehicles[/…]` URI. `None` means the shape is unknown
@@ -771,12 +523,6 @@ fn parse_resource_uri(uri: &str) -> Option<ResourceRef> {
     match (parts.next(), parts.next(), parts.next()) {
         (None, ..) => Some(ResourceRef::Vehicle(vehicle_id)),
         (Some("activity"), None, _) => Some(ResourceRef::Activity(vehicle_id)),
-        (Some("builds"), Some(build), None) => {
-            build.parse().ok().map(|build_id| ResourceRef::Build {
-                vehicle_id,
-                build_id,
-            })
-        }
         _ => None,
     }
 }
@@ -827,25 +573,6 @@ fn tool_json_result<T: Serialize>(value: &T) -> Result<CallToolResult, McpError>
         McpError::internal_error("failed to serialize result", None)
     })?;
     Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
-}
-
-/// Like [`tool_json_result`] but appends a SECOND text content block carrying
-/// a human note + deep link. A standalone text block is the surest way most
-/// MCP clients surface the URL as a clickable link (rather than burying it in
-/// the JSON payload) — used by `record_service` to hand the user a browser
-/// upload link their sandboxed client can't reach.
-fn tool_json_result_with_link<T: Serialize>(
-    value: &T,
-    note_and_link: String,
-) -> Result<CallToolResult, McpError> {
-    let json = serde_json::to_string_pretty(value).map_err(|err| {
-        tracing::error!(?err, "MCP tool: failed to serialize result");
-        McpError::internal_error("failed to serialize result", None)
-    })?;
-    Ok(CallToolResult::success(vec![
-        ContentBlock::text(json),
-        ContentBlock::text(note_and_link),
-    ]))
 }
 
 fn resource_json<T: Serialize>(value: &T) -> Result<String, McpError> {
@@ -928,13 +655,6 @@ mod tests {
             parse_resource_uri("glovebox://vehicles/7/activity"),
             Some(ResourceRef::Activity(7))
         ));
-        assert!(matches!(
-            parse_resource_uri("glovebox://vehicles/7/builds/3"),
-            Some(ResourceRef::Build {
-                vehicle_id: 7,
-                build_id: 3
-            })
-        ));
     }
 
     #[test]
@@ -944,9 +664,7 @@ mod tests {
             "glovebox://vehicles/",
             "glovebox://vehicles/abc",
             "glovebox://vehicles/7/services",
-            "glovebox://vehicles/7/builds",
-            "glovebox://vehicles/7/builds/x",
-            "glovebox://vehicles/7/builds/3/extra",
+            "glovebox://vehicles/7/builds/3",
             "glovebox://vehicles/7/activity/extra",
             "fewd://vehicles",
         ] {

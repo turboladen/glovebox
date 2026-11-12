@@ -6,26 +6,4 @@ pub struct AppConfig {
     /// Path to the `SQLite` database file
     #[arg(long, default_value = "data/glovebox.db", env = "GLOVEBOX_DB_PATH")]
     pub db_path: String,
-
-    /// Address to listen on
-    #[arg(long, default_value = "0.0.0.0:3003", env = "GLOVEBOX_LISTEN")]
-    pub listen: String,
-
-    /// Directory for uploaded files
-    #[arg(long, default_value = "data/files", env = "GLOVEBOX_FILES_DIR")]
-    pub files_dir: String,
-
-    /// Inbox directory the MCP `attach_document` tool reads `source_path`
-    /// files from (LLM clients save files here with their own file tools
-    /// instead of passing bytes through model context)
-    #[arg(long, default_value = "data/inbox", env = "GLOVEBOX_INBOX_DIR")]
-    pub inbox_dir: String,
-
-    /// Public base URL of the web app, for user-facing deep links.
-    #[arg(
-        long,
-        default_value = "http://localhost:3003",
-        env = "GLOVEBOX_PUBLIC_URL"
-    )]
-    pub public_url: String,
 }

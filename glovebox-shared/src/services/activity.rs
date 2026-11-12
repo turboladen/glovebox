@@ -268,7 +268,6 @@ mod tests {
             shop_name: None,
             shop_id: None,
             notes: None,
-            build_id: None,
             paid_by: None,
             payer_note: None,
             schedule_item_ids: None,
@@ -394,14 +393,7 @@ mod tests {
             .await
             .unwrap();
 
-        svc_svc::delete(
-            &db,
-            vid,
-            created.record.id,
-            crate::inputs::document::DocumentDisposition::Keep,
-        )
-        .await
-        .unwrap();
+        svc_svc::delete(&db, vid, created.record.id).await.unwrap();
 
         // No orphaned auto-log lingers: the feed is empty, not hiding a ghost.
         assert!(recent(&db, vid, DEFAULT_LIMIT).await.unwrap().is_empty());

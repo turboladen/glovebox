@@ -21,7 +21,6 @@ pub struct NewIncident {
     pub insurance_adjuster_phone: Option<String>,
     /// Earlier same-vehicle incident this one is a recurrence of.
     pub recurrence_of_id: Option<i32>,
-    pub build_id: Option<i32>,
     /// Same-vehicle service records that address this incident (M2M).
     pub service_record_ids: Option<Vec<i32>>,
 }
@@ -46,7 +45,6 @@ impl Default for NewIncident {
             insurance_adjuster: None,
             insurance_adjuster_phone: None,
             recurrence_of_id: None,
-            build_id: None,
             service_record_ids: None,
         }
     }
@@ -78,7 +76,6 @@ pub struct UpdateIncident {
     pub insurance_payout_cents: Option<Option<i32>>,
     pub insurance_payout_currency: Option<Option<String>>,
     pub recurrence_of_id: Option<Option<i32>>,
-    pub build_id: Option<Option<i32>>,
     /// When present, replaces the incident's service links wholesale.
     pub service_record_ids: Option<Vec<i32>>,
 }

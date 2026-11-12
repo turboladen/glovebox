@@ -9,10 +9,7 @@ use serde::Serialize;
 use crate::{
     entities::{incident, incident_followup, incident_service_link, service_record, work_item},
     error::{DomainError, DomainResult},
-    inputs::{
-        document::DocumentDisposition,
-        incident::{NewFollowup, NewIncident, UpdateIncident},
-    },
+    inputs::incident::{NewFollowup, NewIncident, UpdateIncident},
 };
 
 /// Category whitelist — the lossless union of every category the two retired
@@ -181,18 +178,14 @@ pub async fn get(
     })
 }
 
-/// Guard the cross-record links a create/update may carry: build ownership,
-/// same-vehicle recurrence target. Wrong-vehicle references must be
+/// Guard the cross-record links a create/update may carry: the same-vehicle
+/// recurrence target. Wrong-vehicle references must be
 /// indistinguishable from nonexistent ones.
 async fn require_links_owned(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
-    build_id: Option<i32>,
     recurrence_of_id: Option<i32>,
 ) -> DomainResult<()> {
-    if let Some(build_id) = build_id {
-        crate::services::build::require_owned(db, vehicle_id, build_id).await?;
-    }
     if let Some(recurrence_of_id) = recurrence_of_id {
         require_incident(db, vehicle_id, recurrence_of_id).await?;
     }
@@ -205,7 +198,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     input: NewIncident,
 ) -> DomainResult<IncidentWithDetails> {
     validate_category(&input.category)?;
-    require_links_owned(db, vehicle_id, input.build_id, input.recurrence_of_id).await?;
+    require_links_owned(db, vehicle_id, input.recurrence_of_id).await?;
     let service_record_ids = input.service_record_ids.unwrap_or_default();
     require_service_records_owned(db, vehicle_id, &service_record_ids).await?;
 
@@ -229,7 +222,6 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
         insurance_adjuster: Set(input.insurance_adjuster),
         insurance_adjuster_phone: Set(input.insurance_adjuster_phone),
         recurrence_of_id: Set(input.recurrence_of_id),
-        build_id: Set(input.build_id),
         ..Default::default()
     };
     if let Some(occurred_at) = input.occurred_at {
@@ -267,13 +259,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     if let Some(category) = &input.category {
         validate_category(category)?;
     }
-    require_links_owned(
-        db,
-        vehicle_id,
-        input.build_id.flatten(),
-        input.recurrence_of_id.flatten(),
-    )
-    .await?;
+    require_links_owned(db, vehicle_id, input.recurrence_of_id.flatten()).await?;
     // An incident cannot be a recurrence of itself — directly or through a
     // chain. Walk the proposed target's ancestors; if `id` appears, linking
     // would close a cycle and the first feature that traverses recurrence
@@ -385,9 +371,6 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     if let Some(v) = input.recurrence_of_id {
         active.recurrence_of_id = Set(v);
     }
-    if let Some(v) = input.build_id {
-        active.build_id = Set(v);
-    }
 
     active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
 
@@ -437,15 +420,12 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
 /// Incidents that pointed at this one via `recurrence_of_id` are unlinked
 /// (the DB FK is ON DELETE SET NULL, but explicit keeps the behavior
 /// pragma-independent and inside the same transaction), as are work items
-/// referencing it (soft link, no FK). Linked documents are handled per
-/// `docs`; the returned paths are files the CALLER must remove after commit
-/// (see [`super::document::detach_or_delete_for_entity`]).
+/// referencing it (soft link, no FK).
 pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
     id: i32,
-    docs: DocumentDisposition,
-) -> DomainResult<Vec<String>> {
+) -> DomainResult<()> {
     let existing = require_incident(db, vehicle_id, id).await?;
 
     let txn = db.begin().await?;
@@ -480,14 +460,11 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .exec(&txn)
         .await?;
 
-    let doc_files =
-        super::document::detach_or_delete_for_entity(&txn, "incident", id, docs).await?;
-
     existing.delete(&txn).await?;
 
     txn.commit().await?;
 
-    Ok(doc_files)
+    Ok(())
 }
 
 pub async fn list_followups(
@@ -1054,41 +1031,6 @@ mod tests {
         );
     }
 
-    // --- build links ---------------------------------------------------------
-
-    #[tokio::test]
-    async fn linking_other_vehicles_build_is_not_found() {
-        let db = test_db().await;
-        let owner = seed_vehicle(&db).await;
-        let other = seed_vehicle(&db).await;
-        let foreign_build = crate::services::build::create(
-            &db,
-            other,
-            crate::inputs::build::NewBuild {
-                name: "Foreign".into(),
-                description: None,
-                target_date: None,
-            },
-        )
-        .await
-        .unwrap();
-
-        assert!(matches!(
-            create(
-                &db,
-                owner,
-                NewIncident {
-                    build_id: Some(foreign_build.id),
-                    ..new_incident("t", "general")
-                },
-            )
-            .await
-            .unwrap_err(),
-            DomainError::NotFound(_)
-        ));
-        assert!(list(&db, owner).await.unwrap().is_empty());
-    }
-
     // --- followups ------------------------------------------------------------
 
     #[tokio::test]
@@ -1312,10 +1254,7 @@ mod tests {
         .await
         .unwrap();
 
-        let paths = delete(&db, vid, doomed.incident.id, DocumentDisposition::Keep)
-            .await
-            .unwrap();
-        assert!(paths.is_empty());
+        delete(&db, vid, doomed.incident.id).await.unwrap();
 
         assert!(matches!(
             get(&db, vid, doomed.incident.id).await.unwrap_err(),
@@ -1347,48 +1286,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_handles_linked_documents_per_mode() {
-        let db = test_db().await;
-        let vid = seed_vehicle(&db).await;
-
-        let kept = create(&db, vid, new_incident("Keep my doc", "noise"))
-            .await
-            .unwrap();
-        let cascaded = create(&db, vid, new_incident("Take my doc", "noise"))
-            .await
-            .unwrap();
-        let kept_doc =
-            crate::test_support::seed_linked_document(&db, "incident", kept.incident.id).await;
-        let cascaded_doc =
-            crate::test_support::seed_linked_document(&db, "incident", cascaded.incident.id).await;
-
-        let paths = delete(&db, vid, kept.incident.id, DocumentDisposition::Keep)
-            .await
-            .unwrap();
-        assert!(paths.is_empty());
-        let doc = crate::services::document::get(&db, kept_doc).await.unwrap();
-        assert_eq!(doc.linked_entity_type, None);
-        assert!(doc.notes.unwrap().contains("Unlinked from incident"));
-
-        let paths = delete(&db, vid, cascaded.incident.id, DocumentDisposition::Delete)
-            .await
-            .unwrap();
-        assert_eq!(
-            paths,
-            vec![format!(
-                "general/other/incident-{}.pdf",
-                cascaded.incident.id
-            )]
-        );
-        assert!(matches!(
-            crate::services::document::get(&db, cascaded_doc)
-                .await
-                .unwrap_err(),
-            DomainError::NotFound(_)
-        ));
-    }
-
-    #[tokio::test]
     async fn delete_wrong_vehicle_is_byte_identical_to_nonexistent() {
         let db = test_db().await;
         let vid = seed_vehicle(&db).await;
@@ -1397,9 +1294,7 @@ mod tests {
             .await
             .unwrap();
 
-        let err = delete(&db, other_vid, inc.incident.id, DocumentDisposition::Keep)
-            .await
-            .unwrap_err();
+        let err = delete(&db, other_vid, inc.incident.id).await.unwrap_err();
         let DomainError::NotFound(msg) = err else {
             panic!("expected NotFound");
         };

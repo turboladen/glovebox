@@ -4,13 +4,10 @@ use serde::Serialize;
 use crate::{
     entities::{
         incident_service_link, maintenance_schedule_item, mileage_log, model_template, part,
-        research_finding, service_record, service_record_line_item, service_schedule_link, visit,
+        research_finding, service_record, service_record_line_item, service_schedule_link,
     },
     error::{DomainError, DomainResult},
-    inputs::{
-        document::DocumentDisposition,
-        service_record::{NewLineItem, NewServiceRecord, UpdateServiceRecord},
-    },
+    inputs::service_record::{NewLineItem, NewServiceRecord, UpdateServiceRecord},
 };
 
 /// Payer whitelist for `service_records.paid_by`.
@@ -339,9 +336,6 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
 
     let schedule_item_ids = input.schedule_item_ids.unwrap_or_default();
     require_schedule_items_in_scope(db, vehicle_id, &schedule_item_ids).await?;
-    if let Some(build_id) = input.build_id {
-        crate::services::build::require_owned(db, vehicle_id, build_id).await?;
-    }
 
     let txn = db.begin().await?;
 
@@ -359,7 +353,6 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
         shop_name: Set(input.shop_name),
         shop_id: Set(input.shop_id),
         notes: Set(input.notes),
-        build_id: Set(input.build_id),
         paid_by: Set(input.paid_by.unwrap_or_else(|| "self".into())),
         payer_note: Set(input.payer_note),
         invoice_ref: Set(invoice_ref),
@@ -461,14 +454,6 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
 
     let txn = db.begin().await?;
 
-    // A linked build must belong to the same vehicle; a cross-vehicle build
-    // must be indistinguishable from a nonexistent one. Checked inside the txn
-    // (like the schedule-items guard) so a concurrent build::delete can't slip
-    // between guard and write.
-    if let Some(Some(build_id)) = input.build_id {
-        crate::services::build::require_owned(&txn, vehicle_id, build_id).await?;
-    }
-
     let mut active: service_record::ActiveModel = existing.into();
 
     if let Some(v) = input.service_date {
@@ -506,9 +491,6 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     }
     if let Some(v) = input.notes {
         active.notes = Set(v);
-    }
-    if let Some(v) = input.build_id {
-        active.build_id = Set(v);
     }
     if let Some(v) = input.paid_by {
         validate_payer(&v)?;
@@ -706,16 +688,12 @@ pub async fn link_schedule_items<C: ConnectionTrait + TransactionTrait>(
     })
 }
 
-/// Delete a service record and its owned rows. Linked documents are handled
-/// per `docs` (unlinked or deleted — see
-/// [`super::document::detach_or_delete_for_entity`]); the returned paths are
-/// files the CALLER must remove after this commits.
+/// Delete a service record and its owned rows.
 pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
     id: i32,
-    docs: DocumentDisposition,
-) -> DomainResult<Vec<String>> {
+) -> DomainResult<()> {
     let existing = service_record::Entity::find_by_id(id)
         .filter(service_record::Column::VehicleId.eq(vehicle_id))
         .one(db)
@@ -755,20 +733,6 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .exec(&txn)
         .await?;
 
-    // Visits reference their produced record via a soft link (no FK in
-    // migration 000020) — clear it or a completed visit points at a deleted
-    // service. Same dangling-link class as incident::delete's work_item
-    // cleanup.
-    visit::Entity::update_many()
-        .set(visit::ActiveModel {
-            service_record_id: Set(None),
-            updated_at: Set(super::now_stamp()),
-            ..Default::default()
-        })
-        .filter(visit::Column::ServiceRecordId.eq(existing.id))
-        .exec(&txn)
-        .await?;
-
     // Incident links carry an ON DELETE CASCADE FK, but delete explicitly —
     // pragma-independent and inside the txn, mirroring incident::delete.
     incident_service_link::Entity::delete_many()
@@ -776,9 +740,8 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .exec(&txn)
         .await?;
 
-    // Research findings mark their resolving record via the same polymorphic
-    // soft link documents use (no FK, set by visit::complete or ResearchTab)
-    // — clear it so a finding never points at a deleted service.
+    // Research findings mark their resolving record via a polymorphic soft
+    // link (no FK); clear it so a finding never points at a deleted service.
     research_finding::Entity::update_many()
         .set(research_finding::ActiveModel {
             linked_entity_type: Set(None),
@@ -791,15 +754,12 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .exec(&txn)
         .await?;
 
-    // Unlink or delete attached documents (rows only; files are the caller's)
-    let doc_files = super::document::detach_or_delete_for_entity(&txn, "service", id, docs).await?;
-
     // Delete the service record
     existing.delete(&txn).await?;
 
     txn.commit().await?;
 
-    Ok(doc_files)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -861,7 +821,6 @@ mod tests {
                 shop_name: None,
                 shop_id: None,
                 notes: None,
-                build_id: None,
                 paid_by: None,
                 payer_note: None,
                 schedule_item_ids: Some(vec![sched_id]),
@@ -934,7 +893,6 @@ mod tests {
                 shop_name: None,
                 shop_id: None,
                 notes: None,
-                build_id: None,
                 paid_by: None,
                 payer_note: None,
                 schedule_item_ids: None,
@@ -1015,7 +973,6 @@ mod tests {
                 shop_name: None,
                 shop_id: None,
                 notes: None,
-                build_id: None,
                 paid_by: None,
                 payer_note: None,
                 schedule_item_ids: Some(vec![sched_id]),
@@ -1027,9 +984,7 @@ mod tests {
         .await
         .unwrap();
 
-        delete(&db, vid, created.record.id, DocumentDisposition::Keep)
-            .await
-            .unwrap();
+        delete(&db, vid, created.record.id).await.unwrap();
 
         // Record gone
         assert!(matches!(
@@ -1053,7 +1008,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_unlinks_completed_visit_and_removes_incident_links() {
+    async fn delete_clears_finding_links_and_removes_incident_links() {
         use crate::entities::incident;
 
         let db = test_db().await;
@@ -1069,18 +1024,6 @@ mod tests {
         .unwrap()
         .id;
 
-        // A completed visit pointing at the record (soft link, no FK).
-        let visit_row = visit::ActiveModel {
-            vehicle_id: Set(vid),
-            status: Set("completed".into()),
-            service_record_id: Set(Some(svc_id)),
-            created_at: Set("2024-01-01 00:00:00".into()),
-            updated_at: Set("2024-01-01 00:00:00".into()),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap();
         // An incident linked to the record via the M2M link table.
         let inc = incident::ActiveModel {
             vehicle_id: Set(vid),
@@ -1102,7 +1045,7 @@ mod tests {
         .unwrap();
 
         // A research finding resolved by this record (polymorphic soft link,
-        // no FK — the shape visit::complete writes).
+        // no FK).
         let report = crate::entities::research_report::ActiveModel {
             vehicle_id: Set(vid),
             generated_at: Set("2024-01-01".into()),
@@ -1152,9 +1095,7 @@ mod tests {
         .await
         .unwrap();
 
-        delete(&db, vid, svc_id, DocumentDisposition::Keep)
-            .await
-            .unwrap();
+        delete(&db, vid, svc_id).await.unwrap();
 
         // The research finding survives, its resolving link cleared.
         let f = research_finding::Entity::find_by_id(finding.id)
@@ -1173,14 +1114,7 @@ mod tests {
         assert_eq!(b.linked_entity_type.as_deref(), Some("service"));
         assert_eq!(b.linked_entity_id, Some(other_svc.id));
 
-        // The visit survives, unlinked and re-stamped; the link rows are gone.
-        let v = visit::Entity::find_by_id(visit_row.id)
-            .one(&db)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(v.service_record_id, None);
-        assert_ne!(v.updated_at, "2024-01-01 00:00:00");
+        // The incident link rows are gone.
         let links = incident_service_link::Entity::find()
             .filter(incident_service_link::Column::ServiceRecordId.eq(svc_id))
             .all(&db)
@@ -1251,9 +1185,7 @@ mod tests {
         .await
         .unwrap();
 
-        delete(&db, vid, created.record.id, DocumentDisposition::Keep)
-            .await
-            .unwrap();
+        delete(&db, vid, created.record.id).await.unwrap();
 
         let logs = mileage_log::Entity::find()
             .filter(mileage_log::Column::VehicleId.eq(vid))
@@ -1372,7 +1304,6 @@ mod tests {
             shop_name: None,
             shop_id: None,
             notes: None,
-            build_id: None,
             paid_by: None,
             payer_note: None,
             schedule_item_ids,
@@ -1634,7 +1565,7 @@ mod tests {
         .unwrap_err();
         match err {
             DomainError::BadRequest(msg) => {
-                // The message lists the valid values (build-status whitelist shape).
+                // The message lists the valid values (whitelist shape).
                 assert!(
                     msg.contains("self"),
                     "message should list valid values: {msg}"

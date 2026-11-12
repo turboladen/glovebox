@@ -7,14 +7,11 @@
 
 use glovebox_shared::{
     entities::vehicle,
-    error::{DomainError, DomainResult},
     inputs::{
-        document::{DocumentSource, StoreDocument},
         incident::NewIncident,
         mileage::NewMileageEntry,
         part::NewPart,
         service_record::{NewLineItem, NewServiceRecord},
-        visit::{CompleteVisit, NewVisit},
         work_item::NewWorkItem,
     },
     services::research::NewFiledFinding,
@@ -29,14 +26,6 @@ pub struct EmptyParams {}
 pub struct VehicleParams {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
-}
-
-#[derive(Deserialize, JsonSchema)]
-pub struct BuildParams {
-    /// Vehicle id, from `list_vehicles`.
-    pub vehicle_id: i32,
-    /// Build id, from `list_builds`.
-    pub build_id: i32,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -67,8 +56,6 @@ pub struct RecordServiceInput {
     pub payer_note: Option<String>,
     /// Itemized invoice lines.
     pub line_items: Option<Vec<LineItemInput>>,
-    /// Link this service to a build (from `list_builds`).
-    pub build_id: Option<i32>,
     /// Ids of schedule items (from `check_due_maintenance`) this work
     /// satisfies — linking clears the reminder and restarts its interval.
     pub schedule_item_ids: Option<Vec<i32>>,
@@ -121,7 +108,6 @@ impl RecordServiceInput {
                 shop_name: self.shop_name,
                 shop_id: None,
                 notes: self.notes,
-                build_id: self.build_id,
                 paid_by: self.paid_by,
                 payer_note: self.payer_note,
                 schedule_item_ids: self.schedule_item_ids,
@@ -154,8 +140,6 @@ pub struct LogIncidentInput {
     pub obd_codes: Option<String>,
     /// Free-form notes.
     pub notes: Option<String>,
-    /// Link this incident to a build (from `list_builds`).
-    pub build_id: Option<i32>,
     /// If this is the same problem coming back, the id of the earlier
     /// incident it recurs from (same vehicle).
     pub recurrence_of_id: Option<i32>,
@@ -173,7 +157,6 @@ impl LogIncidentInput {
                 occurred_at: self.occurred_at,
                 obd_codes: self.obd_codes,
                 notes: self.notes,
-                build_id: self.build_id,
                 recurrence_of_id: self.recurrence_of_id,
                 ..Default::default()
             },
@@ -237,8 +220,6 @@ pub struct RecordPartInput {
     pub retailer_url: Option<String>,
     /// Free-form notes.
     pub notes: Option<String>,
-    /// Link this part to a build (from `list_builds`).
-    pub build_id: Option<i32>,
     /// Part warranty expiry date, `YYYY-MM-DD` (if the part carries one).
     pub warranty_expires_on: Option<String>,
     /// Part warranty expiry odometer reading (whole miles).
@@ -266,7 +247,6 @@ impl RecordPartInput {
                 installed_odometer: self.installed_odometer,
                 installed_service_id: self.installed_service_id,
                 notes: self.notes,
-                build_id: self.build_id,
                 location: self.location,
                 warranty_expires_on: self.warranty_expires_on,
                 warranty_expires_miles: self.warranty_expires_miles,
@@ -295,8 +275,6 @@ pub struct PlanWorkInput {
     /// The incident this fixes (from `log_incident`) — completing the work
     /// links the incident to the service record.
     pub incident_id: Option<i32>,
-    /// Link this work to a build (from `list_builds`).
-    pub build_id: Option<i32>,
 }
 
 impl PlanWorkInput {
@@ -309,9 +287,7 @@ impl PlanWorkInput {
                 schedule_item_id: self.schedule_item_id,
                 research_finding_id: self.research_finding_id,
                 incident_id: self.incident_id,
-                build_id: self.build_id,
                 est_cost_cents: self.est_cost_cents,
-                visit_id: None,
             },
         )
     }
@@ -321,97 +297,9 @@ impl PlanWorkInput {
 pub struct ListPlannedWorkInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
-    /// Also include finished work: done/dropped items and
-    /// completed/canceled visits. Default false (open work only).
+    /// Also include finished work: done/dropped items. Default false (open
+    /// work only).
     pub include_done: Option<bool>,
-}
-
-#[derive(Deserialize, JsonSchema)]
-pub struct ScheduleVisitInput {
-    /// Vehicle id, from `list_vehicles`.
-    pub vehicle_id: i32,
-    /// When the visit is planned for, `YYYY-MM-DD`.
-    pub planned_date: Option<String>,
-    /// Shop doing the work (free text) — the primary way to name the shop.
-    /// Omit for DIY.
-    pub shop_name: Option<String>,
-    /// Id of a saved shop from the shops list, when the user refers to one
-    /// they already track. `shop_name` free text works fine on its own.
-    pub shop_id: Option<i32>,
-    /// Work item ids (from `plan_work` / `list_planned_work`) to group into
-    /// this visit — they flip to `scheduled`.
-    pub work_item_ids: Option<Vec<i32>>,
-    /// Free-form notes.
-    pub notes: Option<String>,
-}
-
-impl ScheduleVisitInput {
-    pub fn into_domain(self) -> (i32, NewVisit) {
-        (
-            self.vehicle_id,
-            NewVisit {
-                planned_date: self.planned_date,
-                shop_name: self.shop_name,
-                shop_id: self.shop_id,
-                notes: self.notes,
-                work_item_ids: self.work_item_ids,
-            },
-        )
-    }
-}
-
-#[derive(Deserialize, JsonSchema)]
-pub struct CancelVisitInput {
-    /// Vehicle id, from `list_vehicles`.
-    pub vehicle_id: i32,
-    /// Visit id, from `schedule_visit` / `list_planned_work`.
-    pub visit_id: i32,
-}
-
-#[derive(Deserialize, JsonSchema)]
-pub struct CompleteVisitInput {
-    /// Vehicle id, from `list_vehicles`.
-    pub vehicle_id: i32,
-    /// Visit id, from `schedule_visit` / `list_planned_work`.
-    pub visit_id: i32,
-    /// Date the work was done, `YYYY-MM-DD`.
-    pub service_date: String,
-    /// Odometer reading at service time. Also logs a mileage entry.
-    pub mileage: Option<i32>,
-    /// What was done. Defaults to the attached work items' titles.
-    pub description: Option<String>,
-    /// Total invoice amount in integer cents (e.g. $123.45 -> 12345).
-    pub total_cost_cents: Option<i32>,
-    /// Parts portion of the invoice, integer cents.
-    pub parts_cost_cents: Option<i32>,
-    /// Labor portion of the invoice, integer cents.
-    pub labor_cost_cents: Option<i32>,
-    /// Who paid: `self` (default), `insurance`, or `third_party`.
-    pub paid_by: Option<String>,
-    /// Who exactly paid / claim number, e.g. "Progressive claim #12345".
-    pub payer_note: Option<String>,
-    /// Free-form notes.
-    pub notes: Option<String>,
-}
-
-impl CompleteVisitInput {
-    pub fn into_domain(self) -> (i32, i32, CompleteVisit) {
-        (
-            self.vehicle_id,
-            self.visit_id,
-            CompleteVisit {
-                service_date: self.service_date,
-                mileage: self.mileage,
-                description: self.description,
-                total_cost_cents: self.total_cost_cents,
-                parts_cost_cents: self.parts_cost_cents,
-                labor_cost_cents: self.labor_cost_cents,
-                paid_by: self.paid_by,
-                payer_note: self.payer_note,
-                notes: self.notes,
-            },
-        )
-    }
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -459,20 +347,11 @@ pub struct SummarizeActivityInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
-pub struct FindDocumentsInput {
-    /// Vehicle id, from `list_vehicles`.
-    pub vehicle_id: i32,
-    /// Full-text query over document titles and extracted text (receipts,
-    /// manuals, photos with OCR). Plain words; no special syntax needed.
-    pub query: String,
-}
-
-#[derive(Deserialize, JsonSchema)]
 pub struct SearchRecordsInput {
     /// Full-text query. Plain words; no special syntax needed.
     pub query: String,
     /// Restrict to one record kind: `all`, `vehicles`, `services`,
-    /// `incidents`, `builds`, `documents`, or `research`. Default `all`.
+    /// `incidents`, `research`, `maintenance`, or `todo`. Default `all`.
     pub scope: Option<String>,
     /// Restrict to one vehicle (from `list_vehicles`). Omit to search the garage.
     pub vehicle_id: Option<i32>,
@@ -511,75 +390,6 @@ impl FileResearchFindingInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
-pub struct AttachDocumentInput {
-    /// Vehicle id, from `list_vehicles`.
-    pub vehicle_id: i32,
-    /// THE ONLY way to attach a file with this tool — there is no
-    /// inline-bytes option. This path is resolved on the SERVER, inside its
-    /// inbox directory; you do NOT need to see, mount, or have any access to
-    /// that directory to use it. If the file is already in the inbox (the
-    /// user put it there, or told you its name), pass the name verbatim
-    /// (e.g. "fcp-invoice-2026-06.pdf"). If your file tools share the
-    /// server's filesystem, save the file into the inbox yourself first,
-    /// then pass its inbox-relative path. If the file is NOT in the inbox
-    /// and you cannot put it there, use the HTTP multipart route
-    /// (`POST /api/documents`, see the server instructions) or ask the user
-    /// to drop the file in the inbox and tell you its name. The server reads
-    /// the bytes from disk (byte-perfect, no tokens spent) and COPIES them
-    /// into its document store; the inbox original is left in place.
-    pub source_path: String,
-    /// Original file name with extension, e.g. "fcp-invoice-2026-06.pdf".
-    /// Used for the stored name and MIME detection; unsafe characters are
-    /// normalized. Optional — defaults to the inbox file's name.
-    pub file_name: Option<String>,
-    /// Display title, e.g. "FCP Euro invoice — clutch kit". Defaults to
-    /// `file_name`.
-    pub title: Option<String>,
-    /// The text YOU extracted from the document (read/OCR it yourself and
-    /// pass it here). Full-text indexed — without it, `find_documents` can
-    /// only match the title and file name.
-    pub extracted_text: Option<String>,
-    /// Link target kind: `service` (a service record — the usual case for
-    /// invoices), `part`, or `incident`. Pair with `linked_entity_id`.
-    pub linked_entity_type: Option<String>,
-    /// Id of the linked record (must belong to the same vehicle), e.g. the
-    /// id returned by `record_service`. Pair with `linked_entity_type`.
-    pub linked_entity_id: Option<i32>,
-}
-
-impl AttachDocumentInput {
-    /// Resolve the inbox `source_path` into the shared store input. There is
-    /// no inline-bytes alternative, so an absent/empty path is an
-    /// LLM-recoverable `BadRequest` that names the reachable routes — not a
-    /// protocol failure. (An absent field is already surfaced by
-    /// `LenientParameters`; this guards the empty-string case.)
-    pub fn into_domain(self) -> DomainResult<StoreDocument> {
-        let path = self.source_path.trim();
-        if path.is_empty() {
-            return Err(DomainError::BadRequest(
-                "source_path is required: name the file in the server's inbox to attach. There is \
-                 no inline-bytes option — if the file isn't in the inbox and you can't put it \
-                 there, use the HTTP multipart upload route (POST /api/documents) or ask the user \
-                 to drop the file in the inbox and tell you its name."
-                    .into(),
-            ));
-        }
-        Ok(StoreDocument {
-            vehicle_id: Some(self.vehicle_id),
-            title: self.title,
-            file_name: self.file_name,
-            source: DocumentSource::InboxPath(path.to_string()),
-            mime_type: None,
-            doc_type: None,
-            linked_entity_type: self.linked_entity_type,
-            linked_entity_id: self.linked_entity_id,
-            notes: None,
-            extracted_text: self.extracted_text,
-        })
-    }
-}
-
-#[derive(Deserialize, JsonSchema)]
 pub struct LinkServiceToMaintenanceInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -592,17 +402,6 @@ pub struct LinkServiceToMaintenanceInput {
     /// `add` (default) keeps the record's existing links and adds these;
     /// `replace` overwrites them with exactly this list.
     pub mode: Option<String>,
-}
-
-#[derive(Deserialize, JsonSchema)]
-pub struct UpdateBuildStatusInput {
-    /// Vehicle id, from `list_vehicles`.
-    pub vehicle_id: i32,
-    /// Build id, from `list_builds`.
-    pub build_id: i32,
-    /// New lifecycle status: `planned`, `active`, `on_hold`, `completed`,
-    /// or `abandoned`. Entering `completed` stamps the completion date.
-    pub status: String,
 }
 
 /// Compact vehicle row for `list_vehicles` — enough to pick a `vehicle_id`

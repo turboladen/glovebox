@@ -15,7 +15,6 @@ pub struct NewPart {
     pub installed_odometer: Option<i32>,
     pub installed_service_id: Option<i32>,
     pub notes: Option<String>,
-    pub build_id: Option<i32>,
     pub location: Option<String>,
     /// Warranty expiry (decision ⑩): date (`YYYY-MM-DD`) and/or mileage.
     pub warranty_expires_on: Option<String>,
@@ -42,7 +41,6 @@ pub struct UpdatePart {
     pub replaced_date: Option<Option<String>>,
     pub replaced_odometer: Option<Option<i32>>,
     pub notes: Option<Option<String>>,
-    pub build_id: Option<Option<i32>>,
     pub location: Option<Option<String>>,
     pub warranty_expires_on: Option<Option<String>>,
     pub warranty_expires_miles: Option<Option<i32>>,

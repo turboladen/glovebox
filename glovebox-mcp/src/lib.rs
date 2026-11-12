@@ -1,47 +1,27 @@
-//! MCP (Model Context Protocol) server — glovebox's second surface.
+//! MCP (Model Context Protocol) server for glovebox.
 //!
 //! Exposes the domain in `glovebox-shared` to AI clients as semantic
 //! domain-verb tools (`record_service`, `check_due_maintenance`, …) and
-//! read-only resources (`glovebox://vehicles/{id}`, …). Mounted into the
-//! backend's Axum router at `/mcp` via [`router`]; the transport is
-//! Streamable HTTP in **stateless mode** — every POST is self-contained,
-//! no session table, plain-JSON responses. Statefulness bought us nothing
-//! (we send no server-initiated notifications) and cost us a real failure:
-//! a backend restart invalidated every client's `mcp-session-id`, and
-//! bridges like `mcp-remote` never re-initialize after the resulting 404s —
-//! Claude Desktop just looked "unreachable" until relaunched. The dev loop
-//! restarts the backend on every recompile, so restarts must be invisible.
+//! read-only resources (`glovebox://vehicles/{id}`, …). [`router`] serves
+//! them over Streamable HTTP in **stateless mode**: every POST is
+//! self-contained, there is no session table, and responses are plain JSON.
+//! A server restart therefore never invalidates a connected client's session.
 //!
-//! # Deployment posture (read before exposing beyond the LAN)
+//! # Deployment posture
 //!
-//! **`/mcp` has no authentication — deliberately.** It matches the rest of
-//! the app: the whole HTTP API is unauthenticated, single-user, deployed on
-//! a trusted LAN. Anyone who can reach the port can read and write every
-//! vehicle record, over `/api` and `/mcp` alike. Two consequences:
-//!
-//! 1. **LAN scoping is the security boundary.** Do not port-forward or
-//!    reverse-proxy this server to the internet as-is. If glovebox ever
-//!    needs remote access, add an auth layer first — fewd's per-person
-//!    bearer-token middleware (`fewd/server/src/mcp/mod.rs`) is the
-//!    reference implementation to copy.
-//! 2. **rmcp's DNS-rebinding defense is still on.** The Streamable HTTP
-//!    transport rejects requests whose `Host` header isn't allowlisted
-//!    (localhost variants by default). A LAN deploy reached by hostname
-//!    (e.g. `garage-pi.local:3003`) must opt in via the
-//!    `GLOVEBOX_MCP_ALLOWED_HOSTS` env var — comma-separated, an entry
-//!    without a port matches any port.
-//! 3. **Everything under `GLOVEBOX_INBOX_DIR` is exposable to the LAN.**
-//!    `attach_document`'s `source_path` lets any LAN peer ingest any file
-//!    inside the inbox into the document store and read it back over
-//!    `/files` (containment prevents reaching *outside* the inbox, symlinks
-//!    included). Point the inbox at a DEDICATED directory used only for
-//!    glovebox hand-offs — never a broad directory like a home folder or an
-//!    AI client's general working dir.
+//! **`/mcp` has no authentication.** The server is single-user and meant for
+//! a trusted LAN: anyone who can reach the port can read and write every
+//! vehicle record. Do not port-forward or reverse-proxy it to the internet
+//! as-is. rmcp's DNS-rebinding defense stays on: the Streamable HTTP
+//! transport rejects requests whose `Host` header is not allowlisted
+//! (localhost variants by default). A LAN deploy reached by hostname (for
+//! example `garage-pi.local:3003`) must opt in through the
+//! `GLOVEBOX_MCP_ALLOWED_HOSTS` environment variable: comma-separated, and an
+//! entry without a port matches any port.
 
 use std::sync::Arc;
 
 use axum::Router;
-use glovebox_shared::config::AppConfig;
 use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager,
     tower::{StreamableHttpServerConfig, StreamableHttpService},
@@ -53,67 +33,29 @@ use self::handler::GloveboxMcp;
 mod handler;
 mod schemas;
 
-/// Build the Axum router for the MCP endpoint. The backend mounts this at
-/// `/mcp` via `.nest_service("/mcp", glovebox_mcp::router(db, config))`.
-/// The config supplies `files_dir` for `attach_document`'s file storage and
-/// `inbox_dir` for its `source_path` inbox (where LLM clients drop real
-/// files so the bytes never travel through model context).
-pub fn router(db: DatabaseConnection, config: Arc<AppConfig>) -> Router {
-    // Enumerated once at mount time: the interface set only changes on
-    // network reconfiguration, which in practice comes with a restart.
-    let base_urls: Arc<str> = candidate_base_urls(&config.listen).join(", ").into();
+/// Build the Axum router for the MCP endpoint, served by the given database
+/// connection.
+pub fn router(db: DatabaseConnection) -> Router {
     let default_config = StreamableHttpServerConfig::default();
     let allowed_hosts = merge_allowed_hosts(
         default_config.allowed_hosts.clone(),
         std::env::var("GLOVEBOX_MCP_ALLOWED_HOSTS").ok().as_deref(),
     );
     // Stateless: no sessions to strand on restart (see crate docs), and
-    // plain-JSON responses instead of SSE — simpler for HTTP-only bridges.
+    // plain-JSON responses instead of SSE, which is simpler for HTTP-only
+    // bridges.
     let mut http_config = default_config.with_allowed_hosts(allowed_hosts);
     http_config.stateful_mode = false;
     http_config.json_response = true;
 
     let streamable = StreamableHttpService::new(
-        move || {
-            Ok(GloveboxMcp::new(
-                db.clone(),
-                config.clone(),
-                base_urls.clone(),
-            ))
-        },
+        move || Ok(GloveboxMcp::new(db.clone())),
         // Required by the constructor; unused when stateful_mode is false.
         Arc::new(LocalSessionManager::default()),
         http_config,
     );
 
     Router::new().fallback_service(streamable)
-}
-
-/// Candidate HTTP base URLs for the multipart upload route, advertised in the
-/// server instructions so a sandboxed-but-networked client (e.g. Claude
-/// Desktop's VM, which cannot see the host inbox) knows where to aim `curl`:
-/// the machine's non-loopback, non-link-local IPv4 addresses first (a VM
-/// reaches the host by LAN IP, not the host's loopback), then localhost.
-/// The port comes from `listen` (`GLOVEBOX_LISTEN`), falling back to 3003
-/// when unparseable; interface-enumeration failure degrades gracefully to
-/// localhost only.
-fn candidate_base_urls(listen: &str) -> Vec<String> {
-    let port = listen
-        .rsplit(':')
-        .next()
-        .and_then(|p| p.parse::<u16>().ok())
-        .unwrap_or(3003);
-    let mut urls: Vec<String> = if_addrs::get_if_addrs().map_or_default(|ifaces| {
-        ifaces
-            .iter()
-            .filter(|i| !i.is_loopback() && !i.is_link_local() && i.ip().is_ipv4())
-            .map(|i| format!("http://{}:{port}", i.ip()))
-            .collect()
-    });
-    urls.sort();
-    urls.dedup();
-    urls.push(format!("http://localhost:{port}"));
-    urls
 }
 
 /// Build the MCP host allowlist by appending operator-supplied hostnames from
@@ -137,7 +79,7 @@ fn merge_allowed_hosts(defaults: Vec<String>, env_value: Option<&str>) -> Vec<St
 
 #[cfg(test)]
 mod tests {
-    use super::{candidate_base_urls, merge_allowed_hosts};
+    use super::merge_allowed_hosts;
     use rmcp::transport::streamable_http_server::tower::StreamableHttpServerConfig;
 
     fn fake_defaults() -> Vec<String> {
@@ -161,25 +103,6 @@ mod tests {
             ),
             expected,
         );
-    }
-
-    #[test]
-    fn base_urls_derive_port_from_listen_and_end_with_localhost() {
-        let urls = candidate_base_urls("0.0.0.0:9999");
-        assert_eq!(urls.last().unwrap(), "http://localhost:9999");
-        assert!(urls.iter().all(|u| u.ends_with(":9999")));
-        assert!(
-            !urls.iter().any(|u| u.contains("127.0.0.1")),
-            "loopback interfaces must be excluded (localhost entry covers them): {urls:?}"
-        );
-    }
-
-    /// Unparseable listen (e.g. the empty string test configs use) must not
-    /// lose the route — fall back to the default port, localhost included.
-    #[test]
-    fn base_urls_degrade_gracefully_on_unparseable_listen() {
-        let urls = candidate_base_urls("");
-        assert_eq!(urls.last().unwrap(), "http://localhost:3003");
     }
 
     /// Confirms the call site reads rmcp's defaults instead of hardcoding

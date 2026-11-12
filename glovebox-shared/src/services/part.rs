@@ -3,10 +3,7 @@ use sea_orm::*;
 use crate::{
     entities::{part, research_finding, service_record},
     error::{DomainError, DomainResult},
-    inputs::{
-        document::DocumentDisposition,
-        part::{NewPart, PartFilter, UpdatePart},
-    },
+    inputs::part::{NewPart, PartFilter, UpdatePart},
 };
 
 /// Verify a referenced service record belongs to the vehicle. A cross-vehicle
@@ -54,9 +51,6 @@ pub async fn create(
     if let Some(service_id) = input.installed_service_id {
         require_service_record_owned(db, vehicle_id, service_id).await?;
     }
-    if let Some(build_id) = input.build_id {
-        crate::services::build::require_owned(db, vehicle_id, build_id).await?;
-    }
 
     let model = part::ActiveModel {
         vehicle_id: Set(vehicle_id),
@@ -76,7 +70,6 @@ pub async fn create(
         installed_odometer: Set(input.installed_odometer),
         installed_service_id: Set(input.installed_service_id),
         notes: Set(input.notes),
-        build_id: Set(input.build_id),
         location: Set(input.location),
         warranty_expires_on: Set(input.warranty_expires_on),
         warranty_expires_miles: Set(input.warranty_expires_miles),
@@ -95,9 +88,6 @@ pub async fn update(
 
     if let Some(Some(service_id)) = input.installed_service_id {
         require_service_record_owned(db, vehicle_id, service_id).await?;
-    }
-    if let Some(Some(build_id)) = input.build_id {
-        crate::services::build::require_owned(db, vehicle_id, build_id).await?;
     }
 
     let mut active: part::ActiveModel = existing.into();
@@ -156,9 +146,6 @@ pub async fn update(
     if let Some(v) = input.notes {
         active.notes = Set(v);
     }
-    if let Some(v) = input.build_id {
-        active.build_id = Set(v);
-    }
     if let Some(v) = input.location {
         active.location = Set(v);
     }
@@ -173,15 +160,12 @@ pub async fn update(
     Ok(active.update(db).await?)
 }
 
-/// Delete a part. Linked documents are handled per `docs`; the returned paths
-/// are files the CALLER must remove after commit (see
-/// [`super::document::detach_or_delete_for_entity`]).
+/// Delete a part and clear any research finding links that point at it.
 pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
     id: i32,
-    docs: DocumentDisposition,
-) -> DomainResult<Vec<String>> {
+) -> DomainResult<()> {
     let existing = get(db, vehicle_id, id).await?;
 
     let txn = db.begin().await?;
@@ -198,11 +182,10 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .filter(research_finding::Column::LinkedEntityId.eq(id))
         .exec(&txn)
         .await?;
-    let doc_files = super::document::detach_or_delete_for_entity(&txn, "part", id, docs).await?;
     existing.delete(&txn).await?;
     txn.commit().await?;
 
-    Ok(doc_files)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -245,7 +228,6 @@ mod tests {
             installed_odometer: None,
             installed_service_id,
             notes: None,
-            build_id: None,
             location: None,
             warranty_expires_on: None,
             warranty_expires_miles: None,
@@ -452,51 +434,7 @@ mod tests {
         );
     }
 
-    // --- delete + linked documents ---------------------------------------
-
-    #[tokio::test]
-    async fn delete_keep_unlinks_documents() {
-        let db = test_db().await;
-        let vid = seed_vehicle(&db).await;
-        let part = create(&db, vid, minimal_part("Doomed", None))
-            .await
-            .unwrap();
-        let doc_id = crate::test_support::seed_linked_document(&db, "part", part.id).await;
-
-        let paths = delete(&db, vid, part.id, DocumentDisposition::Keep)
-            .await
-            .unwrap();
-        assert!(paths.is_empty());
-        assert!(matches!(
-            get(&db, vid, part.id).await.unwrap_err(),
-            DomainError::NotFound(_)
-        ));
-
-        let doc = crate::services::document::get(&db, doc_id).await.unwrap();
-        assert_eq!(doc.linked_entity_type, None);
-        assert!(doc.notes.unwrap().contains("Unlinked from part"));
-    }
-
-    #[tokio::test]
-    async fn delete_cascade_removes_document_rows() {
-        let db = test_db().await;
-        let vid = seed_vehicle(&db).await;
-        let part = create(&db, vid, minimal_part("Doomed", None))
-            .await
-            .unwrap();
-        let doc_id = crate::test_support::seed_linked_document(&db, "part", part.id).await;
-
-        let paths = delete(&db, vid, part.id, DocumentDisposition::Delete)
-            .await
-            .unwrap();
-        assert_eq!(paths, vec![format!("general/other/part-{}.pdf", part.id)]);
-        assert!(matches!(
-            crate::services::document::get(&db, doc_id)
-                .await
-                .unwrap_err(),
-            DomainError::NotFound(_)
-        ));
-    }
+    // --- delete ----------------------------------------------------------
 
     #[tokio::test]
     async fn delete_clears_research_finding_links() {
@@ -538,9 +476,7 @@ mod tests {
             .await
             .unwrap();
 
-        delete(&db, vid, part.id, DocumentDisposition::Keep)
-            .await
-            .unwrap();
+        delete(&db, vid, part.id).await.unwrap();
 
         let f = research_finding::Entity::find_by_id(finding.id)
             .one(&db)
@@ -565,9 +501,7 @@ mod tests {
         let other_vid = seed_vehicle(&db).await;
         let part = create(&db, vid, minimal_part("Mine", None)).await.unwrap();
 
-        let wrong_parent = delete(&db, other_vid, part.id, DocumentDisposition::Keep)
-            .await
-            .unwrap_err();
+        let wrong_parent = delete(&db, other_vid, part.id).await.unwrap_err();
         // Compare against the nonexistent-id message for the SAME id: no
         // ownership oracle distinguishing "exists elsewhere" from "not at all".
         let DomainError::NotFound(wrong_parent_msg) = wrong_parent else {

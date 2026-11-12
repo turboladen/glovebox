@@ -1,4 +1,4 @@
-//! Full-text search across vehicle, event, document, and planning text — one
+//! Full-text search across vehicle, event, and planning text — one
 //! domain operation over the FTS5 indexes created by migrations 000013 and
 //! 000021.
 //!
@@ -22,8 +22,6 @@ pub enum SearchScope {
     Vehicles,
     Services,
     Incidents,
-    Builds,
-    Documents,
     Research,
     Maintenance,
     Todo,
@@ -31,21 +29,19 @@ pub enum SearchScope {
 
 impl SearchScope {
     /// Parse the wire form
-    /// (`all|vehicles|services|incidents|builds|documents|research|maintenance|todo`).
+    /// (`all|vehicles|services|incidents|research|maintenance|todo`).
     pub fn parse(s: &str) -> DomainResult<Self> {
         match s {
             "all" => Ok(Self::All),
             "vehicles" => Ok(Self::Vehicles),
             "services" => Ok(Self::Services),
             "incidents" => Ok(Self::Incidents),
-            "builds" => Ok(Self::Builds),
-            "documents" => Ok(Self::Documents),
             "research" => Ok(Self::Research),
             "maintenance" => Ok(Self::Maintenance),
             "todo" => Ok(Self::Todo),
             other => Err(DomainError::BadRequest(format!(
                 "unknown search scope '{other}' (expected one of: all, vehicles, services, \
-                 incidents, builds, documents, research, maintenance, todo)"
+                 incidents, research, maintenance, todo)"
             ))),
         }
     }
@@ -54,7 +50,7 @@ impl SearchScope {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SearchHit {
     /// Domain record kind: `vehicle`, `service`, `incident`,
-    /// `incident_followup`, `build`, `document`, `research_finding`,
+    /// `incident_followup`, `research_finding`,
     /// `schedule_item`, or `work_item`.
     pub kind: String,
     pub id: i32,
@@ -89,8 +85,7 @@ fn fts_match_expr(query: &str) -> Option<String> {
 
 /// One UNION ALL arm: a `kind`-tagged SELECT over one FTS table joined back to
 /// its content table. `?1` is the MATCH expression; when `vehicle_filter` is
-/// set, `?2` is the vehicle id compared against `vehicle_col` (documents with
-/// NULL `vehicle_id` never match, by design).
+/// set, `?2` is the vehicle id compared against `vehicle_col`.
 fn subquery(
     kind: &str,
     fts: &str,
@@ -190,28 +185,6 @@ pub async fn search(
             "f.id",
             "i.vehicle_id",
             "f.summary",
-            filt,
-        ));
-    }
-    if want(SearchScope::Builds) {
-        subs.push(subquery(
-            "build",
-            "fts_builds",
-            "JOIN builds b ON b.id = fts_builds.rowid",
-            "b.id",
-            "b.vehicle_id",
-            "b.name",
-            filt,
-        ));
-    }
-    if want(SearchScope::Documents) {
-        subs.push(subquery(
-            "document",
-            "fts_documents",
-            "JOIN documents d ON d.id = fts_documents.rowid",
-            "d.id",
-            "d.vehicle_id",
-            "d.title",
             filt,
         ));
     }
@@ -333,21 +306,6 @@ mod tests {
         .id
     }
 
-    async fn seed_document(db: &impl ConnectionTrait, vehicle_id: Option<i32>, text: &str) -> i32 {
-        entities::document::ActiveModel {
-            vehicle_id: Set(vehicle_id),
-            title: Set("Invoice".into()),
-            file_path: Set("docs/invoice.pdf".into()),
-            file_name: Set("invoice.pdf".into()),
-            extracted_text: Set(Some(text.into())),
-            ..Default::default()
-        }
-        .insert(db)
-        .await
-        .unwrap()
-        .id
-    }
-
     #[tokio::test]
     async fn finds_service_notes_across_all_scopes() {
         let db = test_db().await;
@@ -401,8 +359,6 @@ mod tests {
         let other = seed_vehicle(&db, "Jetta").await;
         let mine_svc = seed_service(&db, mine, "replaced brake pads").await;
         seed_service(&db, other, "replaced brake pads too").await;
-        // A document with no vehicle must never match a vehicle-scoped search.
-        seed_document(&db, None, "brake pad receipt").await;
 
         let hits = search(&db, "brake", SearchScope::All, Some(mine))
             .await
@@ -410,7 +366,6 @@ mod tests {
         assert!(!hits.is_empty());
         assert!(hits.iter().all(|h| h.vehicle_id == Some(mine)));
         assert!(hits.iter().any(|h| h.kind == "service" && h.id == mine_svc));
-        assert!(!hits.iter().any(|h| h.kind == "document"));
     }
 
     #[tokio::test]
@@ -418,13 +373,21 @@ mod tests {
         let db = test_db().await;
         let vid = seed_vehicle(&db, "Golf R").await;
         seed_service(&db, vid, "replaced brake pads").await;
-        let doc = seed_document(&db, Some(vid), "brake pad receipt from FCP").await;
+        entities::incident::ActiveModel {
+            vehicle_id: Set(vid),
+            category: Set("noise".into()),
+            title: Set("Brake squeal".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
 
-        let hits = search(&db, "brake", SearchScope::Documents, None)
+        let hits = search(&db, "brake", SearchScope::Incidents, None)
             .await
             .unwrap();
-        assert!(hits.iter().all(|h| h.kind == "document"));
-        assert!(hits.iter().any(|h| h.id == doc));
+        assert!(!hits.is_empty());
+        assert!(hits.iter().all(|h| h.kind == "incident"));
 
         let hits = search(&db, "brake", SearchScope::Services, None)
             .await
@@ -536,7 +499,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn finds_vehicle_incident_followup_build_and_research() {
+    async fn finds_vehicle_incident_followup_and_research() {
         let db = test_db().await;
         let vid = seed_vehicle(&db, "Golf R with unicorn paint").await;
         entities::incident::ActiveModel {
@@ -564,15 +527,6 @@ mod tests {
             incident_id: Set(crash.id),
             occurred_at: Set("2026-02-02".into()),
             summary: Set("Adjuster approved bumper repair".into()),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap();
-        entities::build::ActiveModel {
-            vehicle_id: Set(vid),
-            name: Set("Big turbo kilonewton build".into()),
-            description: Set(Some("IS38 swap with methanol injection".into())),
             ..Default::default()
         }
         .insert(&db)
@@ -621,14 +575,6 @@ mod tests {
             .await
             .unwrap();
         assert_kind(&hits, "incident_followup", vid);
-        let hits = search(&db, "kilonewton", SearchScope::Builds, None)
-            .await
-            .unwrap();
-        assert_kind(&hits, "build", vid);
-        let hits = search(&db, "methanol", SearchScope::All, None)
-            .await
-            .unwrap();
-        assert_kind(&hits, "build", vid);
         let hits = search(&db, "impeller", SearchScope::Research, None)
             .await
             .unwrap();
@@ -865,8 +811,7 @@ mod tests {
             SearchScope::parse("incidents").unwrap(),
             SearchScope::Incidents
         );
-        assert_eq!(SearchScope::parse("builds").unwrap(), SearchScope::Builds);
-        for retired in ["observations", "accidents"] {
+        for retired in ["observations", "accidents", "builds", "documents"] {
             assert!(
                 matches!(
                     SearchScope::parse(retired).unwrap_err(),
@@ -875,10 +820,6 @@ mod tests {
                 "retired scope '{retired}' must be rejected"
             );
         }
-        assert_eq!(
-            SearchScope::parse("documents").unwrap(),
-            SearchScope::Documents
-        );
         assert_eq!(
             SearchScope::parse("research").unwrap(),
             SearchScope::Research

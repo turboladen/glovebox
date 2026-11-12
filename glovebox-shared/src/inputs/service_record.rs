@@ -19,7 +19,6 @@ pub struct NewServiceRecord {
     pub shop_name: Option<String>,
     pub shop_id: Option<i32>,
     pub notes: Option<String>,
-    pub build_id: Option<i32>,
     /// Who paid: `self` (default), `insurance`, or `third_party`.
     pub paid_by: Option<String>,
     pub payer_note: Option<String>,
@@ -46,7 +45,6 @@ pub struct UpdateServiceRecord {
     pub shop_name: Option<Option<String>>,
     pub shop_id: Option<Option<i32>>,
     pub notes: Option<Option<String>>,
-    pub build_id: Option<Option<i32>>,
     /// Plain option: the column is non-nullable, so there is no "clear" case.
     pub paid_by: Option<String>,
     pub payer_note: Option<Option<String>>,

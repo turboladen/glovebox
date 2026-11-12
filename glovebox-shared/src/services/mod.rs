@@ -1,10 +1,6 @@
 pub mod activity;
 pub mod budget;
-pub mod build;
 pub mod costs;
-pub mod dashboard;
-pub mod document;
-pub mod export;
 pub mod incident;
 pub mod mileage;
 pub mod model_template;
@@ -19,7 +15,6 @@ pub mod service_record;
 pub mod shop;
 pub mod vehicle;
 pub mod vin_decode;
-pub mod visit;
 pub mod work_item;
 
 /// The project-wide stored-timestamp stamp (naive UTC, stored as text).

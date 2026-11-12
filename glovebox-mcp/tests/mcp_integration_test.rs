@@ -8,61 +8,24 @@
 //! Harness mirrors fewd's `mcp_diet_tags_test.rs`, minus auth (glovebox's
 //! `/mcp` is unauthenticated by design — LAN posture, see crate docs).
 
-use std::sync::Arc;
-
 use axum::{
     Router,
     body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
 use glovebox_shared::{
-    config::AppConfig,
-    inputs::{
-        build::NewBuild, schedule::NewScheduleItem, service_record::NewServiceRecord,
-        vehicle::NewVehicle,
-    },
-    services::{build as build_svc, schedule as schedule_svc, service_record as svc_svc, vehicle},
+    inputs::{schedule::NewScheduleItem, service_record::NewServiceRecord, vehicle::NewVehicle},
+    services::{schedule as schedule_svc, service_record as svc_svc, vehicle},
     test_support::test_db,
 };
 use sea_orm::DatabaseConnection;
 use tower::ServiceExt;
 
-/// Router + DB + the temp files dir backing `attach_document` (keep the
-/// `TempDir` alive for the test's duration; dropping it deletes the dir).
-/// The inbox is pointed at a nonexistent path — tests that exercise
-/// `source_path` use [`setup_with_inbox`].
-async fn setup() -> (Router, DatabaseConnection, tempfile::TempDir) {
+/// Router over a fresh in-memory database, plus a handle to that database
+/// for seeding and assertions.
+async fn setup() -> (Router, DatabaseConnection) {
     let db = test_db().await;
-    let files = tempfile::tempdir().expect("temp files dir");
-    let config = Arc::new(AppConfig {
-        db_path: String::new(),
-        listen: String::new(),
-        files_dir: files.path().to_string_lossy().into_owned(),
-        inbox_dir: files.path().join("inbox").to_string_lossy().into_owned(),
-        public_url: "http://glovebox.test".into(),
-    });
-    (glovebox_mcp::router(db.clone(), config), db, files)
-}
-
-/// Like [`setup`], plus a real temp inbox dir wired into the config for
-/// `attach_document` `source_path` tests.
-async fn setup_with_inbox() -> (
-    Router,
-    DatabaseConnection,
-    tempfile::TempDir,
-    tempfile::TempDir,
-) {
-    let db = test_db().await;
-    let files = tempfile::tempdir().expect("temp files dir");
-    let inbox = tempfile::tempdir().expect("temp inbox dir");
-    let config = Arc::new(AppConfig {
-        db_path: String::new(),
-        listen: String::new(),
-        files_dir: files.path().to_string_lossy().into_owned(),
-        inbox_dir: inbox.path().to_string_lossy().into_owned(),
-        public_url: "http://glovebox.test".into(),
-    });
-    (glovebox_mcp::router(db.clone(), config), db, files, inbox)
+    (glovebox_mcp::router(db.clone()), db)
 }
 
 fn new_vehicle(name: &str) -> NewVehicle {
@@ -91,7 +54,7 @@ fn new_vehicle(name: &str) -> NewVehicle {
     }
 }
 
-fn minimal_service(date: &str, description: &str, build_id: Option<i32>) -> NewServiceRecord {
+fn minimal_service(date: &str, description: &str) -> NewServiceRecord {
     NewServiceRecord {
         service_date: date.into(),
         mileage: None,
@@ -105,7 +68,6 @@ fn minimal_service(date: &str, description: &str, build_id: Option<i32>) -> NewS
         shop_name: None,
         shop_id: None,
         notes: None,
-        build_id,
         paid_by: None,
         payer_note: None,
         schedule_item_ids: None,
@@ -241,63 +203,6 @@ fn extract_json(body: &str) -> serde_json::Value {
     serde_json::from_str(raw).unwrap_or_else(|e| panic!("unparseable rpc body ({e}): {body}"))
 }
 
-/// glovebox-zeeh / glovebox-tht1: sandboxed clients (e.g. Claude Desktop's
-/// VM) cannot see the host inbox, so the served instructions must teach the
-/// full file-attachment decision tree — the inbox path (shared filesystem),
-/// the HTTP multipart route with its health probe and at least the localhost
-/// base URL (sandboxed-but-networked shells), and the ask-the-user STOP as
-/// the final route. There is NO base64 escape hatch: the instructions must
-/// not mention `content_base64`/base64 at all (removing it is the behavioral
-/// fix — the model degraded real scans to fit that parameter).
-#[tokio::test]
-async fn instructions_teach_the_file_attachment_decision_tree() {
-    let (app, _db, _files, inbox) = setup_with_inbox().await;
-    let init = serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": "initialize",
-        "id": 1,
-        "params": {
-            "protocolVersion": "2025-03-26",
-            "capabilities": {},
-            "clientInfo": { "name": "glovebox-mcp-test", "version": "0" }
-        }
-    })
-    .to_string();
-    let body = post_rpc(&app, init).await;
-    let instructions = extract_json(&body)["result"]["instructions"]
-        .as_str()
-        .expect("initialize result must carry instructions")
-        .to_owned();
-
-    let inbox_dir = inbox.path().to_string_lossy().into_owned();
-    for marker in [
-        "browser deep link", // PRIMARY path: hand the record_service link to the user
-        "drop zone",         // ...their browser drag-drops the file
-        inbox_dir.as_str(),  // inbox path for the already-on-server routes
-        "source_path",
-        "/api/documents", // HTTP multipart upload route
-        "curl",
-        "extracted_text",
-        "/api/health",           // reachability probe for the base URLs
-        "http://localhost:3003", // always-present base (test listen is empty → default port)
-    ] {
-        assert!(
-            instructions.contains(marker),
-            "instructions must contain {marker:?}; got: {instructions}"
-        );
-    }
-    // The base64 escape hatch is GONE — its very presence made the model
-    // degrade real files to fit it (glovebox-tht1). It must not reappear in
-    // the served guidance.
-    for forbidden in ["content_base64", "base64"] {
-        assert!(
-            !instructions.contains(forbidden),
-            "instructions must not mention {forbidden:?} (the escape hatch was removed); got: \
-             {instructions}"
-        );
-    }
-}
-
 // ─── Tools ──────────────────────────────────────────────────────
 
 /// The glovebox-9k0x regression: a client whose handshake happened against a
@@ -308,22 +213,14 @@ async fn instructions_teach_the_file_attachment_decision_tree() {
 #[tokio::test]
 async fn tool_calls_survive_a_server_restart() {
     let db = test_db().await;
-    let files = tempfile::tempdir().expect("temp files dir");
-    let config = Arc::new(AppConfig {
-        db_path: String::new(),
-        listen: String::new(),
-        files_dir: files.path().to_string_lossy().into_owned(),
-        inbox_dir: files.path().join("inbox").to_string_lossy().into_owned(),
-        public_url: String::new(),
-    });
-    let first = glovebox_mcp::router(db.clone(), config.clone());
+    let first = glovebox_mcp::router(db.clone());
     handshake(&first).await;
     vehicle::create(&db, new_vehicle("Restart Survivor"))
         .await
         .unwrap();
 
     // "Restart": a brand-new service instance, no handshake sent to it.
-    let second = glovebox_mcp::router(db.clone(), config);
+    let second = glovebox_mcp::router(db.clone());
     let body = post_rpc(&second, call_tool("list_vehicles", serde_json::json!({}))).await;
     assert_success(&body);
     assert!(
@@ -332,9 +229,51 @@ async fn tool_calls_survive_a_server_restart() {
     );
 }
 
+/// Every tool name `tools/list` advertises, after a handshake.
+async fn tool_names(app: &Router) -> Vec<String> {
+    handshake(app).await;
+    let body = post_rpc(
+        app,
+        r#"{"jsonrpc":"2.0","method":"tools/list","id":2}"#.to_string(),
+    )
+    .await;
+    extract_json(&body)["result"]["tools"]
+        .as_array()
+        .unwrap_or_else(|| panic!("tools/list result must carry a tools array; got: {body}"))
+        .iter()
+        .map(|t| t["name"].as_str().expect("tool name").to_owned())
+        .collect()
+}
+
 #[tokio::test]
-async fn tools_list_advertises_the_full_verb_set() {
-    let (app, _db, _files) = setup().await;
+async fn tools_list_has_no_build_visit_or_document_verbs() {
+    let (app, _db) = setup().await;
+    let names = tool_names(&app).await;
+    for gone in [
+        "list_builds",
+        "get_build_progress",
+        "update_build_status",
+        "schedule_visit",
+        "complete_visit",
+        "cancel_visit",
+        "attach_document",
+        "find_documents",
+    ] {
+        assert!(!names.contains(&gone.to_string()), "{gone} must be removed");
+    }
+    for kept in [
+        "record_service",
+        "plan_work",
+        "check_recalls",
+        "log_incident",
+    ] {
+        assert!(names.contains(&kept.to_string()), "{kept} must remain");
+    }
+}
+
+#[tokio::test]
+async fn tools_list_advertises_the_remaining_verb_set() {
+    let (app, _db) = setup().await;
     handshake(&app).await;
     let body = post_rpc(
         &app,
@@ -352,20 +291,12 @@ async fn tools_list_advertises_the_full_verb_set() {
         "check_due_maintenance",
         "dismiss_schedule_item",
         "summarize_recent_activity",
-        "find_documents",
         "search_records",
         "cost_summary",
         "check_recalls",
         "file_research_finding",
-        "list_builds",
-        "get_build_progress",
-        "update_build_status",
         "plan_work",
         "list_planned_work",
-        "schedule_visit",
-        "complete_visit",
-        "cancel_visit",
-        "attach_document",
         "link_service_to_maintenance",
     ] {
         assert!(
@@ -374,14 +305,13 @@ async fn tools_list_advertises_the_full_verb_set() {
         );
     }
     // Every argument-taking tool must advertise a real, non-empty input
-    // schema — forgetting the `input_schema =` override on a #[tool]
-    // silently advertises an empty one (see handler.rs docs), and a single
-    // substring check would never catch that regression.
+    // schema. Forgetting the `input_schema =` override on a #[tool] silently
+    // advertises an empty one, and a substring check alone would not catch it.
     let parsed = extract_json(&body);
     let tools = parsed["result"]["tools"]
         .as_array()
         .unwrap_or_else(|| panic!("tools/list result must carry a tools array; got: {body}"));
-    assert_eq!(tools.len(), 25, "expected exactly 25 tools; got: {body}");
+    assert_eq!(tools.len(), 17, "expected exactly 17 tools; got: {body}");
     for tool in tools {
         let name = tool["name"].as_str().expect("tool name");
         if name == "list_vehicles" {
@@ -399,7 +329,7 @@ async fn tools_list_advertises_the_full_verb_set() {
 
 #[tokio::test]
 async fn rejects_unknown_host_header() {
-    let (app, _db, _files) = setup().await;
+    let (app, _db) = setup().await;
     // DNS-rebinding defense: a Host outside the allowlist must be refused
     // before any JSON-RPC processing happens.
     let resp = app
@@ -427,7 +357,7 @@ async fn rejects_unknown_host_header() {
 
 #[tokio::test]
 async fn list_vehicles_empty_then_after_seed() {
-    let (app, db, _files) = setup().await;
+    let (app, db) = setup().await;
     handshake(&app).await;
 
     let body = post_rpc(&app, call_tool("list_vehicles", serde_json::json!({}))).await;
@@ -445,7 +375,7 @@ async fn list_vehicles_empty_then_after_seed() {
 
 #[tokio::test]
 async fn record_service_then_summarize_recent_activity_round_trip() {
-    let (app, db, _files) = setup().await;
+    let (app, db) = setup().await;
     handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
 
@@ -481,60 +411,6 @@ async fn record_service_then_summarize_recent_activity_round_trip() {
     assert!(
         body.contains("Oil change + filter") && body.contains("48000"),
         "activity feed must include the recorded service; got: {body}"
-    );
-}
-
-/// glovebox-alki: `record_service` hands back a browser deep link (a second
-/// text content block) so a sandboxed client can offload file attachment to
-/// the user's non-sandboxed browser. The link is built from the config's
-/// `public_url` and targets the record-scoped attach page.
-#[tokio::test]
-async fn record_service_returns_browser_attach_deep_link() {
-    let (app, db, _files) = setup().await;
-    handshake(&app).await;
-    let v = vehicle::create(&db, new_vehicle("Link Wagon"))
-        .await
-        .unwrap();
-
-    let body = post_rpc(
-        &app,
-        call_tool(
-            "record_service",
-            serde_json::json!({
-                "vehicle_id": v.id,
-                "service_date": "2026-06-01",
-                "description": "Brake pads",
-                "total_cost_cents": 12_000
-            }),
-        ),
-    )
-    .await;
-    assert_success(&body);
-
-    // The created record id comes off the first (JSON) content block.
-    let record_id = tool_payload(&body)["id"]
-        .as_i64()
-        .expect("service record id in payload");
-
-    // The second content block carries the human note + deep link, built from
-    // setup()'s public_url ("http://glovebox.test").
-    let parsed = extract_json(&body);
-    let note = parsed["result"]["content"][1]["text"]
-        .as_str()
-        .expect("record_service must return a second text block with the link");
-    // Path-mode router: NO `/#/`. A hash URL would make the history router read
-    // the whole thing as `/` and render the dashboard (the bug this guards).
-    let expected = format!(
-        "http://glovebox.test/vehicles/{}/records/documents?attach=service:{}",
-        v.id, record_id
-    );
-    assert!(
-        !note.contains("/#/"),
-        "deep link must be path-mode (no /#/), got: {note}"
-    );
-    assert!(
-        note.contains(&expected),
-        "attach deep link must be present; expected {expected} in: {note}"
     );
 }
 
@@ -593,7 +469,7 @@ async fn reminder_status(app: &Router, vehicle_id: i32, name: &str) -> String {
 
 #[tokio::test]
 async fn record_service_schedule_item_ids_clears_the_overdue_reminder() {
-    let (app, db, _files) = setup().await;
+    let (app, db) = setup().await;
     handshake(&app).await;
     let v = vehicle::create(
         &db,
@@ -660,7 +536,7 @@ async fn record_service_schedule_item_ids_clears_the_overdue_reminder() {
 
 #[tokio::test]
 async fn dismiss_schedule_item_hides_it_and_rejects_wrong_vehicle() {
-    let (app, db, _files) = setup().await;
+    let (app, db) = setup().await;
     handshake(&app).await;
     let v = vehicle::create(
         &db,
@@ -740,7 +616,7 @@ async fn dismiss_schedule_item_hides_it_and_rejects_wrong_vehicle() {
 
 #[tokio::test]
 async fn log_incident_and_mileage_write_through() {
-    let (app, db, _files) = setup().await;
+    let (app, db) = setup().await;
     handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
 
@@ -781,7 +657,7 @@ async fn log_incident_and_mileage_write_through() {
 
 #[tokio::test]
 async fn log_incident_rejects_unknown_category_and_wrong_links() {
-    let (app, db, _files) = setup().await;
+    let (app, db) = setup().await;
     handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
     let other = vehicle::create(&db, new_vehicle("Other")).await.unwrap();
@@ -867,7 +743,7 @@ async fn log_incident_rejects_unknown_category_and_wrong_links() {
 
 #[tokio::test]
 async fn save_note_is_searchable_via_search_records() {
-    let (app, db, _files) = setup().await;
+    let (app, db) = setup().await;
     handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
 
@@ -916,71 +792,10 @@ async fn save_note_is_searchable_via_search_records() {
 }
 
 #[tokio::test]
-async fn search_records_builds_scope_finds_seeded_build() {
-    let (app, db, _files) = setup().await;
-    handshake(&app).await;
-    let v = vehicle::create(&db, new_vehicle("Project")).await.unwrap();
-    build_svc::create(
-        &db,
-        v.id,
-        NewBuild {
-            name: "Big turbo kilonewton build".into(),
-            description: Some("IS38 swap".into()),
-            target_date: None,
-        },
-    )
-    .await
-    .unwrap();
-
-    let body = post_rpc(
-        &app,
-        call_tool(
-            "search_records",
-            serde_json::json!({ "query": "kilonewton", "scope": "builds" }),
-        ),
-    )
-    .await;
-    assert_success(&body);
-    assert!(
-        body.contains("Big turbo kilonewton build") && body.contains("build"),
-        "builds scope must find the seeded build by name; got: {body}"
-    );
-
-    // Retired scopes are clean tool errors, not silent empties.
-    for retired in ["observations", "accidents"] {
-        let body = post_rpc(
-            &app,
-            call_tool(
-                "search_records",
-                serde_json::json!({ "query": "anything", "scope": retired }),
-            ),
-        )
-        .await;
-        assert_tool_error(&body);
-        assert!(
-            body.contains("unknown search scope"),
-            "retired scope '{retired}' must be rejected; got: {body}"
-        );
-    }
-}
-
-#[tokio::test]
-async fn record_part_round_trips_and_rejects_bad_links() {
-    let (app, db, _files) = setup().await;
+async fn record_part_round_trips_and_rejects_a_missing_vehicle() {
+    let (app, db) = setup().await;
     handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
-    let other = vehicle::create(&db, new_vehicle("Other")).await.unwrap();
-    let foreign_build = build_svc::create(
-        &db,
-        other.id,
-        NewBuild {
-            name: "Not mine".into(),
-            description: None,
-            target_date: None,
-        },
-    )
-    .await
-    .unwrap();
 
     // Parts have no MCP list surface; the tool result payload is the created
     // part record itself.
@@ -1020,72 +835,17 @@ async fn record_part_round_trips_and_rejects_bad_links() {
     )
     .await;
     assert_tool_error(&body);
-
-    // Cross-vehicle build must be indistinguishable from a missing one.
-    let body = post_rpc(
-        &app,
-        call_tool(
-            "record_part",
-            serde_json::json!({
-                "vehicle_id": v.id,
-                "name": "Downpipe",
-                "build_id": foreign_build.id
-            }),
-        ),
-    )
-    .await;
-    assert_tool_error(&body);
-    assert!(
-        body.contains("not found"),
-        "cross-vehicle build must read as missing; got: {body}"
-    );
-}
-
-#[tokio::test]
-async fn find_documents_finds_seeded_extracted_text() {
-    let (app, db, _files) = setup().await;
-    handshake(&app).await;
-    let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
-    {
-        use glovebox_shared::entities::document;
-        use sea_orm::{ActiveModelTrait, Set};
-        document::ActiveModel {
-            vehicle_id: Set(Some(v.id)),
-            title: Set("FCP invoice".into()),
-            file_path: Set("docs/fcp.pdf".into()),
-            file_name: Set("fcp.pdf".into()),
-            extracted_text: Set(Some("Sachs clutch kit and flywheel".into())),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap();
-    }
-
-    let body = post_rpc(
-        &app,
-        call_tool(
-            "find_documents",
-            serde_json::json!({ "vehicle_id": v.id, "query": "clutch flywheel" }),
-        ),
-    )
-    .await;
-    assert_success(&body);
-    assert!(
-        body.contains("FCP invoice") && body.contains("document"),
-        "must surface the seeded document; got: {body}"
-    );
 }
 
 #[tokio::test]
 async fn search_records_scopes_and_rejects_bad_scope() {
-    let (app, db, _files) = setup().await;
+    let (app, db) = setup().await;
     handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
     svc_svc::create(
         &db,
         v.id,
-        minimal_service("2026-05-01", "Brake pad replacement", None),
+        minimal_service("2026-05-01", "Brake pad replacement"),
     )
     .await
     .unwrap();
@@ -1118,7 +878,7 @@ async fn search_records_scopes_and_rejects_bad_scope() {
 
 #[tokio::test]
 async fn check_due_maintenance_returns_without_error() {
-    let (app, db, _files) = setup().await;
+    let (app, db) = setup().await;
     handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
 
@@ -1139,10 +899,10 @@ async fn check_due_maintenance_returns_without_error() {
 
 #[tokio::test]
 async fn cost_summary_reports_integer_cents() {
-    let (app, db, _files) = setup().await;
+    let (app, db) = setup().await;
     handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
-    svc_svc::create(&db, v.id, minimal_service("2026-05-01", "Brakes", None))
+    svc_svc::create(&db, v.id, minimal_service("2026-05-01", "Brakes"))
         .await
         .unwrap();
 
@@ -1161,7 +921,7 @@ async fn cost_summary_reports_integer_cents() {
 
 #[tokio::test]
 async fn record_service_payer_flows_into_cost_summary_split() {
-    let (app, db, _files) = setup().await;
+    let (app, db) = setup().await;
     handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
 
@@ -1243,70 +1003,8 @@ async fn record_service_payer_flows_into_cost_summary_split() {
 }
 
 #[tokio::test]
-async fn build_progress_and_status_update_round_trip() {
-    let (app, db, _files) = setup().await;
-    handshake(&app).await;
-    let v = vehicle::create(&db, new_vehicle("Project")).await.unwrap();
-    let b = build_svc::create(
-        &db,
-        v.id,
-        NewBuild {
-            name: "Turbo upgrade".into(),
-            description: None,
-            target_date: None,
-        },
-    )
-    .await
-    .unwrap();
-    svc_svc::create(
-        &db,
-        v.id,
-        minimal_service("2026-05-01", "Downpipe install", Some(b.id)),
-    )
-    .await
-    .unwrap();
-
-    let body = post_rpc(
-        &app,
-        call_tool(
-            "get_build_progress",
-            serde_json::json!({ "vehicle_id": v.id, "build_id": b.id }),
-        ),
-    )
-    .await;
-    assert_success(&body);
-    assert!(
-        body.contains("Turbo upgrade") && body.contains("services_count"),
-        "build progress must roll up linked work; got: {body}"
-    );
-
-    let body = post_rpc(
-        &app,
-        call_tool(
-            "update_build_status",
-            serde_json::json!({ "vehicle_id": v.id, "build_id": b.id, "status": "active" }),
-        ),
-    )
-    .await;
-    assert_success(&body);
-    assert!(body.contains("\\\"active\\\"") || body.contains("\"active\""));
-
-    // Invalid lifecycle status is an LLM-recoverable tool error.
-    let body = post_rpc(
-        &app,
-        call_tool(
-            "update_build_status",
-            serde_json::json!({ "vehicle_id": v.id, "build_id": b.id, "status": "bogus" }),
-        ),
-    )
-    .await;
-    assert_tool_error(&body);
-    assert!(body.contains("Invalid status"));
-}
-
-#[tokio::test]
 async fn file_research_finding_persists_and_is_readable() {
-    let (app, db, _files) = setup().await;
+    let (app, db) = setup().await;
     handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
 
@@ -1338,13 +1036,11 @@ async fn file_research_finding_persists_and_is_readable() {
     assert_tool_error(&err);
 }
 
-/// The unit-G loop, end-to-end over the protocol: file a recall finding,
-/// plan work from it (plus an overdue schedule item), group the work into a
-/// visit, complete the visit — then the finding is completed, the reminder
-/// clears, the payer-aware service record exists, and the items are done.
+/// Planning over the protocol: file a recall finding, plan work from it and
+/// from an overdue schedule item, then read the to-do list and the forecast.
 #[tokio::test]
-async fn recall_plan_schedule_complete_loop_over_the_protocol() {
-    let (app, db, _files) = setup().await;
+async fn recall_and_schedule_item_plan_into_the_todo_list_and_forecast() {
+    let (app, db) = setup().await;
     handshake(&app).await;
     let v = vehicle::create(
         &db,
@@ -1361,12 +1057,7 @@ async fn recall_plan_schedule_complete_loop_over_the_protocol() {
     )
     .await
     .unwrap();
-    assert_eq!(
-        reminder_status(&app, v.id, "Water pump replacement").await,
-        "overdue"
-    );
 
-    // A recall finding, filed over the protocol.
     let body = post_rpc(
         &app,
         call_tool(
@@ -1383,7 +1074,6 @@ async fn recall_plan_schedule_complete_loop_over_the_protocol() {
     assert_success(&body);
     let finding_id = tool_payload(&body)["id"].as_i64().expect("finding id");
 
-    // Plan both pieces of work, each linked to its source.
     let body = post_rpc(
         &app,
         call_tool(
@@ -1398,7 +1088,7 @@ async fn recall_plan_schedule_complete_loop_over_the_protocol() {
     )
     .await;
     assert_success(&body);
-    let recall_item = tool_payload(&body)["id"].as_i64().expect("item id");
+    assert_eq!(tool_payload(&body)["status"], "planned");
 
     let body = post_rpc(
         &app,
@@ -1414,29 +1104,7 @@ async fn recall_plan_schedule_complete_loop_over_the_protocol() {
     )
     .await;
     assert_success(&body);
-    let sched_item = tool_payload(&body)["id"].as_i64().expect("item id");
 
-    // Group them into a visit; the rollup carries the estimates.
-    let body = post_rpc(
-        &app,
-        call_tool(
-            "schedule_visit",
-            serde_json::json!({
-                "vehicle_id": v.id,
-                "planned_date": "2026-07-10",
-                "shop_name": "Joe's Garage",
-                "work_item_ids": [recall_item, sched_item]
-            }),
-        ),
-    )
-    .await;
-    assert_success(&body);
-    let visit_payload = tool_payload(&body);
-    let visit_id = visit_payload["id"].as_i64().expect("visit id");
-    assert_eq!(visit_payload["est_total_cents"], 65_000);
-    assert_eq!(visit_payload["items"].as_array().map(Vec::len), Some(2));
-
-    // list_planned_work shows the scheduled items and the open visit.
     let body = post_rpc(
         &app,
         call_tool(
@@ -1448,152 +1116,12 @@ async fn recall_plan_schedule_complete_loop_over_the_protocol() {
     assert_success(&body);
     let planned = tool_payload(&body);
     assert_eq!(planned["items"].as_array().map(Vec::len), Some(2));
-    assert_eq!(planned["visits"].as_array().map(Vec::len), Some(1));
-
-    // The budget forecast in check_due_maintenance counts the open visit.
-    let body = post_rpc(
-        &app,
-        call_tool(
-            "check_due_maintenance",
-            serde_json::json!({ "vehicle_id": v.id }),
-        ),
-    )
-    .await;
-    assert_success(&body);
-    let due = tool_payload(&body);
-    assert_eq!(due["budget"]["planned_visits_cents"], 65_000);
-
-    // Complete the visit with the actuals.
-    let body = post_rpc(
-        &app,
-        call_tool(
-            "complete_visit",
-            serde_json::json!({
-                "vehicle_id": v.id,
-                "visit_id": visit_id,
-                "service_date": "2026-06-25",
-                "mileage": 62_000,
-                "total_cost_cents": 61_250,
-                "paid_by": "insurance",
-                "payer_note": "recall campaign, dealer covered"
-            }),
-        ),
-    )
-    .await;
-    assert_success(&body);
-    let done = tool_payload(&body);
-    assert_eq!(done["visit"]["status"], "completed");
-    assert_eq!(done["service_record"]["paid_by"], "insurance");
-    assert_eq!(
-        done["service_record"]["description"],
-        "Coolant pump recall fix, Water pump replacement"
-    );
     assert!(
-        done["items"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|i| i["status"] == "done")
+        planned.get("visits").is_none(),
+        "planning state no longer carries visits"
     );
 
-    // Every loop closed: reminder ok, finding completed, record persisted.
-    assert_eq!(
-        reminder_status(&app, v.id, "Water pump replacement").await,
-        "ok"
-    );
-    // The completed record's id, taken from the PROTOCOL payload, must be
-    // what the finding back-links (unit-G reviewer carry-in: assert the
-    // linked_entity pair, not just the status flip).
-    let record_id = done["service_record"]["id"]
-        .as_i64()
-        .expect("completed payload carries the record id");
-    let findings =
-        glovebox_shared::services::research::list_findings(&db, v.id, Some("completed".into()))
-            .await
-            .unwrap();
-    assert_eq!(findings.len(), 1);
-    assert_eq!(findings[0].id, i32::try_from(finding_id).unwrap());
-    assert_eq!(
-        findings[0].linked_entity_type.as_deref(),
-        Some("service"),
-        "finding must back-link the service record"
-    );
-    assert_eq!(
-        findings[0].linked_entity_id,
-        Some(i32::try_from(record_id).unwrap())
-    );
-    let records = svc_svc::list(&db, v.id).await.unwrap();
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].record.paid_by, "insurance");
-    assert_eq!(records[0].schedule_item_ids, vec![overdue.id]);
-
-    // The open-work list is empty again (include_done still shows history).
-    let body = post_rpc(
-        &app,
-        call_tool(
-            "list_planned_work",
-            serde_json::json!({ "vehicle_id": v.id }),
-        ),
-    )
-    .await;
-    let planned = tool_payload(&body);
-    assert_eq!(planned["items"].as_array().map(Vec::len), Some(0));
-    assert_eq!(planned["visits"].as_array().map(Vec::len), Some(0));
-    let body = post_rpc(
-        &app,
-        call_tool(
-            "list_planned_work",
-            serde_json::json!({ "vehicle_id": v.id, "include_done": true }),
-        ),
-    )
-    .await;
-    let planned = tool_payload(&body);
-    assert_eq!(planned["items"].as_array().map(Vec::len), Some(2));
-    assert_eq!(planned["visits"].as_array().map(Vec::len), Some(1));
-}
-
-/// Unit-F carry-in: `cancel_visit` round-trip over the protocol — the
-/// forecast drops the visit's bucket, the items return to the to-do list,
-/// and the cancel guards (double cancel, wrong vehicle) are clean tool
-/// errors.
-#[tokio::test]
-async fn cancel_visit_returns_items_to_the_todo_list() {
-    let (app, db, _files) = setup().await;
-    handshake(&app).await;
-    let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
-
-    let body = post_rpc(
-        &app,
-        call_tool(
-            "plan_work",
-            serde_json::json!({
-                "vehicle_id": v.id,
-                "title": "Wipers",
-                "est_cost_cents": 6_500
-            }),
-        ),
-    )
-    .await;
-    assert_success(&body);
-    let item_id = tool_payload(&body)["id"].as_i64().expect("item id");
-
-    let body = post_rpc(
-        &app,
-        call_tool(
-            "schedule_visit",
-            serde_json::json!({
-                "vehicle_id": v.id,
-                "planned_date": "2026-07-20",
-                "shop_name": "Joe's Garage",
-                "work_item_ids": [item_id]
-            }),
-        ),
-    )
-    .await;
-    assert_success(&body);
-    let visit_id = tool_payload(&body)["id"].as_i64().expect("visit id");
-
-    // While scheduled: the estimate sits in the visits bucket.
+    // The forecast counts the planned estimates once.
     let body = post_rpc(
         &app,
         call_tool(
@@ -1602,88 +1130,15 @@ async fn cancel_visit_returns_items_to_the_todo_list() {
         ),
     )
     .await;
-    let due = tool_payload(&body);
-    assert_eq!(due["budget"]["planned_visits_cents"], 6_500);
-    assert_eq!(due["budget"]["planned_work_cents"], 0);
-
-    // Cancel: the visit closes, the item detaches back to `planned`.
-    let body = post_rpc(
-        &app,
-        call_tool(
-            "cancel_visit",
-            serde_json::json!({ "vehicle_id": v.id, "visit_id": visit_id }),
-        ),
-    )
-    .await;
     assert_success(&body);
-    let canceled = tool_payload(&body);
-    assert_eq!(canceled["status"], "canceled");
-    assert_eq!(canceled["items"].as_array().map(Vec::len), Some(0));
-
-    // Forecast: the visit bucket is gone; the estimate moved to the
-    // backlog bucket.
-    let body = post_rpc(
-        &app,
-        call_tool(
-            "check_due_maintenance",
-            serde_json::json!({ "vehicle_id": v.id }),
-        ),
-    )
-    .await;
     let due = tool_payload(&body);
-    assert_eq!(due["budget"]["planned_visits_cents"], 0);
-    assert_eq!(due["budget"]["planned_work_cents"], 6_500);
-
-    // list_planned_work: no open visit, the item is planned and unattached.
-    let body = post_rpc(
-        &app,
-        call_tool(
-            "list_planned_work",
-            serde_json::json!({ "vehicle_id": v.id }),
-        ),
-    )
-    .await;
-    let planned = tool_payload(&body);
-    assert_eq!(planned["visits"].as_array().map(Vec::len), Some(0));
-    let items = planned["items"].as_array().unwrap();
-    assert_eq!(items.len(), 1);
-    assert_eq!(items[0]["status"], "planned");
-    assert!(items[0]["visit_id"].is_null());
-
-    // Double cancel and wrong-vehicle cancel are clean tool errors.
-    let body = post_rpc(
-        &app,
-        call_tool(
-            "cancel_visit",
-            serde_json::json!({ "vehicle_id": v.id, "visit_id": visit_id }),
-        ),
-    )
-    .await;
-    assert_tool_error(&body);
-    assert!(body.contains("already canceled"), "got: {body}");
-
-    let other = vehicle::create(&db, new_vehicle("Other")).await.unwrap();
-    let v2 = post_rpc(
-        &app,
-        call_tool("schedule_visit", serde_json::json!({ "vehicle_id": v.id })),
-    )
-    .await;
-    let v2_id = tool_payload(&v2)["id"].as_i64().unwrap();
-    let body = post_rpc(
-        &app,
-        call_tool(
-            "cancel_visit",
-            serde_json::json!({ "vehicle_id": other.id, "visit_id": v2_id }),
-        ),
-    )
-    .await;
-    assert_tool_error(&body);
-    assert!(body.contains("not found"), "got: {body}");
+    assert_eq!(due["budget"]["planned_work_cents"], 65_000);
+    assert!(due["budget"].get("planned_visits_cents").is_none());
 }
 
 #[tokio::test]
 async fn planning_tools_reject_wrong_vehicle_and_malformed_args() {
-    let (app, db, _files) = setup().await;
+    let (app, db) = setup().await;
     handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Mine")).await.unwrap();
     let other = vehicle::create(&db, new_vehicle("Other")).await.unwrap();
@@ -1701,52 +1156,6 @@ async fn planning_tools_reject_wrong_vehicle_and_malformed_args() {
                 "vehicle_id": other.id,
                 "title": "Not my item",
                 "schedule_item_id": foreign_item.id
-            }),
-        ),
-    )
-    .await;
-    assert_tool_error(&body);
-    assert!(body.contains("not found"), "got: {body}");
-
-    // schedule_visit: another vehicle's work item reads as missing.
-    let mine = post_rpc(
-        &app,
-        call_tool(
-            "plan_work",
-            serde_json::json!({ "vehicle_id": v.id, "title": "Mine" }),
-        ),
-    )
-    .await;
-    let mine_id = tool_payload(&mine)["id"].as_i64().unwrap();
-    let body = post_rpc(
-        &app,
-        call_tool(
-            "schedule_visit",
-            serde_json::json!({ "vehicle_id": other.id, "work_item_ids": [mine_id] }),
-        ),
-    )
-    .await;
-    assert_tool_error(&body);
-    assert!(body.contains("not found"), "got: {body}");
-
-    // complete_visit: another vehicle's visit reads as missing.
-    let visit = post_rpc(
-        &app,
-        call_tool(
-            "schedule_visit",
-            serde_json::json!({ "vehicle_id": v.id, "work_item_ids": [mine_id] }),
-        ),
-    )
-    .await;
-    let visit_id = tool_payload(&visit)["id"].as_i64().unwrap();
-    let body = post_rpc(
-        &app,
-        call_tool(
-            "complete_visit",
-            serde_json::json!({
-                "vehicle_id": other.id,
-                "visit_id": visit_id,
-                "service_date": "2026-06-25"
             }),
         ),
     )
@@ -1776,46 +1185,12 @@ async fn planning_tools_reject_wrong_vehicle_and_malformed_args() {
         body.contains("title") && body.contains("input schema"),
         "must name the missing field and point at the schema; got: {body}"
     );
-
-    // The bad-payer rollback reaches the LLM as an actionable tool error.
-    let body = post_rpc(
-        &app,
-        call_tool(
-            "complete_visit",
-            serde_json::json!({
-                "vehicle_id": v.id,
-                "visit_id": visit_id,
-                "service_date": "2026-06-25",
-                "paid_by": "my neighbor"
-            }),
-        ),
-    )
-    .await;
-    assert_tool_error(&body);
-    assert!(body.contains("third_party"), "got: {body}");
-    assert!(
-        svc_svc::list(&db, v.id).await.unwrap().is_empty(),
-        "rejected completion must record nothing"
-    );
 }
 
 #[tokio::test]
-async fn wrong_vehicle_ids_are_clean_tool_errors() {
-    let (app, db, _files) = setup().await;
+async fn nonexistent_vehicle_ids_are_clean_tool_errors() {
+    let (app, _db) = setup().await;
     handshake(&app).await;
-    let v = vehicle::create(&db, new_vehicle("Mine")).await.unwrap();
-    let other = vehicle::create(&db, new_vehicle("Other")).await.unwrap();
-    let b = build_svc::create(
-        &db,
-        v.id,
-        NewBuild {
-            name: "B".into(),
-            description: None,
-            target_date: None,
-        },
-    )
-    .await
-    .unwrap();
 
     // Nonexistent vehicle.
     let body = post_rpc(
@@ -1839,22 +1214,11 @@ async fn wrong_vehicle_ids_are_clean_tool_errors() {
     )
     .await;
     assert_tool_error(&body);
-
-    // Cross-vehicle build must be indistinguishable from a missing one.
-    let body = post_rpc(
-        &app,
-        call_tool(
-            "get_build_progress",
-            serde_json::json!({ "vehicle_id": other.id, "build_id": b.id }),
-        ),
-    )
-    .await;
-    assert_tool_error(&body);
 }
 
 #[tokio::test]
 async fn malformed_arguments_are_schema_errors_not_protocol_failures() {
-    let (app, _db, _files) = setup().await;
+    let (app, _db) = setup().await;
     handshake(&app).await;
 
     // Wrong type.
@@ -1881,220 +1245,11 @@ async fn malformed_arguments_are_schema_errors_not_protocol_failures() {
     );
 }
 
-// ─── attach_document via source_path (the inbox — the ONLY way to
-//     attach a file; there is no inline-bytes route) ──────────────
-
-#[tokio::test]
-async fn attach_document_source_path_copies_and_indexes_extracted_text() {
-    let (app, db, files, inbox) = setup_with_inbox().await;
-    handshake(&app).await;
-    let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
-    let record = svc_svc::create(&db, v.id, minimal_service("2026-06-01", "Clutch job", None))
-        .await
-        .unwrap();
-    std::fs::write(inbox.path().join("fcp-invoice.pdf"), b"real scanned bytes").unwrap();
-
-    let body = post_rpc(
-        &app,
-        call_tool(
-            "attach_document",
-            serde_json::json!({
-                "vehicle_id": v.id,
-                "source_path": "fcp-invoice.pdf",
-                "title": "FCP Euro invoice",
-                "extracted_text": "Sachs SRE clutch kit, flywheel bolts, total $899.00",
-                "linked_entity_type": "service",
-                "linked_entity_id": record.record.id
-            }),
-        ),
-    )
-    .await;
-    assert_success(&body);
-    let doc = tool_payload(&body);
-    // file_name defaulted to the inbox file's basename.
-    assert_eq!(doc["file_name"], "fcp-invoice.pdf");
-    assert_eq!(doc["title"], "FCP Euro invoice");
-    assert_eq!(doc["mime_type"], "application/pdf");
-    assert_eq!(doc["linked_entity_type"], "service");
-    assert_eq!(doc["linked_entity_id"], record.record.id);
-
-    // The bytes were COPIED into files_dir…
-    let rel_path = doc["file_path"].as_str().expect("file_path");
-    let stored = std::fs::read(files.path().join(rel_path)).expect("stored file must exist");
-    assert_eq!(stored, b"real scanned bytes");
-    // …and the inbox original is still there, intact (the LLM may retry,
-    // the user may want it).
-    assert_eq!(
-        std::fs::read(inbox.path().join("fcp-invoice.pdf")).unwrap(),
-        b"real scanned bytes"
-    );
-
-    // The LLM's extraction is FTS-indexed: find_documents matches content
-    // that appears nowhere in the title or file name.
-    let body = post_rpc(
-        &app,
-        call_tool(
-            "find_documents",
-            serde_json::json!({ "vehicle_id": v.id, "query": "flywheel bolts" }),
-        ),
-    )
-    .await;
-    assert_success(&body);
-    assert!(
-        body.contains("FCP Euro invoice"),
-        "extracted_text must be searchable; got: {body}"
-    );
-}
-
-/// With the base64 escape hatch removed, `source_path` is the only file
-/// source — a call omitting it must come back as an actionable tool error
-/// (not a bare JSON-RPC -32602) that steers toward source_path.
-#[tokio::test]
-async fn attach_document_requires_source_path() {
-    let (app, db, files) = setup().await;
-    handshake(&app).await;
-    let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
-
-    let body = post_rpc(
-        &app,
-        call_tool(
-            "attach_document",
-            serde_json::json!({ "vehicle_id": v.id, "file_name": "a.pdf" }),
-        ),
-    )
-    .await;
-    assert_tool_error(&body);
-    assert!(
-        body.contains("source_path"),
-        "must steer toward source_path; got: {body}"
-    );
-    // Nothing was written to files_dir by the rejected call.
-    assert!(std::fs::read_dir(files.path()).unwrap().next().is_none());
-}
-
-#[tokio::test]
-async fn attach_document_rejects_files_over_the_10_mib_cap() {
-    let (app, db, files, inbox) = setup_with_inbox().await;
-    handshake(&app).await;
-    let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
-
-    let oversize = vec![0u8; glovebox_shared::services::document::MAX_FILE_BYTES + 1];
-    std::fs::write(inbox.path().join("huge.bin"), oversize).unwrap();
-    let body = post_rpc(
-        &app,
-        call_tool(
-            "attach_document",
-            serde_json::json!({
-                "vehicle_id": v.id,
-                "source_path": "huge.bin"
-            }),
-        ),
-    )
-    .await;
-    assert_tool_error(&body);
-    assert!(
-        body.contains("10 MiB"),
-        "the error must name the cap; got: {body}"
-    );
-    assert!(std::fs::read_dir(files.path()).unwrap().next().is_none());
-}
-
-#[tokio::test]
-async fn attach_document_neutralizes_traversal_file_names() {
-    let (app, db, files, inbox) = setup_with_inbox().await;
-    handshake(&app).await;
-    let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
-    std::fs::write(inbox.path().join("scan.pdf"), b"innocent bytes").unwrap();
-
-    // An explicit file_name carrying traversal must be sanitized, even though
-    // the bytes come from a safe inbox path.
-    let body = post_rpc(
-        &app,
-        call_tool(
-            "attach_document",
-            serde_json::json!({
-                "vehicle_id": v.id,
-                "source_path": "scan.pdf",
-                "file_name": "../../../etc/passwd"
-            }),
-        ),
-    )
-    .await;
-    assert_success(&body);
-    let doc = tool_payload(&body);
-    let rel_path = doc["file_path"].as_str().expect("file_path");
-    // Separators were neutralized: no `..` path component survives, and the
-    // stored file canonicalizes to INSIDE the files dir.
-    assert!(rel_path.split('/').all(|c| c != ".." && !c.is_empty()));
-    let full = files.path().join(rel_path).canonicalize().unwrap();
-    assert!(full.starts_with(files.path().canonicalize().unwrap()));
-}
-
-#[tokio::test]
-async fn attach_document_wrong_vehicle_link_reads_as_missing() {
-    let (app, db, _files, inbox) = setup_with_inbox().await;
-    handshake(&app).await;
-    let v = vehicle::create(&db, new_vehicle("Mine")).await.unwrap();
-    let other = vehicle::create(&db, new_vehicle("Other")).await.unwrap();
-    let foreign = svc_svc::create(&db, other.id, minimal_service("2026-06-01", "Theirs", None))
-        .await
-        .unwrap();
-    std::fs::write(inbox.path().join("invoice.pdf"), b"bytes").unwrap();
-
-    // Another vehicle's service record and a nonexistent one must be the
-    // same clean not-found tool error (no ownership oracle).
-    for eid in [foreign.record.id, 99_999] {
-        let body = post_rpc(
-            &app,
-            call_tool(
-                "attach_document",
-                serde_json::json!({
-                    "vehicle_id": v.id,
-                    "source_path": "invoice.pdf",
-                    "linked_entity_type": "service",
-                    "linked_entity_id": eid
-                }),
-            ),
-        )
-        .await;
-        assert_tool_error(&body);
-        assert!(
-            body.contains(&format!("Service record {eid} not found")),
-            "wrong-parent must read exactly like missing; got: {body}"
-        );
-    }
-}
-
-#[tokio::test]
-async fn attach_document_source_path_escape_attempts_are_rejected() {
-    let (app, db, files, inbox) = setup_with_inbox().await;
-    handshake(&app).await;
-    let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
-    std::fs::write(inbox.path().join("legit.pdf"), b"bytes").unwrap();
-
-    for escape in ["../outside.pdf", "/etc/passwd", "scans/../../outside.pdf"] {
-        let body = post_rpc(
-            &app,
-            call_tool(
-                "attach_document",
-                serde_json::json!({ "vehicle_id": v.id, "source_path": escape }),
-            ),
-        )
-        .await;
-        assert_tool_error(&body);
-        assert!(
-            body.contains("source_path"),
-            "{escape}: the error must name the field; got: {body}"
-        );
-    }
-    assert!(std::fs::read_dir(files.path()).unwrap().next().is_none());
-}
-
 // ─── link_service_to_maintenance ────────────────────────────────
 
 #[tokio::test]
 async fn link_service_to_maintenance_add_defaults_and_replace_overwrites() {
-    let (app, db, _files) = setup().await;
+    let (app, db) = setup().await;
     handshake(&app).await;
     let v = vehicle::create(
         &db,
@@ -2117,7 +1272,7 @@ async fn link_service_to_maintenance_add_defaults_and_replace_overwrites() {
     let imported = svc_svc::create(
         &db,
         v.id,
-        minimal_service("2026-06-01", "Oil + brake fluid service", None),
+        minimal_service("2026-06-01", "Oil + brake fluid service"),
     )
     .await
     .unwrap();
@@ -2207,20 +1362,20 @@ async fn link_service_to_maintenance_add_defaults_and_replace_overwrites() {
 
 #[tokio::test]
 async fn link_service_to_maintenance_wrong_parent_both_ways() {
-    let (app, db, _files) = setup().await;
+    let (app, db) = setup().await;
     handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Mine")).await.unwrap();
     let other = vehicle::create(&db, new_vehicle("Other")).await.unwrap();
     let mine_item = schedule_svc::create(&db, schedule_item_every_12_months(v.id, "Oil"))
         .await
         .unwrap();
-    let mine_svc = svc_svc::create(&db, v.id, minimal_service("2026-06-01", "Mine", None))
+    let mine_svc = svc_svc::create(&db, v.id, minimal_service("2026-06-01", "Mine"))
         .await
         .unwrap();
     let foreign_item = schedule_svc::create(&db, schedule_item_every_12_months(other.id, "Oil"))
         .await
         .unwrap();
-    let foreign_svc = svc_svc::create(&db, other.id, minimal_service("2026-06-01", "Theirs", None))
+    let foreign_svc = svc_svc::create(&db, other.id, minimal_service("2026-06-01", "Theirs"))
         .await
         .unwrap();
 
@@ -2272,21 +1427,10 @@ async fn link_service_to_maintenance_wrong_parent_both_ways() {
 
 #[tokio::test]
 async fn resources_list_and_read_cover_all_uri_forms() {
-    let (app, db, _files) = setup().await;
+    let (app, db) = setup().await;
     handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
-    let b = build_svc::create(
-        &db,
-        v.id,
-        NewBuild {
-            name: "Turbo upgrade".into(),
-            description: None,
-            target_date: None,
-        },
-    )
-    .await
-    .unwrap();
-    svc_svc::create(&db, v.id, minimal_service("2026-05-01", "Oil change", None))
+    svc_svc::create(&db, v.id, minimal_service("2026-05-01", "Oil change"))
         .await
         .unwrap();
 
@@ -2299,7 +1443,6 @@ async fn resources_list_and_read_cover_all_uri_forms() {
         "glovebox://vehicles".to_string(),
         format!("glovebox://vehicles/{}", v.id),
         format!("glovebox://vehicles/{}/activity", v.id),
-        format!("glovebox://vehicles/{}/builds/{}", v.id, b.id),
     ] {
         assert!(
             body.contains(&uri),
@@ -2351,21 +1494,11 @@ async fn resources_list_and_read_cover_all_uri_forms() {
         body.contains("Oil change"),
         "activity resource; got: {body}"
     );
-
-    let body = post_rpc(
-        &app,
-        read_resource(&format!("glovebox://vehicles/{}/builds/{}", v.id, b.id)),
-    )
-    .await;
-    assert!(
-        body.contains("Turbo upgrade") && body.contains("services_count"),
-        "build progress resource; got: {body}"
-    );
 }
 
 #[tokio::test]
 async fn read_resource_unknown_uri_and_missing_record_are_clean_errors() {
-    let (app, _db, _files) = setup().await;
+    let (app, _db) = setup().await;
     handshake(&app).await;
 
     // Unknown shape → invalid_params (-32602) naming the known forms.
@@ -2389,7 +1522,7 @@ async fn read_resource_unknown_uri_and_missing_record_are_clean_errors() {
 /// idempotent), so a retry loop cannot create duplicate service records.
 #[tokio::test]
 async fn record_service_same_invoice_ref_is_idempotent() {
-    let (app, db, _files) = setup().await;
+    let (app, db) = setup().await;
     handshake(&app).await;
     let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
 
@@ -2415,72 +1548,4 @@ async fn record_service_same_invoice_ref_is_idempotent() {
         1,
         "no duplicate record was created"
     );
-}
-
-/// Attaching the identical inbox file twice dedupes on content hash: the
-/// second call returns the existing document (`already_present`) and writes
-/// no second file.
-#[tokio::test]
-async fn attach_document_same_file_twice_dedupes() {
-    let (app, db, files, inbox) = setup_with_inbox().await;
-    handshake(&app).await;
-    let v = vehicle::create(&db, new_vehicle("Daily")).await.unwrap();
-    std::fs::write(inbox.path().join("invoice.pdf"), b"real scanned bytes").unwrap();
-
-    let args = serde_json::json!({
-        "vehicle_id": v.id,
-        "source_path": "invoice.pdf",
-        "title": "FCP invoice"
-    });
-
-    let first = post_rpc(&app, call_tool("attach_document", args.clone())).await;
-    assert_success(&first);
-    let first_doc = tool_payload(&first);
-    assert_eq!(first_doc["already_present"], false);
-    let first_id = first_doc["id"].as_i64().expect("doc id");
-
-    let second = post_rpc(&app, call_tool("attach_document", args)).await;
-    assert_success(&second);
-    let second_doc = tool_payload(&second);
-    assert_eq!(
-        second_doc["already_present"], true,
-        "identical file must dedupe; got: {second}"
-    );
-    assert_eq!(
-        second_doc["id"].as_i64(),
-        Some(first_id),
-        "same document row"
-    );
-
-    // Exactly one row and one file on disk.
-    use glovebox_shared::{inputs::document::DocumentFilter, services::document as doc_svc};
-    assert_eq!(
-        doc_svc::list(&db, DocumentFilter::default())
-            .await
-            .unwrap()
-            .len(),
-        1
-    );
-    let pdfs = walkdir_pdf_count(files.path());
-    assert_eq!(pdfs, 1, "no second file was written");
-}
-
-/// Count `*.pdf` files anywhere under `root`.
-fn walkdir_pdf_count(root: &std::path::Path) -> usize {
-    fn walk(dir: &std::path::Path, acc: &mut usize) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                walk(&path, acc);
-            } else if path.extension().is_some_and(|e| e == "pdf") {
-                *acc += 1;
-            }
-        }
-    }
-    let mut count = 0;
-    walk(root, &mut count);
-    count
 }
