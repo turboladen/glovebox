@@ -308,8 +308,10 @@ async fn insert_line_items(
     record_id: i32,
     items: Vec<NewLineItem>,
 ) -> DomainResult<()> {
-    for item in items {
-        let li = service_record_line_item::ActiveModel {
+    // An empty batch inserts nothing.
+    let rows = items
+        .into_iter()
+        .map(|item| service_record_line_item::ActiveModel {
             service_record_id: Set(record_id),
             description: Set(item.description),
             work_kind: Set(item.work_kind),
@@ -317,9 +319,10 @@ async fn insert_line_items(
             unit_cost_cents: Set(item.unit_cost_cents),
             cost_cents: Set(item.cost_cents),
             ..Default::default()
-        };
-        li.insert(txn).await?;
-    }
+        });
+    service_record_line_item::Entity::insert_many(rows)
+        .exec_without_returning(txn)
+        .await?;
     Ok(())
 }
 

@@ -18,10 +18,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<VehicleParams>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("check_recalls") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "check_recalls");
         domain_result(research::check_recalls(&*self.db, p.vehicle_id).await)
     }
 
@@ -34,10 +31,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<SetRecallStatusInput>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("set_recall_status") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "set_recall_status");
         domain_result(recall::set_status(&*self.db, p.vehicle_id, p.finding_id, &p.status).await)
     }
 
@@ -50,10 +44,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<FileResearchFindingInput>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("file_research_finding") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "file_research_finding");
         let (vehicle_id, input) = p.into_domain();
         domain_result(research::file_finding(&*self.db, vehicle_id, input).await)
     }

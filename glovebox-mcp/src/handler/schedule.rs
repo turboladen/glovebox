@@ -21,10 +21,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<DismissScheduleItemInput>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("dismiss_schedule_item") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "dismiss_schedule_item");
         domain_result(
             schedule::dismiss_for_vehicle(&*self.db, p.vehicle_id, p.schedule_item_id, p.reason)
                 .await,
@@ -40,10 +37,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<ListScheduleInput>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("list_schedule") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "list_schedule");
         domain_result(
             schedule::resolve_for_listing(
                 &*self.db,
@@ -63,10 +57,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<RestoreScheduleItemInput>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("restore_schedule_item") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "restore_schedule_item");
         domain_result(
             schedule::undismiss_for_vehicle(&*self.db, p.vehicle_id, p.schedule_item_id).await,
         )
@@ -81,10 +72,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<AddScheduleItemInput>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("add_schedule_item") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "add_schedule_item");
         let (vehicle_id, input) = p.into_domain();
         domain_result(schedule::create_for_vehicle(&*self.db, vehicle_id, input).await)
     }
@@ -98,10 +86,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<UpdateScheduleItemInput>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("update_schedule_item") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "update_schedule_item");
         let (vehicle_id, item_id, input) = p.into_domain();
         domain_result(schedule::update_for_vehicle(&*self.db, vehicle_id, item_id, input).await)
     }

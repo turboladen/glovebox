@@ -21,10 +21,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<LogIncidentInput>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("log_incident") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "log_incident");
         let (vehicle_id, input) = p.into_domain();
         domain_result(incident::create(&*self.db, vehicle_id, input).await)
     }
@@ -38,10 +35,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<SaveNoteInput>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("save_note") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "save_note");
         let (vehicle_id, input) = p.into_domain();
         domain_result(incident::create(&*self.db, vehicle_id, input).await)
     }
@@ -55,10 +49,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<ListIncidentsInput>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("list_incidents") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "list_incidents");
         domain_result(incident::list_filtered(&*self.db, p.vehicle_id, p.resolved).await)
     }
 
@@ -71,10 +62,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<UpdateIncidentInput>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("update_incident") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "update_incident");
         let (vehicle_id, incident_id, input) = p.into_domain();
         domain_result(incident::update(&*self.db, vehicle_id, incident_id, input).await)
     }
@@ -88,10 +76,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<AddIncidentFollowupInput>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("add_incident_followup") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "add_incident_followup");
         let (vehicle_id, incident_id, input) = p.into_domain();
         domain_result(incident::create_followup(&*self.db, vehicle_id, incident_id, input).await)
     }
@@ -105,10 +90,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<DeleteIncidentInput>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("delete_incident") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "delete_incident");
         deleted_result(
             "incident",
             p.incident_id,

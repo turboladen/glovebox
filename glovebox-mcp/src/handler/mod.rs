@@ -29,6 +29,17 @@ use glovebox_shared::{
 
 use crate::schemas::VehicleBrief;
 
+/// Unwraps a tool's [`LenientParameters`], returning the tool-level error
+/// result from the enclosing tool when the arguments did not deserialize.
+macro_rules! tool_input {
+    ($params:expr, $name:literal) => {
+        match $params.into_tool_input($name) {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        }
+    };
+}
+
 mod incidents;
 mod parts;
 mod planning;
@@ -313,7 +324,7 @@ pub(crate) struct LenientParameters<T>(Result<T, String>);
 
 impl<T> LenientParameters<T> {
     /// Unwrap into the deserialized value or a tool-level error naming the
-    /// tool. Pairs with the early-return pattern in every handler.
+    /// tool. Handlers call it through `tool_input!`.
     pub(crate) fn into_tool_input(self, tool_name: &'static str) -> Result<T, CallToolResult> {
         self.0.map_err(|e| {
             tool_user_error(format!("{tool_name}: {e}. Check the tool's input schema."))

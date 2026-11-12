@@ -73,11 +73,11 @@ pub async fn upcoming(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResul
         .into_iter()
         .filter(|r| r.status == "open" || r.status == "planned")
         .collect();
-    let open_incidents = incident_svc::list(db, vehicle_id)
+    let open_incidents = incident_svc::list_filtered(db, vehicle_id, Some(false))
         .await?
         .into_iter()
         .map(|d| d.incident)
-        .filter(|i| !i.resolved && i.category != "note")
+        .filter(|i| i.category != "note")
         .collect();
 
     Ok(Upcoming {

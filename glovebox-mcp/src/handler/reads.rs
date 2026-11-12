@@ -24,10 +24,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<SummarizeActivityInput>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("summarize_recent_activity") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "summarize_recent_activity");
         let limit = p.limit.map_or(activity::DEFAULT_LIMIT, |l| l as usize);
         domain_result(activity::recent(&*self.db, p.vehicle_id, limit).await)
     }
@@ -41,10 +38,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<SearchRecordsInput>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("search_records") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "search_records");
         let scope = match SearchScope::parse(p.scope.as_deref().unwrap_or("all")) {
             Ok(s) => s,
             Err(e) => return domain_error(e),
@@ -61,10 +55,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<VehicleParams>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("cost_summary") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "cost_summary");
         domain_result(costs::summary(&*self.db, p.vehicle_id).await)
     }
 
@@ -77,10 +68,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<GetServiceInput>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("get_service") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "get_service");
         domain_result(service_record::get(&*self.db, p.vehicle_id, p.service_id).await)
     }
 
@@ -93,10 +81,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<GetIncidentInput>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("get_incident") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "get_incident");
         domain_result(incident::get(&*self.db, p.vehicle_id, p.incident_id).await)
     }
 }

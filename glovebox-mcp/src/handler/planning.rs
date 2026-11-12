@@ -28,10 +28,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<PlanWorkInput>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("plan_work") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "plan_work");
         let (vehicle_id, input) = p.into_domain();
         domain_result(work_item_svc::create(&*self.db, vehicle_id, input).await)
     }
@@ -49,10 +46,7 @@ impl GloveboxMcp {
         struct PlannedWork {
             items: Vec<PlannedItem>,
         }
-        let p = match params.into_tool_input("list_planned_work") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "list_planned_work");
         let include_done = p.include_done.unwrap_or(false);
         let items =
             match work_item_svc::list_with_status(&*self.db, p.vehicle_id, include_done).await {
@@ -71,10 +65,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<VehicleParams>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("whats_coming") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "whats_coming");
         domain_result(upcoming::upcoming(&*self.db, p.vehicle_id).await)
     }
 
@@ -87,10 +78,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<UpdatePlannedWorkInput>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("update_planned_work") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "update_planned_work");
         let (vehicle_id, work_item_id, input) = p.into_domain();
         domain_result(work_item_svc::update(&*self.db, vehicle_id, work_item_id, input).await)
     }
@@ -104,10 +92,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<DeletePlannedWorkInput>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("delete_planned_work") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "delete_planned_work");
         deleted_result(
             "planned work",
             p.work_item_id,

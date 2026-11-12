@@ -469,6 +469,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn every_line_item_of_a_recorded_service_is_searchable() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db, "Golf R").await;
+        let words = ["haldex", "intercooler", "wastegate"];
+        let created = crate::services::service_record::create(
+            &db,
+            vid,
+            crate::inputs::service_record::NewServiceRecord {
+                service_date: "2026-03-01".into(),
+                line_items: Some(
+                    words
+                        .iter()
+                        .map(|w| crate::inputs::service_record::NewLineItem {
+                            description: format!("{w} work"),
+                            work_kind: "maintenance".into(),
+                            quantity: None,
+                            unit_cost_cents: None,
+                            cost_cents: None,
+                        })
+                        .collect(),
+                ),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        for word in words {
+            let hits = search(&db, word, SearchScope::Services, None)
+                .await
+                .unwrap();
+            assert!(
+                hits.iter()
+                    .any(|h| h.kind == "service" && h.id == created.record.id),
+                "no hit for {word}: {hits:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn duplicate_raw_rows_cannot_starve_other_records_out_of_the_limit() {
         let db = test_db().await;
         let vid = seed_vehicle(&db, "Golf R").await;

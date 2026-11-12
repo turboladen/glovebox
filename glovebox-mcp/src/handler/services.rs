@@ -21,10 +21,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<RecordServiceInput>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("record_service") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "record_service");
         let (vehicle_id, input) = p.into_domain();
         domain_result(service_record::create(&*self.db, vehicle_id, input).await)
     }
@@ -38,10 +35,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<LinkServiceToMaintenanceInput>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("link_service_to_maintenance") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "link_service_to_maintenance");
         let mode = match LinkMode::parse(p.mode.as_deref().unwrap_or("add")) {
             Ok(m) => m,
             Err(e) => return domain_error(e),
@@ -67,10 +61,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<ListServicesInput>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("list_services") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "list_services");
         domain_result(
             service_record::list_between(
                 &*self.db,
@@ -91,10 +82,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<CorrectServiceInput>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("correct_service") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "correct_service");
         let (vehicle_id, service_id, input) = p.into_domain();
         domain_result(service_record::update(&*self.db, vehicle_id, service_id, input).await)
     }
@@ -108,10 +96,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<DeleteServiceInput>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("delete_service") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "delete_service");
         domain_result(
             service_record::delete(
                 &*self.db,

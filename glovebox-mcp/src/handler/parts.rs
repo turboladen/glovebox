@@ -18,10 +18,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<RecordPartInput>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("record_part") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "record_part");
         let (vehicle_id, input) = p.into_domain();
         domain_result(part::create(&*self.db, vehicle_id, input).await)
     }
@@ -35,10 +32,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<ListPartsInput>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("list_parts") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "list_parts");
         domain_result(part::list(&*self.db, p.vehicle_id, PartFilter { status: p.status }).await)
     }
 
@@ -51,10 +45,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<CorrectPartInput>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("correct_part") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "correct_part");
         let (vehicle_id, part_id, input) = p.into_domain();
         domain_result(part::update(&*self.db, vehicle_id, part_id, input).await)
     }
@@ -68,10 +59,7 @@ impl GloveboxMcp {
         &self,
         params: LenientParameters<DeletePartInput>,
     ) -> Result<CallToolResult, McpError> {
-        let p = match params.into_tool_input("delete_part") {
-            Ok(v) => v,
-            Err(e) => return Ok(e),
-        };
+        let p = tool_input!(params, "delete_part");
         deleted_result(
             "part",
             p.part_id,
