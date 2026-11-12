@@ -48,6 +48,9 @@ pub struct NewServiceRecord {
     /// Same-vehicle incidents first noticed during this service. An incident
     /// can be noticed during only one service.
     pub noticed_incident_ids: Option<Vec<i32>>,
+    /// Same-vehicle recalls (research findings with category `recall`) this
+    /// service performed.
+    pub recall_finding_ids: Option<Vec<i32>>,
 }
 
 #[derive(Default)]

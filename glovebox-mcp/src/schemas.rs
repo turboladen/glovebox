@@ -85,6 +85,10 @@ pub struct RecordServiceInput {
     /// observation logged beforehand. An incident is noticed during one
     /// service only.
     pub noticed_incident_ids: Option<Vec<i32>>,
+    /// Ids of recalls (from `check_recalls`) this service performed. Each
+    /// recall then reads as done, with this service as the one that did it.
+    /// Name a recall here when the invoice cites its campaign number.
+    pub recall_finding_ids: Option<Vec<i32>>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -137,6 +141,7 @@ impl RecordServiceInput {
                 work_item_ids: self.work_item_ids,
                 resolved_incident_ids: self.resolved_incident_ids,
                 noticed_incident_ids: self.noticed_incident_ids,
+                recall_finding_ids: self.recall_finding_ids,
                 line_items,
                 invoice_ref: self.invoice_ref,
                 end_date: self.end_date,
@@ -177,6 +182,17 @@ pub struct LogIncidentInput {
     /// The service record (same vehicle) during which this was noticed, e.g.
     /// the visit where the shop flagged it.
     pub noticed_during_service_id: Option<i32>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct SetRecallStatusInput {
+    /// Vehicle id, from `list_vehicles`.
+    pub vehicle_id: i32,
+    /// Recall id: the `finding_id` from `check_recalls`.
+    pub finding_id: i32,
+    /// `done` (the work was done and left no paperwork), `not_applicable`
+    /// (the recall does not apply to this car), or `open` (undo either).
+    pub status: String,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -372,7 +388,8 @@ pub struct PlanWorkInput {
     /// reminder.
     pub schedule_item_id: Option<i32>,
     /// The research finding (e.g. a recall from `check_recalls`) this
-    /// addresses — completing the work then closes the finding.
+    /// addresses. The recall reads as planned while the work is open, and
+    /// completing the work through `record_service` links the service to it.
     pub research_finding_id: Option<i32>,
     /// The incident this fixes (from `log_incident`) — completing the work
     /// links the incident to the service record.

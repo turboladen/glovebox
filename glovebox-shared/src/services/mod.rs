@@ -7,6 +7,7 @@ pub mod model_template;
 pub mod nhtsa;
 pub mod part;
 pub mod platform;
+pub mod recall;
 pub mod reminders;
 pub mod research;
 pub mod schedule;

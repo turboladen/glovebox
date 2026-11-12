@@ -5,7 +5,10 @@ use crate::{
     entities::{research_finding, research_report, vehicle},
     error::{DomainError, DomainResult},
     inputs::research::UpdateFinding,
-    services::nhtsa::{self, RecallCheckResult, RecallInfo},
+    services::{
+        nhtsa::{self, RecallInfo},
+        recall::{self, RecallWithStatus},
+    },
 };
 
 #[derive(Debug, Serialize)]
@@ -38,10 +41,22 @@ pub struct NewFiledFinding {
 
 // --- Recall check ---
 
+/// What a recall check found: the count of recalls stored for the first time
+/// and every recall known for the vehicle with its status.
+#[derive(Debug, Serialize)]
+pub struct RecallCheck {
+    pub newly_found: usize,
+    pub recalls: Vec<RecallWithStatus>,
+    pub message: Option<String>,
+}
+
+/// Looks the vehicle up on NHTSA by make, model and year (a live web
+/// request), stores recalls not seen before, and returns all known recalls
+/// with their status.
 pub async fn check_recalls<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
-) -> DomainResult<RecallCheckResult> {
+) -> DomainResult<RecallCheck> {
     let vehicle = vehicle::Entity::find_by_id(vehicle_id)
         .one(db)
         .await?
@@ -61,20 +76,39 @@ pub async fn check_recalls<C: ConnectionTrait + TransactionTrait>(
         .await
         .map_err(DomainError::Internal)?;
 
-    // Persist recalls as research findings (deduplicating by campaign number)
-    if !result.recalls.is_empty() {
-        persist_recall_findings(db, vehicle_id, &result.recalls).await?;
-    }
-
-    Ok(result)
+    record_recalls(db, vehicle_id, &result.recalls).await
 }
 
-/// Persist NHTSA recalls as research findings, skipping any already saved for this vehicle.
+/// Stores the recalls in `found` that this vehicle does not have yet and
+/// lists every recall on the vehicle with its status.
+pub(crate) async fn record_recalls<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    found: &[RecallInfo],
+) -> DomainResult<RecallCheck> {
+    let newly_found = persist_recall_findings(db, vehicle_id, found).await?;
+    let recalls = recall::list(db, vehicle_id).await?;
+    let message = if recalls.is_empty() {
+        Some("NHTSA lists no recalls for this make, model and year.".to_owned())
+    } else if newly_found == 0 {
+        Some("No new recalls; every recall below was already known.".to_owned())
+    } else {
+        None
+    };
+    Ok(RecallCheck {
+        newly_found,
+        recalls,
+        message,
+    })
+}
+
+/// Persist NHTSA recalls as research findings, skipping any already saved for
+/// this vehicle. Returns how many were stored.
 async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
     recalls: &[RecallInfo],
-) -> DomainResult<()> {
+) -> DomainResult<usize> {
     // Collect existing recall source_urls for this vehicle to deduplicate
     let existing_reports = research_report::Entity::find()
         .filter(research_report::Column::VehicleId.eq(vehicle_id))
@@ -82,7 +116,7 @@ async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
         .await?;
     let report_ids: Vec<i32> = existing_reports.iter().map(|r| r.id).collect();
 
-    let existing_urls: std::collections::HashSet<String> = if report_ids.is_empty() {
+    let mut known_urls: std::collections::HashSet<String> = if report_ids.is_empty() {
         std::collections::HashSet::new()
     } else {
         research_finding::Entity::find()
@@ -95,35 +129,34 @@ async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
             .collect()
     };
 
-    let new_findings: Vec<NewFinding> = recalls
-        .iter()
-        .filter(|recall| {
-            let url = format!(
-                "https://www.nhtsa.gov/recalls?nhtsaId={}",
-                recall.campaign_number
-            );
-            !existing_urls.contains(&url)
-        })
-        .map(|recall| NewFinding {
+    let mut new_findings: Vec<NewFinding> = Vec::new();
+    for recall in recalls {
+        let url = format!(
+            "https://www.nhtsa.gov/recalls?nhtsaId={}",
+            recall.campaign_number
+        );
+        // `insert` also drops a campaign repeated within `recalls`.
+        if !known_urls.insert(url.clone()) {
+            continue;
+        }
+        new_findings.push(NewFinding {
             category: "recall".to_string(),
             title: recall.subject.clone(),
             description: recall.summary.clone(),
-            source_url: Some(format!(
-                "https://www.nhtsa.gov/recalls?nhtsaId={}",
-                recall.campaign_number
-            )),
+            source_url: Some(url),
             severity: Some("critical".to_string()),
-        })
-        .collect();
+        });
+    }
 
     if new_findings.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
+    let count = new_findings.len();
 
     let summary = format!(
         "Found {} new recall{} from NHTSA.",
-        new_findings.len(),
-        if new_findings.len() == 1 { "" } else { "s" }
+        count,
+        if count == 1 { "" } else { "s" }
     );
     let raw_data = serde_json::to_string(&new_findings).ok();
 
@@ -153,7 +186,7 @@ async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
     }
 
     txn.commit().await?;
-    Ok(())
+    Ok(count)
 }
 
 // --- Research reports ---

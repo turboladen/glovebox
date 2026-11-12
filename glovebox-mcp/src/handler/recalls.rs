@@ -3,15 +3,15 @@
 use rmcp::{ErrorData as McpError, model::CallToolResult, tool, tool_router};
 
 use super::{GloveboxMcp, LenientParameters, domain_result};
-use glovebox_shared::services::research;
+use glovebox_shared::services::{recall, research};
 
-use crate::schemas::{FileResearchFindingInput, VehicleParams};
+use crate::schemas::{FileResearchFindingInput, SetRecallStatusInput, VehicleParams};
 
 #[tool_router(router = recalls_router, vis = "pub(super)")]
 impl GloveboxMcp {
     #[tool(
         name = "check_recalls",
-        description = "Check NHTSA for open safety recalls on this vehicle (requires make/model/year on the record; makes a live web request). New recalls are also saved as research findings. When a recall needs action, offer to plan_work it (linked via research_finding_id) — completing that work later closes the recall automatically.",
+        description = "Check NHTSA for safety recalls on this vehicle (requires make/model/year on the record; makes a live web request). Returns every known recall with its status (`open`, `planned`, `done` or `not_applicable`) and the work item or service linked to it; `newly_found` counts only recalls stored by this call. NHTSA is queried by make, model and year, so it cannot know whether a recall was already performed on this car: when an invoice names a campaign number, match it to a recall here and pass its `finding_id` in `record_service`'s `recall_finding_ids`. To act on an open recall, `plan_work` it with `research_finding_id`; completing that work through `record_service` links the service to the recall. Use `set_recall_status` for a recall that was done without paperwork or does not apply.",
         input_schema = rmcp::handler::server::common::schema_for_type::<VehicleParams>()
     )]
     async fn check_recalls(
@@ -23,6 +23,22 @@ impl GloveboxMcp {
             Err(e) => return Ok(e),
         };
         domain_result(research::check_recalls(&*self.db, p.vehicle_id).await)
+    }
+
+    #[tool(
+        name = "set_recall_status",
+        description = "Mark a recall (a `finding_id` from `check_recalls`) `done` when the work was done but left no paperwork, `not_applicable` when it does not apply to this car, or `open` to undo either. A recall already linked to a service stays done until that service is deleted, so changing it is an error. Returns the recall with its status.",
+        input_schema = rmcp::handler::server::common::schema_for_type::<SetRecallStatusInput>()
+    )]
+    async fn set_recall_status(
+        &self,
+        params: LenientParameters<SetRecallStatusInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = match params.into_tool_input("set_recall_status") {
+            Ok(v) => v,
+            Err(e) => return Ok(e),
+        };
+        domain_result(recall::set_status(&*self.db, p.vehicle_id, p.finding_id, &p.status).await)
     }
 
     #[tool(

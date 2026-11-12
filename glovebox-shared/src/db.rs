@@ -172,6 +172,7 @@ mod tests {
                 work_item_ids: None,
                 resolved_incident_ids: None,
                 noticed_incident_ids: None,
+                recall_finding_ids: None,
                 parts: None,
             },
         )

@@ -94,6 +94,7 @@ async fn tools_list_advertises_the_remaining_verb_set() {
         "search_records",
         "cost_summary",
         "check_recalls",
+        "set_recall_status",
         "file_research_finding",
         "plan_work",
         "list_planned_work",
@@ -106,7 +107,7 @@ async fn tools_list_advertises_the_remaining_verb_set() {
             "tools/list must advertise {tool}"
         );
     }
-    assert_eq!(tools.len(), 19, "expected exactly 19 tools; got: {names:?}");
+    assert_eq!(tools.len(), 20, "expected exactly 20 tools; got: {names:?}");
     // Every argument-taking tool must advertise a real, non-empty input
     // schema. Forgetting the `input_schema =` override on a #[tool] silently
     // advertises an empty one, and a name check alone would not catch it.

@@ -13,7 +13,9 @@ use crate::{
     },
     services::{
         incident::{self as incident_svc, ServiceRef},
-        part as part_svc, work_item,
+        part as part_svc,
+        recall::{self, RecallRef},
+        work_item,
     },
 };
 
@@ -139,6 +141,8 @@ pub struct ServiceRecordWithLinks {
     /// Incidents this service fixed. Each one's `other_service` is the
     /// service during which it was noticed, if any.
     pub resolved_incidents: Vec<IncidentRef>,
+    /// Recalls this service performed.
+    pub performed_recalls: Vec<RecallRef>,
     /// True when `create` found a record with the same `invoice_ref` on this
     /// vehicle and returned it unchanged instead of writing anything.
     pub already_recorded: bool,
@@ -263,6 +267,7 @@ impl ServiceRecordWithLinks {
         line_items: Vec<service_record_line_item::Model>,
         noticed_incidents: Vec<IncidentRef>,
         resolved_incidents: Vec<IncidentRef>,
+        performed_recalls: Vec<RecallRef>,
     ) -> Self {
         Self {
             record,
@@ -272,6 +277,7 @@ impl ServiceRecordWithLinks {
             line_items,
             noticed_incidents,
             resolved_incidents,
+            performed_recalls,
             already_recorded: false,
             possible_duplicates: Vec::new(),
         }
@@ -312,6 +318,10 @@ async fn load_service_links(
         .resolved
         .remove(&record.id)
         .unwrap_or_default();
+    let performed_recalls = recall::load_performed(db, &[record.id])
+        .await?
+        .remove(&record.id)
+        .unwrap_or_default();
 
     Ok(ServiceRecordWithLinks::assemble(
         record,
@@ -320,6 +330,7 @@ async fn load_service_links(
         line_items,
         noticed,
         resolved,
+        performed_recalls,
     ))
 }
 
@@ -452,6 +463,7 @@ pub async fn list(
     };
 
     let mut incident_links = load_incident_links(db, &record_ids).await?;
+    let mut performed = recall::load_performed(db, &record_ids).await?;
 
     let all_line_items = if record_ids.is_empty() {
         vec![]
@@ -489,6 +501,7 @@ pub async fn list(
                 .resolved
                 .remove(&record.id)
                 .unwrap_or_default();
+            let performed_recalls = performed.remove(&record.id).unwrap_or_default();
             ServiceRecordWithLinks::assemble(
                 record,
                 schedule_item_ids,
@@ -496,6 +509,7 @@ pub async fn list(
                 line_items,
                 noticed,
                 resolved,
+                performed_recalls,
             )
         })
         .collect();
@@ -599,8 +613,9 @@ async fn link_incidents(
 /// Creates a service record with its line items, installed parts, schedule
 /// links and odometer reading in one transaction; any failure leaves nothing
 /// behind. A record already filed under the same `invoice_ref` is returned
-/// unchanged with `already_recorded` set, and the incident ids in this call are
-/// ignored in that case.
+/// unchanged with `already_recorded` set, and the incident and recall ids in
+/// this call are ignored in that case. A completed to-do that came from a
+/// recall links that recall to the record as well.
 pub async fn create<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -697,6 +712,10 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
         &completed,
     )
     .await?;
+
+    let mut recall_ids = input.recall_finding_ids.unwrap_or_default();
+    recall_ids.extend(completed.iter().filter_map(|w| w.research_finding_id));
+    recall::link_service(&txn, vehicle_id, &recall_ids, record.id).await?;
 
     install_parts(
         &txn,
@@ -1022,6 +1041,11 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .exec(&txn)
         .await?;
 
+    crate::entities::service_recall_link::Entity::delete_many()
+        .filter(crate::entities::service_recall_link::Column::ServiceRecordId.eq(existing.id))
+        .exec(&txn)
+        .await?;
+
     // Incident links carry an ON DELETE CASCADE FK, but delete explicitly —
     // pragma-independent and inside the txn, mirroring incident::delete.
     incident_service_link::Entity::delete_many()
@@ -1117,6 +1141,7 @@ mod tests {
                 work_item_ids: None,
                 resolved_incident_ids: None,
                 noticed_incident_ids: None,
+                recall_finding_ids: None,
                 parts: None,
             },
         )
@@ -1195,6 +1220,7 @@ mod tests {
                 work_item_ids: None,
                 resolved_incident_ids: None,
                 noticed_incident_ids: None,
+                recall_finding_ids: None,
                 parts: None,
             },
         )
@@ -1275,6 +1301,7 @@ mod tests {
                 work_item_ids: None,
                 resolved_incident_ids: None,
                 noticed_incident_ids: None,
+                recall_finding_ids: None,
                 parts: None,
             },
         )
@@ -1545,6 +1572,7 @@ mod tests {
             work_item_ids: None,
             resolved_incident_ids: None,
             noticed_incident_ids: None,
+            recall_finding_ids: None,
             parts: None,
         }
     }
@@ -2508,6 +2536,7 @@ mod tests {
             NewServiceRecord {
                 service_date: "2023-05-03".into(),
                 noticed_incident_ids: Some(vec![incident_id]),
+                recall_finding_ids: None,
                 ..Default::default()
             },
         )
@@ -2525,6 +2554,7 @@ mod tests {
             NewServiceRecord {
                 service_date: "2023-06-01".into(),
                 noticed_incident_ids: Some(vec![incident_id]),
+                recall_finding_ids: None,
                 ..Default::default()
             },
         )
@@ -2629,6 +2659,7 @@ mod tests {
                 schedule_item_ids: Some(vec![sched]),
                 resolved_incident_ids: if as_resolved { ids.clone() } else { None },
                 noticed_incident_ids: if as_resolved { None } else { ids },
+                recall_finding_ids: None,
                 ..Default::default()
             }
         };
