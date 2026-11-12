@@ -11,7 +11,7 @@ use crate::schemas::{FileResearchFindingInput, SetRecallStatusInput, VehiclePara
 impl GloveboxMcp {
     #[tool(
         name = "check_recalls",
-        description = "Check NHTSA for safety recalls on this vehicle (requires make/model/year on the record; makes a live web request). Returns every known recall with its status (`open`, `planned`, `done` or `not_applicable`) and the work item or service linked to it; `newly_found` counts only recalls stored by this call. NHTSA is queried by make, model and year, so it cannot know whether a recall was already performed on this car: when an invoice names a campaign number, match it to a recall here and pass its `finding_id` in `record_service`'s `recall_finding_ids`. To act on an open recall, `plan_work` it with `research_finding_id`; completing that work through `record_service` links the service to the recall. Use `set_recall_status` for a recall that was done without paperwork or does not apply.",
+        description = "Check NHTSA for safety recalls on this vehicle (requires make/model/year on the record; makes a live web request). Returns every known recall with its status (`open`, `planned`, `done` or `not_applicable`) and the work item or service linked to it; `newly_found` counts only recalls stored by this call. If NHTSA cannot be reached, the call still succeeds with the recalls already known, `newly_found: 0`, and a `message` starting \"NHTSA lookup failed:\"; carry on with those. Call it once per conversation; `whats_coming` lists the open recalls after that. NHTSA is queried by make, model and year, so it cannot know whether a recall was already performed on this car: when an invoice names a campaign number, match it to a recall here and pass its `finding_id` in `record_service`'s `recall_finding_ids`. To act on an open recall, `plan_work` it with `research_finding_id`; completing that work through `record_service` links the service to the recall. Use `set_recall_status` for a recall that was done without paperwork or does not apply.",
         input_schema = rmcp::handler::server::common::schema_for_type::<VehicleParams>()
     )]
     async fn check_recalls(
@@ -27,7 +27,7 @@ impl GloveboxMcp {
 
     #[tool(
         name = "set_recall_status",
-        description = "Mark a recall (a `finding_id` from `check_recalls`) `done` when the work was done but left no paperwork, `not_applicable` when it does not apply to this car, or `open` to undo either. A recall already linked to a service stays done until that service is deleted, so changing it is an error. Returns the recall with its status.",
+        description = "Mark a recall (a `finding_id` from `whats_coming` or `check_recalls`) `done` when the work was done but left no paperwork, `not_applicable` when it does not apply to this car, or `open` to undo either. A recall already linked to a service stays done until that service is deleted, so changing it is an error. Returns the recall with its status.",
         input_schema = rmcp::handler::server::common::schema_for_type::<SetRecallStatusInput>()
     )]
     async fn set_recall_status(

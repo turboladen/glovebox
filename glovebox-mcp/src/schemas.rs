@@ -100,7 +100,8 @@ pub struct RecordServiceInput {
     /// observation logged beforehand. An incident is noticed during one
     /// service only.
     pub noticed_incident_ids: Option<Vec<i32>>,
-    /// Ids of recalls (from `check_recalls`) this service performed. Each
+    /// Ids of recalls (`finding_id`s from `whats_coming` or `check_recalls`)
+    /// this service performed. Each
     /// recall then reads as done, with this service as the one that did it.
     /// Name a recall here when the invoice cites its campaign number.
     pub recall_finding_ids: Option<Vec<i32>>,
@@ -209,7 +210,7 @@ pub struct LogIncidentInput {
 pub struct SetRecallStatusInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
-    /// Recall id: the `finding_id` from `check_recalls`.
+    /// Recall id: the `finding_id` from `whats_coming` or `check_recalls`.
     pub finding_id: i32,
     /// `done` (the work was done and left no paperwork), `not_applicable`
     /// (the recall does not apply to this car), or `open` (undo either).
@@ -414,7 +415,7 @@ pub struct PlanWorkInput {
     /// `whats_coming`) — completing the work then clears the
     /// reminder.
     pub schedule_item_id: Option<i32>,
-    /// The research finding (e.g. a recall from `check_recalls`) this
+    /// The research finding (e.g. a recall from `whats_coming` or `check_recalls`) this
     /// addresses. The recall reads as planned while the work is open, and
     /// completing the work through `record_service` links the service to it.
     pub research_finding_id: Option<i32>,

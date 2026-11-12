@@ -2,7 +2,7 @@ use sea_orm::*;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    entities::{research_finding, research_report, vehicle},
+    entities::{research_finding, research_report},
     error::{DomainError, DomainResult},
     inputs::research::UpdateFinding,
     services::{
@@ -53,30 +53,59 @@ pub struct RecallCheck {
 /// Looks the vehicle up on NHTSA by make, model and year (a live web
 /// request), stores recalls not seen before, and returns all known recalls
 /// with their status.
+///
+/// A failed lookup is not an error: the result carries the recalls already
+/// known, `newly_found: 0`, and a `message` that starts with
+/// "NHTSA lookup failed:". A vehicle with no make, model or year is a
+/// `BadRequest`.
 pub async fn check_recalls<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
 ) -> DomainResult<RecallCheck> {
-    let vehicle = vehicle::Entity::find_by_id(vehicle_id)
-        .one(db)
-        .await?
-        .ok_or_else(|| DomainError::NotFound("Vehicle not found".to_string()))?;
+    check_recalls_with(db, vehicle_id, |make, model, year| async move {
+        nhtsa::check_recalls(&make, &model, year).await
+    })
+    .await
+}
 
-    let make = vehicle.make.as_deref().ok_or_else(|| {
+/// [`check_recalls`] with the NHTSA lookup supplied by the caller, so a test
+/// can stand in for the network.
+pub(crate) async fn check_recalls_with<C, F, Fut>(
+    db: &C,
+    vehicle_id: i32,
+    lookup: F,
+) -> DomainResult<RecallCheck>
+where
+    C: ConnectionTrait + TransactionTrait,
+    F: FnOnce(String, String, i32) -> Fut,
+    Fut: std::future::Future<Output = Result<nhtsa::RecallCheckResult, String>>,
+{
+    let vehicle = crate::services::vehicle::require(db, vehicle_id).await?;
+
+    let make = vehicle.make.ok_or_else(|| {
         DomainError::BadRequest("Vehicle has no make set — required for recall lookup".to_string())
     })?;
-    let model = vehicle.model.as_deref().ok_or_else(|| {
+    let model = vehicle.model.ok_or_else(|| {
         DomainError::BadRequest("Vehicle has no model set — required for recall lookup".to_string())
     })?;
     let year = vehicle.year.ok_or_else(|| {
         DomainError::BadRequest("Vehicle has no year set — required for recall lookup".to_string())
     })?;
 
-    let result = nhtsa::check_recalls(make, model, year)
-        .await
-        .map_err(DomainError::Internal)?;
-
-    record_recalls(db, vehicle_id, &result.recalls).await
+    match lookup(make, model, year).await {
+        Ok(result) => record_recalls(db, vehicle_id, &result.recalls).await,
+        Err(e) => {
+            tracing::warn!(vehicle_id, error = %e, "NHTSA recall lookup failed");
+            Ok(RecallCheck {
+                newly_found: 0,
+                recalls: recall::list(db, vehicle_id).await?,
+                message: Some(format!(
+                    "NHTSA lookup failed: {e}. The recalls listed are the ones already known; try \
+                     again later."
+                )),
+            })
+        }
+    }
 }
 
 /// Stores the recalls in `found` that this vehicle does not have yet and
@@ -195,10 +224,7 @@ pub async fn list_reports(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
 ) -> DomainResult<Vec<research_report::Model>> {
-    vehicle::Entity::find_by_id(vehicle_id)
-        .one(db)
-        .await?
-        .ok_or_else(|| DomainError::NotFound("Vehicle not found".to_string()))?;
+    crate::services::vehicle::require(db, vehicle_id).await?;
 
     Ok(research_report::Entity::find()
         .filter(research_report::Column::VehicleId.eq(vehicle_id))
@@ -309,10 +335,7 @@ pub async fn file_finding(
     vehicle_id: i32,
     input: NewFiledFinding,
 ) -> DomainResult<research_finding::Model> {
-    vehicle::Entity::find_by_id(vehicle_id)
-        .one(db)
-        .await?
-        .ok_or_else(|| DomainError::NotFound("Vehicle not found".to_string()))?;
+    crate::services::vehicle::require(db, vehicle_id).await?;
 
     // order_by_asc(Id): should concurrent first-filings ever race-create two
     // anchors (no unique index on vehicle+type), every later call still picks
@@ -365,6 +388,51 @@ mod tests {
 
     async fn seed_vehicle(db: &impl ConnectionTrait) -> i32 {
         VehicleFixture::new().insert_id(db).await
+    }
+
+    #[tokio::test]
+    async fn a_failed_lookup_still_returns_the_known_recalls() {
+        let db = test_db().await;
+        let vid = crate::entities::vehicle::ActiveModel {
+            name: Set("GTI".into()),
+            make: Set(Some("Volkswagen".into())),
+            model: Set(Some("Golf GTI".into())),
+            year: Set(Some(2017)),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap()
+        .id;
+        let known = RecallInfo {
+            campaign_number: "24V110000".into(),
+            manufacturer: None,
+            subject: "Suction jet pump".into(),
+            summary: None,
+            consequence: None,
+            remedy: None,
+            report_date: None,
+            component: Some("FUEL SYSTEM".into()),
+            action_number: None,
+        };
+        record_recalls(&db, vid, &[known]).await.unwrap();
+
+        let check = check_recalls_with(&db, vid, |_, _, _| async {
+            Err::<nhtsa::RecallCheckResult, _>("connection refused".to_string())
+        })
+        .await
+        .unwrap();
+        assert_eq!(check.newly_found, 0);
+        assert_eq!(check.recalls.len(), 1);
+        assert_eq!(check.recalls[0].status, "open");
+        let message = check.message.unwrap_or_default();
+        assert!(
+            message.starts_with("NHTSA lookup failed: connection refused"),
+            "got: {message}"
+        );
+
+        let missing = check_recalls(&db, 99_999).await.unwrap_err();
+        assert_eq!(missing.to_string(), "Vehicle 99999 not found");
     }
 
     #[tokio::test]

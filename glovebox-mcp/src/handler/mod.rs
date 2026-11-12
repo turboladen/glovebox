@@ -85,16 +85,16 @@ impl ServerHandler for GloveboxMcp {
                  `invoice_ref`, `line_items` (each with a `work_kind`), `parts`, and the ids of \
                  anything the work closes: `schedule_item_ids` from `whats_coming`, \
                  `work_item_ids` from `list_planned_work`, `resolved_incident_ids`, \
-                 `recall_finding_ids` from `check_recalls`. Filing the same `invoice_ref` again \
-                 returns the existing record; fix a record with `correct_service`, remove one \
-                 with `delete_service` (which reopens what it closed). (2) CAPTURE AN ADVISORY: \
-                 when a shop flags something it did not fix, `log_incident` with category \
-                 `shop_observation` and `noticed_during_service_id`, then `plan_work` the fix \
-                 with `revisit_by_date` or `revisit_by_miles`; progress it with \
-                 `update_incident`, `add_incident_followup` and `update_planned_work`. (3) ANSWER \
-                 \"WHAT'S COMING?\": call `whats_coming` before recommending any work; it covers \
-                 the schedule, planned work, open recalls, unresolved incidents, the 12-month \
-                 forecast and warranty status. Tune the schedule with `list_schedule`, \
+                 `recall_finding_ids` from the `recalls` in `whats_coming`. Filing the same \
+                 `invoice_ref` again returns the existing record; fix a record with \
+                 `correct_service`, remove one with `delete_service` (which reopens what it \
+                 closed). (2) CAPTURE AN ADVISORY: when a shop flags something it did not fix, \
+                 `log_incident` with category `shop_observation` and `noticed_during_service_id`, \
+                 then `plan_work` the fix with `revisit_by_date` or `revisit_by_miles`; progress \
+                 it with `update_incident`, `add_incident_followup` and `update_planned_work`. \
+                 (3) ANSWER \"WHAT'S COMING?\": call `whats_coming` before recommending any work; \
+                 it covers the schedule, planned work, open recalls, unresolved incidents, the \
+                 12-month forecast and warranty status. Tune the schedule with `list_schedule`, \
                  `update_schedule_item` (any item, inherited ones included; history carries \
                  over), `add_schedule_item` for a job the schedule lacks, and \
                  `dismiss_schedule_item` / `restore_schedule_item`. Also: `log_mileage` whenever \
@@ -102,7 +102,8 @@ impl ServerHandler for GloveboxMcp {
                  typo, `delete_vehicle` undoes a mistaken `add_vehicle`), `record_part` and \
                  `list_parts` / `correct_part` / `delete_part` for parts, `save_note` for facts \
                  worth keeping, `search_records` and `cost_summary` to look things up, \
-                 `check_recalls` and `set_recall_status` for recalls. Every record can be listed, \
+                 `check_recalls` (once per conversation; a failed lookup still lists the known \
+                 recalls) and `set_recall_status` for recalls. Every record can be listed, \
                  corrected and deleted; a correct or update tool leaves absent fields alone and \
                  clears a field sent as null, and an argument a tool does not define is an error. \
                  All money is integer cents; all dates are YYYY-MM-DD.",

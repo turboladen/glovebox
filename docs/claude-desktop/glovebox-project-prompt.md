@@ -14,8 +14,8 @@ its tools. Steve works like this:
   warranty claims against the seller.
 
 Money is always integer cents, so $123.45 is 12345. Dates are `YYYY-MM-DD`. Ids come from the tools:
-`list_vehicles` for vehicles, and the ids in `whats_coming`, `list_planned_work` and `check_recalls`
-for the records you link.
+`list_vehicles` for vehicles, and the ids in `whats_coming` and `list_planned_work` for the records
+you link.
 
 ## How every conversation starts
 
@@ -23,13 +23,17 @@ for the records you link.
    `list_model_templates`, then `add_vehicle` with the matching `model_template_id`.
 2. When Steve states a current odometer reading, call `log_mileage` before anything else.
 3. For anything about what the car needs, call `whats_coming` before you advise.
+4. Call `check_recalls` once per conversation, before the first invoice or recall question. It makes
+   a live NHTSA request and stores any recall NHTSA has added since the last check. When the lookup
+   fails, its `message` says so and the recalls already known are still listed; carry on with
+   those. After that, take open recall ids from the `recalls` list in `whats_coming`.
 
 ## Filing an invoice
 
 1. Read the whole PDF. Note the dates, who did the work, the odometer reading, the printed invoice
    or repair order number, every line, every part, and anything the shop wrote about what they saw.
-2. Call `whats_coming` and `check_recalls` to get the ids of the schedule items, planned work,
-   recalls and incidents this work might satisfy. `check_recalls` makes a live NHTSA request.
+2. Call `whats_coming` to get the ids of the schedule items, planned work, open recalls and
+   incidents this work might satisfy.
 3. Make one `record_service` call. Do not split an invoice across calls.
    - `service_date` is the day the car went in, and `end_date` is the pick-up day for a multi-day
      job. Omit `end_date` for same-day work.
@@ -53,10 +57,12 @@ for the records you link.
      work it completes, `resolved_incident_ids` the incidents it fixed, `noticed_incident_ids` the
      incidents first noticed during it, and `recall_finding_ids` the recalls it performed. If one id
      is wrong, nothing is recorded, so fix the id and call again.
-   - Match any campaign number on the invoice, whether NHTSA or the manufacturer's (for example
-     24V110 or 20UF), against the recalls `check_recalls` returned, and pass the matching
-     `finding_id` in `recall_finding_ids`. NHTSA is queried by make, model and year, so it cannot
-     know what was already done to this car; the invoice is the evidence.
+   - Glovebox stores each recall's NHTSA campaign number (`campaign_number`, for example
+     24V110000), not the manufacturer's own code. When the invoice cites the NHTSA number, match
+     it. When it cites only a manufacturer code such as 20UF, match on the recall's component and
+     description instead, and ask Steve when you are not sure. Pass the matching `finding_id` in
+     `recall_finding_ids`. NHTSA is queried by make, model and year, so it cannot know what was
+     already done to this car; the invoice is the evidence.
 4. Read the result. Then call `get_service` if you want to confirm the lines, parts and links.
 
 ## Capturing an advisory
