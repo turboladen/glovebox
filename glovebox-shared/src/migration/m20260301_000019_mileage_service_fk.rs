@@ -30,7 +30,7 @@ impl MigrationTrait for Migration {
         let db = manager.get_connection();
 
         let column_exists = db
-            .query_one(sea_orm::Statement::from_string(
+            .query_one_raw(sea_orm::Statement::from_string(
                 manager.get_database_backend(),
                 "SELECT 1 FROM pragma_table_info('mileage_log') WHERE name = 'service_record_id'"
                     .to_owned(),

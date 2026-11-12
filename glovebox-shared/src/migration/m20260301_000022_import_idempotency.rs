@@ -34,7 +34,7 @@ impl MigrationTrait for Migration {
         let backend = manager.get_database_backend();
 
         let documents_hash_exists = db
-            .query_one(sea_orm::Statement::from_string(
+            .query_one_raw(sea_orm::Statement::from_string(
                 backend,
                 "SELECT 1 FROM pragma_table_info('documents') WHERE name = 'content_sha256'"
                     .to_owned(),
@@ -53,7 +53,7 @@ impl MigrationTrait for Migration {
         }
 
         let service_ref_exists = db
-            .query_one(sea_orm::Statement::from_string(
+            .query_one_raw(sea_orm::Statement::from_string(
                 backend,
                 "SELECT 1 FROM pragma_table_info('service_records') WHERE name = 'invoice_ref'"
                     .to_owned(),

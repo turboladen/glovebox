@@ -129,8 +129,8 @@ pub async fn estimate_mileage(
     let avg_daily = if entries.len() >= 2 {
         let oldest = entries.last().unwrap();
         let oldest_date = parse_date(&oldest.recorded_at).unwrap_or(latest_date);
-        let days = (latest_date - oldest_date).num_days().max(1);
-        let miles = (latest.mileage - oldest.mileage).max(0);
+        let days = Ord::max((latest_date - oldest_date).num_days(), 1);
+        let miles = Ord::max(latest.mileage - oldest.mileage, 0);
         f64::from(miles) / days as f64
     } else {
         // With only one entry, use purchase mileage as baseline
@@ -140,13 +140,13 @@ pub async fn estimate_mileage(
             .as_deref()
             .and_then(parse_date)
             .unwrap_or(latest_date);
-        let days = (latest_date - purchase_date).num_days().max(1);
-        let miles = (latest.mileage - purchase_miles).max(0);
+        let days = Ord::max((latest_date - purchase_date).num_days(), 1);
+        let miles = Ord::max(latest.mileage - purchase_miles, 0);
         f64::from(miles) / days as f64
     };
 
     // Extrapolate from latest entry to today
-    let days_since = (today - latest_date).num_days().max(0);
+    let days_since = Ord::max((today - latest_date).num_days(), 0);
     let is_estimate = days_since > 0;
     #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
     let estimated = latest.mileage + (avg_daily * days_since as f64) as i32;
@@ -432,7 +432,7 @@ fn add_months(date: NaiveDate, months: i32) -> NaiveDate {
     let total_months = date.month() as i32 + months - 1;
     let new_year = date.year() + total_months / 12;
     let new_month = (total_months % 12 + 1) as u32;
-    let new_day = date.day().min(days_in_month(new_year, new_month));
+    let new_day = Ord::min(date.day(), days_in_month(new_year, new_month));
     NaiveDate::from_ymd_opt(new_year, new_month, new_day).unwrap_or(date)
 }
 

@@ -143,7 +143,7 @@ pub async fn forecast_from(
         .filter(|d| *d >= 1)
         .min();
 
-        let mut day = first.max(0);
+        let mut day = Ord::max(first, 0);
         // Already planned: the first occurrence is counted in
         // `planned_work_cents`; only later cycles project here.
         if planned_schedule_items.contains(&item.id) {

@@ -29,7 +29,7 @@ async fn column_exists(
 ) -> Result<bool, DbErr> {
     let db = manager.get_connection();
     Ok(db
-        .query_one(sea_orm::Statement::from_string(
+        .query_one_raw(sea_orm::Statement::from_string(
             manager.get_database_backend(),
             format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name = '{column}'"),
         ))

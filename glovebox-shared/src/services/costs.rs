@@ -81,10 +81,10 @@ pub async fn summary(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult
         .sum();
 
     // Parts cost: use purchased parts total (more accurate than service-reported)
-    let total_parts_cost_cents = total_parts_purchased.max(total_parts_cost_from_services);
+    let total_parts_cost_cents = Ord::max(total_parts_purchased, total_parts_cost_from_services);
     // Total: service totals (which include labor + parts on the bill) plus any
     // separately purchased parts not already counted in service records
-    let extra_parts_cost = (total_parts_purchased - total_parts_cost_from_services).max(0);
+    let extra_parts_cost = Ord::max(total_parts_purchased - total_parts_cost_from_services, 0);
     let total_cost_cents = total_service_cost_cents + extra_parts_cost;
 
     // Payer split: services paid by someone else are covered; self-paid
