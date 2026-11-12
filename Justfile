@@ -27,3 +27,11 @@ ci-backend:
 # Run all CI gates locally
 ci: fmt-check check-layering ci-backend
 
+
+# --- Install ---
+
+# Build the release binary and print what to put in Claude Desktop's config
+install:
+    cargo build --release -p glovebox-mcp
+    @echo "Binary:  $(pwd)/target/release/glovebox-mcp"
+    @echo "Claude Desktop config: $HOME/Library/Application Support/Claude/claude_desktop_config.json"
