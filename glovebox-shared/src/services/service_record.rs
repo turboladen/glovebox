@@ -3,9 +3,8 @@ use serde::Serialize;
 
 use crate::{
     entities::{
-        incident, incident_service_link, mileage_log, part, research_finding, service_recall_link,
-        service_record, service_record_line_item, service_schedule_link,
-        work_item as work_item_entity,
+        incident, incident_service_link, mileage_log, part, service_recall_link, service_record,
+        service_record_line_item, service_schedule_link,
     },
     error::{DomainError, DomainResult},
     inputs::{
@@ -513,21 +512,10 @@ async fn install_parts(
     existing_ids: Vec<i32>,
     new_parts: Vec<NewPart>,
 ) -> DomainResult<()> {
+    // A record with no odometer reading leaves each part's own reading.
+    let odometer = record.mileage.map_or(NotSet, |miles| Set(Some(miles)));
     for part_id in existing_ids {
-        let existing_part = part::Entity::find_by_id(part_id)
-            .filter(part::Column::VehicleId.eq(vehicle_id))
-            .one(txn)
-            .await?
-            .ok_or_else(|| DomainError::NotFound(format!("Part {part_id} not found")))?;
-
-        let mut active_part: part::ActiveModel = existing_part.into();
-        active_part.status = Set("installed".to_string());
-        active_part.installed_service_id = Set(Some(record.id));
-        active_part.installed_date = Set(Some(record.service_date.clone()));
-        if let Some(miles) = record.mileage {
-            active_part.installed_odometer = Set(Some(miles));
-        }
-        active_part.update(txn).await?;
+        part_svc::install(txn, vehicle_id, part_id, record, odometer.clone()).await?;
     }
 
     for mut new_part in new_parts {
@@ -844,31 +832,17 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
             .await?;
         for old_part in old_parts {
             if !new_part_ids.contains(&old_part.id) {
-                let mut active_part: part::ActiveModel = old_part.clone().into();
-                // Only revert to purchased if the part was installed (not replaced/returned)
-                if old_part.status == "installed" {
-                    active_part.status = Set("purchased".to_string());
-                }
-                active_part.installed_service_id = Set(None);
-                active_part.installed_date = Set(None);
-                active_part.installed_odometer = Set(None);
-                active_part.update(&txn).await?;
+                part_svc::uninstall(
+                    &txn,
+                    old_part,
+                    part_svc::UninstallStatus::PurchasedIfInstalled,
+                )
+                .await?;
             }
         }
         // Link new parts
-        for part_id in &new_part_ids {
-            let existing_part = part::Entity::find_by_id(*part_id)
-                .filter(part::Column::VehicleId.eq(vehicle_id))
-                .one(&txn)
-                .await?
-                .ok_or_else(|| DomainError::NotFound(format!("Part {part_id} not found")))?;
-
-            let mut active_part: part::ActiveModel = existing_part.into();
-            active_part.status = Set("installed".to_string());
-            active_part.installed_service_id = Set(Some(record.id));
-            active_part.installed_date = Set(Some(record.service_date.clone()));
-            active_part.installed_odometer = Set(record.mileage);
-            active_part.update(&txn).await?;
+        for &part_id in &new_part_ids {
+            part_svc::install(&txn, vehicle_id, part_id, &record, Set(record.mileage)).await?;
         }
     }
 
@@ -951,14 +925,7 @@ pub async fn link_schedule_items<C: ConnectionTrait + TransactionTrait>(
     load_service_links(db, record).await
 }
 
-/// What happens to the recalls a deleted service performed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RecallsOnDelete {
-    /// Each recall reads `open` again, unless another service also performed it.
-    Reopen,
-    /// Each recall reads `done` with no service, as `recall::set_status(.., "done")` stores it.
-    KeepDone,
-}
+pub use super::recall::RecallsOnDelete;
 
 /// What [`delete`] changed besides the service itself.
 #[derive(Debug, Default, Serialize)]
@@ -1004,31 +971,16 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .await?
         .remove(&existing.id)
         .unwrap_or_default();
+    // The choice is checked before anything is written.
+    let recall_choice = match (performed.is_empty(), recalls) {
+        (true, _) => None,
+        (false, None) => return Err(recalls_need_a_choice(&performed)),
+        (false, Some(choice)) => Some(choice),
+    };
     let mut outcome = DeletedService::default();
-    if !performed.is_empty() {
-        let Some(choice) = recalls else {
-            return Err(recalls_need_a_choice(&performed));
-        };
-        let finding_ids: Vec<i32> = performed.iter().map(|r| r.finding_id).collect();
-        // The stored status is what makes a recall read done or open once its
-        // link is gone: `completed` reads done, `new` reads open.
-        let (stored, ids) = match choice {
-            RecallsOnDelete::Reopen => ("new", &mut outcome.reopened_recall_ids),
-            RecallsOnDelete::KeepDone => ("completed", &mut outcome.kept_done_recall_ids),
-        };
-        research_finding::Entity::update_many()
-            .set(research_finding::ActiveModel {
-                status: Set(stored.to_owned()),
-                updated_at: Set(super::now_stamp()),
-                ..Default::default()
-            })
-            .filter(research_finding::Column::Id.is_in(finding_ids.clone()))
-            .exec(&txn)
-            .await?;
-        *ids = finding_ids;
-    }
 
-    reopen_what_it_closed(&txn, existing.id).await?;
+    work_item::reopen_completed_by(&txn, existing.id).await?;
+    reopen_resolved_incidents(&txn, existing.id).await?;
 
     // Unlink parts installed during this service (revert to purchased)
     let linked_parts = part::Entity::find()
@@ -1038,12 +990,7 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .await?;
     outcome.kept_part_ids = linked_parts.iter().map(|p| p.id).collect();
     for p in linked_parts {
-        let mut active_part: part::ActiveModel = p.into();
-        active_part.status = Set("purchased".to_string());
-        active_part.installed_service_id = Set(None);
-        active_part.installed_date = Set(None);
-        active_part.installed_odometer = Set(None);
-        active_part.update(&txn).await?;
+        part_svc::uninstall(&txn, p, part_svc::UninstallStatus::Purchased).await?;
     }
 
     // Remove the auto-created mileage log(s) — an orphaned log would keep
@@ -1078,25 +1025,12 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     // Delete the service record
     existing.delete(&txn).await?;
 
-    // Read after this service's links are gone: a reopened recall that another
-    // service also performed still reads done through that link.
-    if !outcome.reopened_recall_ids.is_empty() {
-        let linked_elsewhere: std::collections::HashSet<i32> = service_recall_link::Entity::find()
-            .filter(
-                service_recall_link::Column::ResearchFindingId
-                    .is_in(outcome.reopened_recall_ids.clone()),
-            )
-            .all(&txn)
-            .await?
-            .into_iter()
-            .map(|l| l.research_finding_id)
-            .collect();
-        let (elsewhere, open): (Vec<i32>, Vec<i32>) = outcome
-            .reopened_recall_ids
-            .iter()
-            .partition(|id| linked_elsewhere.contains(id));
-        outcome.reopened_recall_ids = open;
-        outcome.still_done_elsewhere_recall_ids = elsewhere;
+    if let Some(choice) = recall_choice {
+        let finding_ids = performed.iter().map(|r| r.finding_id).collect();
+        let released = recall::release_from_deleted_service(&txn, finding_ids, choice).await?;
+        outcome.reopened_recall_ids = released.reopened;
+        outcome.kept_done_recall_ids = released.kept_done;
+        outcome.still_done_elsewhere_recall_ids = released.still_done_elsewhere;
     }
 
     txn.commit().await?;
@@ -1120,22 +1054,13 @@ fn recalls_need_a_choice(performed: &[RecallRef]) -> DomainError {
     ))
 }
 
-/// Undoes the closing effects of a service that is about to be deleted. Runs
-/// before the link rows are removed because it reads them.
-async fn reopen_what_it_closed(txn: &impl ConnectionTrait, service_id: i32) -> DomainResult<()> {
-    let stamp = super::now_stamp();
-
-    work_item_entity::Entity::update_many()
-        .set(work_item_entity::ActiveModel {
-            status: Set("planned".to_string()),
-            completed_service_id: Set(None),
-            updated_at: Set(stamp.clone()),
-            ..Default::default()
-        })
-        .filter(work_item_entity::Column::CompletedServiceId.eq(service_id))
-        .exec(txn)
-        .await?;
-
+/// Marks unresolved each incident a service that is about to be deleted
+/// resolved, unless another service also resolved it. Runs before the link
+/// rows are removed because it reads them.
+async fn reopen_resolved_incidents(
+    txn: &impl ConnectionTrait,
+    service_id: i32,
+) -> DomainResult<()> {
     let resolved_here: Vec<i32> = incident_service_link::Entity::find()
         .filter(incident_service_link::Column::ServiceRecordId.eq(service_id))
         .filter(incident_service_link::Column::Role.eq(incident_svc::ROLE_RESOLVED))
@@ -1144,27 +1069,34 @@ async fn reopen_what_it_closed(txn: &impl ConnectionTrait, service_id: i32) -> D
         .into_iter()
         .map(|l| l.incident_id)
         .collect();
-    for incident_id in resolved_here {
-        let resolved_elsewhere = incident_service_link::Entity::find()
-            .filter(incident_service_link::Column::IncidentId.eq(incident_id))
-            .filter(incident_service_link::Column::Role.eq(incident_svc::ROLE_RESOLVED))
-            .filter(incident_service_link::Column::ServiceRecordId.ne(service_id))
-            .count(txn)
-            .await?
-            > 0;
-        if !resolved_elsewhere {
-            incident::Entity::update_many()
-                .set(incident::ActiveModel {
-                    resolved: Set(false),
-                    updated_at: Set(stamp.clone()),
-                    ..Default::default()
-                })
-                .filter(incident::Column::Id.eq(incident_id))
-                .exec(txn)
-                .await?;
-        }
+    if resolved_here.is_empty() {
+        return Ok(());
     }
-
+    let resolved_elsewhere: std::collections::HashSet<i32> = incident_service_link::Entity::find()
+        .filter(incident_service_link::Column::IncidentId.is_in(resolved_here.clone()))
+        .filter(incident_service_link::Column::Role.eq(incident_svc::ROLE_RESOLVED))
+        .filter(incident_service_link::Column::ServiceRecordId.ne(service_id))
+        .all(txn)
+        .await?
+        .into_iter()
+        .map(|l| l.incident_id)
+        .collect();
+    let reopen: Vec<i32> = resolved_here
+        .into_iter()
+        .filter(|id| !resolved_elsewhere.contains(id))
+        .collect();
+    if reopen.is_empty() {
+        return Ok(());
+    }
+    incident::Entity::update_many()
+        .set(incident::ActiveModel {
+            resolved: Set(false),
+            updated_at: Set(super::now_stamp()),
+            ..Default::default()
+        })
+        .filter(incident::Column::Id.is_in(reopen))
+        .exec(txn)
+        .await?;
     Ok(())
 }
 

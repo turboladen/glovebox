@@ -187,6 +187,17 @@ pub async fn list(
     with_status(db, findings).await
 }
 
+/// The stored finding status that makes a recall with no service read as
+/// `status`, or `None` for a status a caller cannot set.
+fn stored_status(status: &str) -> Option<&'static str> {
+    match status {
+        "open" => Some("new"),
+        "done" => Some("completed"),
+        "not_applicable" => Some("dismissed"),
+        _ => None,
+    }
+}
+
 /// Sets a recall to `open`, `done` or `not_applicable` without a service.
 ///
 /// A recall linked to a service is `done` for as long as the link exists, so
@@ -197,16 +208,11 @@ pub async fn set_status(
     finding_id: i32,
     status: &str,
 ) -> DomainResult<RecallWithStatus> {
-    let stored = match status {
-        "open" => "new",
-        "done" => "completed",
-        "not_applicable" => "dismissed",
-        other => {
-            return Err(DomainError::BadRequest(format!(
-                "Invalid status '{other}'. Must be one of: {}",
-                VALID_STATUSES.join(", ")
-            )));
-        }
+    let Some(stored) = stored_status(status) else {
+        return Err(DomainError::BadRequest(format!(
+            "Invalid status '{status}'. Must be one of: {}",
+            VALID_STATUSES.join(", ")
+        )));
     };
     let finding = require_recalls(db, vehicle_id, &[finding_id])
         .await?
@@ -280,6 +286,69 @@ pub(crate) async fn link_service(
         }
     }
     Ok(())
+}
+
+/// What happens to the recalls a deleted service performed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecallsOnDelete {
+    /// Each recall reads `open` again, unless another service also performed it.
+    Reopen,
+    /// Each recall reads `done` with no service, as `recall::set_status(.., "done")` stores it.
+    KeepDone,
+}
+
+/// The recalls a deleted service performed, by what became of them.
+#[derive(Debug, Default)]
+pub(crate) struct ReleasedRecalls {
+    pub reopened: Vec<i32>,
+    pub kept_done: Vec<i32>,
+    pub still_done_elsewhere: Vec<i32>,
+}
+
+/// Applies the owner's choice to the recalls a deleted service performed, on
+/// the caller's transaction. Call it once that service's recall links are
+/// gone: a reopened recall that still reads `done` is one another service
+/// also performed.
+pub(crate) async fn release_from_deleted_service(
+    db: &impl ConnectionTrait,
+    finding_ids: Vec<i32>,
+    choice: RecallsOnDelete,
+) -> DomainResult<ReleasedRecalls> {
+    let mut out = ReleasedRecalls::default();
+    if finding_ids.is_empty() {
+        return Ok(out);
+    }
+    let shown = match choice {
+        RecallsOnDelete::Reopen => "open",
+        RecallsOnDelete::KeepDone => "done",
+    };
+    let stored = stored_status(shown).expect("open and done are settable statuses");
+    research_finding::Entity::update_many()
+        .set(research_finding::ActiveModel {
+            status: Set(stored.to_owned()),
+            updated_at: Set(super::now_stamp()),
+            ..Default::default()
+        })
+        .filter(research_finding::Column::Id.is_in(finding_ids.clone()))
+        .exec(db)
+        .await?;
+    if choice == RecallsOnDelete::KeepDone {
+        out.kept_done = finding_ids;
+        return Ok(out);
+    }
+    let findings = research_finding::Entity::find()
+        .filter(research_finding::Column::Id.is_in(finding_ids.clone()))
+        .all(db)
+        .await?;
+    let done: std::collections::HashSet<i32> = with_status(db, findings)
+        .await?
+        .into_iter()
+        .filter(|r| r.status == "done")
+        .map(|r| r.finding_id)
+        .collect();
+    (out.still_done_elsewhere, out.reopened) =
+        finding_ids.into_iter().partition(|id| done.contains(id));
+    Ok(out)
 }
 
 /// The recalls each of the given services performed, keyed by service id.

@@ -193,6 +193,57 @@ pub async fn update(
     Ok(active.update(db).await?)
 }
 
+/// Marks a vehicle's part as installed by `record` on the record's date.
+/// `odometer` is written to `installed_odometer` as given, so `NotSet`
+/// keeps the reading the part already has. A part of another vehicle reads
+/// as nonexistent.
+pub(crate) async fn install(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    part_id: i32,
+    record: &service_record::Model,
+    odometer: ActiveValue<Option<i32>>,
+) -> DomainResult<()> {
+    let mut active: part::ActiveModel = get(db, vehicle_id, part_id).await?.into();
+    active.status = Set("installed".to_string());
+    active.installed_service_id = Set(Some(record.id));
+    active.installed_date = Set(Some(record.service_date.clone()));
+    active.installed_odometer = odometer;
+    active.update(db).await?;
+    Ok(())
+}
+
+/// What [`uninstall`] does to a part's status.
+pub(crate) enum UninstallStatus {
+    /// The part reads `purchased` whatever its status was.
+    Purchased,
+    /// Only an `installed` part goes back to `purchased`; a replaced or
+    /// returned part keeps its status.
+    PurchasedIfInstalled,
+}
+
+/// Detaches a part from the service that installed it, clearing its install
+/// fields and setting its status as `status` says.
+pub(crate) async fn uninstall(
+    db: &impl ConnectionTrait,
+    p: part::Model,
+    status: UninstallStatus,
+) -> DomainResult<()> {
+    let revert = match status {
+        UninstallStatus::Purchased => true,
+        UninstallStatus::PurchasedIfInstalled => p.status == "installed",
+    };
+    let mut active: part::ActiveModel = p.into();
+    if revert {
+        active.status = Set("purchased".to_string());
+    }
+    active.installed_service_id = Set(None);
+    active.installed_date = Set(None);
+    active.installed_odometer = Set(None);
+    active.update(db).await?;
+    Ok(())
+}
+
 /// Delete a part.
 pub async fn delete(db: &impl ConnectionTrait, vehicle_id: i32, id: i32) -> DomainResult<()> {
     get(db, vehicle_id, id).await?.delete(db).await?;

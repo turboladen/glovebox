@@ -241,6 +241,25 @@ pub(crate) async fn complete_with_service(
     Ok(completed)
 }
 
+/// Returns to `planned` every work item a service that is about to be
+/// deleted completed, on the caller's transaction.
+pub(crate) async fn reopen_completed_by(
+    db: &impl ConnectionTrait,
+    service_record_id: i32,
+) -> DomainResult<()> {
+    work_item::Entity::update_many()
+        .set(work_item::ActiveModel {
+            status: Set("planned".to_string()),
+            completed_service_id: Set(None),
+            updated_at: Set(super::now_stamp()),
+            ..Default::default()
+        })
+        .filter(work_item::Column::CompletedServiceId.eq(service_record_id))
+        .exec(db)
+        .await?;
+    Ok(())
+}
+
 pub async fn get(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
