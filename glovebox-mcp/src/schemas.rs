@@ -54,9 +54,11 @@ pub struct RecordServiceInput {
     pub description: Option<String>,
     /// Odometer reading at service time. Also logs a mileage entry.
     pub mileage: Option<i32>,
-    /// The amount the shop charged on the invoice, in integer cents (e.g.
-    /// $123.45 -> 12345). It excludes the cost of any part with
-    /// `supplied_by: "self"`, which was paid for elsewhere.
+    /// The invoice's grand total across all lines, in integer cents (e.g.
+    /// $123.45 -> 12345), including lines someone else paid for. What the
+    /// owner paid is derived as this total minus the covered lines. It
+    /// excludes the cost of any part with `supplied_by: "self"`, which was
+    /// paid for elsewhere.
     pub total_cost_cents: Option<i32>,
     /// Parts subtotal, integer cents. Fill it only when the invoice prints one.
     pub parts_cost_cents: Option<i32>,
@@ -124,13 +126,17 @@ pub struct LineItemInput {
     pub work_kind: String,
     /// Who paid this line: `self`, `insurance`, `third_party` or `manufacturer`. Leave it
     /// out unless this line was paid by someone other than whoever paid the service. Mark a
-    /// warranty or recall line on an owner-paid invoice `manufacturer`.
+    /// warranty or recall line on an owner-paid invoice `manufacturer`; the
+    /// line's cost still counts inside the service's `total_cost_cents`, and
+    /// the owner's share is the total minus the covered lines.
     pub paid_by: Option<String>,
     /// How many units, e.g. 5 for five quarts of oil. May be fractional.
     pub quantity: Option<f64>,
     /// Per-unit cost, integer cents.
     pub unit_cost_cents: Option<i32>,
-    /// Line total, integer cents.
+    /// Line total, integer cents. For a line someone else paid, the value the
+    /// invoice shows for that work; leave it out or send 0 when the invoice
+    /// shows none.
     pub cost_cents: Option<i32>,
 }
 

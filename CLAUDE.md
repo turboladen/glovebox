@@ -127,12 +127,25 @@ Every service read carries `lines_total_cents`, and a `note` when the total diff
 kinds are `maintenance`, `mod`, `repair`, `inspection`, `recall` and `fee`; payers are `self`,
 `insurance`, `third_party` and `manufacturer`). A line may carry its own `paid_by`
 (`service_record::effective_payer` gives the line's own value, else the service's), and
-`cost_summary` judges out-of-pocket and covered amounts per line. Its `covered_work` lists the
-services with covered work, and `miles_covered` (the highest odometer reading minus the earliest
-service or reading, dated by `history_starts_on`) is the base of the per-1,000-miles figure.
+`cost_summary` judges out-of-pocket and covered amounts per line. Every line in a service read also
+carries `effective_paid_by` (its own `paid_by`, else the service's; the stored `paid_by` stays
+null when inherited). `total_cost_cents` is the invoice's grand total across all lines, including
+lines someone else paid for, and a covered line's `cost_cents` is the value the invoice shows for
+that work (zero or omitted when it shows none); the owner's share is the total minus the covered
+lines. `cost_summary`'s `covered_work` lists the services with covered work, each with
+`covered_by_others_cents` and `out_of_pocket_cents` (the covered figures sum to the summary's
+`covered_cents`). `miles_covered` (the highest odometer reading minus the earliest service or
+reading, dated by `history_starts_on`) is the base of the per-1,000-miles figure, which stays null
+until the records cover 1,000 miles (`costs::MIN_MILES_FOR_COST_PER_1000`).
 
 **Schedule names** compare through `schedule::name_key` (ASCII case and surrounding spaces do not
-matter), so a vehicle's "Cabin air filter" shadows the inherited "Cabin Air Filter". Each reminder
+matter), so a vehicle's "Cabin air filter" shadows the inherited "Cabin Air Filter". A new item that shadows an inherited one takes that
+item's spelling of the name and, for every field the caller leaves out, its value
+(`schedule::fill_from_inherited`, shared with the copy `update_schedule_item` makes), and
+`list_schedule` shows it with `overrides` (the replaced item's id and `inherited_from`). A vehicle
+created with a `model_template_id` takes the template's year, make, model, trim, body style, engine,
+transmission and drivetrain for each one left empty, with the precedence caller, then VIN decode,
+then template; `update_vehicle` setting a template fills only the empty ones. Each reminder
 carries a `baseline` (`last_service`, `purchase` or `none`), the forecast names the schedule items
 and planned work it left unpriced, `bundle_suggestions` is one entry listing every overdue or
 due-soon item when there are two or more, and a stored recall title is the NHTSA component in title

@@ -57,7 +57,9 @@ pub struct CostSummary {
     /// reading that starts `miles_covered`, or `None` when there is none.
     pub history_starts_on: Option<String>,
     /// `total_cost_cents` per 1000 of `miles_covered`, rounded to the nearest
-    /// cent; `None` when `miles_covered` is.
+    /// cent; `None` when `miles_covered` is, or is under
+    /// [`MIN_MILES_FOR_COST_PER_1000`], since a short history makes the rate
+    /// noise.
     pub cost_per_1000_miles_cents: Option<i64>,
     pub monthly_costs: Vec<MonthlyCost>,
     /// Self-supplied part costs with neither a purchase nor an install date,
@@ -65,6 +67,9 @@ pub struct CostSummary {
     /// `total_cost_cents`.
     pub unbucketed_parts_cents: i64,
 }
+
+/// The fewest recorded miles over which a cost per 1000 miles is reported.
+pub const MIN_MILES_FOR_COST_PER_1000: i64 = 1_000;
 
 /// A service with work someone other than the owner paid for.
 #[derive(Serialize)]
@@ -75,8 +80,13 @@ pub struct CoveredWork {
     /// Who paid the invoice overall.
     pub paid_by: String,
     pub payer_note: Option<String>,
-    /// `None` when the service has no total on record.
-    pub total_cost_cents: Option<i32>,
+    /// What others paid for this service: its total minus
+    /// `out_of_pocket_cents`. Zero when the service has no total. Summed
+    /// over `covered_work`, these add up to the summary's `covered_cents`.
+    pub covered_by_others_cents: i64,
+    /// What the owner paid for this service, by the rules of the summary's
+    /// `out_of_pocket_cents`. Zero when the service has no total.
+    pub out_of_pocket_cents: i64,
     /// The recalls this service performed.
     pub recalls: Vec<RecallRef>,
     /// The lines whose effective payer is not `self`.
@@ -140,15 +150,15 @@ async fn load_lines(
     Ok(by_service)
 }
 
-/// Per service, what someone else paid. A self-paid service is the owner's
-/// except for the lines someone else paid; a service someone else paid is the
-/// owner's only for the lines marked `self`. A service with no total has
-/// nothing to split and is left out.
-fn covered_per_service(
+/// Per service, the owner's share of its total. A self-paid service is the
+/// owner's except for the lines someone else paid; a service someone else paid
+/// is the owner's only for the lines marked `self`. A service with no total has
+/// nothing to split and is left out. What others paid is the total minus this.
+fn out_of_pocket_per_service(
     services: &[service_record::Model],
     lines_by_service: &LinesByService,
 ) -> HashMap<i32, i64> {
-    let mut covered = HashMap::new();
+    let mut out_of_pocket_by_service = HashMap::new();
     for svc in services {
         let Some(total) = svc.total_cost_cents.map(i64::from) else {
             continue;
@@ -168,9 +178,9 @@ fn covered_per_service(
         } else {
             Ord::min(line_cents(false), total)
         };
-        covered.insert(svc.id, total - out_of_pocket);
+        out_of_pocket_by_service.insert(svc.id, out_of_pocket);
     }
-    covered
+    out_of_pocket_by_service
 }
 
 /// The services with work someone else paid for, newest first, with the
@@ -179,6 +189,7 @@ async fn covered_work(
     db: &impl ConnectionTrait,
     services: &[service_record::Model],
     lines_by_service: &LinesByService,
+    out_of_pocket_by_service: &HashMap<i32, i64>,
 ) -> DomainResult<Vec<CoveredWork>> {
     let mut covered: Vec<&service_record::Model> = services
         .iter()
@@ -196,28 +207,32 @@ async fn covered_work(
     let mut recalls_by_service = recall::load_performed(db, &ids).await?;
     Ok(covered
         .into_iter()
-        .map(|s| CoveredWork {
-            service_id: s.id,
-            service_date: s.service_date.clone(),
-            description: s.description.clone(),
-            paid_by: s.paid_by.clone(),
-            payer_note: s.payer_note.clone(),
-            total_cost_cents: s.total_cost_cents,
-            recalls: recalls_by_service.remove(&s.id).unwrap_or_default(),
-            lines: lines_by_service
-                .get(&s.id)
-                .into_iter()
-                .flatten()
-                .filter_map(|l| {
-                    let payer = effective_payer(l.paid_by.as_deref(), &s.paid_by);
-                    (payer != PAYER_SELF).then(|| CoveredLine {
-                        description: l.description.clone(),
-                        work_kind: l.work_kind.clone(),
-                        paid_by: payer.to_owned(),
-                        cost_cents: l.cost_cents,
+        .map(|s| {
+            let out_of_pocket = out_of_pocket_by_service.get(&s.id).copied().unwrap_or(0);
+            CoveredWork {
+                service_id: s.id,
+                service_date: s.service_date.clone(),
+                description: s.description.clone(),
+                paid_by: s.paid_by.clone(),
+                payer_note: s.payer_note.clone(),
+                covered_by_others_cents: i64::from(s.total_cost_cents.unwrap_or(0)) - out_of_pocket,
+                out_of_pocket_cents: out_of_pocket,
+                recalls: recalls_by_service.remove(&s.id).unwrap_or_default(),
+                lines: lines_by_service
+                    .get(&s.id)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|l| {
+                        let payer = effective_payer(l.paid_by.as_deref(), &s.paid_by);
+                        (payer != PAYER_SELF).then(|| CoveredLine {
+                            description: l.description.clone(),
+                            work_kind: l.work_kind.clone(),
+                            paid_by: payer.to_owned(),
+                            cost_cents: l.cost_cents,
+                        })
                     })
-                })
-                .collect(),
+                    .collect(),
+            }
         })
         .collect())
 }
@@ -278,12 +293,21 @@ pub async fn summary(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult
     let total_cost_cents = service_totals_cents + self_supplied_parts_cents;
 
     let lines_by_service = load_lines(db, &services).await?;
-    let covered_by_service = covered_per_service(&services, &lines_by_service);
+    let out_of_pocket_by_service = out_of_pocket_per_service(&services, &lines_by_service);
+    let covered_by_service: HashMap<i32, i64> = services
+        .iter()
+        .filter_map(|s| {
+            let total = i64::from(s.total_cost_cents?);
+            Some((s.id, total - out_of_pocket_by_service.get(&s.id)?))
+        })
+        .collect();
     let covered_cents: i64 = covered_by_service.values().sum();
-    let covered_work = covered_work(db, &services, &lines_by_service).await?;
+    let covered_work =
+        covered_work(db, &services, &lines_by_service, &out_of_pocket_by_service).await?;
     let (miles_covered, history_starts_on) = recorded_miles(db, vehicle_id, &services).await?;
-    let cost_per_1000_miles_cents =
-        miles_covered.map(|miles| (total_cost_cents * 1000 + miles / 2) / miles);
+    let cost_per_1000_miles_cents = miles_covered
+        .filter(|miles| *miles >= MIN_MILES_FOR_COST_PER_1000)
+        .map(|miles| (total_cost_cents * 1000 + miles / 2) / miles);
 
     // Month buckets: (service cents, parts cents, covered cents).
     let mut monthly_map: std::collections::BTreeMap<String, (i64, i64, i64)> =
@@ -789,12 +813,14 @@ mod tests {
         assert_eq!(ids, vec![new, old]);
         let first = &s.covered_work[0];
         assert_eq!(first.paid_by, "manufacturer");
-        assert_eq!(first.total_cost_cents, None);
+        assert_eq!(first.covered_by_others_cents, 0);
+        assert_eq!(first.out_of_pocket_cents, 0);
         assert!(first.lines.is_empty());
         assert_eq!(first.recalls.len(), 1);
         assert_eq!(first.recalls[0].finding_id, finding);
         assert_eq!(first.recalls[0].title, "Fuel Pump");
-        assert_eq!(s.covered_work[1].total_cost_cents, Some(5_000));
+        assert_eq!(s.covered_work[1].covered_by_others_cents, 5_000);
+        assert_eq!(s.covered_work[1].out_of_pocket_cents, 0);
         assert!(s.covered_work[1].recalls.is_empty());
     }
 
@@ -887,6 +913,65 @@ mod tests {
         assert_eq!(s.covered_work_count, 1);
         assert_eq!(s.covered_work[0].lines[0].paid_by, "manufacturer");
         assert_eq!(s.covered_work[0].lines[0].cost_cents, None);
+    }
+
+    #[tokio::test]
+    async fn covered_work_figures_add_up_to_the_summary_figures() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db, None).await;
+        // The worked example: $450 warranty repair, $129 oil change and $11
+        // in fees on one invoice with a grand total of $590.
+        let a = insert_service(&db, vid, "2026-11-03", Some(59_000), "self").await;
+        insert_line(
+            &db,
+            a,
+            "Water pump",
+            "repair",
+            Some(45_000),
+            Some("manufacturer"),
+        )
+        .await;
+        insert_line(&db, a, "Oil change", "maintenance", Some(12_900), None).await;
+        insert_line(&db, a, "Shop fees", "fee", Some(1_100), None).await;
+        let b = insert_service(&db, vid, "2026-11-05", Some(30_000), "insurance").await;
+        insert_line(&db, b, "Bodywork", "repair", Some(30_000), None).await;
+        let c = insert_service(&db, vid, "2026-11-06", Some(8_000), "manufacturer").await;
+        insert_line(&db, c, "Tax", "fee", Some(500), Some("self")).await;
+
+        let s = summary(&db, vid).await.unwrap();
+        let first = s.covered_work.iter().find(|w| w.service_id == a).unwrap();
+        assert_eq!(first.out_of_pocket_cents, 14_000);
+        assert_eq!(first.covered_by_others_cents, 45_000);
+        let covered: i64 = s
+            .covered_work
+            .iter()
+            .map(|w| w.covered_by_others_cents)
+            .sum();
+        let out_of_pocket: i64 = s.covered_work.iter().map(|w| w.out_of_pocket_cents).sum();
+        assert_eq!(covered, s.covered_cents);
+        assert_eq!(out_of_pocket, s.service_totals_cents - s.covered_cents);
+        assert_eq!(out_of_pocket, s.out_of_pocket_cents);
+    }
+
+    async fn history_of_miles(miles: i32) -> CostSummary {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db, None).await;
+        insert_service(&db, vid, "2026-11-03", Some(14_000), "self").await;
+        insert_reading(&db, vid, "2026-11-01", 63_000).await;
+        insert_reading(&db, vid, "2026-11-12", 63_000 + miles).await;
+        summary(&db, vid).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_cost_per_1000_miles_is_withheld_below_1000_recorded_miles() {
+        let short = history_of_miles(999).await;
+        assert_eq!(short.miles_covered, Some(999));
+        assert_eq!(short.history_starts_on.as_deref(), Some("2026-11-01"));
+        assert_eq!(short.cost_per_1000_miles_cents, None);
+
+        let enough = history_of_miles(1_000).await;
+        assert_eq!(enough.miles_covered, Some(1_000));
+        assert_eq!(enough.cost_per_1000_miles_cents, Some(14_000));
     }
 
     #[tokio::test]

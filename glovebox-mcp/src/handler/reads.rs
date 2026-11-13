@@ -55,15 +55,19 @@ impl GloveboxMcp {
                        `service_totals_cents` (the sum of every service's total; parts the shop \
                        supplied are already inside those invoices) plus \
                        `self_supplied_parts_cents` (parts the owner bought outside any invoice). \
-                       `out_of_pocket_cents` and `covered_cents` add up to the total. Payment is \
-                       judged per line: on a self-paid service, lines paid by someone else are \
-                       covered; on a service someone else paid, only lines marked `self` are out \
-                       of pocket; a line without its own `paid_by` follows its service. A service \
+                       `out_of_pocket_cents` and `covered_cents` add up to the total. A service's \
+                       total is the invoice's grand total including covered lines; the owner's \
+                       share is the total minus the lines someone else paid. Payment is judged \
+                       per line: on a self-paid service, lines paid by someone else are covered; \
+                       on a service someone else paid, only lines marked `self` are out of \
+                       pocket; a line without its own `paid_by` follows its service. A service \
                        with no total adds nothing to either figure. `covered_work` is where to \
                        look for what warranty, a recall or insurance covered: one entry per \
                        service that someone else paid or that has such a line, newest first, with \
-                       its id, date, description, `paid_by`, `payer_note`, `total_cost_cents` \
-                       (null when none), the recalls it performed and its covered `lines` \
+                       its id, date, description, `paid_by`, `payer_note`, \
+                       `covered_by_others_cents` and `out_of_pocket_cents` for that service (both \
+                       0 when it has no total; across the entries the covered figures add up to \
+                       `covered_cents`), the recalls it performed and its covered `lines` \
                        (description, `work_kind`, payer and `cost_cents`, null when the line has \
                        no amount); `covered_work_count` counts the entries. \
                        `labor_subtotals_cents` and `parts_subtotals_cents` sum the subtotals \
@@ -73,10 +77,12 @@ impl GloveboxMcp {
                        mileage of the earliest-dated service or reading, which \
                        `history_starts_on` dates. The purchase mileage is not used. Costs \
                        recorded for only part of the car's life are spread over only those miles, \
-                       so say when `history_starts_on` is recent. `miles_covered` and the \
-                       per-1,000 figure are null when the records cover no miles. `monthly_costs` \
-                       plus `unbucketed_parts_cents` (self-supplied parts with neither a purchase \
-                       nor an install date) add up to the total."
+                       so say when `history_starts_on` is recent. `miles_covered` is null when \
+                       the records cover no miles. `cost_per_1000_miles_cents` is withheld (null) \
+                       until the records cover at least 1,000 miles; `miles_covered` and \
+                       `history_starts_on` are still reported. `monthly_costs` plus \
+                       `unbucketed_parts_cents` (self-supplied parts with neither a purchase nor \
+                       an install date) add up to the total."
     )]
     async fn cost_summary(
         &self,

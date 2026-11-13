@@ -32,7 +32,7 @@ where
 pub struct AddVehicleInput {
     /// Display name, e.g. 'Daily Golf R'.
     pub name: String,
-    /// Model template id from `list_model_templates`. Gives the car its inherited maintenance schedule.
+    /// Model template id from `list_model_templates`. Gives the car its inherited maintenance schedule and fills year, make, model, trim, body style, engine, transmission and drivetrain left empty (a VIN decode fills first, then the template).
     pub model_template_id: Option<i32>,
     /// VIN. When given, the vehicle's blank year, make, model, trim, body style, engine, transmission and drivetrain are filled from an NHTSA lookup; values sent here always win. If the lookup fails the vehicle is still created and the result carries `vin_decode_error`.
     pub vin: Option<String>,
@@ -104,7 +104,7 @@ pub struct UpdateVehicleInput {
     pub vehicle_id: i32,
     /// New display name. Omit to leave it unchanged.
     pub name: Option<String>,
-    /// Model template id from `list_model_templates`.
+    /// Model template id from `list_model_templates`. Setting one fills the year, make, model, trim, body style, engine, transmission and drivetrain that are empty on the car; fields the car already has are kept.
     ///
     /// Send `null` to clear it; omit the key to leave it unchanged.
     #[serde(default, deserialize_with = "nullable")]
@@ -343,7 +343,7 @@ pub struct CorrectServiceInput {
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<i32>")]
     pub labor_cost_cents: Option<Option<i32>>,
-    /// Total invoice amount, integer cents.
+    /// The invoice's grand total across all lines, integer cents, including lines someone else paid for.
     ///
     /// Send `null` to clear it; omit the key to leave it unchanged.
     #[serde(default, deserialize_with = "nullable")]

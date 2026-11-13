@@ -17,47 +17,51 @@ impl GloveboxMcp {
         description = "Record work that was done on a vehicle: one call per invoice or repair \
                        order. Give `service_date` (and `end_date` for multi-day jobs), \
                        `performed_by` (`shop` or `self`), `mileage` (also logs an odometer \
-                       reading), and costs in integer cents: `total_cost_cents` is the amount the \
-                       shop charged on the invoice, and `parts_cost_cents` and `labor_cost_cents` \
-                       are optional subtotals to fill only when the invoice prints them. Work the \
-                       manufacturer or dealer paid for, as with a recall or warranty repair, \
-                       takes `paid_by: \"manufacturer\"`; the default `self` records it as \
-                       owner-paid. The service's `paid_by` is who paid the invoice overall; a \
-                       line's `paid_by` overrides it for that line, so a warranty or recall line \
-                       on an invoice the owner paid is marked `manufacturer` (a `recall` line \
-                       normally is), and a line the owner paid on a covered invoice is marked \
-                       `self`. Put each job on the paperwork in `line_items` with a `work_kind` \
-                       (`maintenance`, `mod`, `repair`, `inspection`, `recall` for work done \
-                       under a recall campaign, or `fee` for tax, shop supplies and disposal \
-                       charges, so the lines add up to the total) The result carries \
-                       `lines_total_cents` (the sum of the lines) and, when it differs from \
-                       `total_cost_cents`, a `note` stating both amounts; that is information, \
-                       never an error, and a `fee` line records the difference. `message` is a \
-                       different key: it appears only when the call hit an already-recorded \
-                       invoice number, and list anything installed in `parts` so each part is \
-                       created and installed by this service. A part already recorded with \
-                       `record_part` (e.g. bought before the visit) goes in `part_ids` instead, \
-                       by its id from `list_parts`, and is marked installed by this service; do \
-                       not list it again under `parts`. A part with `supplied_by: \"self\"` was \
-                       paid for elsewhere, so its `cost_cents` is not part of the invoice total. \
-                       `invoice_ref` is the number printed on the paperwork; filing the same one \
-                       again returns the existing record with `already_recorded: true` and a \
-                       `message` saying nothing was applied, and ignores everything sent this \
-                       time, including lines, parts, and incident and recall ids (nothing is \
-                       merged), so fix the existing record with `correct_service` instead. If the \
-                       work completes to-do items from `list_planned_work`, pass their ids in \
-                       `work_item_ids`; each is marked done and its schedule item's reminder \
-                       clears. If the work satisfies due/overdue schedule items from \
-                       `whats_coming`, pass the ids of every item it satisfies, not only the one \
-                       the owner mentioned, in `schedule_item_ids` so the reminders clear; for \
-                       records that already exist, reconcile with `link_service_to_maintenance`. \
-                       Pass `resolved_incident_ids` for incidents this work fixed (each is marked \
-                       resolved and linked to this service) and `noticed_incident_ids` for \
-                       incidents first noticed during it. Pass `recall_finding_ids` (from \
-                       `check_recalls`) for recalls this work performed, e.g. when the invoice \
-                       names a campaign number; completing a to-do that was planned for a recall \
-                       links that recall automatically. The result lists `performed_recalls` and \
-                       `completed_work_items`."
+                       reading), and costs in integer cents: `total_cost_cents` is the invoice's \
+                       grand total across all lines, including lines someone else paid for; a \
+                       covered line's `cost_cents` is the value the invoice shows for that work \
+                       (zero or omitted when it shows none), and what the owner paid is derived \
+                       as the total minus the covered lines. `parts_cost_cents` and \
+                       `labor_cost_cents` are optional subtotals to fill only when the invoice \
+                       prints them. Work the manufacturer or dealer paid for, as with a recall or \
+                       warranty repair, takes `paid_by: \"manufacturer\"`; the default `self` \
+                       records it as owner-paid. The service's `paid_by` is who paid the invoice \
+                       overall; a line's `paid_by` overrides it for that line, so a warranty or \
+                       recall line on an invoice the owner paid is marked `manufacturer` (a \
+                       `recall` line normally is), and a line the owner paid on a covered invoice \
+                       is marked `self`. Put each job on the paperwork in `line_items` with a \
+                       `work_kind` (`maintenance`, `mod`, `repair`, `inspection`, `recall` for \
+                       work done under a recall campaign, or `fee` for tax, shop supplies and \
+                       disposal charges, so the lines add up to the total). Each line in a read \
+                       carries `effective_paid_by`, its own `paid_by` or else the service's. The \
+                       result carries `lines_total_cents` (the sum of all lines) and, when it \
+                       differs from `total_cost_cents`, a `note` stating both amounts; that is \
+                       information, never an error, and a `fee` line records the difference. \
+                       `message` is a different key: it appears only when the call hit an \
+                       already-recorded invoice number, and list anything installed in `parts` so \
+                       each part is created and installed by this service. A part already \
+                       recorded with `record_part` (e.g. bought before the visit) goes in \
+                       `part_ids` instead, by its id from `list_parts`, and is marked installed \
+                       by this service; do not list it again under `parts`. A part with \
+                       `supplied_by: \"self\"` was paid for elsewhere, so its `cost_cents` is not \
+                       part of the invoice total. `invoice_ref` is the number printed on the \
+                       paperwork; filing the same one again returns the existing record with \
+                       `already_recorded: true` and a `message` saying nothing was applied, and \
+                       ignores everything sent this time, including lines, parts, and incident \
+                       and recall ids (nothing is merged), so fix the existing record with \
+                       `correct_service` instead. If the work completes to-do items from \
+                       `list_planned_work`, pass their ids in `work_item_ids`; each is marked \
+                       done and its schedule item's reminder clears. If the work satisfies \
+                       due/overdue schedule items from `whats_coming`, pass the ids of every item \
+                       it satisfies, not only the one the owner mentioned, in `schedule_item_ids` \
+                       so the reminders clear; for records that already exist, reconcile with \
+                       `link_service_to_maintenance`. Pass `resolved_incident_ids` for incidents \
+                       this work fixed (each is marked resolved and linked to this service) and \
+                       `noticed_incident_ids` for incidents first noticed during it. Pass \
+                       `recall_finding_ids` (from `check_recalls`) for recalls this work \
+                       performed, e.g. when the invoice names a campaign number; completing a \
+                       to-do that was planned for a recall links that recall automatically. The \
+                       result lists `performed_recalls` and `completed_work_items`."
     )]
     async fn record_service(
         &self,

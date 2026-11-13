@@ -74,7 +74,9 @@ async fn cost_summary_lists_a_covered_service_that_has_no_total() {
     assert_eq!(listed["service_id"], service_id);
     assert_eq!(listed["paid_by"], "manufacturer");
     assert_eq!(listed["payer_note"], "Recall 26V001");
-    assert!(listed["total_cost_cents"].is_null());
+    assert!(listed.get("total_cost_cents").is_none());
+    assert_eq!(listed["covered_by_others_cents"], 0);
+    assert_eq!(listed["out_of_pocket_cents"], 0);
 }
 
 #[tokio::test]

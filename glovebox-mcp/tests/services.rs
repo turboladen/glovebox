@@ -1086,6 +1086,11 @@ async fn a_mixed_invoice_marks_the_warranty_line_and_cost_summary_splits_it() {
         .await;
     assert!(read["line_items"][0]["paid_by"].is_null(), "got: {read}");
     assert_eq!(read["line_items"][1]["paid_by"], "manufacturer");
+    assert_eq!(
+        read["line_items"][0]["effective_paid_by"], "self",
+        "got: {read}"
+    );
+    assert_eq!(read["line_items"][1]["effective_paid_by"], "manufacturer");
 
     let summary = t.call("cost_summary", json!({ "vehicle_id": v.id })).await;
     assert_eq!(summary["out_of_pocket_cents"], 12_000);
@@ -1109,4 +1114,37 @@ async fn a_mixed_invoice_marks_the_warranty_line_and_cost_summary_splits_it() {
         )
         .await;
     assert!(err.contains("paid_by"), "got: {err}");
+}
+
+#[tokio::test]
+async fn the_worked_invoice_example_reports_14000_out_of_pocket_and_45000_covered() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let recorded = t
+        .call(
+            "record_service",
+            json!({
+                "vehicle_id": v.id,
+                "service_date": "2026-11-03",
+                "total_cost_cents": 59_000,
+                "line_items": [
+                    {"description": "Water pump", "work_kind": "repair",
+                     "cost_cents": 45_000, "paid_by": "manufacturer"},
+                    {"description": "Oil change", "work_kind": "maintenance",
+                     "cost_cents": 12_900},
+                    {"description": "Shop fees", "work_kind": "fee", "cost_cents": 1_100}
+                ]
+            }),
+        )
+        .await;
+    assert!(recorded.get("note").is_none(), "got: {recorded}");
+    assert_eq!(recorded["lines_total_cents"], 59_000);
+
+    let summary = t.call("cost_summary", json!({ "vehicle_id": v.id })).await;
+    assert_eq!(summary["out_of_pocket_cents"], 14_000);
+    assert_eq!(summary["covered_cents"], 45_000);
+    let work = &summary["covered_work"][0];
+    assert_eq!(work["out_of_pocket_cents"], 14_000);
+    assert_eq!(work["covered_by_others_cents"], 45_000);
+    assert!(work.get("total_cost_cents").is_none());
 }

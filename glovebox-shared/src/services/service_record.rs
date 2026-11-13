@@ -123,7 +123,7 @@ pub struct ServiceRecordWithLinks {
     pub part_ids: Vec<i32>,
     /// The full rows behind `part_ids`.
     pub parts: Vec<part::Model>,
-    pub line_items: Vec<service_record_line_item::Model>,
+    pub line_items: Vec<LineItemView>,
     /// Incidents first noticed during this service. Each one's
     /// `other_service` is the service that fixed it, if any.
     pub noticed_incidents: Vec<IncidentRef>,
@@ -157,6 +157,24 @@ pub struct ServiceRecordWithLinks {
     /// coexist. Empty (and omitted from JSON) on every other path.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub possible_duplicates: Vec<PossibleDuplicate>,
+}
+
+/// A line item with the payer it resolves to.
+#[derive(Clone, Debug, Serialize)]
+pub struct LineItemView {
+    #[serde(flatten)]
+    pub line: service_record_line_item::Model,
+    /// The line's own `paid_by` when it has one, otherwise the service's.
+    /// `paid_by` itself stays null for a line that follows its service.
+    pub effective_paid_by: String,
+}
+
+impl std::ops::Deref for LineItemView {
+    type Target = service_record_line_item::Model;
+
+    fn deref(&self) -> &Self::Target {
+        &self.line
+    }
 }
 
 /// An incident as seen from a service record.
@@ -274,6 +292,14 @@ impl ServiceRecordWithLinks {
         resolved_incidents: Vec<IncidentRef>,
         performed_recalls: Vec<RecallRef>,
     ) -> Self {
+        let line_items: Vec<LineItemView> = line_items
+            .into_iter()
+            .map(|line| LineItemView {
+                effective_paid_by: effective_payer(line.paid_by.as_deref(), &record.paid_by)
+                    .to_owned(),
+                line,
+            })
+            .collect();
         let lines_total_cents = line_items
             .iter()
             .filter_map(|l| l.cost_cents)
