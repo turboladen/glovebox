@@ -50,6 +50,34 @@ async fn cost_summary_reports_integer_cents() {
 }
 
 #[tokio::test]
+async fn cost_summary_lists_a_covered_service_that_has_no_total() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let covered = t
+        .call(
+            "record_service",
+            json!({
+                "vehicle_id": v.id,
+                "service_date": "2026-11-09",
+                "description": "Fuel pump recall",
+                "paid_by": "manufacturer",
+                "payer_note": "Recall 26V001"
+            }),
+        )
+        .await;
+    let service_id = covered["id"].clone();
+
+    let summary = t.call("cost_summary", json!({ "vehicle_id": v.id })).await;
+    assert_eq!(summary["covered_cents"], 0);
+    assert_eq!(summary["covered_work_count"], 1);
+    let listed = &summary["covered_work"][0];
+    assert_eq!(listed["service_id"], service_id);
+    assert_eq!(listed["paid_by"], "manufacturer");
+    assert_eq!(listed["payer_note"], "Recall 26V001");
+    assert!(listed["total_cost_cents"].is_null());
+}
+
+#[tokio::test]
 async fn resources_list_and_read_cover_all_uri_forms() {
     let t = connect().await;
     let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();

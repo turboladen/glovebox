@@ -49,9 +49,10 @@ fn validate_choice(field: &str, value: &str, allowed: &[&str]) -> DomainResult<(
 }
 
 fn validate_line_items(items: &[NewLineItem]) -> DomainResult<()> {
-    items
-        .iter()
-        .try_for_each(|li| validate_choice("work_kind", &li.work_kind, &VALID_WORK_KINDS))
+    items.iter().try_for_each(|li| {
+        validate_choice("work_kind", &li.work_kind, &VALID_WORK_KINDS)?;
+        li.paid_by.as_deref().map_or(Ok(()), validate_payer)
+    })
 }
 
 /// Checks the dates are `YYYY-MM-DD`, the range runs forward, and a
@@ -90,8 +91,18 @@ fn normalize_invoice_ref(invoice_ref: Option<&str>) -> Option<String> {
         .filter(|r| !r.is_empty())
 }
 
-/// Payer whitelist for `service_records.paid_by`.
-const VALID_PAYERS: [&str; 4] = ["self", "insurance", "third_party", "manufacturer"];
+/// Payer whitelist for `service_records.paid_by` and
+/// `service_record_line_items.paid_by`.
+pub const VALID_PAYERS: [&str; 4] = ["self", "insurance", "third_party", "manufacturer"];
+
+/// The `paid_by` value of a payer that is the owner.
+pub const PAYER_SELF: &str = "self";
+
+/// Who paid for a line: its own `paid_by` when it has one, otherwise the
+/// service's.
+pub fn effective_payer<'a>(line_paid_by: Option<&'a str>, service_paid_by: &'a str) -> &'a str {
+    line_paid_by.unwrap_or(service_paid_by)
+}
 
 fn validate_payer(paid_by: &str) -> DomainResult<()> {
     if VALID_PAYERS.contains(&paid_by) {
@@ -367,6 +378,7 @@ async fn insert_line_items(
             service_record_id: Set(record_id),
             description: Set(item.description),
             work_kind: Set(item.work_kind),
+            paid_by: Set(item.paid_by),
             quantity: Set(item.quantity),
             unit_cost_cents: Set(item.unit_cost_cents),
             cost_cents: Set(item.cost_cents),
@@ -1246,6 +1258,7 @@ mod tests {
                 schedule_item_ids: Some(vec![sched_id]),
                 part_ids: Some(vec![part_id]),
                 line_items: Some(vec![NewLineItem {
+                    paid_by: None,
                     description: "Synthetic oil".into(),
                     work_kind: "maintenance".into(),
                     quantity: Some(5.0),
@@ -1325,6 +1338,7 @@ mod tests {
                 schedule_item_ids: None,
                 part_ids: Some(vec![part_a]),
                 line_items: Some(vec![NewLineItem {
+                    paid_by: None,
                     description: "old".into(),
                     work_kind: "maintenance".into(),
                     quantity: None,
@@ -1351,6 +1365,7 @@ mod tests {
             UpdateServiceRecord {
                 part_ids: Some(vec![part_b]),
                 line_items: Some(vec![NewLineItem {
+                    paid_by: None,
                     description: "new".into(),
                     work_kind: "maintenance".into(),
                     quantity: None,
@@ -1730,6 +1745,7 @@ mod tests {
                 // schedule id would fail the guard if it ran.
                 schedule_item_ids: Some(vec![9999]),
                 line_items: Some(vec![NewLineItem {
+                    paid_by: None,
                     description: "should not be added".into(),
                     work_kind: "maintenance".into(),
                     quantity: None,
@@ -2267,12 +2283,60 @@ mod tests {
 
     fn line(description: &str, work_kind: &str) -> NewLineItem {
         NewLineItem {
+            paid_by: None,
             description: description.into(),
             work_kind: work_kind.into(),
             quantity: None,
             unit_cost_cents: None,
             cost_cents: None,
         }
+    }
+
+    #[tokio::test]
+    async fn a_line_stores_its_own_payer_and_refuses_an_unknown_one() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let got = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: "2026-11-03".into(),
+                line_items: Some(vec![
+                    line("Oil change", "maintenance"),
+                    NewLineItem {
+                        paid_by: Some("manufacturer".into()),
+                        ..line("Water pump under warranty", "repair")
+                    },
+                ]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let payers: Vec<Option<&str>> = got
+            .line_items
+            .iter()
+            .map(|l| l.paid_by.as_deref())
+            .collect();
+        assert_eq!(payers, vec![None, Some("manufacturer")]);
+        assert_eq!(effective_payer(None, "insurance"), "insurance");
+        assert_eq!(effective_payer(Some("self"), "insurance"), "self");
+
+        let err = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: "2026-11-04".into(),
+                line_items: Some(vec![NewLineItem {
+                    paid_by: Some("my neighbor".into()),
+                    ..line("Oil change", "maintenance")
+                }]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::BadRequest(_)), "got: {err}");
     }
 
     fn inline_part(name: &str, supplied_by: &str) -> NewPart {

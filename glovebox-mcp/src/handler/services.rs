@@ -22,10 +22,14 @@ impl GloveboxMcp {
                        are optional subtotals to fill only when the invoice prints them. Work the \
                        manufacturer or dealer paid for, as with a recall or warranty repair, \
                        takes `paid_by: \"manufacturer\"`; the default `self` records it as \
-                       owner-paid. Put each job on the paperwork in `line_items` with a \
-                       `work_kind` (`maintenance`, `mod`, `repair`, `inspection`, `recall` for \
-                       work done under a recall campaign, or `fee` for tax, shop supplies and \
-                       disposal charges, so the lines add up to the total) The result carries \
+                       owner-paid. The service's `paid_by` is who paid the invoice overall; a \
+                       line's `paid_by` overrides it for that line, so a warranty or recall line \
+                       on an invoice the owner paid is marked `manufacturer` (a `recall` line \
+                       normally is), and a line the owner paid on a covered invoice is marked \
+                       `self`. Put each job on the paperwork in `line_items` with a `work_kind` \
+                       (`maintenance`, `mod`, `repair`, `inspection`, `recall` for work done \
+                       under a recall campaign, or `fee` for tax, shop supplies and disposal \
+                       charges, so the lines add up to the total) The result carries \
                        `lines_total_cents` (the sum of the lines) and, when it differs from \
                        `total_cost_cents`, a `note` stating both amounts; that is information, \
                        never an error, and a `fee` line records the difference. `message` is a \

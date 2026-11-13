@@ -122,6 +122,10 @@ pub struct LineItemInput {
     /// (tax, shop supplies, disposal and similar charges on the invoice that
     /// are not work).
     pub work_kind: String,
+    /// Who paid this line: `self`, `insurance`, `third_party` or `manufacturer`. Leave it
+    /// out unless this line was paid by someone other than whoever paid the service. Mark a
+    /// warranty or recall line on an owner-paid invoice `manufacturer`.
+    pub paid_by: Option<String>,
     /// How many units, e.g. 5 for five quarts of oil. May be fractional.
     pub quantity: Option<f64>,
     /// Per-unit cost, integer cents.
@@ -135,6 +139,7 @@ impl LineItemInput {
         NewLineItem {
             description: self.description,
             work_kind: self.work_kind,
+            paid_by: self.paid_by,
             quantity: self.quantity,
             unit_cost_cents: self.unit_cost_cents,
             cost_cents: self.cost_cents,

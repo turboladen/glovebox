@@ -4,6 +4,9 @@ pub struct NewLineItem {
     pub description: String,
     /// One of `service_record::VALID_WORK_KINDS`.
     pub work_kind: String,
+    /// One of `service_record::VALID_PAYERS`, or `None` for the service's own
+    /// payer.
+    pub paid_by: Option<String>,
     pub quantity: Option<f64>,
     pub unit_cost_cents: Option<i32>,
     pub cost_cents: Option<i32>,

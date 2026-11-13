@@ -583,6 +583,7 @@ async fn create_service_tables(manager: &SchemaManager<'_>) -> Result<(), DbErr>
                 .col(stamp("created_at"))
                 .col(stamp("updated_at"))
                 .col(text_not_null("work_kind"))
+                .col(text("paid_by"))
                 .foreign_key(&mut fk(
                     "service_record_line_items",
                     "service_record_id",

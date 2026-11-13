@@ -1055,3 +1055,58 @@ async fn a_total_that_differs_from_its_lines_carries_a_note_and_a_fee_line_close
     assert!(bare["lines_total_cents"].is_null());
     assert!(bare.get("note").is_none());
 }
+
+#[tokio::test]
+async fn a_mixed_invoice_marks_the_warranty_line_and_cost_summary_splits_it() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let recorded = t
+        .call(
+            "record_service",
+            json!({
+                "vehicle_id": v.id,
+                "service_date": "2026-11-03",
+                "description": "Dealer visit",
+                "total_cost_cents": 12_000,
+                "line_items": [
+                    {"description": "Oil change", "work_kind": "maintenance", "cost_cents": 12_000},
+                    {"description": "Replace failed water pump under warranty",
+                     "work_kind": "repair", "paid_by": "manufacturer"}
+                ]
+            }),
+        )
+        .await;
+    let service_id = recorded["id"].clone();
+
+    let read = t
+        .call(
+            "get_service",
+            json!({ "vehicle_id": v.id, "service_id": service_id }),
+        )
+        .await;
+    assert!(read["line_items"][0]["paid_by"].is_null(), "got: {read}");
+    assert_eq!(read["line_items"][1]["paid_by"], "manufacturer");
+
+    let summary = t.call("cost_summary", json!({ "vehicle_id": v.id })).await;
+    assert_eq!(summary["out_of_pocket_cents"], 12_000);
+    assert_eq!(summary["covered_cents"], 0);
+    assert_eq!(summary["covered_work_count"], 1);
+    let work = &summary["covered_work"][0];
+    assert_eq!(work["service_id"], service_id);
+    assert_eq!(work["lines"][0]["paid_by"], "manufacturer");
+    assert!(work["lines"][0]["cost_cents"].is_null());
+
+    let err = t
+        .call_err(
+            "record_service",
+            json!({
+                "vehicle_id": v.id,
+                "service_date": "2026-11-04",
+                "line_items": [
+                    {"description": "x", "work_kind": "repair", "paid_by": "neighbor"}
+                ]
+            }),
+        )
+        .await;
+    assert!(err.contains("paid_by"), "got: {err}");
+}

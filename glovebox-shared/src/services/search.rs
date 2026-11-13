@@ -482,6 +482,7 @@ mod tests {
                     words
                         .iter()
                         .map(|w| crate::inputs::service_record::NewLineItem {
+                            paid_by: None,
                             description: format!("{w} work"),
                             work_kind: "maintenance".into(),
                             quantity: None,

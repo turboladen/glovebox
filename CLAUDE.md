@@ -125,7 +125,11 @@ on that path). Completing planned work happens by naming
 `work_item_ids` in `record_service`.
 Every service read carries `lines_total_cents`, and a `note` when the total differs from it (the
 kinds are `maintenance`, `mod`, `repair`, `inspection`, `recall` and `fee`; payers are `self`,
-`insurance`, `third_party` and `manufacturer`).
+`insurance`, `third_party` and `manufacturer`). A line may carry its own `paid_by`
+(`service_record::effective_payer` gives the line's own value, else the service's), and
+`cost_summary` judges out-of-pocket and covered amounts per line. Its `covered_work` lists the
+services with covered work, and `miles_covered` (the highest odometer reading minus the earliest
+service or reading, dated by `history_starts_on`) is the base of the per-1,000-miles figure.
 
 **Resources**: `glovebox://vehicles`, `glovebox://vehicles/{id}` and `…/{id}/activity`.
 `list_resources` enumerates concrete URIs from the database and `read_resource` parses them.

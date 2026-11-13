@@ -15,6 +15,9 @@ pub struct Model {
     pub updated_at: String,
     /// One of `maintenance`, `mod`, `repair`, `inspection`, `recall`, `fee`.
     pub work_kind: String,
+    /// Who paid this line when it differs from the service's `paid_by`;
+    /// `None` means the line follows the service.
+    pub paid_by: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

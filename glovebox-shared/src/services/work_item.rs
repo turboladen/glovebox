@@ -645,6 +645,7 @@ mod tests {
         let full = NewServiceRecord {
             mileage: Some(50_000),
             line_items: Some(vec![NewLineItem {
+                paid_by: None,
                 description: "Oil".into(),
                 work_kind: "maintenance".into(),
                 quantity: None,

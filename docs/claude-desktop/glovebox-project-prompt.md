@@ -51,9 +51,12 @@ you link.
      `maintenance`, `mod`, `repair`, `inspection`, `recall` or `fee`. One invoice can mix kinds. A
      recall line uses `work_kind: "recall"`. File tax, shop supplies and disposal charges as `fee`
      lines so the lines add up to the total. Put inspection results, such as pass or fail and the
-     certificate number, in `notes`. Work the manufacturer paid for, such as a recall or warranty
-     repair, uses `paid_by: "manufacturer"` on the service; the default `self` records it as an
-     owner-paid repair.
+     certificate number, in `notes`. The service's `paid_by` is who paid the invoice overall. Work the
+     manufacturer paid for, such as a recall or warranty repair, uses `paid_by: "manufacturer"`
+     on the service; the default `self` records it as owner-paid. A line's own `paid_by` overrides
+     the service's for that line, so a warranty or recall line on an invoice Steve paid is marked
+     `manufacturer` (a `recall` line normally is), and a line Steve paid on a covered invoice is
+     marked `self`. Leave a line's `paid_by` out when it matches the service's.
    - `parts` has every part the invoice lists, each with `supplied_by` set to `self` when Steve
      bought it and `shop` when the shop sourced it. Ask Steve who supplied a part when the invoice
      does not make it clear. For a self-supplied part, record the `seller` (for example "FCP
