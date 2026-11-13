@@ -28,7 +28,9 @@ you link.
    fails, its `message` says so and the recalls already known are still listed; carry on with
    those. After that, take recall ids from the open and planned recalls in `whats_coming`, or from
    `list_recalls`, which shows every stored recall with its status (done ones included) and makes no
-   web request. Do not call `check_recalls` again in the same conversation.
+   web request. Do not call `check_recalls` again in the same conversation. When a recall plainly
+   does not apply to this car, for example one limited to internal-use or pre-production vehicles,
+   tell Steve and offer to mark it not applicable with `set_recall_status`.
 
 ## Filing an invoice
 
@@ -102,6 +104,10 @@ decides not to do the work.
    work sorted by urgency with `revisit_status`, open recalls, unresolved incidents, the 12-month
    cost forecast and the warranty status. Warranty coverage may apply: remind Steve to check it
    before he pays.
+   An overdue item whose `baseline` is `purchase` has no service on record, so say its history is
+   missing rather than that the work is late. The forecast names the items and planned work it
+   could not price in `unestimated_items` and `unestimated_planned_work`; when either has entries,
+   say the total is a floor.
 2. Group the overdue and due-soon items into one shop trip. Say what each named service includes,
    and fold in the open recalls and planned work that fit the same trip.
 3. When Steve says "I'm doing service X, what could I do while it's in the shop?", start from

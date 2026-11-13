@@ -131,6 +131,13 @@ kinds are `maintenance`, `mod`, `repair`, `inspection`, `recall` and `fee`; paye
 services with covered work, and `miles_covered` (the highest odometer reading minus the earliest
 service or reading, dated by `history_starts_on`) is the base of the per-1,000-miles figure.
 
+**Schedule names** compare through `schedule::name_key` (ASCII case and surrounding spaces do not
+matter), so a vehicle's "Cabin air filter" shadows the inherited "Cabin Air Filter". Each reminder
+carries a `baseline` (`last_service`, `purchase` or `none`), the forecast names the schedule items
+and planned work it left unpriced, `bundle_suggestions` is one entry listing every overdue or
+due-soon item when there are two or more, and a stored recall title is the NHTSA component in title
+case.
+
 **Resources**: `glovebox://vehicles`, `glovebox://vehicles/{id}` and `…/{id}/activity`.
 `list_resources` enumerates concrete URIs from the database and `read_resource` parses them.
 

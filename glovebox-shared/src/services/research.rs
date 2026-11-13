@@ -179,8 +179,16 @@ async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
             recall.campaign_number
         );
         if let Some(existing) = known.remove(&url) {
-            // A campaign stored earlier with a blank title gets the current one.
-            if existing.title.trim().is_empty() && !recall.title.trim().is_empty() {
+            // A campaign stored with a blank title, or with its raw NHTSA
+            // component as the title, gets the current one.
+            let stored_raw = recall
+                .component
+                .as_deref()
+                .is_some_and(|c| c.trim() == existing.title.trim());
+            if (existing.title.trim().is_empty() || stored_raw)
+                && !recall.title.trim().is_empty()
+                && recall.title != existing.title
+            {
                 let mut active: research_finding::ActiveModel = existing.into();
                 active.title = Set(recall.title.clone());
                 active.updated_at = Set(super::now_stamp());
@@ -404,6 +412,52 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(third.recalls[0].title, "FUEL SYSTEM");
+    }
+
+    #[tokio::test]
+    async fn checking_again_reformats_a_title_stored_in_the_raw_component_form() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let raw = "FUEL SYSTEM, GASOLINE:DELIVERY:FUEL PUMP";
+        let with_component = |title: &str| RecallInfo {
+            component: Some(raw.into()),
+            ..full_recall("17V1", title)
+        };
+        record_recalls(&db, vid, &[with_component(raw)])
+            .await
+            .unwrap();
+
+        let again = record_recalls(
+            &db,
+            vid,
+            &[with_component("Fuel System, Gasoline: Delivery: Fuel Pump")],
+        )
+        .await
+        .unwrap();
+        assert_eq!(again.newly_found, 0);
+        assert_eq!(
+            again.recalls[0].title,
+            "Fuel System, Gasoline: Delivery: Fuel Pump"
+        );
+
+        // A title someone chose is not the raw component, so it is kept.
+        let id = again.recalls[0].finding_id;
+        let mut active: research_finding::ActiveModel = research_finding::Entity::find_by_id(id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap()
+            .into();
+        active.title = Set("Fuel pump recall".into());
+        active.update(&db).await.unwrap();
+        let last = record_recalls(
+            &db,
+            vid,
+            &[with_component("Fuel System, Gasoline: Delivery: Fuel Pump")],
+        )
+        .await
+        .unwrap();
+        assert_eq!(last.recalls[0].title, "Fuel pump recall");
     }
 
     #[tokio::test]

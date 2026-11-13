@@ -171,6 +171,34 @@ async fn fetch_recalls(
     })
 }
 
+/// Rewrites an NHTSA component label for reading: title case, with a space
+/// after each colon. `FUEL SYSTEM, GASOLINE:DELIVERY:FUEL PUMP` becomes
+/// `Fuel System, Gasoline: Delivery: Fuel Pump`. A letter starts a word unless
+/// it follows a letter, digit or apostrophe.
+pub(crate) fn readable_component(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len() + 4);
+    let mut word_continues = false;
+    for ch in raw.trim().chars() {
+        if ch == ':' {
+            out.push_str(": ");
+            word_continues = false;
+        } else if ch.is_whitespace() && out.ends_with(' ') {
+            // Whitespace after a space collapses into it.
+        } else if ch.is_alphanumeric() {
+            if word_continues {
+                out.extend(ch.to_lowercase());
+            } else {
+                out.extend(ch.to_uppercase());
+            }
+            word_continues = true;
+        } else {
+            out.push(ch);
+            word_continues = ch == '\'';
+        }
+    }
+    out.trim_end().to_owned()
+}
+
 fn parse_recall_results(results: Vec<NhtsaRecallResult>) -> Vec<RecallInfo> {
     results
         .into_iter()
@@ -181,7 +209,7 @@ fn parse_recall_results(results: Vec<NhtsaRecallResult>) -> Vec<RecallInfo> {
                 .as_deref()
                 .map(str::trim)
                 .filter(|c| !c.is_empty())
-                .map_or_else(|| format!("Recall {campaign_number}"), str::to_owned);
+                .map_or_else(|| format!("Recall {campaign_number}"), readable_component);
             Some(RecallInfo {
                 campaign_number,
                 manufacturer: r.manufacturer,
@@ -252,8 +280,15 @@ mod tests {
         let recalls = parse_response_json(json).unwrap();
         assert_eq!(recalls.len(), 2);
         assert_eq!(recalls[0].campaign_number, "17V123000");
-        assert_eq!(recalls[0].title, "FUEL SYSTEM, GASOLINE:DELIVERY:FUEL PUMP");
-        assert_eq!(recalls[1].title, "AIR BAGS");
+        assert_eq!(
+            recalls[0].title,
+            "Fuel System, Gasoline: Delivery: Fuel Pump"
+        );
+        assert_eq!(
+            recalls[0].component.as_deref(),
+            Some("FUEL SYSTEM, GASOLINE:DELIVERY:FUEL PUMP")
+        );
+        assert_eq!(recalls[1].title, "Air Bags");
         assert_eq!(recalls[1].campaign_number, "18V456000");
     }
 
@@ -295,6 +330,19 @@ mod tests {
         assert!(recalls[0].manufacturer.is_none());
         assert!(recalls[0].remedy.is_none());
         assert_eq!(recalls[0].title, "Recall 20V999000");
+    }
+
+    #[test]
+    fn a_component_is_title_cased_with_a_space_after_each_colon() {
+        assert_eq!(
+            readable_component("FUEL SYSTEM, GASOLINE:DELIVERY:FUEL PUMP"),
+            "Fuel System, Gasoline: Delivery: Fuel Pump"
+        );
+        assert_eq!(
+            readable_component("  ELECTRICAL SYSTEM/BATTERY: x "),
+            "Electrical System/Battery: X"
+        );
+        assert_eq!(readable_component("Owner's Manual"), "Owner's Manual");
     }
 
     #[test]
