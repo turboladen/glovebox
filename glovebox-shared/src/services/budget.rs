@@ -42,6 +42,29 @@ pub struct BudgetForecast {
     /// `projected_maintenance_cents + planned_work_cents`.
     pub total_cents: i64,
     pub lines: Vec<ForecastLine>,
+    /// Schedule items the forecast expects to come due in the window that
+    /// have no `est_cost_cents`. Their cost is missing from every figure
+    /// above, so `total_cents` is a floor while this list is not empty.
+    pub unestimated_items: Vec<UnestimatedItem>,
+    /// The length of `unestimated_items`.
+    pub unestimated_item_count: usize,
+    /// Planned work items with no `est_cost_cents`, also missing from
+    /// `total_cents`.
+    pub unestimated_planned_work: Vec<UnestimatedWork>,
+    /// The length of `unestimated_planned_work`.
+    pub unestimated_planned_work_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UnestimatedItem {
+    pub id: i32,
+    pub name: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UnestimatedWork {
+    pub id: i32,
+    pub title: String,
 }
 
 /// One projected occurrence of a schedule item.
@@ -51,6 +74,24 @@ pub struct ForecastLine {
     /// Projected date, `YYYY-MM-DD` (today for overdue items).
     pub when: String,
     pub est_cents: i64,
+}
+
+/// The summed estimates of the planned backlog, and the items with none.
+fn planned_work_cost(backlog: &[work_item::Model]) -> (i64, Vec<UnestimatedWork>) {
+    let cents = backlog
+        .iter()
+        .filter_map(|i| i.est_cost_cents)
+        .map(i64::from)
+        .sum();
+    let unestimated = backlog
+        .iter()
+        .filter(|i| i.est_cost_cents.is_none())
+        .map(|i| UnestimatedWork {
+            id: i.id,
+            title: i.title.clone(),
+        })
+        .collect();
+    (cents, unestimated)
 }
 
 /// Projects the vehicle's next 12 months of maintenance spend from reminders
@@ -102,14 +143,11 @@ pub async fn forecast_from(
     };
 
     let mut lines: Vec<ForecastLine> = Vec::new();
+    let mut unestimated_items: Vec<UnestimatedItem> = Vec::new();
     for r in &rems.reminders {
         let Some(item) = items.get(&r.schedule_item.id) else {
             continue;
         };
-        let Some(cost) = item.est_cost_cents else {
-            continue;
-        };
-        let cost = i64::from(cost);
 
         // Days until the first occurrence; overdue counts as one now.
         let first_due: Option<i64> = if r.status == "overdue" {
@@ -146,6 +184,15 @@ pub async fn forecast_from(
                 continue;
             }
         }
+        // An item expected to come due but with no estimate is named instead
+        // of priced.
+        let Some(cost) = item.est_cost_cents.map(i64::from) else {
+            unestimated_items.push(UnestimatedItem {
+                id: item.id,
+                name: item.name.clone(),
+            });
+            continue;
+        };
         loop {
             lines.push(ForecastLine {
                 label: item.name.clone(),
@@ -164,11 +211,7 @@ pub async fn forecast_from(
     lines.sort_by(|a, b| a.when.cmp(&b.when).then_with(|| a.label.cmp(&b.label)));
     let projected_maintenance_cents: i64 = lines.iter().map(|l| l.est_cents).sum();
 
-    let planned_work_cents: i64 = backlog
-        .iter()
-        .filter_map(|i| i.est_cost_cents)
-        .map(i64::from)
-        .sum();
+    let (planned_work_cents, unestimated_planned_work) = planned_work_cost(&backlog);
 
     Ok(BudgetForecast {
         horizon_months: HORIZON_MONTHS,
@@ -176,6 +219,10 @@ pub async fn forecast_from(
         planned_work_cents,
         total_cents: projected_maintenance_cents + planned_work_cents,
         lines,
+        unestimated_item_count: unestimated_items.len(),
+        unestimated_items,
+        unestimated_planned_work_count: unestimated_planned_work.len(),
+        unestimated_planned_work,
     })
 }
 
@@ -488,5 +535,64 @@ mod tests {
                 .format("%Y-%m-%d")
                 .to_string()
         );
+    }
+
+    fn plan(title: &str, est_cost_cents: Option<i32>) -> NewWorkItem {
+        NewWorkItem {
+            title: title.into(),
+            notes: None,
+            schedule_item_id: None,
+            research_finding_id: None,
+            incident_id: None,
+            est_cost_cents,
+            revisit_by_date: None,
+            revisit_by_miles: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn the_forecast_names_what_it_leaves_out() {
+        let db = test_db().await;
+        let vid = VehicleFixture::new()
+            .purchase_date(&days_ago(730))
+            .insert_id(&db)
+            .await;
+        seed_item(&db, vid, "Priced", None, Some(12), Some(10_000)).await;
+        let unpriced = seed_item(&db, vid, "Unpriced", None, Some(12), None).await;
+        // Mileage-only with no mileage history: nothing projects, so it is not
+        // an item the forecast expects to come due.
+        seed_item(&db, vid, "Unknowable", Some(5_000), None, None).await;
+        let far = seed_item(&db, vid, "Far off", None, Some(120), None).await;
+        let far_svc = service_record::ActiveModel {
+            vehicle_id: Set(vid),
+            service_date: Set(days_ago(10)),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        service_schedule_link::ActiveModel {
+            service_record_id: Set(far_svc.id),
+            schedule_item_id: Set(far),
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        work_item_svc::create(&db, vid, plan("Wipers", Some(7_500)))
+            .await
+            .unwrap();
+        let blank = work_item_svc::create(&db, vid, plan("Alignment", None))
+            .await
+            .unwrap();
+
+        let f = forecast(&db, vid).await.unwrap();
+        assert_eq!(f.total_cents, 17_500);
+        assert_eq!(f.unestimated_item_count, 1);
+        assert_eq!(f.unestimated_items.len(), 1);
+        assert_eq!(f.unestimated_items[0].id, unpriced);
+        assert_eq!(f.unestimated_items[0].name, "Unpriced");
+        assert_eq!(f.unestimated_planned_work_count, 1);
+        assert_eq!(f.unestimated_planned_work[0].id, blank.id);
+        assert_eq!(f.unestimated_planned_work[0].title, "Alignment");
     }
 }

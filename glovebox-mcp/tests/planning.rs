@@ -25,6 +25,46 @@ async fn whats_coming_returns_every_section_for_a_bare_vehicle() {
     assert!(due.get("estimated_mileage").is_some(), "got: {due}");
 }
 
+#[tokio::test]
+async fn whats_coming_flags_missing_history_and_missing_estimates() {
+    let t = connect().await;
+    let v = vehicle::create(
+        &t.db,
+        NewVehicle {
+            purchase_date: Some("2020-01-01".into()),
+            ..new_vehicle("Daily")
+        },
+    )
+    .await
+    .unwrap();
+    for name in ["Brake fluid", "Cabin filter"] {
+        schedule_svc::create(&t.db, schedule_item_every_12_months(v.id, name))
+            .await
+            .unwrap();
+    }
+    t.call(
+        "plan_work",
+        json!({ "vehicle_id": v.id, "title": "Alignment" }),
+    )
+    .await;
+
+    let due = t.call("whats_coming", json!({ "vehicle_id": v.id })).await;
+    assert_eq!(due["reminders"][0]["baseline"], "purchase", "got: {due}");
+    assert_eq!(due["bundle_suggestions"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        due["bundle_suggestions"][0]["items"]
+            .as_array()
+            .map(Vec::len),
+        Some(2)
+    );
+    assert_eq!(due["budget"]["unestimated_item_count"], 2);
+    assert_eq!(due["budget"]["unestimated_planned_work_count"], 1);
+    assert_eq!(
+        due["budget"]["unestimated_planned_work"][0]["title"],
+        "Alignment"
+    );
+}
+
 // Plans work from a recall finding and from an overdue schedule item, then
 // reads the to-do list and the forecast.
 #[tokio::test]

@@ -12,12 +12,29 @@ use crate::{
     services::schedule::{DEFAULT_WARNING_DAYS, DEFAULT_WARNING_MILES, name_key},
 };
 
+/// What a reminder's due point was measured from.
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Baseline {
+    /// The date and odometer of the latest service linked to the item.
+    LastService,
+    /// No linked service exists, so the vehicle's purchase date and mileage
+    /// stand in. An overdue item with this baseline has no service on record;
+    /// the work is not known to be late.
+    Purchase,
+    /// No linked service and no purchase date or mileage: the due point
+    /// counts from today and from zero miles.
+    None,
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct ReminderStatus {
     pub schedule_item: ScheduleItemSummary,
     /// `overdue`, `due_soon` (within the item's warning miles or days) or
     /// `ok`: the same words planned work's `revisit_status` uses.
     pub status: String,
+    /// What `due_at_miles` and `due_at_date` count from.
+    pub baseline: Baseline,
     pub last_service: Option<LastServiceInfo>,
     pub due_at_miles: Option<i32>,
     pub due_at_date: Option<String>,
@@ -338,6 +355,11 @@ pub async fn calculate_reminders(
                 name: item.name.clone(),
             },
             status: status.to_string(),
+            baseline: match (&last_service, &v.purchase_date, &v.purchase_mileage) {
+                (Some(_), _, _) => Baseline::LastService,
+                (None, None, None) => Baseline::None,
+                (None, _, _) => Baseline::Purchase,
+            },
             last_service: last_service.map(|s| LastServiceInfo {
                 id: s.id,
                 date: s.service_date.clone(),
@@ -363,8 +385,7 @@ pub async fn calculate_reminders(
             .then(a.schedule_item.name.cmp(&b.schedule_item.name))
     });
 
-    // Bundle suggestions
-    let bundle_suggestions = calculate_bundles(&reminders, 5000);
+    let bundle_suggestions = calculate_bundles(&reminders);
 
     Ok(RemindersResponse {
         vehicle_id,
@@ -475,51 +496,29 @@ async fn resolve_schedule(
     Ok(schedule.into_values().filter(|i| i.enabled).collect())
 }
 
-/// Calculate bundle suggestions based on `labor_categories`.
-fn calculate_bundles(reminders: &[ReminderStatus], bundling_window: i32) -> Vec<BundleSuggestion> {
-    let mut suggestions = Vec::new();
-
-    for reminder in reminders {
-        if reminder.status == "ok"
-            && let Some(miles) = reminder.miles_remaining
-            && miles <= bundling_window
-        {
-            // This item is within bundling window of being due
-            let due_items: Vec<&ReminderStatus> = reminders
-                .iter()
-                .filter(|r| r.status == "overdue" || r.status == "due_soon")
-                .collect();
-
-            if !due_items.is_empty() {
-                let mut items: Vec<BundleItem> = due_items
-                    .iter()
-                    .map(|r| BundleItem {
-                        id: r.schedule_item.id,
-                        name: r.schedule_item.name.clone(),
-                        status: r.status.clone(),
-                        due_in_miles: r.miles_remaining,
-                    })
-                    .collect();
-
-                items.push(BundleItem {
-                    id: reminder.schedule_item.id,
-                    name: reminder.schedule_item.name.clone(),
-                    status: reminder.status.clone(),
-                    due_in_miles: reminder.miles_remaining,
-                });
-
-                suggestions.push(BundleSuggestion {
-                    reason: format!(
-                        "{} is due within {} miles — consider doing it with upcoming services",
-                        reminder.schedule_item.name, miles
-                    ),
-                    items,
-                });
-            }
-        }
+/// One shop-trip suggestion listing every overdue or due-soon item, or none
+/// when fewer than two items are due.
+fn calculate_bundles(reminders: &[ReminderStatus]) -> Vec<BundleSuggestion> {
+    let items: Vec<BundleItem> = reminders
+        .iter()
+        .filter(|r| r.status == "overdue" || r.status == "due_soon")
+        .map(|r| BundleItem {
+            id: r.schedule_item.id,
+            name: r.schedule_item.name.clone(),
+            status: r.status.clone(),
+            due_in_miles: r.miles_remaining,
+        })
+        .collect();
+    if items.len() < 2 {
+        return Vec::new();
     }
-
-    suggestions
+    vec![BundleSuggestion {
+        reason: format!(
+            "{} items are overdue or due soon; do them in one shop trip",
+            items.len()
+        ),
+        items,
+    }]
 }
 
 fn parse_date(s: &str) -> Option<NaiveDate> {
@@ -957,5 +956,97 @@ mod tests {
         assert!(daily_rate(start, (day("2019-12-31"), 5_000)).abs() < f64::EPSILON);
         assert!(daily_rate(start, (day("2020-01-11"), 500)).abs() < f64::EPSILON);
         assert!((daily_rate(start, (day("2020-01-11"), 1_500)) - 50.0).abs() < 1e-9);
+    }
+
+    async fn seed_monthly_item(db: &DatabaseConnection, vehicle_id: i32, name: &str) -> i32 {
+        maintenance_schedule_item::ActiveModel {
+            vehicle_id: Set(Some(vehicle_id)),
+            name: Set(name.into()),
+            interval_months: Set(Some(12)),
+            enabled: Set(true),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+        .id
+    }
+
+    #[tokio::test]
+    async fn every_overdue_or_due_soon_item_is_offered_as_one_shop_trip() {
+        let db = test_db().await;
+        let vid = VehicleFixture::new()
+            .purchase_date(&days_ago(3_000))
+            .insert_id(&db)
+            .await;
+        for name in ["Brake fluid", "Cabin filter", "Spark plugs"] {
+            seed_monthly_item(&db, vid, name).await;
+        }
+
+        let resp = calculate_reminders(&db, vid).await.unwrap();
+        assert_eq!(resp.bundle_suggestions.len(), 1, "{resp:?}");
+        let bundle = &resp.bundle_suggestions[0];
+        let mut names: Vec<&str> = bundle.items.iter().map(|i| i.name.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, vec!["Brake fluid", "Cabin filter", "Spark plugs"]);
+        assert!(bundle.items.iter().all(|i| i.status == "overdue"));
+        assert!(bundle.reason.contains('3'), "{}", bundle.reason);
+    }
+
+    #[tokio::test]
+    async fn one_due_item_is_not_a_bundle() {
+        let db = test_db().await;
+        let vid = VehicleFixture::new()
+            .purchase_date(&days_ago(3_000))
+            .insert_id(&db)
+            .await;
+        seed_monthly_item(&db, vid, "Brake fluid").await;
+
+        let resp = calculate_reminders(&db, vid).await.unwrap();
+        assert!(resp.bundle_suggestions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_reminder_says_what_its_due_point_was_measured_from() {
+        let db = test_db().await;
+        let dated = VehicleFixture::new()
+            .purchase_date(&days_ago(3_000))
+            .insert_id(&db)
+            .await;
+        let serviced = seed_monthly_item(&db, dated, "Serviced").await;
+        seed_monthly_item(&db, dated, "Never serviced").await;
+        let svc = service_record::ActiveModel {
+            vehicle_id: Set(dated),
+            service_date: Set(days_ago(100)),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        service_schedule_link::ActiveModel {
+            service_record_id: Set(svc.id),
+            schedule_item_id: Set(serviced),
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        let resp = calculate_reminders(&db, dated).await.unwrap();
+        let baseline = |name: &str| {
+            resp.reminders
+                .iter()
+                .find(|r| r.schedule_item.name == name)
+                .unwrap()
+                .baseline
+        };
+        assert_eq!(baseline("Serviced"), Baseline::LastService);
+        assert_eq!(baseline("Never serviced"), Baseline::Purchase);
+
+        let undated = VehicleFixture::new().insert_id(&db).await;
+        seed_monthly_item(&db, undated, "Never serviced").await;
+        let resp = calculate_reminders(&db, undated).await.unwrap();
+        assert_eq!(resp.reminders[0].baseline, Baseline::None);
+        let json = serde_json::to_value(&resp.reminders[0]).unwrap();
+        assert_eq!(json["baseline"], "none");
     }
 }
