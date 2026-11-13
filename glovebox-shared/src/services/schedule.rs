@@ -31,6 +31,17 @@ pub(crate) fn name_key(name: &str) -> String {
 pub struct ResolvedScheduleItem {
     pub effective_item: maintenance_schedule_item::Model,
     pub inherited_from: Option<String>,
+    /// For a vehicle-owned item that replaces an inherited one by name, the
+    /// replaced item; `None` otherwise.
+    pub overrides: Option<OverriddenItem>,
+}
+
+/// The inherited item a vehicle-owned item replaces.
+#[derive(Serialize)]
+pub struct OverriddenItem {
+    pub id: i32,
+    /// `platform` or `model_template`.
+    pub inherited_from: String,
 }
 
 pub async fn list(
@@ -178,9 +189,10 @@ pub async fn update(
 /// overwritten with `vehicle_id` and the other owner fields are cleared, so
 /// the item can only ever belong to this vehicle.
 ///
-/// An item named like one the vehicle inherits replaces it for this vehicle,
-/// and the vehicle's services and planned work linked to the inherited item
-/// move to the new one. A name the vehicle already has its own item for is a
+/// An item named like one the vehicle inherits replaces it for this vehicle:
+/// it takes the inherited item's spelling of the name and, for every field
+/// the caller leaves out, the inherited item's value. The vehicle's services
+/// and planned work linked to the inherited item move to the new one. A name the vehicle already has its own item for is a
 /// `BadRequest`, and an interval of zero or less is `Invalid`.
 pub async fn create_for_vehicle<C: ConnectionTrait + TransactionTrait>(
     db: &C,
@@ -205,6 +217,9 @@ pub async fn create_for_vehicle<C: ConnectionTrait + TransactionTrait>(
     input.platform_id = None;
     input.model_template_id = None;
     input.overrides_item_id = effective_inherited(&shadowed).map(|i| i.id);
+    if let Some(inherited) = effective_inherited(&shadowed) {
+        fill_from_inherited(&mut input, inherited);
+    }
     let created = create(&txn, input).await?;
     repoint_links(&txn, vehicle_id, &shadowed, created.id).await?;
     txn.commit().await?;
@@ -272,7 +287,7 @@ pub async fn update_for_vehicle<C: ConnectionTrait + TransactionTrait>(
     } else if let Some(existing) = own_item_named(&txn, vehicle_id, &item.name).await? {
         existing
     } else {
-        copy_for_vehicle(&item, vehicle_id).insert(&txn).await?
+        copy_for_vehicle(&txn, &item, vehicle_id).await?
     };
     let updated = update(&txn, target.id, input).await?;
     let shadowed = inherited_named(&txn, &v, &updated.name).await?;
@@ -360,29 +375,45 @@ fn effective_inherited(
         .or_else(|| items.first())
 }
 
-/// A vehicle-owned copy of an inherited item's full definition, pointing back
-/// at it through `overrides_item_id`.
-fn copy_for_vehicle(
+/// Fills every field of `input` that the caller left empty from the inherited
+/// item, and takes the inherited item's spelling of the name. The copy covers
+/// the description, intervals, warning window, source, notes, factory flag,
+/// labor categories and estimated cost. `enabled` is not copied.
+fn fill_from_inherited(input: &mut NewScheduleItem, item: &maintenance_schedule_item::Model) {
+    item.name.clone_into(&mut input.name);
+    input.description = input
+        .description
+        .take()
+        .or_else(|| item.description.clone());
+    input.interval_miles = input.interval_miles.or(item.interval_miles);
+    input.interval_months = input.interval_months.or(item.interval_months);
+    input.warning_miles = input.warning_miles.or(item.warning_miles);
+    input.warning_days = input.warning_days.or(item.warning_days);
+    input.source = input.source.take().or_else(|| item.source.clone());
+    input.notes = input.notes.take().or_else(|| item.notes.clone());
+    input.is_factory_recommended = input.is_factory_recommended.or(item.is_factory_recommended);
+    input.labor_categories = input
+        .labor_categories
+        .take()
+        .or_else(|| item.labor_categories.clone());
+    input.est_cost_cents = input.est_cost_cents.or(item.est_cost_cents);
+}
+
+/// Stores a vehicle-owned copy of an inherited item's full definition,
+/// pointing back at it through `overrides_item_id`.
+async fn copy_for_vehicle(
+    db: &impl ConnectionTrait,
     item: &maintenance_schedule_item::Model,
     vehicle_id: i32,
-) -> maintenance_schedule_item::ActiveModel {
-    maintenance_schedule_item::ActiveModel {
-        vehicle_id: Set(Some(vehicle_id)),
-        overrides_item_id: Set(Some(item.id)),
-        name: Set(item.name.clone()),
-        description: Set(item.description.clone()),
-        interval_miles: Set(item.interval_miles),
-        interval_months: Set(item.interval_months),
-        warning_miles: Set(item.warning_miles),
-        warning_days: Set(item.warning_days),
-        enabled: Set(item.enabled),
-        source: Set(item.source.clone()),
-        notes: Set(item.notes.clone()),
-        is_factory_recommended: Set(item.is_factory_recommended),
-        labor_categories: Set(item.labor_categories.clone()),
-        est_cost_cents: Set(item.est_cost_cents),
+) -> DomainResult<maintenance_schedule_item::Model> {
+    let mut copy = NewScheduleItem {
+        vehicle_id: Some(vehicle_id),
+        overrides_item_id: Some(item.id),
+        enabled: Some(item.enabled),
         ..Default::default()
-    }
+    };
+    fill_from_inherited(&mut copy, item);
+    create(db, copy).await
 }
 
 /// Moves this vehicle's service links and planned work from the `shadowed`
@@ -632,6 +663,7 @@ pub async fn resolve_for_listing(
                         ResolvedScheduleItem {
                             effective_item: item,
                             inherited_from: Some("platform".to_string()),
+                            overrides: None,
                         },
                     );
                 }
@@ -649,6 +681,7 @@ pub async fn resolve_for_listing(
                     ResolvedScheduleItem {
                         effective_item: item,
                         inherited_from: Some("model_template".to_string()),
+                        overrides: None,
                     },
                 );
             }
@@ -662,13 +695,27 @@ pub async fn resolve_for_listing(
         .await?;
 
     for item in vehicle_items {
-        schedule.insert(
-            name_key(&item.name),
+        let key = name_key(&item.name);
+        let replaced = schedule.insert(
+            key.clone(),
             ResolvedScheduleItem {
+                overrides: None,
                 effective_item: item,
                 inherited_from: None,
             },
         );
+        // A vehicle item shadowing an earlier vehicle item keeps what that one
+        // replaced.
+        let overrides = replaced.and_then(|r| match r.inherited_from {
+            Some(inherited_from) => Some(OverriddenItem {
+                id: r.effective_item.id,
+                inherited_from,
+            }),
+            None => r.overrides,
+        });
+        if let Some(entry) = schedule.get_mut(&key) {
+            entry.overrides = overrides;
+        }
     }
 
     // Leave out disabled items unless asked, and sort by name for stable output
@@ -752,7 +799,7 @@ pub async fn dismiss_for_vehicle<C: ConnectionTrait + TransactionTrait>(
     } else if let Some(existing) = own_item_named(&txn, vehicle_id, &item.name).await? {
         existing
     } else {
-        copy_for_vehicle(&item, vehicle_id).insert(&txn).await?
+        copy_for_vehicle(&txn, &item, vehicle_id).await?
     };
 
     let notes = append_dismiss_reason(target.notes.clone(), reason.as_deref());
@@ -1806,8 +1853,8 @@ mod tests {
             .unwrap();
         assert_eq!(own.overrides_item_id, Some(inherited.id));
         assert_eq!(
-            own.name, "  cabin air filter ",
-            "the stored name keeps the caller's spelling"
+            own.name, "Cabin Air Filter",
+            "the stored name takes the inherited item's spelling"
         );
 
         let resolved = resolve(&db, vid).await.unwrap();

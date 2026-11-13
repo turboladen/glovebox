@@ -132,11 +132,13 @@ impl GloveboxMcp {
         description = "Add a car to the garage. Give a `name` and whatever is known. Pass \
                        `model_template_id` (from `list_model_templates`) when the car matches \
                        one, so it inherits that platform's maintenance schedule (`list_schedule` \
-                       shows it). Pass `vin` to fill blank year, make, model, trim, engine, \
-                       transmission and drivetrain from NHTSA; anything sent explicitly wins, and \
-                       if the lookup fails (offline, invalid VIN) the car is still added and the \
-                       result carries `vin_decode_error`. Use `update_vehicle` to change a car \
-                       that already exists."
+                       shows it) and takes the template's year, make, model, trim, body style, \
+                       engine, transmission and drivetrain for every one of them you leave out. \
+                       Pass `vin` to fill blank fields of the same kind from NHTSA; the order is \
+                       what you send, then the VIN decode, then the template, and if the lookup \
+                       fails (offline, invalid VIN) the car is still added and the result carries \
+                       `vin_decode_error`. Use `update_vehicle` to change a car that already \
+                       exists."
     )]
     async fn add_vehicle(
         &self,
@@ -164,9 +166,12 @@ impl GloveboxMcp {
     #[tool(
         name = "update_vehicle",
         description = "Change details of an existing vehicle: name, plate, color, VIN, purchase \
-                       or sale details, warranty expiry, notes, model template. Send only the \
-                       fields to change; a field sent as null is cleared, and a field left out is \
-                       untouched. Use `add_vehicle` for a car that is not in the garage yet."
+                       or sale details, warranty expiry, notes, model template. Setting a model \
+                       template fills the year, make, model, trim, body style, engine, \
+                       transmission and drivetrain that are empty on the car and leaves the ones \
+                       it has. Send only the fields to change; a field sent as null is cleared, \
+                       and a field left out is untouched. Use `add_vehicle` for a car that is not \
+                       in the garage yet."
     )]
     async fn update_vehicle(
         &self,

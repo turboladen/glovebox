@@ -2,7 +2,8 @@ use sea_orm::*;
 
 use crate::{
     entities::{
-        incident, part, research_finding, research_report, service_record, vehicle, work_item,
+        incident, model_template, part, research_finding, research_report, service_record, vehicle,
+        work_item,
     },
     error::{DomainError, DomainResult},
     inputs::vehicle::{NewVehicle, UpdateVehicle},
@@ -27,26 +28,43 @@ pub async fn get(db: &impl ConnectionTrait, id: i32) -> DomainResult<vehicle::Mo
     require(db, id).await
 }
 
-/// Fails with a `NotFound` that points at `list_model_templates` when the id
-/// names no template.
-async fn require_template(db: &impl ConnectionTrait, id: Option<i32>) -> DomainResult<()> {
-    if let Some(id) = id
-        && crate::entities::model_template::Entity::find_by_id(id)
-            .one(db)
-            .await?
-            .is_none()
-    {
-        return Err(DomainError::NotFound(format!(
-            "Model template {id} not found; list_model_templates shows the valid ids"
-        )));
-    }
-    Ok(())
+/// Loads the template when an id is given. Fails with a `NotFound` that
+/// points at `list_model_templates` when the id names no template.
+async fn require_template(
+    db: &impl ConnectionTrait,
+    id: Option<i32>,
+) -> DomainResult<Option<model_template::Model>> {
+    let Some(id) = id else { return Ok(None) };
+    model_template::Entity::find_by_id(id)
+        .one(db)
+        .await?
+        .map(Some)
+        .ok_or_else(|| {
+            DomainError::NotFound(format!(
+                "Model template {id} not found; list_model_templates shows the valid ids"
+            ))
+        })
 }
 
-pub async fn create(db: &impl ConnectionTrait, input: NewVehicle) -> DomainResult<vehicle::Model> {
+/// Creates a vehicle. When `model_template_id` is set, every one of year, make,
+/// model, trim, body style, engine, transmission and drivetrain that the input
+/// leaves empty takes the template's value; a supplied value always wins.
+pub async fn create(
+    db: &impl ConnectionTrait,
+    mut input: NewVehicle,
+) -> DomainResult<vehicle::Model> {
     super::validate_optional_date("purchase_date", input.purchase_date.as_deref())?;
     super::validate_optional_date("warranty_expires_on", input.warranty_expires_on.as_deref())?;
-    require_template(db, input.model_template_id).await?;
+    if let Some(t) = require_template(db, input.model_template_id).await? {
+        input.year = input.year.or(t.year);
+        input.make = input.make.or(t.make);
+        input.model = input.model.or(t.model);
+        input.trim_level = input.trim_level.or(t.trim_level);
+        input.body_style = input.body_style.or(t.body_style);
+        input.engine = input.engine.or(t.engine);
+        input.transmission = input.transmission.or(t.transmission);
+        input.drivetrain = input.drivetrain.or(t.drivetrain);
+    }
     let model = vehicle::ActiveModel {
         name: Set(input.name),
         model_template_id: Set(input.model_template_id),
@@ -78,7 +96,8 @@ pub async fn create(db: &impl ConnectionTrait, input: NewVehicle) -> DomainResul
 ///
 /// Year, make, model, trim, body style, engine, transmission and drivetrain
 /// each take the decoded value only when the input has none; a supplied value
-/// always wins. With `decoded` of `None` this behaves like [`create`]. The
+/// always wins. A model template then fills whatever is still empty, so the
+/// precedence is caller, then VIN decode, then template. With `decoded` of `None` this behaves like [`create`]. The
 /// decode is a parameter so the lookup (a live web request) stays with the
 /// caller and this function stays testable offline.
 pub async fn create_with_vin_decode<C: ConnectionTrait + TransactionTrait>(
@@ -105,6 +124,44 @@ pub async fn create_with_vin_decode<C: ConnectionTrait + TransactionTrait>(
     Ok(created)
 }
 
+/// Sets each detail that is empty on the car and not set by this update to the
+/// template's value.
+fn fill_empty_from_template(
+    input: &mut UpdateVehicle,
+    existing: &vehicle::Model,
+    t: model_template::Model,
+) {
+    fn fill<T>(slot: &mut Option<Option<T>>, current: Option<&T>, from: Option<T>) {
+        if slot.is_none() && current.is_none() {
+            *slot = Some(from);
+        }
+    }
+    fill(&mut input.year, existing.year.as_ref(), t.year);
+    fill(&mut input.make, existing.make.as_ref(), t.make);
+    fill(&mut input.model, existing.model.as_ref(), t.model);
+    fill(
+        &mut input.trim_level,
+        existing.trim_level.as_ref(),
+        t.trim_level,
+    );
+    fill(
+        &mut input.body_style,
+        existing.body_style.as_ref(),
+        t.body_style,
+    );
+    fill(&mut input.engine, existing.engine.as_ref(), t.engine);
+    fill(
+        &mut input.transmission,
+        existing.transmission.as_ref(),
+        t.transmission,
+    );
+    fill(
+        &mut input.drivetrain,
+        existing.drivetrain.as_ref(),
+        t.drivetrain,
+    );
+}
+
 pub async fn update(
     db: &impl ConnectionTrait,
     id: i32,
@@ -118,7 +175,11 @@ pub async fn update(
     ] {
         super::validate_optional_date(field, value.as_ref().and_then(|v| v.as_deref()))?;
     }
-    require_template(db, input.model_template_id.flatten()).await?;
+    let template = require_template(db, input.model_template_id.flatten()).await?;
+    let mut input = input;
+    if let Some(t) = template {
+        fill_empty_from_template(&mut input, &existing, t);
+    }
     let mut active: vehicle::ActiveModel = existing.into();
 
     if let Some(v) = input.name {
@@ -417,6 +478,114 @@ mod tests {
         assert_eq!(made.make.as_deref(), Some("VW"));
         assert_eq!(made.year, Some(2020));
         assert_eq!(made.model.as_deref(), Some("Golf R"));
+    }
+
+    async fn seed_template(db: &impl ConnectionTrait) -> i32 {
+        crate::services::model_template::create(
+            db,
+            crate::inputs::model_template::NewModelTemplate {
+                year: Some(2018),
+                make: Some("Volkswagen".into()),
+                model: Some("Golf".into()),
+                trim_level: Some("SE".into()),
+                body_style: Some("Wagon".into()),
+                engine: Some("2.0L TSI".into()),
+                transmission: Some("6MT".into()),
+                drivetrain: Some("FWD".into()),
+                platform_id: None,
+                platform_ref: None,
+            },
+        )
+        .await
+        .unwrap()
+        .id
+    }
+
+    #[tokio::test]
+    async fn create_fills_empty_fields_from_the_template() {
+        let db = test_db().await;
+        let tid = seed_template(&db).await;
+        let made = create(
+            &db,
+            NewVehicle {
+                name: "Daily".into(),
+                model_template_id: Some(tid),
+                make: Some("VW".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(made.make.as_deref(), Some("VW"));
+        assert_eq!(made.year, Some(2018));
+        assert_eq!(made.model.as_deref(), Some("Golf"));
+        assert_eq!(made.trim_level.as_deref(), Some("SE"));
+        assert_eq!(made.body_style.as_deref(), Some("Wagon"));
+        assert_eq!(made.engine.as_deref(), Some("2.0L TSI"));
+        assert_eq!(made.transmission.as_deref(), Some("6MT"));
+        assert_eq!(made.drivetrain.as_deref(), Some("FWD"));
+    }
+
+    #[tokio::test]
+    async fn precedence_is_caller_then_vin_decode_then_template() {
+        let db = test_db().await;
+        let tid = seed_template(&db).await;
+        let mut d = decoded();
+        d.trim = None;
+        d.engine = None;
+        let made = create_with_vin_decode(
+            &db,
+            NewVehicle {
+                name: "Daily".into(),
+                model_template_id: Some(tid),
+                year: Some(2020),
+                ..Default::default()
+            },
+            Some(&d),
+        )
+        .await
+        .unwrap();
+        assert_eq!(made.year, Some(2020), "caller wins");
+        assert_eq!(
+            made.make.as_deref(),
+            Some("Volkswagen"),
+            "decode beats template"
+        );
+        assert_eq!(
+            made.trim_level.as_deref(),
+            Some("SE"),
+            "template fills the gap"
+        );
+        assert_eq!(made.engine.as_deref(), Some("2.0L TSI"));
+    }
+
+    #[tokio::test]
+    async fn update_setting_a_template_fills_only_empty_fields() {
+        let db = test_db().await;
+        let tid = seed_template(&db).await;
+        let v = create(
+            &db,
+            NewVehicle {
+                name: "Daily".into(),
+                make: Some("VW".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let updated = update(
+            &db,
+            v.id,
+            UpdateVehicle {
+                model_template_id: Some(Some(tid)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.make.as_deref(), Some("VW"));
+        assert_eq!(updated.transmission.as_deref(), Some("6MT"));
+        assert_eq!(updated.year, Some(2018));
     }
 
     #[tokio::test]

@@ -39,9 +39,11 @@ impl GloveboxMcp {
         name = "list_schedule",
         description = "The vehicle's maintenance schedule as configured: every item that applies, \
                        each with its intervals and where it came from (`inherited_from` names the \
-                       platform or model template, null for items specific to this car). Items \
-                       the owner dismissed are left out unless `include_dismissed` is true. Use \
-                       this to find a `schedule_item_id` for `update_schedule_item`, \
+                       platform or model template, null for items specific to this car). An item \
+                       specific to this car that replaces an inherited one also carries \
+                       `overrides`, the replaced item's `id` and `inherited_from`. Items the \
+                       owner dismissed are left out unless `include_dismissed` is true. Use this \
+                       to find a `schedule_item_id` for `update_schedule_item`, \
                        `dismiss_schedule_item` or `record_service`; use `whats_coming` instead \
                        for what is due or overdue."
     )]
@@ -88,7 +90,10 @@ impl GloveboxMcp {
                        `update_schedule_item` instead. Names are compared ignoring case and \
                        surrounding spaces: an item named like one the car inherits (\"Cabin air \
                        filter\" for \"Cabin Air Filter\") becomes this car's version of it, with \
-                       its history, and a name the car already has its own item for is an error."
+                       its history, its spelling of the name, and every detail you leave out \
+                       (notes, labor categories, source, factory-recommended flag, intervals, \
+                       warning window, estimated cost) copied from it, and a name the car already \
+                       has its own item for is an error."
     )]
     async fn add_schedule_item(
         &self,

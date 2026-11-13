@@ -273,6 +273,79 @@ async fn an_item_added_in_other_capitalization_takes_over_the_inherited_one() {
     assert!(err.contains("already has"), "got: {err}");
 }
 
+#[tokio::test]
+async fn an_item_added_over_an_inherited_one_keeps_its_details_and_shows_what_it_replaces() {
+    let t = connect().await;
+    let template = schedule_svc_template(&t).await;
+    let v = vehicle::create(
+        &t.db,
+        NewVehicle {
+            model_template_id: Some(template),
+            ..new_vehicle("Golf")
+        },
+    )
+    .await
+    .unwrap();
+    let before = t.call("list_schedule", json!({ "vehicle_id": v.id })).await;
+    let inherited = before
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["effective_item"]["name"] == "Cabin Air Filter")
+        .unwrap()
+        .clone();
+
+    let added = t
+        .call(
+            "add_schedule_item",
+            json!({
+                "vehicle_id": v.id,
+                "name": "cabin air filter",
+                "interval_miles": 15000,
+                "interval_months": 12,
+                "est_cost_cents": 4500
+            }),
+        )
+        .await;
+    assert_eq!(added["name"], "Cabin Air Filter");
+    assert_eq!(added["notes"], "Behind glove box");
+    assert_eq!(added["source"], "factory");
+    assert_eq!(added["is_factory_recommended"], true);
+    assert_eq!(added["labor_categories"], "[\"interior\"]");
+    assert_eq!(added["interval_miles"], 15000);
+    assert_eq!(added["interval_months"], 12);
+    assert_eq!(added["est_cost_cents"], 4500);
+
+    let after = t.call("list_schedule", json!({ "vehicle_id": v.id })).await;
+    let rows = after.as_array().unwrap();
+    let mine = rows
+        .iter()
+        .find(|r| r["effective_item"]["id"] == added["id"])
+        .unwrap();
+    assert_eq!(mine["inherited_from"], serde_json::Value::Null);
+    assert_eq!(
+        mine["overrides"],
+        json!({
+            "id": inherited["effective_item"]["id"],
+            "inherited_from": "platform"
+        })
+    );
+    let before_names: Vec<_> = before
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["effective_item"]["name"].clone())
+        .collect();
+    let after_names: Vec<_> = rows
+        .iter()
+        .map(|r| r["effective_item"]["name"].clone())
+        .collect();
+    assert_eq!(
+        after_names, before_names,
+        "the override keeps its place in the list"
+    );
+}
+
 async fn schedule_svc_template(t: &common::TestClient) -> i32 {
     glovebox_shared::services::model_template::list(&t.db)
         .await
