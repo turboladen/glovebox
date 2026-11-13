@@ -14,15 +14,25 @@ When the user needs a new migration, determine the next sequence number and crea
 
 ## Step 1: Determine Migration Number
 
-Check `src/migration/mod.rs` for the current highest number. The next migration is `N+1`.
+The schema is one squashed baseline, `m20261112_000001_initial_schema`, followed by the seed
+migration `m20261112_000002_seed_vw_mqb`. New migrations go after those. Check
+`glovebox-shared/src/migration/mod.rs` for the current highest number; the next migration is `N+1`.
 
-File naming: `m20260301_{NNNNNN}_{descriptive_name}.rs`
-- Use the same date prefix `20260301` as existing consolidated migrations
-- Pad the sequence number to 6 digits (e.g., `000009`)
+File naming: `m{YYYYMMDD}_{NNNNNN}_{descriptive_name}.rs`
+- Use the date the migration is written, and keep the sequence number increasing (`000003` is next
+  after the seed). Migrations run in vector order, so the order of `migrations()` is what counts.
+- Pad the sequence number to 6 digits.
+
+Migrations live in `glovebox-shared/src/migration/`. Read `m20261112_000001_initial_schema.rs` first:
+it shows the helpers (`pk()`, `text()`, `int()`, `stamp()`, `fk()`, `index()`) that build columns with
+`Alias::new`, and new files can define the same small helpers or use `DeriveIden` enums.
 
 ## Step 2: Create Migration File
 
-### Template — New Table
+All APIs are `sea_orm_migration::prelude::*` from SeaORM 2.0. A migration is a unit struct with
+`#[derive(DeriveMigrationName)]` and an `#[async_trait::async_trait]` `impl MigrationTrait`.
+
+### Template: New Table
 
 ```rust
 use sea_orm_migration::prelude::*;
@@ -49,18 +59,18 @@ impl MigrationTrait for Migration {
                     // .col(ColumnDef::new({TableEnum}::Name).text().not_null())
                     // .col(ColumnDef::new({TableEnum}::Description).text())  // nullable = no .not_null()
                     // .col(ColumnDef::new({TableEnum}::VehicleId).integer().not_null())
-                    // --- timestamps (always last before FKs) ---
+                    // --- timestamps ---
                     .col(
                         ColumnDef::new({TableEnum}::CreatedAt)
                             .text()
                             .not_null()
-                            .default(Expr::cust("(datetime('now'))")),
+                            .default(Expr::cust("datetime('now')")),
                     )
                     .col(
                         ColumnDef::new({TableEnum}::UpdatedAt)
                             .text()
                             .not_null()
-                            .default(Expr::cust("(datetime('now'))")),
+                            .default(Expr::cust("datetime('now')")),
                     )
                     // --- foreign keys ---
                     // .foreign_key(
@@ -73,12 +83,13 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // Indexes for FK columns (always index FK columns)
+        // Index every FK column.
         // manager
         //     .create_index(
         //         Index::create()
-        //             .table({TableEnum}::Table)
+        //             .if_not_exists()
         //             .name("idx_{table_name}_{fk_column}")
+        //             .table({TableEnum}::Table)
         //             .col({TableEnum}::FkColumn)
         //             .to_owned(),
         //     )
@@ -89,7 +100,7 @@ impl MigrationTrait for Migration {
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         manager
-            .drop_table(Table::drop().table({TableEnum}::Table).to_owned())
+            .drop_table(Table::drop().table({TableEnum}::Table).if_exists().to_owned())
             .await
     }
 }
@@ -98,12 +109,12 @@ impl MigrationTrait for Migration {
 enum {TableEnum} {
     Table,
     Id,
-    // ... all columns as PascalCase variants
+    // ... every column as a PascalCase variant
     CreatedAt,
     UpdatedAt,
 }
 
-// Reference enums for FK targets (only need Table + Id)
+// FK targets need only Table + Id.
 // #[derive(DeriveIden)]
 // enum Vehicles {
 //     Table,
@@ -111,7 +122,7 @@ enum {TableEnum} {
 // }
 ```
 
-### Template — Junction Table (Many-to-Many)
+### Template: Junction Table (Many-to-Many)
 
 ```rust
 // No Id column, no timestamps
@@ -120,16 +131,8 @@ manager
         Table::create()
             .table({JunctionEnum}::Table)
             .if_not_exists()
-            .col(
-                ColumnDef::new({JunctionEnum}::LeftId)
-                    .integer()
-                    .not_null(),
-            )
-            .col(
-                ColumnDef::new({JunctionEnum}::RightId)
-                    .integer()
-                    .not_null(),
-            )
+            .col(ColumnDef::new({JunctionEnum}::LeftId).integer().not_null())
+            .col(ColumnDef::new({JunctionEnum}::RightId).integer().not_null())
             .primary_key(
                 Index::create()
                     .col({JunctionEnum}::LeftId)
@@ -152,7 +155,7 @@ manager
     .await?;
 ```
 
-### Template — ALTER TABLE (Add Column)
+### Template: ALTER TABLE (Add Column)
 
 ```rust
 // SQLite ALTER TABLE only supports ADD COLUMN
@@ -166,28 +169,39 @@ manager
     .await?;
 ```
 
-**IMPORTANT**: ALTER TABLE appends columns to the end. Update the entity struct to place new fields AFTER `created_at`/`updated_at`.
+**IMPORTANT**: ALTER TABLE appends columns to the end. Update the entity struct to place new fields
+AFTER `created_at`/`updated_at`. A column named in an FK clause cannot be dropped; rebuild the table
+instead.
 
 ## Critical SQLite Rules
 
-1. **DateTime defaults**: ALWAYS use `Expr::cust("(datetime('now'))")` — NEVER string literals like `"CURRENT_TIMESTAMP"` (SeaORM wraps strings in quotes)
-2. **FK on-delete policy**:
-   - Non-nullable parent ref (vehicle_id) → `ForeignKeyAction::Cascade`
-   - Nullable ref (shop_id, created_by) → `ForeignKeyAction::SetNull`
-   - Self-referential nullable (superseded_by) → `ForeignKeyAction::SetNull`
-3. **Always index FK columns** with a named index: `idx_{table}_{column}`
-4. **Column types**: Use `.text()` for strings (SQLite TEXT), `.integer()` for numbers
-5. **CHECK constraints**: Use raw SQL via `manager.get_connection().execute_unprepared()` — SeaORM migration builder doesn't support CHECK natively
-6. **String defaults**: `.default("value")` works for simple string defaults (SeaORM quotes correctly)
-7. **Add `#[allow(clippy::too_many_lines)]`** on `impl MigrationTrait` if migration creates multiple tables
-8. **Add `#[allow(clippy::unreadable_literal)]`** if migration name has long numeric sequences
+1. **Rerun-safe**: SQLite migrations are not transactional, so a crash mid-`up()` reruns from the
+   top. Use `if_not_exists()` on tables and indexes, `INSERT ... WHERE NOT EXISTS` for data, and
+   pragma-guarded `ALTER`s.
+2. **DateTime defaults**: use `Expr::cust("datetime('now')")`, never a string literal such as
+   `"CURRENT_TIMESTAMP"` (SeaORM quotes strings).
+3. **FK on-delete policy**:
+   - Non-nullable parent ref (`vehicle_id`) uses `ForeignKeyAction::Cascade`.
+   - Nullable ref (`shop_id`, `model_template_id`) uses `ForeignKeyAction::SetNull`.
+   - Self-referential nullable refs use `ForeignKeyAction::SetNull`.
+   Foreign keys are enforced: `db::connect` turns them on.
+4. **Always index FK columns** with a named index: `idx_{table}_{column}`.
+5. **Column types**: `.text()` for strings (SQLite TEXT), `.integer()` for numbers.
+6. **No builder form**: CHECK constraints, partial-index predicates the builder cannot express, and
+   FTS5 tables with their triggers go through `manager.get_connection().execute_unprepared()`.
+   Copy the external-content trigger trio from the initial schema migration for FTS5.
+7. **Seeding data** uses `execute_unprepared` with `NOT EXISTS`-gated inserts, as the seed migration
+   does.
+8. **Lints**: add `#![allow(clippy::too_many_lines)]` when a migration defines many tables.
 
 ## Step 3: Register Migration
 
-Add to `src/migration/mod.rs`:
-1. Add `mod m20260301_{NNNNNN}_{name};` declaration
-2. Add `Box::new(m20260301_{NNNNNN}_{name}::Migration),` to the `migrations()` vec
+In `glovebox-shared/src/migration/mod.rs`:
+1. Add `mod m{YYYYMMDD}_{NNNNNN}_{name};`.
+2. Add `Box::new(m{YYYYMMDD}_{NNNNNN}_{name}::Migration),` to the end of the `migrations()` vec.
 
 ## Step 4: Verify
 
-Run `cargo build` to check the migration compiles. The migration will auto-run on next `cargo run` via `Migrator::up()`.
+Run `cargo test -p glovebox-shared`: `test_support::test_db()` applies every migration to an
+in-memory database. For a migration that moves data, also start the binary against a copy of
+`data/glovebox.db`.

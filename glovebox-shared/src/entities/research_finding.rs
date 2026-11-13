@@ -13,8 +13,6 @@ pub struct Model {
     pub source_url: Option<String>,
     pub severity: Option<String>,
     pub status: String,
-    pub linked_entity_type: Option<String>,
-    pub linked_entity_id: Option<i32>,
     pub created_at: String,
     pub updated_at: String,
 }

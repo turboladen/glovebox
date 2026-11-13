@@ -5,15 +5,10 @@ data/
 *.db-shm
 *.db-wal
 .env
-frontend/dist
-frontend/node_modules/
-test-results/
-frontend/test-results/
-frontend/playwright-report/
-
 # Dolt database files (added by bd init)
 .dolt/
 
 # Beads / Dolt files (added by bd init)
 .beads-credential-key
+.beads.gate.lock
 .superpowers/

@@ -1,13 +1,12 @@
-//! 12-month spend forecast (2hea unit G, decision ⑧): schedule intervals ×
-//! the vehicle's actual mileage rate × each item's `est_cost_cents`, plus
-//! open visits' estimated-cost rollups, plus the unattached planned-work
+//! 12-month spend forecast: schedule intervals × the vehicle's actual
+//! mileage rate × each item's `est_cost_cents`, plus the planned-work
 //! backlog. Money is integer cents throughout; only the day arithmetic
 //! touches floats (the mileage rate).
 //!
 //! Baselines, due dates, and the mileage rate all come from
-//! [`reminders::calculate_reminders`] (extract-don't-duplicate: the rate
-//! machinery lives in `reminders::estimate_mileage`, which the reminders
-//! response already surfaces as `avg_daily_miles`).
+//! [`calculate_reminders`](crate::services::reminders::calculate_reminders):
+//! the rate machinery lives in `reminders::estimate_mileage`, which the
+//! reminders response surfaces as `avg_daily_miles`.
 
 use std::collections::{HashMap, HashSet};
 
@@ -17,7 +16,7 @@ use serde::Serialize;
 use crate::{
     entities::{maintenance_schedule_item, work_item},
     error::DomainResult,
-    services::{reminders, reminders::RemindersResponse, visit, work_item as work_item_svc},
+    services::reminders::RemindersResponse,
 };
 
 /// Forecast horizon: days `0..HORIZON_DAYS` from today (an occurrence
@@ -25,29 +24,47 @@ use crate::{
 const HORIZON_DAYS: i64 = 365;
 const HORIZON_MONTHS: u32 = 12;
 
-/// The three-bucket forecast model. Each dollar appears in exactly one
-/// bucket: schedule projections (minus occurrences already planned in an
-/// open visit), open visits' item rollups, and the unattached backlog.
+/// The two-bucket forecast model. Each dollar appears in exactly one
+/// bucket: schedule projections (minus occurrences already on the planned
+/// backlog) and the planned-work backlog.
 #[derive(Debug, Serialize)]
 pub struct BudgetForecast {
     pub horizon_months: u32,
     /// Σ projected schedule-item occurrences within the horizon. A
-    /// schedule item that appears (via a work item's `schedule_item_id`)
-    /// in an OPEN visit — or on the unattached BACKLOG — skips its FIRST
-    /// projected occurrence: that spend is already counted in
-    /// `planned_visits_cents` / `planned_work_cents` ("already planned").
+    /// schedule item that appears (via a work item's `schedule_item_id`) on
+    /// the planned backlog skips its FIRST projected occurrence: that spend
+    /// is already counted in `planned_work_cents` ("already planned").
     /// Later cycles still project.
     pub projected_maintenance_cents: i64,
-    /// Σ open (planned/scheduled) visits' `est_total_cents`.
-    pub planned_visits_cents: i64,
-    /// Σ participating (planned/scheduled) work items carrying
-    /// `est_cost_cents` that are NOT attached to any visit — the backlog
-    /// the user intends to do but hasn't scheduled.
+    /// Σ planned work items carrying `est_cost_cents`: the backlog the user
+    /// intends to do.
     pub planned_work_cents: i64,
-    /// `projected_maintenance_cents + planned_visits_cents +
-    /// planned_work_cents`.
+    /// `projected_maintenance_cents + planned_work_cents`.
     pub total_cents: i64,
     pub lines: Vec<ForecastLine>,
+    /// Schedule items the forecast expects to come due in the window that
+    /// have no `est_cost_cents`. Their cost is missing from every figure
+    /// above, so `total_cents` is a floor while this list is not empty.
+    pub unestimated_items: Vec<UnestimatedItem>,
+    /// The length of `unestimated_items`.
+    pub unestimated_item_count: usize,
+    /// Planned work items with no `est_cost_cents`, also missing from
+    /// `total_cents`.
+    pub unestimated_planned_work: Vec<UnestimatedWork>,
+    /// The length of `unestimated_planned_work`.
+    pub unestimated_planned_work_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UnestimatedItem {
+    pub id: i32,
+    pub name: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UnestimatedWork {
+    pub id: i32,
+    pub title: String,
 }
 
 /// One projected occurrence of a schedule item.
@@ -59,7 +76,27 @@ pub struct ForecastLine {
     pub est_cents: i64,
 }
 
-/// Project the vehicle's next 12 months of maintenance spend.
+/// The summed estimates of the planned backlog, and the items with none.
+fn planned_work_cost(backlog: &[work_item::Model]) -> (i64, Vec<UnestimatedWork>) {
+    let cents = backlog
+        .iter()
+        .filter_map(|i| i.est_cost_cents)
+        .map(i64::from)
+        .sum();
+    let unestimated = backlog
+        .iter()
+        .filter(|i| i.est_cost_cents.is_none())
+        .map(|i| UnestimatedWork {
+            id: i.id,
+            title: i.title.clone(),
+        })
+        .collect();
+    (cents, unestimated)
+}
+
+/// Projects the vehicle's next 12 months of maintenance spend from reminders
+/// the caller has already computed with
+/// [`calculate_reminders`](crate::services::reminders::calculate_reminders).
 ///
 /// For each enabled resolved schedule item carrying `est_cost_cents`:
 /// occurrences repeat at the item's interval — `interval_months`, and/or
@@ -67,18 +104,9 @@ pub struct ForecastLine {
 /// cycle is shorter). Overdue items count as one occurrence now. Items with
 /// no projectable due date (e.g. mileage-only interval on a vehicle with no
 /// mileage history) are skipped unless overdue.
-pub async fn forecast(db: &DatabaseConnection, vehicle_id: i32) -> DomainResult<BudgetForecast> {
-    let rems = reminders::calculate_reminders(db, vehicle_id).await?;
-    forecast_from(db, vehicle_id, &rems).await
-}
-
-/// [`forecast`] with the reminders precomputed — for callers (the MCP's
-/// `check_due_maintenance`) that already have a [`RemindersResponse`] and
-/// must not compute it twice.
 #[allow(clippy::cast_possible_truncation)] // day counts, not money
-#[allow(clippy::too_many_lines)] // one linear pass over the buckets
 pub async fn forecast_from(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     vehicle_id: i32,
     rems: &RemindersResponse,
 ) -> DomainResult<BudgetForecast> {
@@ -97,45 +125,29 @@ pub async fn forecast_from(
             .collect()
     };
 
-    // Open (planned/scheduled) visits: their item rollups are one bucket,
-    // and their participating items' schedule links suppress the first
-    // projected occurrence below (it's the same spend, already planned).
-    let open_visits = visit::list(db, vehicle_id, false).await?;
-
-    // The unattached backlog: participating items not scheduled into any
-    // visit yet. Their estimates are the third bucket, and their schedule
-    // links suppress first occurrences exactly like open visits' do —
-    // "already planned" applies to the to-do list too.
+    // The planned backlog: its estimates are the second bucket, and its
+    // schedule links suppress first occurrences ("already planned").
     let backlog: Vec<work_item::Model> = work_item::Entity::find()
         .filter(work_item::Column::VehicleId.eq(vehicle_id))
-        .filter(work_item::Column::VisitId.is_null())
-        .filter(work_item::Column::Status.is_in(["planned", "scheduled"]))
+        .filter(work_item::Column::Status.eq("planned"))
         .all(db)
         .await?;
 
-    let planned_schedule_items: HashSet<i32> = open_visits
-        .iter()
-        .flat_map(|v| v.items.iter())
-        .filter(|i| work_item_svc::participates(&i.status))
-        .chain(backlog.iter())
-        .filter_map(|i| i.schedule_item_id)
-        .collect();
+    let planned_schedule_items: HashSet<i32> =
+        backlog.iter().filter_map(|i| i.schedule_item_id).collect();
 
-    let today = chrono::Utc::now().date_naive();
+    let today = crate::services::today();
     let avg_daily = rems.avg_daily_miles;
     let miles_to_days = |miles: i32| -> Option<i64> {
         (avg_daily > 0.0).then(|| (f64::from(miles) / avg_daily).ceil() as i64)
     };
 
     let mut lines: Vec<ForecastLine> = Vec::new();
+    let mut unestimated_items: Vec<UnestimatedItem> = Vec::new();
     for r in &rems.reminders {
         let Some(item) = items.get(&r.schedule_item.id) else {
             continue;
         };
-        let Some(cost) = item.est_cost_cents else {
-            continue;
-        };
-        let cost = i64::from(cost);
 
         // Days until the first occurrence; overdue counts as one now.
         let first_due: Option<i64> = if r.status == "overdue" {
@@ -162,10 +174,9 @@ pub async fn forecast_from(
         .filter(|d| *d >= 1)
         .min();
 
-        let mut day = first.max(0);
-        // Already planned (open visit or backlog): the first occurrence is
-        // counted in `planned_visits_cents` / `planned_work_cents`; only
-        // later cycles project here.
+        let mut day = Ord::max(first, 0);
+        // Already planned: the first occurrence is counted in
+        // `planned_work_cents`; only later cycles project here.
         if planned_schedule_items.contains(&item.id) {
             let Some(cycle) = cycle_days else { continue };
             day += cycle;
@@ -173,6 +184,15 @@ pub async fn forecast_from(
                 continue;
             }
         }
+        // An item expected to come due but with no estimate is named instead
+        // of priced.
+        let Some(cost) = item.est_cost_cents.map(i64::from) else {
+            unestimated_items.push(UnestimatedItem {
+                id: item.id,
+                name: item.name.clone(),
+            });
+            continue;
+        };
         loop {
             lines.push(ForecastLine {
                 label: item.name.clone(),
@@ -191,21 +211,18 @@ pub async fn forecast_from(
     lines.sort_by(|a, b| a.when.cmp(&b.when).then_with(|| a.label.cmp(&b.label)));
     let projected_maintenance_cents: i64 = lines.iter().map(|l| l.est_cents).sum();
 
-    let planned_visits_cents: i64 = open_visits.iter().map(|v| v.est_total_cents).sum();
-
-    let planned_work_cents: i64 = backlog
-        .iter()
-        .filter_map(|i| i.est_cost_cents)
-        .map(i64::from)
-        .sum();
+    let (planned_work_cents, unestimated_planned_work) = planned_work_cost(&backlog);
 
     Ok(BudgetForecast {
         horizon_months: HORIZON_MONTHS,
         projected_maintenance_cents,
-        planned_visits_cents,
         planned_work_cents,
-        total_cents: projected_maintenance_cents + planned_visits_cents + planned_work_cents,
+        total_cents: projected_maintenance_cents + planned_work_cents,
         lines,
+        unestimated_item_count: unestimated_items.len(),
+        unestimated_items,
+        unestimated_planned_work_count: unestimated_planned_work.len(),
+        unestimated_planned_work,
     })
 }
 
@@ -215,18 +232,14 @@ mod tests {
     use crate::{
         entities::{mileage_log, service_record, service_schedule_link},
         error::DomainError,
-        inputs::{
-            visit::{NewVisit, UpdateVisit},
-            work_item::NewWorkItem,
-        },
-        services::work_item as work_item_svc,
-        test_support::{VehicleFixture, test_db},
+        inputs::work_item::{NewWorkItem, UpdateWorkItem},
+        services::{reminders, work_item as work_item_svc},
+        test_support::{VehicleFixture, days_ago, test_db},
     };
 
-    fn days_ago(days: i64) -> String {
-        (chrono::Utc::now().date_naive() - chrono::Duration::days(days))
-            .format("%Y-%m-%d")
-            .to_string()
+    async fn forecast(db: &DatabaseConnection, vehicle_id: i32) -> DomainResult<BudgetForecast> {
+        let rems = reminders::calculate_reminders(db, vehicle_id).await?;
+        forecast_from(db, vehicle_id, &rems).await
     }
 
     async fn seed_item(
@@ -269,27 +282,26 @@ mod tests {
         let f = forecast(&db, vid).await.unwrap();
         assert_eq!(f.horizon_months, 12);
         assert_eq!(f.projected_maintenance_cents, 0);
-        assert_eq!(f.planned_visits_cents, 0);
         assert_eq!(f.planned_work_cents, 0);
         assert_eq!(f.total_cents, 0);
         assert!(f.lines.is_empty());
     }
 
-    /// The pinned arithmetic scenario. Everything is seeded relative to
-    /// today (no wall-clock flakiness):
-    ///
-    /// - "Annual inspection": 12-month interval, $100, last serviced ~6
-    ///   months ago → due in ~6 months → exactly 1 occurrence.
-    /// - "Timing belt check": 12-month interval, $50, never serviced on a
-    ///   vehicle purchased 2 years ago → overdue → 1 occurrence now (the
-    ///   next lands ~12 months out, past the horizon).
-    /// - "Oil change": 5000-mile interval, $20, mileage rate pinned at
-    ///   exactly 100 mi/day (logs 100 days apart, 10k miles apart, latest
-    ///   today) → overdue (est. 20k vs due at 5k), cycle = 50 days →
-    ///   occurrences at days 0,50,...,350 = 8.
-    /// - An open visit with a $75 item; a canceled visit with a $999 item
-    ///   that must NOT count as a visit — canceling detaches the item back
-    ///   to the backlog, so it lands in `planned_work_cents` instead.
+    // The pinned arithmetic scenario. Everything is seeded relative to
+    // today (no wall-clock flakiness):
+    //
+    // - "Annual inspection": 12-month interval, $100, last serviced ~6
+    //   months ago → due in ~6 months → exactly 1 occurrence.
+    // - "Timing belt check": 12-month interval, $50, never serviced on a
+    //   vehicle purchased 2 years ago → overdue → 1 occurrence now (the
+    //   next lands ~12 months out, past the horizon).
+    // - "Oil change": 5000-mile interval, $20, mileage rate pinned at
+    //   exactly 100 mi/day (logs 100 days apart, 10k miles apart, latest
+    //   today) → overdue (est. 20k vs due at 5k), cycle = 50 days →
+    //   occurrences at days 0,50,...,350 = 8.
+    // - A planned work item with a $75 estimate, which lands in
+    //   `planned_work_cents`; a dropped item with a $999 estimate that must
+    //   not count.
     #[tokio::test]
     async fn pinned_interval_and_rate_scenario() {
         let db = test_db().await;
@@ -336,8 +348,8 @@ mod tests {
         .await
         .unwrap();
 
-        // One open visit ($75 item) and one canceled visit ($999 item).
-        let open_item = work_item_svc::create(
+        // One planned item ($75) and one dropped item ($999).
+        work_item_svc::create(
             &db,
             vid,
             NewWorkItem {
@@ -346,22 +358,9 @@ mod tests {
                 schedule_item_id: None,
                 research_finding_id: None,
                 incident_id: None,
-                build_id: None,
                 est_cost_cents: Some(7_500),
-                visit_id: None,
-            },
-        )
-        .await
-        .unwrap();
-        crate::services::visit::create(
-            &db,
-            vid,
-            NewVisit {
-                planned_date: None,
-                shop_name: None,
-                shop_id: None,
-                notes: None,
-                work_item_ids: Some(vec![open_item.id]),
+                revisit_by_date: None,
+                revisit_by_miles: None,
             },
         )
         .await
@@ -375,32 +374,19 @@ mod tests {
                 schedule_item_id: None,
                 research_finding_id: None,
                 incident_id: None,
-                build_id: None,
                 est_cost_cents: Some(99_900),
-                visit_id: None,
+                revisit_by_date: None,
+                revisit_by_miles: None,
             },
         )
         .await
         .unwrap();
-        let canceled = crate::services::visit::create(
+        work_item_svc::update(
             &db,
             vid,
-            NewVisit {
-                planned_date: None,
-                shop_name: None,
-                shop_id: None,
-                notes: None,
-                work_item_ids: Some(vec![dead_item.id]),
-            },
-        )
-        .await
-        .unwrap();
-        crate::services::visit::update(
-            &db,
-            vid,
-            canceled.visit.id,
-            UpdateVisit {
-                status: Some("canceled".into()),
+            dead_item.id,
+            UpdateWorkItem {
+                status: Some("dropped".into()),
                 ..Default::default()
             },
         )
@@ -417,10 +403,8 @@ mod tests {
 
         // 1×10_000 + 1×5_000 + 8×2_000 = 31_000, all integer cents.
         assert_eq!(f.projected_maintenance_cents, 31_000);
-        assert_eq!(f.planned_visits_cents, 7_500, "canceled visit excluded");
-        // Canceling detached the $999 item back to the planned backlog.
-        assert_eq!(f.planned_work_cents, 99_900, "unattached backlog bucket");
-        assert_eq!(f.total_cents, 31_000 + 7_500 + 99_900);
+        assert_eq!(f.planned_work_cents, 7_500, "dropped item excluded");
+        assert_eq!(f.total_cents, 31_000 + 7_500);
 
         // Overdue occurrences land today; lines are date-ordered.
         assert_eq!(f.lines[0].when, days_ago(0));
@@ -430,100 +414,11 @@ mod tests {
         assert_eq!(whens, sorted);
     }
 
-    /// Fix 10a: a schedule item planned into an OPEN visit (via a work
-    /// item's `schedule_item_id`) skips its FIRST projected occurrence —
-    /// that spend is the visit's — while later cycles still project. An
-    /// item whose next cycle falls past the horizon projects nothing.
-    #[tokio::test]
-    async fn schedule_item_in_open_visit_skips_first_occurrence() {
-        let db = test_db().await;
-        let vid = VehicleFixture::new()
-            .purchase_date(&days_ago(730))
-            .purchase_mileage(0)
-            .insert_id(&db)
-            .await;
-        // Rate pinned at exactly 100 mi/day (as in the pinned scenario).
-        for (age, miles) in [(100, 10_000), (0, 20_000)] {
-            mileage_log::ActiveModel {
-                vehicle_id: Set(vid),
-                mileage: Set(miles),
-                recorded_at: Set(days_ago(age)),
-                ..Default::default()
-            }
-            .insert(&db)
-            .await
-            .unwrap();
-        }
-
-        // Overdue, cycle 50 days → 8 occurrences when unplanned.
-        let oil = seed_item(&db, vid, "Oil change", Some(5_000), None, Some(2_000)).await;
-        // Overdue, cycle 12 months → exactly 1 occurrence when unplanned.
-        let belt = seed_item(&db, vid, "Timing belt check", None, Some(12), Some(5_000)).await;
-
-        let baseline = forecast(&db, vid).await.unwrap();
-        let count =
-            |f: &BudgetForecast, label: &str| f.lines.iter().filter(|l| l.label == label).count();
-        assert_eq!(count(&baseline, "Oil change"), 8);
-        assert_eq!(count(&baseline, "Timing belt check"), 1);
-        assert_eq!(baseline.total_cents, 8 * 2_000 + 5_000);
-
-        // Plan both into one open visit.
-        let mut ids = vec![];
-        for (title, sched, est) in [("Oil", oil, 2_200), ("Belt", belt, 5_500)] {
-            ids.push(
-                work_item_svc::create(
-                    &db,
-                    vid,
-                    NewWorkItem {
-                        title: title.into(),
-                        notes: None,
-                        schedule_item_id: Some(sched),
-                        research_finding_id: None,
-                        incident_id: None,
-                        build_id: None,
-                        est_cost_cents: Some(est),
-                        visit_id: None,
-                    },
-                )
-                .await
-                .unwrap()
-                .id,
-            );
-        }
-        crate::services::visit::create(
-            &db,
-            vid,
-            NewVisit {
-                planned_date: None,
-                shop_name: None,
-                shop_id: None,
-                notes: None,
-                work_item_ids: Some(ids),
-            },
-        )
-        .await
-        .unwrap();
-
-        let f = forecast(&db, vid).await.unwrap();
-        // Oil: first occurrence suppressed, later cycles (days 50..350)
-        // still project. Belt: the only occurrence within the horizon is
-        // the planned one → nothing projects.
-        assert_eq!(count(&f, "Oil change"), 7, "lines: {:?}", f.lines);
-        assert_eq!(count(&f, "Timing belt check"), 0, "lines: {:?}", f.lines);
-        assert_eq!(f.projected_maintenance_cents, 7 * 2_000);
-        assert_eq!(f.planned_visits_cents, 2_200 + 5_500);
-        assert_eq!(f.planned_work_cents, 0);
-        // No double count: the planned occurrences appear only as the
-        // visit's estimate.
-        assert_eq!(f.total_cents, 7 * 2_000 + 7_700);
-    }
-
-    /// Unit-F carry-in (unit G reviewer): a schedule-linked work item on
-    /// the unattached BACKLOG also skips that schedule item's FIRST
-    /// projected occurrence — same "already planned" rationale as open
-    /// visits. Before this, the spend double-counted (`planned_work` +
-    /// `projected_maintenance`). Later cycles still project; an item whose
-    /// only in-horizon occurrence is the planned one projects nothing.
+    // A schedule-linked work item on the planned backlog skips that
+    // schedule item's FIRST projected occurrence, so the spend is not
+    // counted in both `planned_work` and `projected_maintenance`. Later
+    // cycles still project; an item whose only in-horizon occurrence is the
+    // planned one projects nothing.
     #[tokio::test]
     async fn schedule_linked_backlog_item_skips_first_occurrence() {
         let db = test_db().await;
@@ -557,7 +452,7 @@ mod tests {
         assert_eq!(count(&baseline, "Timing belt check"), 1);
         assert_eq!(baseline.total_cents, 8 * 2_000 + 5_000);
 
-        // Plan both onto the to-do list — NO visit.
+        // Plan both onto the to-do list.
         for (title, sched, est) in [("Oil", oil, 2_200), ("Belt", belt, 5_500)] {
             work_item_svc::create(
                 &db,
@@ -568,9 +463,9 @@ mod tests {
                     schedule_item_id: Some(sched),
                     research_finding_id: None,
                     incident_id: None,
-                    build_id: None,
                     est_cost_cents: Some(est),
-                    visit_id: None,
+                    revisit_by_date: None,
+                    revisit_by_miles: None,
                 },
             )
             .await
@@ -584,36 +479,120 @@ mod tests {
         assert_eq!(count(&f, "Oil change"), 7, "lines: {:?}", f.lines);
         assert_eq!(count(&f, "Timing belt check"), 0, "lines: {:?}", f.lines);
         assert_eq!(f.projected_maintenance_cents, 7 * 2_000);
-        assert_eq!(f.planned_visits_cents, 0);
         assert_eq!(f.planned_work_cents, 2_200 + 5_500);
         // No double count: the planned occurrences appear only as the
         // backlog estimates.
         assert_eq!(f.total_cents, 7 * 2_000 + 7_700);
     }
 
-    /// Fix 9: `forecast_from` with precomputed reminders is `forecast` —
-    /// same buckets, same lines.
+    // A first session of filing invoices logs two readings a couple of days
+    // apart. The rate then comes from the purchase, so a mileage-interval
+    // item still projects into the 12-month forecast.
     #[tokio::test]
-    async fn forecast_from_matches_forecast() {
+    async fn mileage_items_forecast_when_recent_readings_are_close_together() {
+        let db = test_db().await;
+        let vid = VehicleFixture::new()
+            .purchase_date("2017-03-05")
+            .purchase_mileage(40)
+            .insert_id(&db)
+            .await;
+        for age in [2, 0] {
+            mileage_log::ActiveModel {
+                vehicle_id: Set(vid),
+                mileage: Set(64_000),
+                recorded_at: Set(days_ago(age)),
+                ..Default::default()
+            }
+            .insert(&db)
+            .await
+            .unwrap();
+        }
+        let item = seed_item(&db, vid, "Oil change", Some(10_000), None, Some(2_000)).await;
+        let svc = service_record::ActiveModel {
+            vehicle_id: Set(vid),
+            service_date: Set(days_ago(300)),
+            mileage: Set(Some(60_000)),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        service_schedule_link::ActiveModel {
+            service_record_id: Set(svc.id),
+            schedule_item_id: Set(item),
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        let rems = reminders::calculate_reminders(&db, vid).await.unwrap();
+        let f = forecast_from(&db, vid, &rems).await.unwrap();
+        assert!(!f.lines.is_empty(), "rate {}", rems.avg_daily_miles);
+        let first_in_days = (6_000.0 / rems.avg_daily_miles).ceil() as i64;
+        assert_eq!(
+            f.lines[0].when,
+            (crate::services::today() + chrono::Duration::days(first_in_days))
+                .format("%Y-%m-%d")
+                .to_string()
+        );
+    }
+
+    fn plan(title: &str, est_cost_cents: Option<i32>) -> NewWorkItem {
+        NewWorkItem {
+            title: title.into(),
+            notes: None,
+            schedule_item_id: None,
+            research_finding_id: None,
+            incident_id: None,
+            est_cost_cents,
+            revisit_by_date: None,
+            revisit_by_miles: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn the_forecast_names_what_it_leaves_out() {
         let db = test_db().await;
         let vid = VehicleFixture::new()
             .purchase_date(&days_ago(730))
             .insert_id(&db)
             .await;
-        seed_item(&db, vid, "Timing belt check", None, Some(12), Some(5_000)).await;
-
-        let via_forecast = forecast(&db, vid).await.unwrap();
-        let rems = crate::services::reminders::calculate_reminders(&db, vid)
+        seed_item(&db, vid, "Priced", None, Some(12), Some(10_000)).await;
+        let unpriced = seed_item(&db, vid, "Unpriced", None, Some(12), None).await;
+        // Mileage-only with no mileage history: nothing projects, so it is not
+        // an item the forecast expects to come due.
+        seed_item(&db, vid, "Unknowable", Some(5_000), None, None).await;
+        let far = seed_item(&db, vid, "Far off", None, Some(120), None).await;
+        let far_svc = service_record::ActiveModel {
+            vehicle_id: Set(vid),
+            service_date: Set(days_ago(10)),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        service_schedule_link::ActiveModel {
+            service_record_id: Set(far_svc.id),
+            schedule_item_id: Set(far),
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        work_item_svc::create(&db, vid, plan("Wipers", Some(7_500)))
             .await
             .unwrap();
-        let via_from = forecast_from(&db, vid, &rems).await.unwrap();
+        let blank = work_item_svc::create(&db, vid, plan("Alignment", None))
+            .await
+            .unwrap();
 
-        assert_eq!(
-            via_from.projected_maintenance_cents,
-            via_forecast.projected_maintenance_cents
-        );
-        assert_eq!(via_from.total_cents, via_forecast.total_cents);
-        assert_eq!(via_from.lines.len(), via_forecast.lines.len());
-        assert_eq!(via_from.total_cents, 5_000);
+        let f = forecast(&db, vid).await.unwrap();
+        assert_eq!(f.total_cents, 17_500);
+        assert_eq!(f.unestimated_item_count, 1);
+        assert_eq!(f.unestimated_items.len(), 1);
+        assert_eq!(f.unestimated_items[0].id, unpriced);
+        assert_eq!(f.unestimated_items[0].name, "Unpriced");
+        assert_eq!(f.unestimated_planned_work_count, 1);
+        assert_eq!(f.unestimated_planned_work[0].id, blank.id);
+        assert_eq!(f.unestimated_planned_work[0].title, "Alignment");
     }
 }

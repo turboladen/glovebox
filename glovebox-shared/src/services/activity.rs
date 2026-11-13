@@ -2,8 +2,7 @@
 //! service records, incidents, and mileage logs into a single
 //! reverse-chronological list. Consumed by the MCP surface
 //! (`summarize_recent_activity` tool + `glovebox://vehicles/{id}/activity`
-//! resource); available to the HTTP surface should it ever want the same
-//! feed.
+//! resource).
 
 use sea_orm::*;
 use serde::Serialize;
@@ -26,19 +25,12 @@ pub struct ActivityItem {
     /// `service`, `incident`, or `mileage`.
     pub kind: String,
     pub id: i32,
-    /// Owning vehicle — lets garage-wide consumers ([`recent_all`]) label
-    /// rows without a second lookup. Additive fields: existing consumers
-    /// (MCP `summarize_recent_activity` + the activity resource) simply
-    /// gain them.
+    /// Owning vehicle.
     pub vehicle_id: i32,
     pub vehicle_name: String,
     pub date: String,
-    /// When the record was ADDED (its row's `created_at`) — a uniform
-    /// `YYYY-MM-DD HH:MM:SS` timestamp, distinct from the domain `date`
-    /// above. The garage-wide feed ([`recent_all`]) orders by this so a
-    /// just-imported record with an old event date still surfaces as
-    /// recent; the per-vehicle [`recent`] feed keeps ordering by `date`.
-    /// Additive field: existing consumers simply gain it.
+    /// When the record was added (its row's `created_at`), a
+    /// `YYYY-MM-DD HH:MM:SS` timestamp distinct from the domain `date`.
     pub created_at: String,
     pub summary: String,
     /// Odometer reading attached to the record, when present.
@@ -47,19 +39,8 @@ pub struct ActivityItem {
     pub total_cost_cents: Option<i32>,
 }
 
-/// Which timeline a feed is ordered against. [`recent`] is event-chronological
-/// (`Event`); [`recent_all`] is added-chronological (`Added`) so freshly
-/// imported records surface even when their event date is old. The order is
-/// applied *both* in the per-entity SQL fetch (so the per-vehicle `limit`
-/// truncation keeps the right rows) and in the final in-memory sort.
-#[derive(Clone, Copy)]
-enum Order {
-    Event,
-    Added,
-}
-
 /// The `limit` most recent services + incidents + mileage logs for a
-/// vehicle, merged and sorted newest-first.
+/// vehicle, merged and sorted newest-first by their own dates.
 ///
 /// Mileage logs auto-created by service records are excluded: the service
 /// item already carries that odometer reading, and showing both would
@@ -73,58 +54,30 @@ pub async fn recent(
     vehicle_id: i32,
     limit: usize,
 ) -> DomainResult<Vec<ActivityItem>> {
-    gather(db, vehicle_id, limit, Order::Event).await
-}
-
-/// Fetch, merge, sort, and truncate one vehicle's feed under a given [`Order`].
-///
-/// The `order` selects the per-entity SQL sort column *and* the final
-/// in-memory comparator so the two agree: the per-vehicle `limit` truncation
-/// must keep the same rows the caller will ultimately rank by, or a
-/// recently-*added* old-*event* record would be dropped here before a
-/// [`recent_all`] merge ever sees it.
-async fn gather(
-    db: &impl ConnectionTrait,
-    vehicle_id: i32,
-    limit: usize,
-    order: Order,
-) -> DomainResult<Vec<ActivityItem>> {
     let vehicle = super::vehicle::require(db, vehicle_id).await?;
     let vehicle_name = vehicle.name;
     let limit_u64 = limit as u64;
 
-    let mut service_q =
-        service_record::Entity::find().filter(service_record::Column::VehicleId.eq(vehicle_id));
-    service_q = match order {
-        Order::Event => service_q.order_by_desc(service_record::Column::ServiceDate),
-        Order::Added => service_q.order_by_desc(service_record::Column::CreatedAt),
-    };
-    let services = service_q
+    let services = service_record::Entity::find()
+        .filter(service_record::Column::VehicleId.eq(vehicle_id))
+        .order_by_desc(service_record::Column::ServiceDate)
         .order_by_desc(service_record::Column::Id)
         .limit(limit_u64)
         .all(db)
         .await?;
 
-    let mut incident_q =
-        incident::Entity::find().filter(incident::Column::VehicleId.eq(vehicle_id));
-    incident_q = match order {
-        Order::Event => incident_q.order_by_desc(incident::Column::OccurredAt),
-        Order::Added => incident_q.order_by_desc(incident::Column::CreatedAt),
-    };
-    let incidents = incident_q
+    let incidents = incident::Entity::find()
+        .filter(incident::Column::VehicleId.eq(vehicle_id))
+        .order_by_desc(incident::Column::OccurredAt)
         .order_by_desc(incident::Column::Id)
         .limit(limit_u64)
         .all(db)
         .await?;
 
-    let mut mileage_q = mileage_log::Entity::find()
+    let mileage_logs = mileage_log::Entity::find()
         .filter(mileage_log::Column::VehicleId.eq(vehicle_id))
-        .filter(mileage_log::Column::ServiceRecordId.is_null());
-    mileage_q = match order {
-        Order::Event => mileage_q.order_by_desc(mileage_log::Column::RecordedAt),
-        Order::Added => mileage_q.order_by_desc(mileage_log::Column::CreatedAt),
-    };
-    let mileage_logs = mileage_q
+        .filter(mileage_log::Column::ServiceRecordId.is_null())
+        .order_by_desc(mileage_log::Column::RecordedAt)
         .order_by_desc(mileage_log::Column::Id)
         .limit(limit_u64)
         .all(db)
@@ -177,48 +130,20 @@ async fn gather(
         });
     }
 
-    sort_by(&mut items, order);
+    sort_newest_first(&mut items);
     items.truncate(limit);
     Ok(items)
 }
 
-/// The garage-wide merged feed: every vehicle's records (per-vehicle loop —
-/// this is a personal app with FEW vehicles), merged and sorted by *when they
-/// were added* (`created_at`), capped at `limit`. This is what the dashboard's
-/// "Recent activity" surfaces: what recently entered the garage's records, so
-/// a just-imported service with an old service date still shows up. Each
-/// vehicle is gathered under [`Order::Added`] so its per-vehicle `limit`
-/// truncation keeps the most-recently-*added* rows, matching the merge order.
-/// Archived vehicles' history is included: the feed is "what happened in the
-/// garage", and archived cars' records are still records.
-pub async fn recent_all(
-    db: &impl ConnectionTrait,
-    limit: usize,
-) -> DomainResult<Vec<ActivityItem>> {
-    let vehicles = super::vehicle::list(db).await?;
-    let mut items: Vec<ActivityItem> = Vec::new();
-    for v in vehicles {
-        items.extend(gather(db, v.id, limit, Order::Added).await?);
-    }
-    sort_by(&mut items, Order::Added);
-    items.truncate(limit);
-    Ok(items)
-}
-
-/// Sort newest-first under `order`. `Event` ranks by the domain date (via
-/// [`sort_key`]'s end-of-day normalization for mixed granularity); `Added`
-/// ranks by the uniform-timestamp `created_at`. Equal primary keys break by
-/// `kind` first (ids are per-table sequences, so they aren't comparable across
-/// kinds), then by `id` descending *within a kind* — where higher id = later
-/// insert, so same-kind equal-key rows read as "more recently added". This
-/// keeps equal-key ordering deterministic.
-fn sort_by(items: &mut [ActivityItem], order: Order) {
+/// Sort newest-first by the domain date (via [`sort_key`]'s end-of-day
+/// normalization for mixed granularity). Equal dates break by `kind` first
+/// (ids are per-table sequences, so they aren't comparable across kinds),
+/// then by `id` descending within a kind, where a higher id is a later
+/// insert. This keeps equal-date ordering deterministic.
+fn sort_newest_first(items: &mut [ActivityItem]) {
     items.sort_by(|a, b| {
-        let primary = match order {
-            Order::Event => sort_key(&b.date).cmp(&sort_key(&a.date)),
-            Order::Added => b.created_at.cmp(&a.created_at),
-        };
-        primary
+        sort_key(&b.date)
+            .cmp(&sort_key(&a.date))
             .then_with(|| a.kind.cmp(&b.kind))
             .then_with(|| b.id.cmp(&a.id))
     });
@@ -268,13 +193,19 @@ mod tests {
             shop_name: None,
             shop_id: None,
             notes: None,
-            build_id: None,
             paid_by: None,
             payer_note: None,
             schedule_item_ids: None,
             part_ids: None,
             line_items: None,
             invoice_ref: None,
+            end_date: None,
+            performed_by: None,
+            work_item_ids: None,
+            resolved_incident_ids: None,
+            noticed_incident_ids: None,
+            recall_finding_ids: None,
+            parts: None,
         }
     }
 
@@ -361,8 +292,8 @@ mod tests {
     async fn manual_log_labeled_service_is_still_visible() {
         let db = test_db().await;
         let vid = seed_vehicle(&db).await;
-        // An HTTP client may label a manual log `source: "service"`. Exclusion
-        // keys on the real FK now, so this log must still appear in the feed.
+        // A client may label a manual log `source: "service"`. Exclusion keys
+        // on the real FK, so this log must still appear in the feed.
         mileage_svc::create(
             &db,
             vid,
@@ -394,14 +325,9 @@ mod tests {
             .await
             .unwrap();
 
-        svc_svc::delete(
-            &db,
-            vid,
-            created.record.id,
-            crate::inputs::document::DocumentDisposition::Keep,
-        )
-        .await
-        .unwrap();
+        svc_svc::delete(&db, vid, created.record.id, None)
+            .await
+            .unwrap();
 
         // No orphaned auto-log lingers: the feed is empty, not hiding a ghost.
         assert!(recent(&db, vid, DEFAULT_LIMIT).await.unwrap().is_empty());
@@ -452,161 +378,5 @@ mod tests {
         let items = recent(&db, vid, DEFAULT_LIMIT).await.unwrap();
         assert_eq!(items[0].vehicle_id, vid);
         assert_eq!(items[0].vehicle_name, "Car");
-    }
-
-    #[tokio::test]
-    async fn recent_all_merges_across_vehicles_newest_first_with_names() {
-        let db = test_db().await;
-        let a = VehicleFixture::new().name("Golf").insert_id(&db).await;
-        let b = VehicleFixture::new().name("Vanagon").insert_id(&db).await;
-        svc_svc::create(&db, a, service("2026-01-10", "Brakes", None))
-            .await
-            .unwrap();
-        incident_svc::create(&db, b, incident("Squeak", "2026-02-20 08:00:00"))
-            .await
-            .unwrap();
-
-        let items = recent_all(&db, DEFAULT_LIMIT).await.unwrap();
-        assert_eq!(
-            items
-                .iter()
-                .map(|i| (i.kind.as_str(), i.vehicle_name.as_str()))
-                .collect::<Vec<_>>(),
-            vec![("incident", "Vanagon"), ("service", "Golf")],
-        );
-        assert_eq!(items[1].vehicle_id, a);
-
-        // The cap applies to the MERGED feed, not per vehicle.
-        let capped = recent_all(&db, 1).await.unwrap();
-        assert_eq!(capped.len(), 1);
-        assert_eq!(capped[0].kind, "incident");
-    }
-
-    #[tokio::test]
-    async fn recent_all_on_empty_garage_is_empty() {
-        let db = test_db().await;
-        assert!(recent_all(&db, DEFAULT_LIMIT).await.unwrap().is_empty());
-    }
-
-    /// Insert a service_record ActiveModel directly with an explicit
-    /// `created_at`: the service `create` fn leaves `created_at` to the DB
-    /// default (`datetime('now')`), so in-test rows would all share one
-    /// wall-clock second and couldn't demonstrate added-order. Setting it
-    /// explicitly (Set overrides the default) lets us decouple the added
-    /// date from the event date.
-    async fn insert_service_raw(
-        db: &impl ConnectionTrait,
-        vehicle_id: i32,
-        service_date: &str,
-        created_at: &str,
-        description: &str,
-    ) -> i32 {
-        use crate::entities::service_record;
-        service_record::ActiveModel {
-            vehicle_id: Set(vehicle_id),
-            service_date: Set(service_date.into()),
-            description: Set(Some(description.into())),
-            created_at: Set(created_at.into()),
-            updated_at: Set(created_at.into()),
-            ..Default::default()
-        }
-        .insert(db)
-        .await
-        .unwrap()
-        .id
-    }
-
-    #[tokio::test]
-    async fn recent_all_sorts_by_created_at_not_event_date() {
-        let db = test_db().await;
-        let vid = seed_vehicle(&db).await;
-        // A: recent event, added long ago. B: old event, added recently
-        // (the just-imported record). The garage feed must surface B first.
-        insert_service_raw(
-            &db,
-            vid,
-            "2026-06-01",
-            "2026-01-01 00:00:00",
-            "Recent event",
-        )
-        .await;
-        insert_service_raw(
-            &db,
-            vid,
-            "2026-01-01",
-            "2026-06-01 00:00:00",
-            "Just imported",
-        )
-        .await;
-
-        let garage = recent_all(&db, DEFAULT_LIMIT).await.unwrap();
-        assert_eq!(
-            garage
-                .iter()
-                .map(|i| i.summary.as_str())
-                .collect::<Vec<_>>(),
-            vec!["Just imported", "Recent event"],
-            "recent_all orders by created_at (added) desc",
-        );
-
-        // The per-vehicle feed stays event-chronological (Timeline + MCP).
-        let per_vehicle = recent(&db, vid, DEFAULT_LIMIT).await.unwrap();
-        assert_eq!(
-            per_vehicle
-                .iter()
-                .map(|i| i.summary.as_str())
-                .collect::<Vec<_>>(),
-            vec!["Recent event", "Just imported"],
-            "recent orders by event date desc, unchanged",
-        );
-    }
-
-    #[tokio::test]
-    async fn recent_all_keeps_recently_added_old_event_row_past_the_per_vehicle_limit() {
-        let db = test_db().await;
-        let vid = seed_vehicle(&db).await;
-        // `limit` records with recent events but old added-dates, plus ONE
-        // just-added record with the OLDEST event date. An event-ordered
-        // per-vehicle truncation to `limit` would cut the just-added row
-        // before the merge — the exact pre-truncation bug. It must survive.
-        let limit = 3;
-        for day in 1..=limit {
-            insert_service_raw(
-                &db,
-                vid,
-                &format!("2026-06-{day:02}"),
-                &format!("2026-01-{day:02} 00:00:00"),
-                &format!("old-add {day}"),
-            )
-            .await;
-        }
-        insert_service_raw(&db, vid, "2025-01-01", "2026-12-31 00:00:00", "just added").await;
-
-        let garage = recent_all(&db, limit).await.unwrap();
-        assert_eq!(garage.len(), limit);
-        assert_eq!(
-            garage[0].summary, "just added",
-            "the most-recently-added row survives the per-vehicle limit: {garage:?}",
-        );
-    }
-
-    #[tokio::test]
-    async fn recent_all_equal_created_at_tiebreaks_by_id_desc() {
-        let db = test_db().await;
-        let vid = seed_vehicle(&db).await;
-        // Same added timestamp (a bulk import in one second): the later
-        // insert (higher id) reads as "more recently added".
-        let first =
-            insert_service_raw(&db, vid, "2026-03-01", "2026-06-01 00:00:00", "first").await;
-        let second =
-            insert_service_raw(&db, vid, "2026-02-01", "2026-06-01 00:00:00", "second").await;
-        assert!(second > first);
-
-        let garage = recent_all(&db, DEFAULT_LIMIT).await.unwrap();
-        assert_eq!(
-            garage.iter().map(|i| i.id).collect::<Vec<_>>(),
-            vec![second, first],
-            "equal created_at falls back to id desc",
-        );
     }
 }

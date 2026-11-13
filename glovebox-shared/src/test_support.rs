@@ -1,28 +1,33 @@
-use sea_orm::{ConnectOptions, Database, DatabaseConnection};
-use sea_orm_migration::MigratorTrait;
+use sea_orm::{
+    ActiveModelTrait, ConnectionTrait, DatabaseConnection, EntityTrait, PaginatorTrait, Set,
+};
 
-use crate::migration::Migrator;
-
-#[cfg(any(test, feature = "test-support"))]
 use crate::entities::vehicle;
-#[cfg(any(test, feature = "test-support"))]
-use sea_orm::{ActiveModelTrait, ConnectionTrait, Set};
 
-/// A fresh in-memory `SQLite` DB with all migrations applied. For service-layer unit tests.
-///
-/// `sqlite::memory:` databases are per-connection, so the pool is pinned to a single
-/// connection: migrations and the test's queries share one physical connection, and the
-/// migrated schema cannot vanish under a second connection. Pinning it explicitly (rather
-/// than relying on SeaORM's implicit max-connections default) keeps each test's DB isolated
-/// and non-flaky.
+/// A fresh in-memory `SQLite` DB with all migrations applied, opened with the
+/// same options as `db::connect` (WAL, foreign keys on). For service-layer
+/// unit tests.
 pub async fn test_db() -> DatabaseConnection {
-    let mut opt = ConnectOptions::new("sqlite::memory:");
-    opt.max_connections(1).min_connections(1);
-    let db = Database::connect(opt)
-        .await
-        .expect("connect in-memory sqlite");
-    Migrator::up(&db, None).await.expect("run migrations");
-    db
+    crate::db::connect_in_memory().await
+}
+
+/// The date `days` days before [`services::today`](crate::services::today),
+/// written `YYYY-MM-DD`. A test that judges a reminder against the current
+/// date dates its fixtures with this, so that it holds on whatever day it
+/// runs and agrees with the code under test about what "today" is.
+pub fn days_ago(days: i64) -> String {
+    (crate::services::today() - chrono::Duration::days(days))
+        .format("%Y-%m-%d")
+        .to_string()
+}
+
+/// The number of rows in `E`'s table. Panics if the query fails.
+pub async fn row_count<E>(db: &DatabaseConnection) -> u64
+where
+    E: EntityTrait,
+    E::Model: Sync,
+{
+    E::find().count(db).await.unwrap()
 }
 
 /// Test-only builder for a `vehicle` row. The single construction point for
@@ -126,31 +131,4 @@ impl VehicleFixture {
     pub async fn insert_id(self, db: &impl ConnectionTrait) -> i32 {
         self.insert(db).await.id
     }
-}
-
-/// Insert a document row linked to an entity — the shared fixture for the
-/// delete/unlink cascade tests (services/part/incident all exercise the same
-/// shape). Returns the new document id; its `file_path` is
-/// `general/other/{entity_type}-{entity_id}.pdf`.
-pub async fn seed_linked_document(
-    db: &impl ConnectionTrait,
-    entity_type: &str,
-    entity_id: i32,
-) -> i32 {
-    use crate::entities::document;
-
-    document::ActiveModel {
-        vehicle_id: Set(None),
-        title: Set(format!("{entity_type} doc")),
-        file_path: Set(format!("general/other/{entity_type}-{entity_id}.pdf")),
-        file_name: Set(format!("{entity_type}-{entity_id}.pdf")),
-        linked_entity_type: Set(Some(entity_type.to_string())),
-        linked_entity_id: Set(Some(entity_id)),
-        content_sha256: Set(Some("0".repeat(64))),
-        ..Default::default()
-    }
-    .insert(db)
-    .await
-    .unwrap()
-    .id
 }

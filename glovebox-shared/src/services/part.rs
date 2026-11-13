@@ -1,27 +1,25 @@
 use sea_orm::*;
 
 use crate::{
-    entities::{part, research_finding, service_record},
+    entities::{part, service_record},
     error::{DomainError, DomainResult},
-    inputs::{
-        document::DocumentDisposition,
-        part::{NewPart, PartFilter, UpdatePart},
-    },
+    inputs::part::{NewPart, PartFilter, UpdatePart},
 };
 
-/// Verify a referenced service record belongs to the vehicle. A cross-vehicle
-/// service must be indistinguishable from a nonexistent one.
-async fn require_service_record_owned(
-    db: &impl ConnectionTrait,
-    vehicle_id: i32,
-    service_id: i32,
-) -> DomainResult<()> {
-    service_record::Entity::find_by_id(service_id)
-        .filter(service_record::Column::VehicleId.eq(vehicle_id))
-        .one(db)
-        .await?
-        .ok_or_else(|| DomainError::NotFound(format!("Service record {service_id} not found")))?;
-    Ok(())
+/// Allowed values for `parts.supplied_by`.
+pub const VALID_SUPPLIED_BY: [&str; 2] = ["self", "shop"];
+
+fn validate_supplied_by(supplied_by: &str) -> DomainResult<()> {
+    if VALID_SUPPLIED_BY.contains(&supplied_by) {
+        return Ok(());
+    }
+    Err(DomainError::Invalid {
+        field: "supplied_by".into(),
+        message: format!(
+            "'{supplied_by}' is not valid. Must be one of: {}",
+            VALID_SUPPLIED_BY.join(", ")
+        ),
+    })
 }
 
 pub async fn list(
@@ -29,6 +27,7 @@ pub async fn list(
     vehicle_id: i32,
     filter: PartFilter,
 ) -> DomainResult<Vec<part::Model>> {
+    super::vehicle::require(db, vehicle_id).await?;
     let mut query = part::Entity::find().filter(part::Column::VehicleId.eq(vehicle_id));
 
     if let Some(status) = filter.status {
@@ -51,11 +50,14 @@ pub async fn create(
     vehicle_id: i32,
     input: NewPart,
 ) -> DomainResult<part::Model> {
+    super::vehicle::require(db, vehicle_id).await?;
+    let supplied_by = input.supplied_by.unwrap_or_else(|| "self".to_string());
+    validate_supplied_by(&supplied_by)?;
+    super::validate_optional_date("purchase_date", input.purchase_date.as_deref())?;
+    super::validate_optional_date("installed_date", input.installed_date.as_deref())?;
+    super::validate_optional_date("warranty_expires_on", input.warranty_expires_on.as_deref())?;
     if let Some(service_id) = input.installed_service_id {
-        require_service_record_owned(db, vehicle_id, service_id).await?;
-    }
-    if let Some(build_id) = input.build_id {
-        crate::services::build::require_owned(db, vehicle_id, build_id).await?;
+        super::service_record::require(db, vehicle_id, service_id).await?;
     }
 
     let model = part::ActiveModel {
@@ -68,7 +70,6 @@ pub async fn create(
         purchase_date: Set(input.purchase_date),
         cost_cents: Set(input.cost_cents),
         cost_currency: Set(input.cost_currency),
-        invoice_url: Set(input.invoice_url),
         manufacturer_url: Set(input.manufacturer_url),
         retailer_url: Set(input.retailer_url),
         status: Set(input.status.unwrap_or_else(|| "purchased".to_string())),
@@ -76,10 +77,10 @@ pub async fn create(
         installed_odometer: Set(input.installed_odometer),
         installed_service_id: Set(input.installed_service_id),
         notes: Set(input.notes),
-        build_id: Set(input.build_id),
         location: Set(input.location),
         warranty_expires_on: Set(input.warranty_expires_on),
         warranty_expires_miles: Set(input.warranty_expires_miles),
+        supplied_by: Set(supplied_by),
         ..Default::default()
     };
     Ok(model.insert(db).await?)
@@ -94,14 +95,26 @@ pub async fn update(
     let existing = get(db, vehicle_id, id).await?;
 
     if let Some(Some(service_id)) = input.installed_service_id {
-        require_service_record_owned(db, vehicle_id, service_id).await?;
+        super::service_record::require(db, vehicle_id, service_id).await?;
     }
-    if let Some(Some(build_id)) = input.build_id {
-        crate::services::build::require_owned(db, vehicle_id, build_id).await?;
+
+    if let Some(v) = &input.supplied_by {
+        validate_supplied_by(v)?;
+    }
+    for (field, value) in [
+        ("purchase_date", &input.purchase_date),
+        ("installed_date", &input.installed_date),
+        ("replaced_date", &input.replaced_date),
+        ("warranty_expires_on", &input.warranty_expires_on),
+    ] {
+        super::validate_optional_date(field, value.as_ref().and_then(|v| v.as_deref()))?;
     }
 
     let mut active: part::ActiveModel = existing.into();
 
+    if let Some(v) = input.supplied_by {
+        active.supplied_by = Set(v);
+    }
     if let Some(v) = input.name {
         active.name = Set(v);
     }
@@ -125,9 +138,6 @@ pub async fn update(
     }
     if let Some(v) = input.cost_currency {
         active.cost_currency = Set(v);
-    }
-    if let Some(v) = input.invoice_url {
-        active.invoice_url = Set(v);
     }
     if let Some(v) = input.manufacturer_url {
         active.manufacturer_url = Set(v);
@@ -156,9 +166,6 @@ pub async fn update(
     if let Some(v) = input.notes {
         active.notes = Set(v);
     }
-    if let Some(v) = input.build_id {
-        active.build_id = Set(v);
-    }
     if let Some(v) = input.location {
         active.location = Set(v);
     }
@@ -169,40 +176,90 @@ pub async fn update(
         active.warranty_expires_miles = Set(v);
     }
 
-    active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
+    active.updated_at = Set(super::now_stamp());
     Ok(active.update(db).await?)
 }
 
-/// Delete a part. Linked documents are handled per `docs`; the returned paths
-/// are files the CALLER must remove after commit (see
-/// [`super::document::detach_or_delete_for_entity`]).
-pub async fn delete<C: ConnectionTrait + TransactionTrait>(
-    db: &C,
+/// Marks a vehicle's part as installed by `record` on the record's date.
+/// `odometer` is written to `installed_odometer` as given, so `NotSet`
+/// keeps the reading the part already has. A part of another vehicle reads
+/// as nonexistent.
+pub(crate) async fn install(
+    db: &impl ConnectionTrait,
     vehicle_id: i32,
-    id: i32,
-    docs: DocumentDisposition,
-) -> DomainResult<Vec<String>> {
-    let existing = get(db, vehicle_id, id).await?;
+    part_id: i32,
+    record: &service_record::Model,
+    odometer: ActiveValue<Option<i32>>,
+) -> DomainResult<()> {
+    let mut active: part::ActiveModel = get(db, vehicle_id, part_id).await?.into();
+    active.status = Set("installed".to_string());
+    active.installed_service_id = Set(Some(record.id));
+    active.installed_date = Set(Some(record.service_date.clone()));
+    active.installed_odometer = odometer;
+    active.updated_at = Set(super::now_stamp());
+    active.update(db).await?;
+    Ok(())
+}
 
-    let txn = db.begin().await?;
-    // Research findings may soft-link to a part (no FK) — clear the link so
-    // a finding never points at a deleted part, mirroring service delete.
-    research_finding::Entity::update_many()
-        .set(research_finding::ActiveModel {
-            linked_entity_type: Set(None),
-            linked_entity_id: Set(None),
-            updated_at: Set(super::now_stamp()),
-            ..Default::default()
-        })
-        .filter(research_finding::Column::LinkedEntityType.eq("part"))
-        .filter(research_finding::Column::LinkedEntityId.eq(id))
-        .exec(&txn)
+/// Moves the install date of every part `record` installed to the record's
+/// date, and their install odometer to its mileage when it has one. A record
+/// with no mileage leaves each part's own reading.
+pub(crate) async fn follow_service(
+    db: &impl ConnectionTrait,
+    record: &service_record::Model,
+) -> DomainResult<()> {
+    let mut changes = part::ActiveModel {
+        installed_date: Set(Some(record.service_date.clone())),
+        updated_at: Set(super::now_stamp()),
+        ..Default::default()
+    };
+    if let Some(miles) = record.mileage {
+        changes.installed_odometer = Set(Some(miles));
+    }
+    part::Entity::update_many()
+        .set(changes)
+        .filter(part::Column::InstalledServiceId.eq(record.id))
+        .exec(db)
         .await?;
-    let doc_files = super::document::detach_or_delete_for_entity(&txn, "part", id, docs).await?;
-    existing.delete(&txn).await?;
-    txn.commit().await?;
+    Ok(())
+}
 
-    Ok(doc_files)
+/// What [`uninstall`] does to a part's status.
+pub(crate) enum UninstallStatus {
+    /// The part reads `purchased` whatever its status was.
+    Purchased,
+    /// Only an `installed` part goes back to `purchased`; a replaced or
+    /// returned part keeps its status.
+    PurchasedIfInstalled,
+}
+
+/// Detaches a part from the service that installed it, clearing its install
+/// fields and setting its status as `status` says.
+pub(crate) async fn uninstall(
+    db: &impl ConnectionTrait,
+    p: part::Model,
+    status: UninstallStatus,
+) -> DomainResult<()> {
+    let revert = match status {
+        UninstallStatus::Purchased => true,
+        UninstallStatus::PurchasedIfInstalled => p.status == "installed",
+    };
+    let mut active: part::ActiveModel = p.into();
+    if revert {
+        active.status = Set("purchased".to_string());
+    }
+    active.installed_service_id = Set(None);
+    active.installed_date = Set(None);
+    active.installed_odometer = Set(None);
+    active.updated_at = Set(super::now_stamp());
+    active.update(db).await?;
+    Ok(())
+}
+
+/// Delete a part.
+pub async fn delete(db: &impl ConnectionTrait, vehicle_id: i32, id: i32) -> DomainResult<()> {
+    get(db, vehicle_id, id).await?.delete(db).await?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -237,7 +294,6 @@ mod tests {
             purchase_date: None,
             cost_cents: None,
             cost_currency: None,
-            invoice_url: None,
             manufacturer_url: None,
             retailer_url: None,
             status: None,
@@ -245,10 +301,10 @@ mod tests {
             installed_odometer: None,
             installed_service_id,
             notes: None,
-            build_id: None,
             location: None,
             warranty_expires_on: None,
             warranty_expires_miles: None,
+            supplied_by: None,
         }
     }
 
@@ -452,111 +508,7 @@ mod tests {
         );
     }
 
-    // --- delete + linked documents ---------------------------------------
-
-    #[tokio::test]
-    async fn delete_keep_unlinks_documents() {
-        let db = test_db().await;
-        let vid = seed_vehicle(&db).await;
-        let part = create(&db, vid, minimal_part("Doomed", None))
-            .await
-            .unwrap();
-        let doc_id = crate::test_support::seed_linked_document(&db, "part", part.id).await;
-
-        let paths = delete(&db, vid, part.id, DocumentDisposition::Keep)
-            .await
-            .unwrap();
-        assert!(paths.is_empty());
-        assert!(matches!(
-            get(&db, vid, part.id).await.unwrap_err(),
-            DomainError::NotFound(_)
-        ));
-
-        let doc = crate::services::document::get(&db, doc_id).await.unwrap();
-        assert_eq!(doc.linked_entity_type, None);
-        assert!(doc.notes.unwrap().contains("Unlinked from part"));
-    }
-
-    #[tokio::test]
-    async fn delete_cascade_removes_document_rows() {
-        let db = test_db().await;
-        let vid = seed_vehicle(&db).await;
-        let part = create(&db, vid, minimal_part("Doomed", None))
-            .await
-            .unwrap();
-        let doc_id = crate::test_support::seed_linked_document(&db, "part", part.id).await;
-
-        let paths = delete(&db, vid, part.id, DocumentDisposition::Delete)
-            .await
-            .unwrap();
-        assert_eq!(paths, vec![format!("general/other/part-{}.pdf", part.id)]);
-        assert!(matches!(
-            crate::services::document::get(&db, doc_id)
-                .await
-                .unwrap_err(),
-            DomainError::NotFound(_)
-        ));
-    }
-
-    #[tokio::test]
-    async fn delete_clears_research_finding_links() {
-        let db = test_db().await;
-        let vid = seed_vehicle(&db).await;
-        let part = create(&db, vid, minimal_part("Researched", None))
-            .await
-            .unwrap();
-        let report = crate::entities::research_report::ActiveModel {
-            vehicle_id: Set(vid),
-            generated_at: Set("2024-01-01".into()),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap();
-        let seed_finding = |part_id: i32, title: &str| research_finding::ActiveModel {
-            report_id: Set(report.id),
-            category: Set("upgrade".into()),
-            title: Set(title.into()),
-            status: Set("completed".into()),
-            linked_entity_type: Set(Some("part".into())),
-            linked_entity_id: Set(Some(part_id)),
-            created_at: Set("2024-01-01 00:00:00".into()),
-            updated_at: Set("2024-01-01 00:00:00".into()),
-            ..Default::default()
-        };
-        let finding = seed_finding(part.id, "Better part exists")
-            .insert(&db)
-            .await
-            .unwrap();
-        // Negative control: a finding linked to a DIFFERENT part must keep
-        // its link — guards the update_many's id predicate.
-        let other_part = create(&db, vid, minimal_part("Bystander", None))
-            .await
-            .unwrap();
-        let bystander = seed_finding(other_part.id, "Unrelated")
-            .insert(&db)
-            .await
-            .unwrap();
-
-        delete(&db, vid, part.id, DocumentDisposition::Keep)
-            .await
-            .unwrap();
-
-        let f = research_finding::Entity::find_by_id(finding.id)
-            .one(&db)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(f.linked_entity_type, None);
-        assert_eq!(f.linked_entity_id, None);
-        let b = research_finding::Entity::find_by_id(bystander.id)
-            .one(&db)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(b.linked_entity_type.as_deref(), Some("part"));
-        assert_eq!(b.linked_entity_id, Some(other_part.id));
-    }
+    // --- delete ----------------------------------------------------------
 
     #[tokio::test]
     async fn delete_wrong_vehicle_is_byte_identical_to_nonexistent() {
@@ -565,9 +517,7 @@ mod tests {
         let other_vid = seed_vehicle(&db).await;
         let part = create(&db, vid, minimal_part("Mine", None)).await.unwrap();
 
-        let wrong_parent = delete(&db, other_vid, part.id, DocumentDisposition::Keep)
-            .await
-            .unwrap_err();
+        let wrong_parent = delete(&db, other_vid, part.id).await.unwrap_err();
         // Compare against the nonexistent-id message for the SAME id: no
         // ownership oracle distinguishing "exists elsewhere" from "not at all".
         let DomainError::NotFound(wrong_parent_msg) = wrong_parent else {
@@ -576,5 +526,65 @@ mod tests {
         assert_eq!(wrong_parent_msg, format!("Part {} not found", part.id));
         // The part survives a wrong-parent delete attempt.
         assert!(get(&db, vid, part.id).await.is_ok());
+    }
+
+    // --- supplied_by ------------------------------------------------------
+
+    #[tokio::test]
+    async fn supplied_by_defaults_to_self_and_is_validated_on_create_and_update() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let made = create(&db, vid, minimal_part("Pads", None)).await.unwrap();
+        assert_eq!(made.supplied_by, "self");
+
+        let shop_part = create(
+            &db,
+            vid,
+            NewPart {
+                supplied_by: Some("shop".into()),
+                ..minimal_part("Fluid", None)
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(shop_part.supplied_by, "shop");
+
+        let err = create(
+            &db,
+            vid,
+            NewPart {
+                supplied_by: Some("dealer".into()),
+                ..minimal_part("Bad", None)
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "supplied_by"));
+
+        let updated = update(
+            &db,
+            vid,
+            made.id,
+            UpdatePart {
+                supplied_by: Some("shop".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.supplied_by, "shop");
+
+        let err = update(
+            &db,
+            vid,
+            made.id,
+            UpdatePart {
+                supplied_by: Some("dealer".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "supplied_by"));
     }
 }

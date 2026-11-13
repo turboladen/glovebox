@@ -1,10 +1,10 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// A planned piece of work — "something I'm actually gonna do" (2hea unit G).
-/// Sourced from a schedule item, a research finding (e.g. a recall), an
-/// incident, a build, or ad-hoc; optionally grouped into a visit. The source
-/// FKs and `visit_id` are plain nullable INTs enforced by the service layer.
+/// A planned piece of work. It can come from a schedule item, a research
+/// finding (such as a recall), an incident, or be ad hoc. The source ids are
+/// plain nullable integers that the service layer checks against the vehicle;
+/// `completed_service_id` is a real foreign key that clears when the service goes.
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "work_items")]
 pub struct Model {
@@ -16,12 +16,13 @@ pub struct Model {
     pub schedule_item_id: Option<i32>,
     pub research_finding_id: Option<i32>,
     pub incident_id: Option<i32>,
-    pub build_id: Option<i32>,
     pub est_cost_cents: Option<i32>,
     pub status: String,
-    pub visit_id: Option<i32>,
     pub created_at: String,
     pub updated_at: String,
+    pub revisit_by_date: Option<String>,
+    pub revisit_by_miles: Option<i32>,
+    pub completed_service_id: Option<i32>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -33,22 +34,16 @@ pub enum Relation {
     )]
     Vehicle,
     #[sea_orm(
-        belongs_to = "super::visit::Entity",
-        from = "Column::VisitId",
-        to = "super::visit::Column::Id"
+        belongs_to = "super::service_record::Entity",
+        from = "Column::CompletedServiceId",
+        to = "super::service_record::Column::Id"
     )]
-    Visit,
+    CompletedService,
 }
 
 impl Related<super::vehicle::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Vehicle.def()
-    }
-}
-
-impl Related<super::visit::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::Visit.def()
     }
 }
 

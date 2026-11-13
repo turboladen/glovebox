@@ -22,5 +22,3 @@ updates:
         update-types:
           - minor
           - patch
-# Note: the frontend uses bun; Dependabot does not yet support bun.lock, so the
-# npm ecosystem is intentionally omitted until support lands.

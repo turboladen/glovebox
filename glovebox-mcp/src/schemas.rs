@@ -7,14 +7,11 @@
 
 use glovebox_shared::{
     entities::vehicle,
-    error::{DomainError, DomainResult},
     inputs::{
-        document::{DocumentSource, StoreDocument},
         incident::NewIncident,
         mileage::NewMileageEntry,
         part::NewPart,
         service_record::{NewLineItem, NewServiceRecord},
-        visit::{CompleteVisit, NewVisit},
         work_item::NewWorkItem,
     },
     services::research::NewFiledFinding,
@@ -22,90 +19,145 @@ use glovebox_shared::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+// The correct and update inputs use `Option<Option<T>>` to tell an absent key
+// from an explicit `null`.
+#[allow(clippy::option_option)]
+mod corrections;
+
+pub use corrections::*;
+
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct EmptyParams {}
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct VehicleParams {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
 }
 
 #[derive(Deserialize, JsonSchema)]
-pub struct BuildParams {
-    /// Vehicle id, from `list_vehicles`.
-    pub vehicle_id: i32,
-    /// Build id, from `list_builds`.
-    pub build_id: i32,
-}
-
-#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RecordServiceInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
-    /// Date the work was done, `YYYY-MM-DD`.
+    /// Date the work was done (the first day, for multi-day jobs), `YYYY-MM-DD`.
     pub service_date: String,
+    /// Last day of the work for a multi-day job, `YYYY-MM-DD`. Not before
+    /// `service_date`. Omit for same-day work.
+    pub end_date: Option<String>,
+    /// Who did the work: `shop` (default) or `self` (the owner did it, e.g. a
+    /// DIY job or an ECU flash). A `self` job takes no `shop_name`.
+    pub performed_by: Option<String>,
     /// What was done, e.g. "Oil change + tire rotation".
     pub description: Option<String>,
     /// Odometer reading at service time. Also logs a mileage entry.
     pub mileage: Option<i32>,
-    /// Total invoice amount in integer cents (e.g. $123.45 -> 12345).
+    /// The invoice's grand total across all lines, in integer cents (e.g.
+    /// $123.45 -> 12345), including lines someone else paid for. What the
+    /// owner paid is derived as this total minus the covered lines. It
+    /// excludes the cost of any part with `supplied_by: "self"`, which was
+    /// paid for elsewhere.
     pub total_cost_cents: Option<i32>,
-    /// Parts portion of the invoice, integer cents.
+    /// Parts subtotal, integer cents. Fill it only when the invoice prints one.
     pub parts_cost_cents: Option<i32>,
-    /// Labor portion of the invoice, integer cents.
+    /// Labor subtotal, integer cents. Fill it only when the invoice prints one.
     pub labor_cost_cents: Option<i32>,
     /// Shop that did the work (free text). Omit for DIY.
     pub shop_name: Option<String>,
     /// Free-form notes.
     pub notes: Option<String>,
-    /// Who paid: `self` (default), `insurance`, or `third_party` (e.g. the
-    /// other driver). Anything not paid by the owner counts as covered, not
-    /// out-of-pocket, in cost summaries.
+    /// Who paid: `self` (default), `insurance`, `third_party` (e.g. the
+    /// other driver), or `manufacturer` (the manufacturer or dealer covered
+    /// the work, as with a recall or warranty repair). Anything not paid by
+    /// the owner counts as covered, not out-of-pocket, in cost summaries.
     pub paid_by: Option<String>,
     /// Who exactly paid / claim number, e.g. "Progressive claim #12345".
     pub payer_note: Option<String>,
-    /// Itemized invoice lines.
+    /// Itemized invoice lines, one per job on the paperwork.
     pub line_items: Option<Vec<LineItemInput>>,
-    /// Link this service to a build (from `list_builds`).
-    pub build_id: Option<i32>,
-    /// Ids of schedule items (from `check_due_maintenance`) this work
-    /// satisfies — linking clears the reminder and restarts its interval.
+    /// Parts this invoice lists that are not recorded yet. Each is created
+    /// already installed by this service, at its mileage and date, so no
+    /// separate `record_part` call is needed.
+    pub parts: Option<Vec<InlinePartInput>>,
+    /// Ids of parts already recorded for this vehicle (from `record_part` or
+    /// `list_parts`) that this service installed. Each is marked installed
+    /// at this service's date and mileage. Do not list such a part again
+    /// under `parts`.
+    pub part_ids: Option<Vec<i32>>,
+    /// Ids of schedule items (from `whats_coming`) this work satisfies, every
+    /// one of them and not only the one the owner mentioned. Linking clears
+    /// the reminder and restarts its interval.
     pub schedule_item_ids: Option<Vec<i32>>,
-    /// The invoice/receipt number read off the scan (e.g. "FCP-2026-06-1234").
-    /// Pass it to make the import idempotent: re-recording the SAME ref for
-    /// this vehicle returns the existing record instead of creating a
-    /// duplicate. Omit for work with no invoice number.
+    /// The number printed on the invoice or repair order (e.g. "RO-1182").
+    /// Re-recording the SAME ref for this vehicle returns the existing record
+    /// (with `already_recorded: true` and a `message` saying nothing was
+    /// applied) and ignores the lines and parts sent this time; they are not
+    /// merged. Omit for work with no paperwork number.
     pub invoice_ref: Option<String>,
+    /// Ids of open to-do items (from `list_planned_work`) this service
+    /// completes. Each is marked done, and its schedule item, if any, is
+    /// linked so the reminder clears.
+    pub work_item_ids: Option<Vec<i32>>,
+    /// Ids of incidents (from `log_incident`) this service fixed. Each is
+    /// marked resolved and linked to this service.
+    pub resolved_incident_ids: Option<Vec<i32>>,
+    /// Ids of incidents first noticed during this service, e.g. a shop
+    /// observation logged beforehand. An incident is noticed during one
+    /// service only.
+    pub noticed_incident_ids: Option<Vec<i32>>,
+    /// Ids of recalls (`finding_id`s from `whats_coming` or `check_recalls`)
+    /// this service performed. Each
+    /// recall then reads as done, with this service as the one that did it.
+    /// Name a recall here when the invoice cites its campaign number.
+    pub recall_finding_ids: Option<Vec<i32>>,
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct LineItemInput {
     /// Line description, e.g. "5W-30 synthetic oil, 5qt".
     pub description: String,
-    /// Category, e.g. "parts", "labor", "fluids", "fees".
-    pub category: Option<String>,
+    /// What kind of work this line is: `maintenance`, `mod`, `repair`,
+    /// `inspection`, `recall` (work done under a recall campaign), or `fee`
+    /// (tax, shop supplies, disposal and similar charges on the invoice that
+    /// are not work).
+    pub work_kind: String,
+    /// Who paid this line: `self`, `insurance`, `third_party` or `manufacturer`. Leave it
+    /// out unless this line was paid by someone other than whoever paid the service. Mark a
+    /// warranty or recall line on an owner-paid invoice `manufacturer`; the
+    /// line's cost still counts inside the service's `total_cost_cents`, and
+    /// the owner's share is the total minus the covered lines.
+    pub paid_by: Option<String>,
+    /// How many units, e.g. 5 for five quarts of oil. May be fractional.
     pub quantity: Option<f64>,
     /// Per-unit cost, integer cents.
     pub unit_cost_cents: Option<i32>,
-    /// Line total, integer cents.
+    /// Line total, integer cents. For a line someone else paid, the value the
+    /// invoice shows for that work; leave it out or send 0 when the invoice
+    /// shows none.
     pub cost_cents: Option<i32>,
+}
+
+impl LineItemInput {
+    pub fn into_domain(self) -> NewLineItem {
+        NewLineItem {
+            description: self.description,
+            work_kind: self.work_kind,
+            paid_by: self.paid_by,
+            quantity: self.quantity,
+            unit_cost_cents: self.unit_cost_cents,
+            cost_cents: self.cost_cents,
+        }
+    }
 }
 
 impl RecordServiceInput {
     pub fn into_domain(self) -> (i32, NewServiceRecord) {
-        let line_items = self.line_items.map(|items| {
-            items
-                .into_iter()
-                .map(|li| NewLineItem {
-                    description: li.description,
-                    category: li.category,
-                    quantity: li.quantity,
-                    unit_cost_cents: li.unit_cost_cents,
-                    cost_cents: li.cost_cents,
-                })
-                .collect()
-        });
+        let line_items = self
+            .line_items
+            .map(|items| items.into_iter().map(LineItemInput::into_domain).collect());
         (
             self.vehicle_id,
             NewServiceRecord {
@@ -121,44 +173,85 @@ impl RecordServiceInput {
                 shop_name: self.shop_name,
                 shop_id: None,
                 notes: self.notes,
-                build_id: self.build_id,
                 paid_by: self.paid_by,
                 payer_note: self.payer_note,
                 schedule_item_ids: self.schedule_item_ids,
-                part_ids: None,
+                part_ids: self.part_ids,
+                work_item_ids: self.work_item_ids,
+                resolved_incident_ids: self.resolved_incident_ids,
+                noticed_incident_ids: self.noticed_incident_ids,
+                recall_finding_ids: self.recall_finding_ids,
                 line_items,
                 invoice_ref: self.invoice_ref,
+                end_date: self.end_date,
+                performed_by: self.performed_by,
+                parts: self
+                    .parts
+                    .map(|ps| ps.into_iter().map(InlinePartInput::into_domain).collect()),
             },
         )
     }
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct LogIncidentInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
     /// Short title, e.g. "Squeak from front left on braking".
     pub title: String,
     /// One of: `general`, `noise`, `leak`, `warning_light`, `cosmetic`,
-    /// `performance`, `obd_code`, `damage`, `accident`, `note`. Defaults to
-    /// `general`. Collisions/crashes with another party belong under
-    /// category `accident`.
+    /// `performance`, `obd_code`, `damage`, `accident`, `note`,
+    /// `shop_observation`. Defaults to `general`. Collisions/crashes with
+    /// another party belong under category `accident`; anything a shop flagged
+    /// but did not fix belongs under `shop_observation`.
     pub category: Option<String>,
     /// Longer description of what happened or was noticed.
     pub description: Option<String>,
     /// Odometer reading when it happened.
     pub odometer: Option<i32>,
-    /// When it happened, `YYYY-MM-DD HH:MM:SS`. Defaults to now.
+    /// When it happened, `YYYY-MM-DD HH:MM:SS` or just `YYYY-MM-DD`. Defaults to the current local date and time.
     pub occurred_at: Option<String>,
     /// OBD-II codes if a scanner was involved, e.g. "P0301,P0420".
     pub obd_codes: Option<String>,
     /// Free-form notes.
     pub notes: Option<String>,
-    /// Link this incident to a build (from `list_builds`).
-    pub build_id: Option<i32>,
     /// If this is the same problem coming back, the id of the earlier
     /// incident it recurs from (same vehicle).
     pub recurrence_of_id: Option<i32>,
+    /// The service record (same vehicle) during which this was noticed, e.g.
+    /// the visit where the shop flagged it.
+    pub noticed_during_service_id: Option<i32>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetRecallStatusInput {
+    /// Vehicle id, from `list_vehicles`.
+    pub vehicle_id: i32,
+    /// Recall id: the `finding_id` from `whats_coming` or `check_recalls`.
+    pub finding_id: i32,
+    /// `done` (the work was done and left no paperwork), `not_applicable`
+    /// (the recall does not apply to this car), or `open` (undo either).
+    pub status: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GetServiceInput {
+    /// Vehicle id, from `list_vehicles`.
+    pub vehicle_id: i32,
+    /// Service record id.
+    pub service_id: i32,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GetIncidentInput {
+    /// Vehicle id, from `list_vehicles`.
+    pub vehicle_id: i32,
+    /// Incident id, from `log_incident` or `summarize_recent_activity`.
+    pub incident_id: i32,
 }
 
 impl LogIncidentInput {
@@ -173,8 +266,8 @@ impl LogIncidentInput {
                 occurred_at: self.occurred_at,
                 obd_codes: self.obd_codes,
                 notes: self.notes,
-                build_id: self.build_id,
                 recurrence_of_id: self.recurrence_of_id,
+                noticed_during_service_id: self.noticed_during_service_id,
                 ..Default::default()
             },
         )
@@ -182,6 +275,7 @@ impl LogIncidentInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SaveNoteInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -206,7 +300,61 @@ impl SaveNoteInput {
     }
 }
 
+/// A part listed on a service invoice. The service supplies the install
+/// date, mileage and link.
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct InlinePartInput {
+    /// Part name, e.g. "Front brake pads".
+    pub name: String,
+    /// Manufacturer/brand, e.g. "Sachs".
+    pub manufacturer: Option<String>,
+    /// Manufacturer part number.
+    pub part_number: Option<String>,
+    /// Where it was bought, e.g. "FCP Euro".
+    pub seller: Option<String>,
+    /// Purchase date, `YYYY-MM-DD`.
+    pub purchase_date: Option<String>,
+    /// What the part cost, integer cents. With `supplied_by: "shop"` the cost
+    /// is already inside the invoice's `total_cost_cents` and is not added
+    /// again; with `supplied_by: "self"` it was paid for elsewhere and is
+    /// added on top of the invoice total.
+    pub cost_cents: Option<i32>,
+    /// Who supplied the part: `self` (the owner bought it, the default; its
+    /// cost is added to the total) or `shop` (the shop sourced and billed it;
+    /// its cost is already inside the invoice total).
+    pub supplied_by: Option<String>,
+    /// Where it goes on the car (free text), e.g. "Front brakes".
+    pub location: Option<String>,
+    /// Free-form notes.
+    pub notes: Option<String>,
+    /// Part warranty expiry date, `YYYY-MM-DD`.
+    pub warranty_expires_on: Option<String>,
+    /// Part warranty expiry odometer reading (whole miles).
+    pub warranty_expires_miles: Option<i32>,
+}
+
+impl InlinePartInput {
+    fn into_domain(self) -> NewPart {
+        NewPart {
+            name: self.name,
+            manufacturer: self.manufacturer,
+            part_number: self.part_number,
+            seller: self.seller,
+            purchase_date: self.purchase_date,
+            cost_cents: self.cost_cents,
+            supplied_by: self.supplied_by,
+            location: self.location,
+            notes: self.notes,
+            warranty_expires_on: self.warranty_expires_on,
+            warranty_expires_miles: self.warranty_expires_miles,
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RecordPartInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -222,6 +370,9 @@ pub struct RecordPartInput {
     pub purchase_date: Option<String>,
     /// What it cost, integer cents (e.g. $123.45 -> 12345).
     pub cost_cents: Option<i32>,
+    /// Who supplied the part: `self` (the owner bought it, the default) or
+    /// `shop` (the shop sourced it and billed for it).
+    pub supplied_by: Option<String>,
     /// Lifecycle status: `purchased`, `installed`, or `replaced`.
     /// Defaults to `purchased`.
     pub status: Option<String>,
@@ -237,8 +388,6 @@ pub struct RecordPartInput {
     pub retailer_url: Option<String>,
     /// Free-form notes.
     pub notes: Option<String>,
-    /// Link this part to a build (from `list_builds`).
-    pub build_id: Option<i32>,
     /// Part warranty expiry date, `YYYY-MM-DD` (if the part carries one).
     pub warranty_expires_on: Option<String>,
     /// Part warranty expiry odometer reading (whole miles).
@@ -258,7 +407,6 @@ impl RecordPartInput {
                 purchase_date: self.purchase_date,
                 cost_cents: self.cost_cents,
                 cost_currency: None,
-                invoice_url: None,
                 manufacturer_url: None,
                 retailer_url: self.retailer_url,
                 status: self.status,
@@ -266,16 +414,17 @@ impl RecordPartInput {
                 installed_odometer: self.installed_odometer,
                 installed_service_id: self.installed_service_id,
                 notes: self.notes,
-                build_id: self.build_id,
                 location: self.location,
                 warranty_expires_on: self.warranty_expires_on,
                 warranty_expires_miles: self.warranty_expires_miles,
+                supplied_by: self.supplied_by,
             },
         )
     }
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PlanWorkInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -286,17 +435,24 @@ pub struct PlanWorkInput {
     /// Free-form notes.
     pub notes: Option<String>,
     /// The overdue/due schedule item this satisfies (from
-    /// `check_due_maintenance`) — completing the work then clears the
+    /// `whats_coming`) — completing the work then clears the
     /// reminder.
     pub schedule_item_id: Option<i32>,
-    /// The research finding (e.g. a recall from `check_recalls`) this
-    /// addresses — completing the work then closes the finding.
+    /// The research finding (e.g. a recall from `whats_coming` or `check_recalls`) this
+    /// addresses. The recall reads as planned while the work is open, and
+    /// completing the work through `record_service` links the service to it.
     pub research_finding_id: Option<i32>,
     /// The incident this fixes (from `log_incident`) — completing the work
     /// links the incident to the service record.
     pub incident_id: Option<i32>,
-    /// Link this work to a build (from `list_builds`).
-    pub build_id: Option<i32>,
+    /// Date to look at this item again, `YYYY-MM-DD`, for work to watch
+    /// rather than do now.
+    pub revisit_by_date: Option<String>,
+    /// Odometer reading at which to look at this item again. It is judged
+    /// against the estimated mileage, which needs an odometer reading or a
+    /// purchase mileage; until the car has one, an item with only this field
+    /// reads `revisit_status: "ok"`.
+    pub revisit_by_miles: Option<i32>,
 }
 
 impl PlanWorkInput {
@@ -309,118 +465,32 @@ impl PlanWorkInput {
                 schedule_item_id: self.schedule_item_id,
                 research_finding_id: self.research_finding_id,
                 incident_id: self.incident_id,
-                build_id: self.build_id,
                 est_cost_cents: self.est_cost_cents,
-                visit_id: None,
+                revisit_by_date: self.revisit_by_date,
+                revisit_by_miles: self.revisit_by_miles,
             },
         )
     }
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ListPlannedWorkInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
-    /// Also include finished work: done/dropped items and
-    /// completed/canceled visits. Default false (open work only).
+    /// Also include finished work: done/dropped items. Default false (open
+    /// work only).
     pub include_done: Option<bool>,
 }
 
 #[derive(Deserialize, JsonSchema)]
-pub struct ScheduleVisitInput {
-    /// Vehicle id, from `list_vehicles`.
-    pub vehicle_id: i32,
-    /// When the visit is planned for, `YYYY-MM-DD`.
-    pub planned_date: Option<String>,
-    /// Shop doing the work (free text) — the primary way to name the shop.
-    /// Omit for DIY.
-    pub shop_name: Option<String>,
-    /// Id of a saved shop from the shops list, when the user refers to one
-    /// they already track. `shop_name` free text works fine on its own.
-    pub shop_id: Option<i32>,
-    /// Work item ids (from `plan_work` / `list_planned_work`) to group into
-    /// this visit — they flip to `scheduled`.
-    pub work_item_ids: Option<Vec<i32>>,
-    /// Free-form notes.
-    pub notes: Option<String>,
-}
-
-impl ScheduleVisitInput {
-    pub fn into_domain(self) -> (i32, NewVisit) {
-        (
-            self.vehicle_id,
-            NewVisit {
-                planned_date: self.planned_date,
-                shop_name: self.shop_name,
-                shop_id: self.shop_id,
-                notes: self.notes,
-                work_item_ids: self.work_item_ids,
-            },
-        )
-    }
-}
-
-#[derive(Deserialize, JsonSchema)]
-pub struct CancelVisitInput {
-    /// Vehicle id, from `list_vehicles`.
-    pub vehicle_id: i32,
-    /// Visit id, from `schedule_visit` / `list_planned_work`.
-    pub visit_id: i32,
-}
-
-#[derive(Deserialize, JsonSchema)]
-pub struct CompleteVisitInput {
-    /// Vehicle id, from `list_vehicles`.
-    pub vehicle_id: i32,
-    /// Visit id, from `schedule_visit` / `list_planned_work`.
-    pub visit_id: i32,
-    /// Date the work was done, `YYYY-MM-DD`.
-    pub service_date: String,
-    /// Odometer reading at service time. Also logs a mileage entry.
-    pub mileage: Option<i32>,
-    /// What was done. Defaults to the attached work items' titles.
-    pub description: Option<String>,
-    /// Total invoice amount in integer cents (e.g. $123.45 -> 12345).
-    pub total_cost_cents: Option<i32>,
-    /// Parts portion of the invoice, integer cents.
-    pub parts_cost_cents: Option<i32>,
-    /// Labor portion of the invoice, integer cents.
-    pub labor_cost_cents: Option<i32>,
-    /// Who paid: `self` (default), `insurance`, or `third_party`.
-    pub paid_by: Option<String>,
-    /// Who exactly paid / claim number, e.g. "Progressive claim #12345".
-    pub payer_note: Option<String>,
-    /// Free-form notes.
-    pub notes: Option<String>,
-}
-
-impl CompleteVisitInput {
-    pub fn into_domain(self) -> (i32, i32, CompleteVisit) {
-        (
-            self.vehicle_id,
-            self.visit_id,
-            CompleteVisit {
-                service_date: self.service_date,
-                mileage: self.mileage,
-                description: self.description,
-                total_cost_cents: self.total_cost_cents,
-                parts_cost_cents: self.parts_cost_cents,
-                labor_cost_cents: self.labor_cost_cents,
-                paid_by: self.paid_by,
-                payer_note: self.payer_note,
-                notes: self.notes,
-            },
-        )
-    }
-}
-
-#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct LogMileageInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
     /// Odometer reading (whole miles).
     pub mileage: i32,
-    /// When the reading was taken, `YYYY-MM-DD HH:MM:SS`. Defaults to now.
+    /// When the reading was taken, `YYYY-MM-DD HH:MM:SS` or just `YYYY-MM-DD`. Defaults to the current local date and time.
     pub recorded_at: Option<String>,
     /// Free-form notes.
     pub notes: Option<String>,
@@ -441,16 +511,47 @@ impl LogMileageInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DeleteMileageInput {
+    /// Vehicle id, from `list_vehicles`.
+    pub vehicle_id: i32,
+    /// Reading id, from `list_mileage`.
+    pub mileage_id: i32,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DismissScheduleItemInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
-    /// Schedule item id, from `check_due_maintenance`.
+    /// Schedule item id, from `whats_coming`.
     pub schedule_item_id: i32,
     /// Why it's being waived, e.g. "independent shop handles this".
     pub reason: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RestoreScheduleItemInput {
+    /// Vehicle id, from `list_vehicles`.
+    pub vehicle_id: i32,
+    /// The dismissed item's id: the `id` `dismiss_schedule_item` returned, or
+    /// an item with `enabled: false` in `list_schedule` with
+    /// `include_dismissed`.
+    pub schedule_item_id: i32,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListScheduleInput {
+    /// Vehicle id, from `list_vehicles`.
+    pub vehicle_id: i32,
+    /// Also list dismissed items, shown with `enabled: false`. Default false.
+    pub include_dismissed: Option<bool>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SummarizeActivityInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -459,26 +560,19 @@ pub struct SummarizeActivityInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
-pub struct FindDocumentsInput {
-    /// Vehicle id, from `list_vehicles`.
-    pub vehicle_id: i32,
-    /// Full-text query over document titles and extracted text (receipts,
-    /// manuals, photos with OCR). Plain words; no special syntax needed.
-    pub query: String,
-}
-
-#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SearchRecordsInput {
     /// Full-text query. Plain words; no special syntax needed.
     pub query: String,
     /// Restrict to one record kind: `all`, `vehicles`, `services`,
-    /// `incidents`, `builds`, `documents`, or `research`. Default `all`.
+    /// `incidents`, `research`, `maintenance`, or `todo`. Default `all`.
     pub scope: Option<String>,
     /// Restrict to one vehicle (from `list_vehicles`). Omit to search the garage.
     pub vehicle_id: Option<i32>,
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct FileResearchFindingInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
@@ -511,98 +605,19 @@ impl FileResearchFindingInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
-pub struct AttachDocumentInput {
-    /// Vehicle id, from `list_vehicles`.
-    pub vehicle_id: i32,
-    /// THE ONLY way to attach a file with this tool — there is no
-    /// inline-bytes option. This path is resolved on the SERVER, inside its
-    /// inbox directory; you do NOT need to see, mount, or have any access to
-    /// that directory to use it. If the file is already in the inbox (the
-    /// user put it there, or told you its name), pass the name verbatim
-    /// (e.g. "fcp-invoice-2026-06.pdf"). If your file tools share the
-    /// server's filesystem, save the file into the inbox yourself first,
-    /// then pass its inbox-relative path. If the file is NOT in the inbox
-    /// and you cannot put it there, use the HTTP multipart route
-    /// (`POST /api/documents`, see the server instructions) or ask the user
-    /// to drop the file in the inbox and tell you its name. The server reads
-    /// the bytes from disk (byte-perfect, no tokens spent) and COPIES them
-    /// into its document store; the inbox original is left in place.
-    pub source_path: String,
-    /// Original file name with extension, e.g. "fcp-invoice-2026-06.pdf".
-    /// Used for the stored name and MIME detection; unsafe characters are
-    /// normalized. Optional — defaults to the inbox file's name.
-    pub file_name: Option<String>,
-    /// Display title, e.g. "FCP Euro invoice — clutch kit". Defaults to
-    /// `file_name`.
-    pub title: Option<String>,
-    /// The text YOU extracted from the document (read/OCR it yourself and
-    /// pass it here). Full-text indexed — without it, `find_documents` can
-    /// only match the title and file name.
-    pub extracted_text: Option<String>,
-    /// Link target kind: `service` (a service record — the usual case for
-    /// invoices), `part`, or `incident`. Pair with `linked_entity_id`.
-    pub linked_entity_type: Option<String>,
-    /// Id of the linked record (must belong to the same vehicle), e.g. the
-    /// id returned by `record_service`. Pair with `linked_entity_type`.
-    pub linked_entity_id: Option<i32>,
-}
-
-impl AttachDocumentInput {
-    /// Resolve the inbox `source_path` into the shared store input. There is
-    /// no inline-bytes alternative, so an absent/empty path is an
-    /// LLM-recoverable `BadRequest` that names the reachable routes — not a
-    /// protocol failure. (An absent field is already surfaced by
-    /// `LenientParameters`; this guards the empty-string case.)
-    pub fn into_domain(self) -> DomainResult<StoreDocument> {
-        let path = self.source_path.trim();
-        if path.is_empty() {
-            return Err(DomainError::BadRequest(
-                "source_path is required: name the file in the server's inbox to attach. There is \
-                 no inline-bytes option — if the file isn't in the inbox and you can't put it \
-                 there, use the HTTP multipart upload route (POST /api/documents) or ask the user \
-                 to drop the file in the inbox and tell you its name."
-                    .into(),
-            ));
-        }
-        Ok(StoreDocument {
-            vehicle_id: Some(self.vehicle_id),
-            title: self.title,
-            file_name: self.file_name,
-            source: DocumentSource::InboxPath(path.to_string()),
-            mime_type: None,
-            doc_type: None,
-            linked_entity_type: self.linked_entity_type,
-            linked_entity_id: self.linked_entity_id,
-            notes: None,
-            extracted_text: self.extracted_text,
-        })
-    }
-}
-
-#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct LinkServiceToMaintenanceInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
     /// The existing service record to link, e.g. an id returned by
     /// `record_service` or found via `summarize_recent_activity`.
     pub service_record_id: i32,
-    /// Schedule item ids (from `check_due_maintenance`) this service
+    /// Schedule item ids (from `whats_coming`) this service
     /// satisfies — linking clears their reminders.
     pub schedule_item_ids: Vec<i32>,
     /// `add` (default) keeps the record's existing links and adds these;
     /// `replace` overwrites them with exactly this list.
     pub mode: Option<String>,
-}
-
-#[derive(Deserialize, JsonSchema)]
-pub struct UpdateBuildStatusInput {
-    /// Vehicle id, from `list_vehicles`.
-    pub vehicle_id: i32,
-    /// Build id, from `list_builds`.
-    pub build_id: i32,
-    /// New lifecycle status: `planned`, `active`, `on_hold`, `completed`,
-    /// or `abandoned`. Entering `completed` stamps the completion date.
-    pub status: String,
 }
 
 /// Compact vehicle row for `list_vehicles` — enough to pick a `vehicle_id`

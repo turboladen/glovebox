@@ -1,6 +1,6 @@
-//! Full-text search across vehicle, event, document, and planning text — one
-//! domain operation over the FTS5 indexes created by migrations 000013 and
-//! 000021.
+//! Full-text search across vehicle, event, and planning text — one
+//! domain operation over the FTS5 indexes created by the initial schema
+//! migration.
 //!
 //! Each FTS5 table is external-content (index only), so every subquery joins
 //! back to its content table to produce domain-shaped hits: `vehicle_id` is
@@ -22,8 +22,6 @@ pub enum SearchScope {
     Vehicles,
     Services,
     Incidents,
-    Builds,
-    Documents,
     Research,
     Maintenance,
     Todo,
@@ -31,21 +29,19 @@ pub enum SearchScope {
 
 impl SearchScope {
     /// Parse the wire form
-    /// (`all|vehicles|services|incidents|builds|documents|research|maintenance|todo`).
+    /// (`all|vehicles|services|incidents|research|maintenance|todo`).
     pub fn parse(s: &str) -> DomainResult<Self> {
         match s {
             "all" => Ok(Self::All),
             "vehicles" => Ok(Self::Vehicles),
             "services" => Ok(Self::Services),
             "incidents" => Ok(Self::Incidents),
-            "builds" => Ok(Self::Builds),
-            "documents" => Ok(Self::Documents),
             "research" => Ok(Self::Research),
             "maintenance" => Ok(Self::Maintenance),
             "todo" => Ok(Self::Todo),
             other => Err(DomainError::BadRequest(format!(
                 "unknown search scope '{other}' (expected one of: all, vehicles, services, \
-                 incidents, builds, documents, research, maintenance, todo)"
+                 incidents, research, maintenance, todo)"
             ))),
         }
     }
@@ -54,7 +50,7 @@ impl SearchScope {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SearchHit {
     /// Domain record kind: `vehicle`, `service`, `incident`,
-    /// `incident_followup`, `build`, `document`, `research_finding`,
+    /// `incident_followup`, `research_finding`,
     /// `schedule_item`, or `work_item`.
     pub kind: String,
     pub id: i32,
@@ -89,8 +85,7 @@ fn fts_match_expr(query: &str) -> Option<String> {
 
 /// One UNION ALL arm: a `kind`-tagged SELECT over one FTS table joined back to
 /// its content table. `?1` is the MATCH expression; when `vehicle_filter` is
-/// set, `?2` is the vehicle id compared against `vehicle_col` (documents with
-/// NULL `vehicle_id` never match, by design).
+/// set, `?2` is the vehicle id compared against `vehicle_col`.
 fn subquery(
     kind: &str,
     fts: &str,
@@ -193,28 +188,6 @@ pub async fn search(
             filt,
         ));
     }
-    if want(SearchScope::Builds) {
-        subs.push(subquery(
-            "build",
-            "fts_builds",
-            "JOIN builds b ON b.id = fts_builds.rowid",
-            "b.id",
-            "b.vehicle_id",
-            "b.name",
-            filt,
-        ));
-    }
-    if want(SearchScope::Documents) {
-        subs.push(subquery(
-            "document",
-            "fts_documents",
-            "JOIN documents d ON d.id = fts_documents.rowid",
-            "d.id",
-            "d.vehicle_id",
-            "d.title",
-            filt,
-        ));
-    }
     if want(SearchScope::Research) {
         subs.push(subquery(
             "research_finding",
@@ -228,15 +201,12 @@ pub async fn search(
         ));
     }
     if want(SearchScope::Maintenance) {
-        // A schedule item is owned by exactly one of platform / model template /
-        // vehicle, and applies to every vehicle that resolves it (vehicle →
-        // template → platform), so the join fans out to one hit per applicable
-        // vehicle — each is a distinct navigable destination (Plan → Due).
-        // Override/dismissal resolution is deliberately NOT replicated here: an
-        // overridden or disabled item is still discoverable (it lives in
-        // Schedule ⚙'s Dismissed section), and its `?hl` on Due silently no-ops
-        // per the deep-link convention. Items whose platform/template has no
-        // vehicles have no destination and drop out via the inner join.
+        // A schedule item is owned by exactly one of platform, model template or
+        // vehicle, and applies to every vehicle that resolves it, so the join
+        // fans out to one hit per applicable vehicle. Override and dismissal
+        // are not resolved here: an overridden or dismissed item is still
+        // found, and `list_schedule` with `include_dismissed` shows it. Items
+        // whose platform or template has no vehicles drop out of the inner join.
         subs.push(subquery(
             "schedule_item",
             "fts_maintenance_schedule_items",
@@ -263,15 +233,14 @@ pub async fn search(
         ));
     }
 
-    // Dedupe by (kind, id, vehicle_id) IN SQL, before the LIMIT: a service
-    // matching in its own text and in several line items is one domain record,
-    // and duplicate raw rows must not starve other matching records out of the
-    // capped result set. vehicle_id joins the key for the schedule-item arm,
-    // where one inherited item legitimately fans out to one hit per applicable
-    // vehicle (every other kind has exactly one vehicle_id per (kind, id), so
-    // the extra key is a no-op for them). SQLite's bare-columns-with-MIN
-    // semantics make title/snippet come from the best-ranked row of each group;
-    // kind/id/vehicle_id tiebreakers keep equal-rank ordering deterministic.
+    // Dedupe by (kind, id, vehicle_id) in SQL, before the LIMIT: a service
+    // matching in its own text and in several line items is one record, and
+    // duplicate raw rows must not starve other records out of the capped
+    // result. vehicle_id is in the key for the schedule-item arm, where one
+    // inherited item fans out to one hit per vehicle. SQLite's
+    // bare-columns-with-MIN semantics take title and snippet from the
+    // best-ranked row of each group.
+
     // The CTE must be MATERIALIZED: if SQLite flattens the arms into the
     // aggregate query, bm25() lands outside its FTS cursor and fails with
     // "unable to use function bm25 in the requested context".
@@ -286,7 +255,7 @@ pub async fn search(
         None => vec![match_expr.into()],
     };
     let rows = db
-        .query_all(Statement::from_sql_and_values(
+        .query_all_raw(Statement::from_sql_and_values(
             DatabaseBackend::Sqlite,
             &sql,
             values,
@@ -325,21 +294,6 @@ mod tests {
             service_date: Set("2026-01-15".into()),
             description: Set(Some("Front brake job".into())),
             notes: Set(Some(notes.into())),
-            ..Default::default()
-        }
-        .insert(db)
-        .await
-        .unwrap()
-        .id
-    }
-
-    async fn seed_document(db: &impl ConnectionTrait, vehicle_id: Option<i32>, text: &str) -> i32 {
-        entities::document::ActiveModel {
-            vehicle_id: Set(vehicle_id),
-            title: Set("Invoice".into()),
-            file_path: Set("docs/invoice.pdf".into()),
-            file_name: Set("invoice.pdf".into()),
-            extracted_text: Set(Some(text.into())),
             ..Default::default()
         }
         .insert(db)
@@ -401,8 +355,6 @@ mod tests {
         let other = seed_vehicle(&db, "Jetta").await;
         let mine_svc = seed_service(&db, mine, "replaced brake pads").await;
         seed_service(&db, other, "replaced brake pads too").await;
-        // A document with no vehicle must never match a vehicle-scoped search.
-        seed_document(&db, None, "brake pad receipt").await;
 
         let hits = search(&db, "brake", SearchScope::All, Some(mine))
             .await
@@ -410,7 +362,6 @@ mod tests {
         assert!(!hits.is_empty());
         assert!(hits.iter().all(|h| h.vehicle_id == Some(mine)));
         assert!(hits.iter().any(|h| h.kind == "service" && h.id == mine_svc));
-        assert!(!hits.iter().any(|h| h.kind == "document"));
     }
 
     #[tokio::test]
@@ -418,13 +369,21 @@ mod tests {
         let db = test_db().await;
         let vid = seed_vehicle(&db, "Golf R").await;
         seed_service(&db, vid, "replaced brake pads").await;
-        let doc = seed_document(&db, Some(vid), "brake pad receipt from FCP").await;
+        entities::incident::ActiveModel {
+            vehicle_id: Set(vid),
+            category: Set("noise".into()),
+            title: Set("Brake squeal".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
 
-        let hits = search(&db, "brake", SearchScope::Documents, None)
+        let hits = search(&db, "brake", SearchScope::Incidents, None)
             .await
             .unwrap();
-        assert!(hits.iter().all(|h| h.kind == "document"));
-        assert!(hits.iter().any(|h| h.id == doc));
+        assert!(!hits.is_empty());
+        assert!(hits.iter().all(|h| h.kind == "incident"));
 
         let hits = search(&db, "brake", SearchScope::Services, None)
             .await
@@ -483,6 +442,7 @@ mod tests {
         entities::service_record_line_item::ActiveModel {
             service_record_id: Set(sid),
             description: Set("OEM brake pad set".into()),
+            work_kind: Set("maintenance".into()),
             ..Default::default()
         }
         .insert(&db)
@@ -491,6 +451,7 @@ mod tests {
         entities::service_record_line_item::ActiveModel {
             service_record_id: Set(sid),
             description: Set("brake rotor pair".into()),
+            work_kind: Set("maintenance".into()),
             ..Default::default()
         }
         .insert(&db)
@@ -508,6 +469,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn every_line_item_of_a_recorded_service_is_searchable() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db, "Golf R").await;
+        let words = ["haldex", "intercooler", "wastegate"];
+        let created = crate::services::service_record::create(
+            &db,
+            vid,
+            crate::inputs::service_record::NewServiceRecord {
+                service_date: "2026-03-01".into(),
+                line_items: Some(
+                    words
+                        .iter()
+                        .map(|w| crate::inputs::service_record::NewLineItem {
+                            paid_by: None,
+                            description: format!("{w} work"),
+                            work_kind: "maintenance".into(),
+                            quantity: None,
+                            unit_cost_cents: None,
+                            cost_cents: None,
+                        })
+                        .collect(),
+                ),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        for word in words {
+            let hits = search(&db, word, SearchScope::Services, None)
+                .await
+                .unwrap();
+            assert!(
+                hits.iter()
+                    .any(|h| h.kind == "service" && h.id == created.record.id),
+                "no hit for {word}: {hits:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn duplicate_raw_rows_cannot_starve_other_records_out_of_the_limit() {
         let db = test_db().await;
         let vid = seed_vehicle(&db, "Golf R").await;
@@ -517,6 +518,7 @@ mod tests {
             entities::service_record_line_item::ActiveModel {
                 service_record_id: Set(sid_a),
                 description: Set(format!("brake part {i}")),
+                work_kind: Set("maintenance".into()),
                 ..Default::default()
             }
             .insert(&db)
@@ -536,7 +538,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn finds_vehicle_incident_followup_build_and_research() {
+    async fn finds_vehicle_incident_followup_and_research() {
         let db = test_db().await;
         let vid = seed_vehicle(&db, "Golf R with unicorn paint").await;
         entities::incident::ActiveModel {
@@ -564,15 +566,6 @@ mod tests {
             incident_id: Set(crash.id),
             occurred_at: Set("2026-02-02".into()),
             summary: Set("Adjuster approved bumper repair".into()),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap();
-        entities::build::ActiveModel {
-            vehicle_id: Set(vid),
-            name: Set("Big turbo kilonewton build".into()),
-            description: Set(Some("IS38 swap with methanol injection".into())),
             ..Default::default()
         }
         .insert(&db)
@@ -621,14 +614,6 @@ mod tests {
             .await
             .unwrap();
         assert_kind(&hits, "incident_followup", vid);
-        let hits = search(&db, "kilonewton", SearchScope::Builds, None)
-            .await
-            .unwrap();
-        assert_kind(&hits, "build", vid);
-        let hits = search(&db, "methanol", SearchScope::All, None)
-            .await
-            .unwrap();
-        assert_kind(&hits, "build", vid);
         let hits = search(&db, "impeller", SearchScope::Research, None)
             .await
             .unwrap();
@@ -865,8 +850,7 @@ mod tests {
             SearchScope::parse("incidents").unwrap(),
             SearchScope::Incidents
         );
-        assert_eq!(SearchScope::parse("builds").unwrap(), SearchScope::Builds);
-        for retired in ["observations", "accidents"] {
+        for retired in ["observations", "accidents", "builds", "documents"] {
             assert!(
                 matches!(
                     SearchScope::parse(retired).unwrap_err(),
@@ -875,10 +859,6 @@ mod tests {
                 "retired scope '{retired}' must be rejected"
             );
         }
-        assert_eq!(
-            SearchScope::parse("documents").unwrap(),
-            SearchScope::Documents
-        );
         assert_eq!(
             SearchScope::parse("research").unwrap(),
             SearchScope::Research

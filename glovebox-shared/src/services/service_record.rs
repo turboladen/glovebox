@@ -3,18 +3,106 @@ use serde::Serialize;
 
 use crate::{
     entities::{
-        incident_service_link, maintenance_schedule_item, mileage_log, model_template, part,
-        research_finding, service_record, service_record_line_item, service_schedule_link, visit,
+        incident, incident_service_link, mileage_log, part, service_recall_link, service_record,
+        service_record_line_item, service_schedule_link,
     },
     error::{DomainError, DomainResult},
     inputs::{
-        document::DocumentDisposition,
+        part::NewPart,
         service_record::{NewLineItem, NewServiceRecord, UpdateServiceRecord},
+    },
+    services::{
+        incident::{self as incident_svc, ServiceRef},
+        part as part_svc,
+        recall::{self, RecallRef},
+        schedule,
+        work_item::{self, WorkItemRef},
     },
 };
 
-/// Payer whitelist for `service_records.paid_by`.
-const VALID_PAYERS: [&str; 3] = ["self", "insurance", "third_party"];
+/// Allowed values for `service_records.performed_by`.
+pub const VALID_PERFORMED_BY: [&str; 2] = ["shop", "self"];
+
+/// Allowed values for `service_record_line_items.work_kind`. `fee` is a
+/// charge on the invoice that is not work, such as tax, shop supplies or
+/// disposal.
+pub const VALID_WORK_KINDS: [&str; 6] = [
+    "maintenance",
+    "mod",
+    "repair",
+    "inspection",
+    "recall",
+    "fee",
+];
+
+fn validate_choice(field: &str, value: &str, allowed: &[&str]) -> DomainResult<()> {
+    if allowed.contains(&value) {
+        return Ok(());
+    }
+    Err(DomainError::invalid(
+        field,
+        format!(
+            "'{value}' is not valid. Must be one of: {}",
+            allowed.join(", ")
+        ),
+    ))
+}
+
+fn validate_line_items(items: &[NewLineItem]) -> DomainResult<()> {
+    items.iter().try_for_each(|li| {
+        validate_choice("work_kind", &li.work_kind, &VALID_WORK_KINDS)?;
+        li.paid_by.as_deref().map_or(Ok(()), validate_payer)
+    })
+}
+
+/// Checks the dates are `YYYY-MM-DD`, the range runs forward, and a
+/// self-performed job has no shop. Dates compare as `YYYY-MM-DD` text.
+fn validate_who_and_when(
+    service_date: &str,
+    end_date: Option<&str>,
+    performed_by: &str,
+    shop_name: Option<&str>,
+) -> DomainResult<()> {
+    validate_choice("performed_by", performed_by, &VALID_PERFORMED_BY)?;
+    super::validate_date("service_date", service_date)?;
+    super::validate_optional_date("end_date", end_date)?;
+    if end_date.is_some_and(|end| end < service_date) {
+        return Err(DomainError::invalid(
+            "end_date",
+            "must not be before service_date",
+        ));
+    }
+    if performed_by == "self" && shop_name.is_some() {
+        return Err(DomainError::invalid(
+            "shop_name",
+            "a self-performed service has no shop",
+        ));
+    }
+    Ok(())
+}
+
+/// Trims an invoice number and treats a blank one as absent. An LLM may send
+/// "" or spaces rather than omitting the field, and a blank ref stored as a
+/// real one would make the partial unique index reject a second ref-less
+/// record as a duplicate.
+fn normalize_invoice_ref(invoice_ref: Option<&str>) -> Option<String> {
+    invoice_ref
+        .map(|r| r.trim().to_string())
+        .filter(|r| !r.is_empty())
+}
+
+/// Payer whitelist for `service_records.paid_by` and
+/// `service_record_line_items.paid_by`.
+pub const VALID_PAYERS: [&str; 4] = ["self", "insurance", "third_party", "manufacturer"];
+
+/// The `paid_by` value of a payer that is the owner.
+pub const PAYER_SELF: &str = "self";
+
+/// Who paid for a line: its own `paid_by` when it has one, otherwise the
+/// service's.
+pub fn effective_payer<'a>(line_paid_by: Option<&'a str>, service_paid_by: &'a str) -> &'a str {
+    line_paid_by.unwrap_or(service_paid_by)
+}
 
 fn validate_payer(paid_by: &str) -> DomainResult<()> {
     if VALID_PAYERS.contains(&paid_by) {
@@ -27,63 +115,162 @@ fn validate_payer(paid_by: &str) -> DomainResult<()> {
     )))
 }
 
-/// Verify each schedule item is within the vehicle's schedule scope: owned by
-/// the vehicle itself, by its model template, or by that template's platform.
-/// Anything else must be indistinguishable from a nonexistent item.
-async fn require_schedule_items_in_scope(
-    db: &impl ConnectionTrait,
-    vehicle_id: i32,
-    schedule_item_ids: &[i32],
-) -> DomainResult<()> {
-    if schedule_item_ids.is_empty() {
-        return Ok(());
-    }
-
-    let v = crate::services::vehicle::require(db, vehicle_id).await?;
-    let template = match v.model_template_id {
-        Some(mt_id) => model_template::Entity::find_by_id(mt_id).one(db).await?,
-        None => None,
-    };
-
-    let mut owner =
-        Condition::any().add(maintenance_schedule_item::Column::VehicleId.eq(vehicle_id));
-    if let Some(mt) = &template {
-        owner = owner.add(maintenance_schedule_item::Column::ModelTemplateId.eq(mt.id));
-        if let Some(platform_id) = mt.platform_id {
-            owner = owner.add(maintenance_schedule_item::Column::PlatformId.eq(platform_id));
-        }
-    }
-
-    let in_scope: std::collections::HashSet<i32> = maintenance_schedule_item::Entity::find()
-        .filter(maintenance_schedule_item::Column::Id.is_in(schedule_item_ids.to_vec()))
-        .filter(owner)
-        .all(db)
-        .await?
-        .into_iter()
-        .map(|i| i.id)
-        .collect();
-
-    if let Some(missing) = schedule_item_ids.iter().find(|id| !in_scope.contains(id)) {
-        return Err(DomainError::NotFound(format!(
-            "Schedule item {missing} not found"
-        )));
-    }
-    Ok(())
-}
-
 #[derive(Debug, Serialize)]
 pub struct ServiceRecordWithLinks {
     #[serde(flatten)]
     pub record: service_record::Model,
     pub schedule_item_ids: Vec<i32>,
     pub part_ids: Vec<i32>,
-    pub line_items: Vec<service_record_line_item::Model>,
+    /// The full rows behind `part_ids`.
+    pub parts: Vec<part::Model>,
+    pub line_items: Vec<LineItemView>,
+    /// Incidents first noticed during this service. Each one's
+    /// `other_service` is the service that fixed it, if any.
+    pub noticed_incidents: Vec<IncidentRef>,
+    /// Incidents this service fixed. Each one's `other_service` is the
+    /// service during which it was noticed, if any.
+    pub resolved_incidents: Vec<IncidentRef>,
+    /// Recalls this service performed.
+    pub performed_recalls: Vec<RecallRef>,
+    /// To-do items this service completed.
+    pub completed_work_items: Vec<WorkItemRef>,
+    /// True when `create` found a record with the same `invoice_ref` on this
+    /// vehicle and returned it unchanged instead of writing anything.
+    /// Serialized only when true.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub already_recorded: bool,
+    /// Present only when `already_recorded` is true: says that nothing in the
+    /// call was applied and points at `correct_service`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    /// The sum of the line items' `cost_cents`, or `None` when the service has
+    /// no lines or none has a cost.
+    pub lines_total_cents: Option<i64>,
+    /// Present only when `total_cost_cents` and `lines_total_cents` both exist
+    /// and differ: states both amounts and the difference. It is information
+    /// about the record, unlike `message`, which reports what a call did.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
     /// Soft advisory: other same-day records on this vehicle, surfaced only
     /// when a record was created WITHOUT an `invoice_ref` so the caller can
     /// reconcile a possible duplicate. Never blocks — distinct records
     /// coexist. Empty (and omitted from JSON) on every other path.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub possible_duplicates: Vec<PossibleDuplicate>,
+}
+
+/// A line item with the payer it resolves to.
+#[derive(Clone, Debug, Serialize)]
+pub struct LineItemView {
+    #[serde(flatten)]
+    pub line: service_record_line_item::Model,
+    /// The line's own `paid_by` when it has one, otherwise the service's.
+    /// `paid_by` itself stays null for a line that follows its service.
+    pub effective_paid_by: String,
+}
+
+impl std::ops::Deref for LineItemView {
+    type Target = service_record_line_item::Model;
+
+    fn deref(&self) -> &Self::Target {
+        &self.line
+    }
+}
+
+/// An incident as seen from a service record.
+#[derive(Clone, Debug, Serialize)]
+pub struct IncidentRef {
+    pub id: i32,
+    pub title: String,
+    pub category: String,
+    pub resolved: bool,
+    /// The service on the other end of the incident's link; see the field it
+    /// appears under on `ServiceRecordWithLinks`.
+    pub other_service: Option<ServiceRef>,
+}
+
+/// The incident links of a batch of service records, keyed by record id.
+#[derive(Default)]
+struct IncidentLinks {
+    noticed: std::collections::HashMap<i32, Vec<IncidentRef>>,
+    resolved: std::collections::HashMap<i32, Vec<IncidentRef>>,
+}
+
+/// Loads the noticed and resolved incidents of each record with four batched
+/// queries however many records there are.
+async fn load_incident_links(
+    db: &impl ConnectionTrait,
+    record_ids: &[i32],
+) -> DomainResult<IncidentLinks> {
+    let mut out = IncidentLinks::default();
+    if record_ids.is_empty() {
+        return Ok(out);
+    }
+    let mine = incident_service_link::Entity::find()
+        .filter(incident_service_link::Column::ServiceRecordId.is_in(record_ids.to_vec()))
+        .all(db)
+        .await?;
+    if mine.is_empty() {
+        return Ok(out);
+    }
+    let incident_ids: Vec<i32> = mine.iter().map(|l| l.incident_id).collect();
+    let all_links = incident_service_link::Entity::find()
+        .filter(incident_service_link::Column::IncidentId.is_in(incident_ids.clone()))
+        .all(db)
+        .await?;
+    let incidents: std::collections::HashMap<i32, incident::Model> = incident::Entity::find()
+        .filter(incident::Column::Id.is_in(incident_ids))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|i| (i.id, i))
+        .collect();
+    let other_ids: Vec<i32> = all_links.iter().map(|l| l.service_record_id).collect();
+    let services: std::collections::HashMap<i32, service_record::Model> =
+        service_record::Entity::find()
+            .filter(service_record::Column::Id.is_in(other_ids))
+            .all(db)
+            .await?
+            .into_iter()
+            .map(|s| (s.id, s))
+            .collect();
+
+    // The other end of a link: the incident's noticing service, or, when
+    // looking from the noticing side, the latest service that fixed it.
+    let other_for = |incident_id: i32, role: &str| -> Option<ServiceRef> {
+        all_links
+            .iter()
+            .filter(|l| l.incident_id == incident_id && l.role == role)
+            .filter_map(|l| services.get(&l.service_record_id))
+            .max_by(|a, b| (&a.service_date, a.id).cmp(&(&b.service_date, b.id)))
+            .cloned()
+            .map(ServiceRef::from)
+    };
+
+    for link in &mine {
+        let Some(inc) = incidents.get(&link.incident_id) else {
+            continue;
+        };
+        let (bucket, other_role) = match link.role.as_str() {
+            "noticed" => (&mut out.noticed, "resolved"),
+            "resolved" => (&mut out.resolved, "noticed"),
+            _ => continue,
+        };
+        bucket
+            .entry(link.service_record_id)
+            .or_default()
+            .push(IncidentRef {
+                id: inc.id,
+                title: inc.title.clone(),
+                category: inc.category.clone(),
+                resolved: inc.resolved,
+                other_service: other_for(inc.id, other_role),
+            });
+    }
+    for refs in out.noticed.values_mut().chain(out.resolved.values_mut()) {
+        refs.sort_by_key(|r| r.id);
+    }
+    Ok(out)
 }
 
 /// A lightweight same-day peer surfaced in `possible_duplicates`.
@@ -95,30 +282,113 @@ pub struct PossibleDuplicate {
     pub total_cost_cents: Option<i32>,
 }
 
-/// Load schedule link IDs, part IDs, and line items for a single service record.
+impl ServiceRecordWithLinks {
+    fn assemble(
+        record: service_record::Model,
+        schedule_item_ids: Vec<i32>,
+        parts: Vec<part::Model>,
+        line_items: Vec<service_record_line_item::Model>,
+        noticed_incidents: Vec<IncidentRef>,
+        resolved_incidents: Vec<IncidentRef>,
+        performed_recalls: Vec<RecallRef>,
+    ) -> Self {
+        let line_items: Vec<LineItemView> = line_items
+            .into_iter()
+            .map(|line| LineItemView {
+                effective_paid_by: effective_payer(line.paid_by.as_deref(), &record.paid_by)
+                    .to_owned(),
+                line,
+            })
+            .collect();
+        let lines_total_cents = line_items
+            .iter()
+            .filter_map(|l| l.cost_cents)
+            .map(i64::from)
+            .fold(None, |acc, c| Some(acc.unwrap_or(0) + c));
+        let note = match (record.total_cost_cents, lines_total_cents) {
+            (Some(total), Some(lines)) if i64::from(total) != lines => Some(format!(
+                "The total is {total} cents and the line items add up to {lines} cents, a \
+                 difference of {} cents. Tax or fees can be recorded as a line with work_kind \
+                 \"fee\".",
+                i64::from(total) - lines
+            )),
+            _ => None,
+        };
+        Self {
+            lines_total_cents,
+            note,
+            record,
+            schedule_item_ids,
+            part_ids: parts.iter().map(|p| p.id).collect(),
+            parts,
+            line_items,
+            noticed_incidents,
+            resolved_incidents,
+            performed_recalls,
+            completed_work_items: Vec::new(),
+            already_recorded: false,
+            message: None,
+            possible_duplicates: Vec::new(),
+        }
+    }
+}
+
+/// Load a record's schedule link ids, installed parts, line items, incident
+/// links, performed recalls and completed to-do items.
 async fn load_service_links(
     db: &impl ConnectionTrait,
-    record_id: i32,
-) -> DomainResult<(Vec<i32>, Vec<i32>, Vec<service_record_line_item::Model>)> {
-    let links = service_schedule_link::Entity::find()
-        .filter(service_schedule_link::Column::ServiceRecordId.eq(record_id))
+    record: service_record::Model,
+) -> DomainResult<ServiceRecordWithLinks> {
+    let schedule_item_ids = service_schedule_link::Entity::find()
+        .filter(service_schedule_link::Column::ServiceRecordId.eq(record.id))
         .all(db)
-        .await?;
-    let schedule_item_ids = links.into_iter().map(|l| l.schedule_item_id).collect();
+        .await?
+        .into_iter()
+        .map(|l| l.schedule_item_id)
+        .collect();
 
     let parts = part::Entity::find()
-        .filter(part::Column::InstalledServiceId.eq(record_id))
+        .filter(part::Column::InstalledServiceId.eq(record.id))
+        .order_by_asc(part::Column::Id)
         .all(db)
         .await?;
-    let part_ids = parts.into_iter().map(|p| p.id).collect();
 
     let line_items = service_record_line_item::Entity::find()
-        .filter(service_record_line_item::Column::ServiceRecordId.eq(record_id))
+        .filter(service_record_line_item::Column::ServiceRecordId.eq(record.id))
         .order_by_asc(service_record_line_item::Column::Id)
         .all(db)
         .await?;
 
-    Ok((schedule_item_ids, part_ids, line_items))
+    let mut incident_links = load_incident_links(db, &[record.id]).await?;
+    let noticed = incident_links
+        .noticed
+        .remove(&record.id)
+        .unwrap_or_default();
+    let resolved = incident_links
+        .resolved
+        .remove(&record.id)
+        .unwrap_or_default();
+    let performed_recalls = recall::load_performed(db, &[record.id])
+        .await?
+        .remove(&record.id)
+        .unwrap_or_default();
+
+    let completed_work_items = work_item::load_completed_by(db, &[record.id])
+        .await?
+        .remove(&record.id)
+        .unwrap_or_default();
+
+    let mut links = ServiceRecordWithLinks::assemble(
+        record,
+        schedule_item_ids,
+        parts,
+        line_items,
+        noticed,
+        resolved,
+        performed_recalls,
+    );
+    links.completed_work_items = completed_work_items;
+    Ok(links)
 }
 
 /// Insert line items for a service record within a transaction.
@@ -127,18 +397,22 @@ async fn insert_line_items(
     record_id: i32,
     items: Vec<NewLineItem>,
 ) -> DomainResult<()> {
-    for item in items {
-        let li = service_record_line_item::ActiveModel {
+    // An empty batch inserts nothing.
+    let rows = items
+        .into_iter()
+        .map(|item| service_record_line_item::ActiveModel {
             service_record_id: Set(record_id),
             description: Set(item.description),
-            category: Set(item.category),
+            work_kind: Set(item.work_kind),
+            paid_by: Set(item.paid_by),
             quantity: Set(item.quantity),
             unit_cost_cents: Set(item.unit_cost_cents),
             cost_cents: Set(item.cost_cents),
             ..Default::default()
-        };
-        li.insert(txn).await?;
-    }
+        });
+    service_record_line_item::Entity::insert_many(rows)
+        .exec_without_returning(txn)
+        .await?;
     Ok(())
 }
 
@@ -204,8 +478,30 @@ pub async fn list(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
 ) -> DomainResult<Vec<ServiceRecordWithLinks>> {
-    let records = service_record::Entity::find()
-        .filter(service_record::Column::VehicleId.eq(vehicle_id))
+    list_between(db, vehicle_id, None, None).await
+}
+
+/// Lists a vehicle's services newest first, keeping those whose service date
+/// falls on or after `from` and on or before `to` (both `YYYY-MM-DD`; either
+/// bound may be omitted).
+pub async fn list_between(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    from: Option<&str>,
+    to: Option<&str>,
+) -> DomainResult<Vec<ServiceRecordWithLinks>> {
+    super::vehicle::require(db, vehicle_id).await?;
+    super::validate_optional_date("from", from)?;
+    super::validate_optional_date("to", to)?;
+    let mut query =
+        service_record::Entity::find().filter(service_record::Column::VehicleId.eq(vehicle_id));
+    if let Some(from) = from {
+        query = query.filter(service_record::Column::ServiceDate.gte(from));
+    }
+    if let Some(to) = to {
+        query = query.filter(service_record::Column::ServiceDate.lte(to));
+    }
+    let records = query
         .order_by_desc(service_record::Column::ServiceDate)
         .all(db)
         .await?;
@@ -227,9 +523,14 @@ pub async fn list(
     } else {
         part::Entity::find()
             .filter(part::Column::InstalledServiceId.is_in(record_ids.clone()))
+            .order_by_asc(part::Column::Id)
             .all(db)
             .await?
     };
+
+    let mut incident_links = load_incident_links(db, &record_ids).await?;
+    let mut performed = recall::load_performed(db, &record_ids).await?;
+    let mut completed = work_item::load_completed_by(db, &record_ids).await?;
 
     let all_line_items = if record_ids.is_empty() {
         vec![]
@@ -249,27 +550,55 @@ pub async fn list(
                 .filter(|l| l.service_record_id == record.id)
                 .map(|l| l.schedule_item_id)
                 .collect();
-            let part_ids = all_parts
+            let parts = all_parts
                 .iter()
                 .filter(|p| p.installed_service_id == Some(record.id))
-                .map(|p| p.id)
+                .cloned()
                 .collect();
             let line_items = all_line_items
                 .iter()
                 .filter(|li| li.service_record_id == record.id)
                 .cloned()
                 .collect();
-            ServiceRecordWithLinks {
+            let noticed = incident_links
+                .noticed
+                .remove(&record.id)
+                .unwrap_or_default();
+            let resolved = incident_links
+                .resolved
+                .remove(&record.id)
+                .unwrap_or_default();
+            let performed_recalls = performed.remove(&record.id).unwrap_or_default();
+            let completed_work_items = completed.remove(&record.id).unwrap_or_default();
+            let mut links = ServiceRecordWithLinks::assemble(
                 record,
                 schedule_item_ids,
-                part_ids,
+                parts,
                 line_items,
-                possible_duplicates: Vec::new(),
-            }
+                noticed,
+                resolved,
+                performed_recalls,
+            );
+            links.completed_work_items = completed_work_items;
+            links
         })
         .collect();
 
     Ok(results)
+}
+
+/// Fetches a service record scoped to its vehicle. A record that belongs to
+/// another vehicle produces the same `NotFound` as one that does not exist.
+pub(crate) async fn require(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    id: i32,
+) -> DomainResult<service_record::Model> {
+    service_record::Entity::find_by_id(id)
+        .filter(service_record::Column::VehicleId.eq(vehicle_id))
+        .one(db)
+        .await?
+        .ok_or_else(|| DomainError::NotFound(format!("Service record {id} not found")))
 }
 
 pub async fn get(
@@ -277,47 +606,116 @@ pub async fn get(
     vehicle_id: i32,
     id: i32,
 ) -> DomainResult<ServiceRecordWithLinks> {
-    let record = service_record::Entity::find_by_id(id)
-        .filter(service_record::Column::VehicleId.eq(vehicle_id))
-        .one(db)
-        .await?
-        .ok_or_else(|| DomainError::NotFound(format!("Service record {id} not found")))?;
-
-    let (schedule_item_ids, part_ids, line_items) = load_service_links(db, record.id).await?;
-
-    Ok(ServiceRecordWithLinks {
-        record,
-        schedule_item_ids,
-        part_ids,
-        line_items,
-        possible_duplicates: Vec::new(),
-    })
+    let record = require(db, vehicle_id, id).await?;
+    load_service_links(db, record).await
 }
 
-#[allow(clippy::too_many_lines)] // linear create + idempotency + advisory
+/// Marks existing parts as installed by `record` and creates the parts its
+/// invoice lists, already installed.
+async fn install_parts(
+    txn: &impl ConnectionTrait,
+    vehicle_id: i32,
+    record: &service_record::Model,
+    existing_ids: Vec<i32>,
+    new_parts: Vec<NewPart>,
+) -> DomainResult<()> {
+    // A record with no odometer reading leaves each part's own reading.
+    let odometer = record.mileage.map_or(NotSet, |miles| Set(Some(miles)));
+    for part_id in existing_ids {
+        part_svc::install(txn, vehicle_id, part_id, record, odometer.clone()).await?;
+    }
+
+    for mut new_part in new_parts {
+        new_part.status = Some("installed".into());
+        new_part.installed_service_id = Some(record.id);
+        new_part.installed_date = Some(record.service_date.clone());
+        new_part.installed_odometer = record.mileage;
+        part_svc::create(txn, vehicle_id, new_part).await?;
+    }
+    Ok(())
+}
+
+/// Other records on the vehicle dated the same day as `record`.
+async fn same_day_peers(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    record: &service_record::Model,
+) -> DomainResult<Vec<PossibleDuplicate>> {
+    Ok(service_record::Entity::find()
+        .filter(service_record::Column::VehicleId.eq(vehicle_id))
+        .filter(service_record::Column::ServiceDate.eq(record.service_date.clone()))
+        .filter(service_record::Column::Id.ne(record.id))
+        .order_by_asc(service_record::Column::Id)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|r| PossibleDuplicate {
+            id: r.id,
+            service_date: r.service_date,
+            description: r.description,
+            total_cost_cents: r.total_cost_cents,
+        })
+        .collect())
+}
+
+/// Links the record to the incidents it fixed and the ones it noticed. A
+/// completed to-do that came from an incident fixes that incident too.
+async fn link_incidents(
+    txn: &impl ConnectionTrait,
+    vehicle_id: i32,
+    record_id: i32,
+    mut resolved_ids: Vec<i32>,
+    noticed_ids: Vec<i32>,
+    completed: &[crate::entities::work_item::Model],
+) -> DomainResult<()> {
+    resolved_ids.extend(completed.iter().filter_map(|w| w.incident_id));
+    for (ids, role) in [(resolved_ids, "resolved"), (noticed_ids, "noticed")] {
+        for id in super::dedup_ids(&ids) {
+            incident_svc::link_service(txn, vehicle_id, id, record_id, role).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Loads a record found under a repeated `invoice_ref`, flagged so the caller
+/// knows nothing in its call was applied.
+async fn load_existing(
+    db: &impl ConnectionTrait,
+    existing: service_record::Model,
+) -> DomainResult<ServiceRecordWithLinks> {
+    let mut found = load_service_links(db, existing).await?;
+    found.already_recorded = true;
+    found.message = Some(format!(
+        "This invoice number is already recorded as service {}; nothing in this call was applied. \
+         Use correct_service to change it.",
+        found.record.id
+    ));
+    Ok(found)
+}
+
+/// Creates a service record with its line items, installed parts, schedule
+/// links and odometer reading in one transaction; any failure leaves nothing
+/// behind. A record already filed under the same `invoice_ref` is returned
+/// unchanged with `already_recorded` set, and the incident and recall ids in
+/// this call are ignored in that case. A completed to-do that came from a
+/// recall links that recall to the record as well.
 pub async fn create<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
     input: NewServiceRecord,
 ) -> DomainResult<ServiceRecordWithLinks> {
+    super::vehicle::require(db, vehicle_id).await?;
     if let Some(paid_by) = &input.paid_by {
         validate_payer(paid_by)?;
     }
 
-    // Normalize a blank invoice_ref to absent. An LLM may send "" (or spaces)
-    // rather than omitting the field; treating that as a real ref would let the
-    // partial unique index reject a SECOND ref-less record as a false
-    // duplicate. Trim so "INV-1 " and "INV-1" are the same identity signal.
-    let invoice_ref = input
-        .invoice_ref
-        .map(|r| r.trim().to_string())
-        .filter(|r| !r.is_empty());
+    let invoice_ref = normalize_invoice_ref(input.invoice_ref.as_deref());
 
     // Hard-idempotency: an invoice_ref is a deterministic identity signal.
     // If this vehicle already has a record with the same ref, return it
-    // UNTOUCHED — no new record, no new links/parts/line-items from this call
-    // (reconcile those via `link` if needed). Short-circuits before any guard
-    // or write. The partial unique index is the backstop against a race.
+    // UNTOUCHED: no new record, no new links, parts or line items from this
+    // call. The short-circuit runs before any other check or write. The
+    // partial unique index is the backstop against a race.
     if let Some(invoice_ref) = &invoice_ref {
         let existing = service_record::Entity::find()
             .filter(service_record::Column::VehicleId.eq(vehicle_id))
@@ -325,29 +723,37 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
             .one(db)
             .await?;
         if let Some(existing) = existing {
-            let (schedule_item_ids, part_ids, line_items) =
-                load_service_links(db, existing.id).await?;
-            return Ok(ServiceRecordWithLinks {
-                record: existing,
-                schedule_item_ids,
-                part_ids,
-                line_items,
-                possible_duplicates: Vec::new(),
-            });
+            let found = load_existing(db, existing).await?;
+            return Ok(found);
         }
     }
 
-    let schedule_item_ids = input.schedule_item_ids.unwrap_or_default();
-    require_schedule_items_in_scope(db, vehicle_id, &schedule_item_ids).await?;
-    if let Some(build_id) = input.build_id {
-        crate::services::build::require_owned(db, vehicle_id, build_id).await?;
-    }
+    let performed_by = input.performed_by.unwrap_or_else(|| "shop".into());
+    validate_who_and_when(
+        &input.service_date,
+        input.end_date.as_deref(),
+        &performed_by,
+        input.shop_name.as_deref(),
+    )?;
+    let line_items_input = input.line_items.unwrap_or_default();
+    validate_line_items(&line_items_input)?;
 
     let txn = db.begin().await?;
+
+    // Resolved before the record is written so a bad schedule id is reported
+    // ahead of any error the insert itself could raise.
+    let schedule_item_ids = schedule::tracked_ids(
+        &txn,
+        vehicle_id,
+        &input.schedule_item_ids.unwrap_or_default(),
+    )
+    .await?;
 
     let record = service_record::ActiveModel {
         vehicle_id: Set(vehicle_id),
         service_date: Set(input.service_date.clone()),
+        end_date: Set(input.end_date),
+        performed_by: Set(performed_by),
         mileage: Set(input.mileage),
         description: Set(input.description),
         parts_cost_cents: Set(input.parts_cost_cents),
@@ -359,7 +765,6 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
         shop_name: Set(input.shop_name),
         shop_id: Set(input.shop_id),
         notes: Set(input.notes),
-        build_id: Set(input.build_id),
         paid_by: Set(input.paid_by.unwrap_or_else(|| "self".into())),
         payer_note: Set(input.payer_note),
         invoice_ref: Set(invoice_ref),
@@ -367,83 +772,67 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     };
     let record = record.insert(&txn).await?;
 
-    for item_id in &schedule_item_ids {
-        let link = service_schedule_link::ActiveModel {
-            service_record_id: Set(record.id),
-            schedule_item_id: Set(*item_id),
-        };
-        link.insert(&txn).await?;
-    }
+    // Every link step below runs on `txn`, so a failure in any of them rolls
+    // back the record and everything written before it.
+    schedule::insert_service_links(&txn, record.id, &schedule_item_ids, LinkMode::Add).await?;
 
-    // Mark linked parts as installed
-    let part_ids = input.part_ids.unwrap_or_default();
-    for part_id in &part_ids {
-        let existing_part = part::Entity::find_by_id(*part_id)
-            .filter(part::Column::VehicleId.eq(vehicle_id))
-            .one(&txn)
-            .await?
-            .ok_or_else(|| DomainError::NotFound(format!("Part {part_id} not found")))?;
+    let completed = work_item::complete_with_service(
+        &txn,
+        vehicle_id,
+        &input.work_item_ids.unwrap_or_default(),
+        record.id,
+    )
+    .await?;
 
-        let mut active_part: part::ActiveModel = existing_part.into();
-        active_part.status = Set("installed".to_string());
-        active_part.installed_service_id = Set(Some(record.id));
-        active_part.installed_date = Set(Some(input.service_date.clone()));
-        if let Some(miles) = record.mileage {
-            active_part.installed_odometer = Set(Some(miles));
-        }
-        active_part.update(&txn).await?;
-    }
+    link_incidents(
+        &txn,
+        vehicle_id,
+        record.id,
+        input.resolved_incident_ids.unwrap_or_default(),
+        input.noticed_incident_ids.unwrap_or_default(),
+        &completed,
+    )
+    .await?;
 
-    // Insert line items
-    let line_items_input = input.line_items.unwrap_or_default();
+    let mut recall_ids = input.recall_finding_ids.unwrap_or_default();
+    // Only the explicit ids must be recalls; a completed to-do may come from
+    // any kind of finding, and only a recall-sourced one links a recall.
+    let from_work: Vec<i32> = completed
+        .iter()
+        .filter_map(|w| w.research_finding_id)
+        .collect();
+    recall_ids.extend(recall::recall_ids_among(&txn, &from_work).await?);
+    recall::link_service(&txn, vehicle_id, &recall_ids, record.id).await?;
+
+    install_parts(
+        &txn,
+        vehicle_id,
+        &record,
+        input.part_ids.unwrap_or_default(),
+        input.parts.unwrap_or_default(),
+    )
+    .await?;
+
     insert_line_items(&txn, record.id, line_items_input).await?;
 
-    // Also create a mileage log entry if mileage was provided. The FK is the
-    // real linkage (activity dedupe + update/delete maintenance key on it);
-    // `source` stays as a display label.
+    // The odometer reading is linked by FK (activity dedupe and
+    // update/delete maintenance key on it); `source` is a display label.
     if let Some(miles) = record.mileage {
         insert_auto_mileage_log(&txn, vehicle_id, &record, miles).await?;
     }
 
-    // Load back the inserted line items to return
-    let line_items = service_record_line_item::Entity::find()
-        .filter(service_record_line_item::Column::ServiceRecordId.eq(record.id))
-        .order_by_asc(service_record_line_item::Column::Id)
-        .all(&txn)
-        .await?;
+    let mut created = load_service_links(&txn, record).await?;
 
     txn.commit().await?;
 
     // Soft advisory: with no invoice_ref there is no deterministic identity
     // signal, so surface other same-day records on this vehicle for the caller
-    // to reconcile. Read-only, never blocks — distinct records coexist.
-    let possible_duplicates = if record.invoice_ref.is_none() {
-        service_record::Entity::find()
-            .filter(service_record::Column::VehicleId.eq(vehicle_id))
-            .filter(service_record::Column::ServiceDate.eq(record.service_date.clone()))
-            .filter(service_record::Column::Id.ne(record.id))
-            .order_by_asc(service_record::Column::Id)
-            .all(db)
-            .await?
-            .into_iter()
-            .map(|r| PossibleDuplicate {
-                id: r.id,
-                service_date: r.service_date,
-                description: r.description,
-                total_cost_cents: r.total_cost_cents,
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
+    // to reconcile. Read-only, never blocks; distinct records coexist.
+    if created.record.invoice_ref.is_none() {
+        created.possible_duplicates = same_day_peers(db, vehicle_id, &created.record).await?;
+    }
 
-    Ok(ServiceRecordWithLinks {
-        record,
-        schedule_item_ids,
-        part_ids,
-        line_items,
-        possible_duplicates,
-    })
+    Ok(created)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -453,26 +842,54 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     id: i32,
     input: UpdateServiceRecord,
 ) -> DomainResult<ServiceRecordWithLinks> {
-    let existing = service_record::Entity::find_by_id(id)
-        .filter(service_record::Column::VehicleId.eq(vehicle_id))
-        .one(db)
-        .await?
-        .ok_or_else(|| DomainError::NotFound(format!("Service record {id} not found")))?;
+    let existing = require(db, vehicle_id, id).await?;
+
+    validate_who_and_when(
+        input
+            .service_date
+            .as_ref()
+            .unwrap_or(&existing.service_date),
+        input
+            .end_date
+            .as_ref()
+            .unwrap_or(&existing.end_date)
+            .as_deref(),
+        input
+            .performed_by
+            .as_ref()
+            .unwrap_or(&existing.performed_by),
+        input
+            .shop_name
+            .as_ref()
+            .unwrap_or(&existing.shop_name)
+            .as_deref(),
+    )?;
+    if let Some(items) = &input.line_items {
+        validate_line_items(items)?;
+    }
+    let invoice_ref = input
+        .invoice_ref
+        .map(|r| normalize_invoice_ref(r.as_deref()));
+    if let Some(Some(invoice_ref)) = &invoice_ref {
+        require_invoice_ref_free(db, vehicle_id, id, invoice_ref).await?;
+    }
 
     let txn = db.begin().await?;
 
-    // A linked build must belong to the same vehicle; a cross-vehicle build
-    // must be indistinguishable from a nonexistent one. Checked inside the txn
-    // (like the schedule-items guard) so a concurrent build::delete can't slip
-    // between guard and write.
-    if let Some(Some(build_id)) = input.build_id {
-        crate::services::build::require_owned(&txn, vehicle_id, build_id).await?;
-    }
-
+    let (date_before, mileage_before) = (existing.service_date.clone(), existing.mileage);
     let mut active: service_record::ActiveModel = existing.into();
+    if let Some(v) = invoice_ref {
+        active.invoice_ref = Set(v);
+    }
 
     if let Some(v) = input.service_date {
         active.service_date = Set(v);
+    }
+    if let Some(v) = input.end_date {
+        active.end_date = Set(v);
+    }
+    if let Some(v) = input.performed_by {
+        active.performed_by = Set(v);
     }
     if let Some(v) = input.mileage {
         active.mileage = Set(v);
@@ -507,9 +924,6 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     if let Some(v) = input.notes {
         active.notes = Set(v);
     }
-    if let Some(v) = input.build_id {
-        active.build_id = Set(v);
-    }
     if let Some(v) = input.paid_by {
         validate_payer(&v)?;
         active.paid_by = Set(v);
@@ -518,38 +932,19 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         active.payer_note = Set(v);
     }
 
-    active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
+    active.updated_at = Set(super::now_stamp());
 
     let record = active.update(&txn).await?;
 
     // Keep the auto-created mileage log in step with the record.
     sync_auto_mileage_log(&txn, vehicle_id, &record).await?;
 
-    let schedule_item_ids = if let Some(item_ids) = input.schedule_item_ids {
-        require_schedule_items_in_scope(&txn, vehicle_id, &item_ids).await?;
-        service_schedule_link::Entity::delete_many()
-            .filter(service_schedule_link::Column::ServiceRecordId.eq(record.id))
-            .exec(&txn)
-            .await?;
-
-        for item_id in &item_ids {
-            let link = service_schedule_link::ActiveModel {
-                service_record_id: Set(record.id),
-                schedule_item_id: Set(*item_id),
-            };
-            link.insert(&txn).await?;
-        }
-        item_ids
-    } else {
-        let links = service_schedule_link::Entity::find()
-            .filter(service_schedule_link::Column::ServiceRecordId.eq(record.id))
-            .all(&txn)
-            .await?;
-        links.into_iter().map(|l| l.schedule_item_id).collect()
-    };
+    if let Some(item_ids) = input.schedule_item_ids {
+        schedule::link_service(&txn, vehicle_id, record.id, &item_ids, LinkMode::Replace).await?;
+    }
 
     // Handle part linking on update
-    let part_ids = if let Some(new_part_ids) = input.part_ids {
+    if let Some(new_part_ids) = input.part_ids {
         // Unlink previously linked parts
         let old_parts = part::Entity::find()
             .filter(part::Column::InstalledServiceId.eq(record.id))
@@ -557,40 +952,31 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
             .await?;
         for old_part in old_parts {
             if !new_part_ids.contains(&old_part.id) {
-                let mut active_part: part::ActiveModel = old_part.clone().into();
-                // Only revert to purchased if the part was installed (not replaced/returned)
-                if old_part.status == "installed" {
-                    active_part.status = Set("purchased".to_string());
-                }
-                active_part.installed_service_id = Set(None);
-                active_part.installed_date = Set(None);
-                active_part.installed_odometer = Set(None);
-                active_part.update(&txn).await?;
+                part_svc::uninstall(
+                    &txn,
+                    old_part,
+                    part_svc::UninstallStatus::PurchasedIfInstalled,
+                )
+                .await?;
             }
         }
         // Link new parts
-        for part_id in &new_part_ids {
-            let existing_part = part::Entity::find_by_id(*part_id)
-                .filter(part::Column::VehicleId.eq(vehicle_id))
-                .one(&txn)
-                .await?
-                .ok_or_else(|| DomainError::NotFound(format!("Part {part_id} not found")))?;
-
-            let mut active_part: part::ActiveModel = existing_part.into();
-            active_part.status = Set("installed".to_string());
-            active_part.installed_service_id = Set(Some(record.id));
-            active_part.installed_date = Set(Some(record.service_date.clone()));
-            active_part.installed_odometer = Set(record.mileage);
-            active_part.update(&txn).await?;
+        for &part_id in &new_part_ids {
+            part_svc::install(&txn, vehicle_id, part_id, &record, Set(record.mileage)).await?;
         }
-        new_part_ids
-    } else {
-        let parts = part::Entity::find()
-            .filter(part::Column::InstalledServiceId.eq(record.id))
-            .all(&txn)
+    } else if record.service_date != date_before || record.mileage != mileage_before {
+        // The parts this service installed carry its date and mileage as
+        // their install date and odometer.
+        part_svc::follow_service(&txn, &record).await?;
+    }
+
+    if let Some(recall_ids) = input.recall_finding_ids {
+        service_recall_link::Entity::delete_many()
+            .filter(service_recall_link::Column::ServiceRecordId.eq(record.id))
+            .exec(&txn)
             .await?;
-        parts.into_iter().map(|p| p.id).collect()
-    };
+        recall::link_service(&txn, vehicle_id, &recall_ids, record.id).await?;
+    }
 
     // Handle line items: replace-all semantics when provided
     if let Some(new_line_items) = input.line_items {
@@ -601,50 +987,43 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         insert_line_items(&txn, record.id, new_line_items).await?;
     }
 
-    let line_items = service_record_line_item::Entity::find()
-        .filter(service_record_line_item::Column::ServiceRecordId.eq(record.id))
-        .order_by_asc(service_record_line_item::Column::Id)
-        .all(&txn)
-        .await?;
+    let updated = load_service_links(&txn, record).await?;
 
     txn.commit().await?;
 
-    Ok(ServiceRecordWithLinks {
-        record,
-        schedule_item_ids,
-        part_ids,
-        line_items,
-        possible_duplicates: Vec::new(),
-    })
+    Ok(updated)
 }
 
-/// How [`link_schedule_items`] treats the record's existing schedule links.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LinkMode {
-    /// Union the given items with the existing links (safe for incremental
-    /// reconciliation loops — nothing already linked is clobbered).
-    Add,
-    /// Overwrite: the given items become the record's only links.
-    Replace,
-}
-
-impl LinkMode {
-    pub fn parse(mode: &str) -> DomainResult<Self> {
-        match mode {
-            "add" => Ok(Self::Add),
-            "replace" => Ok(Self::Replace),
-            other => Err(DomainError::BadRequest(format!(
-                "Invalid mode '{other}'. Must be one of: add, replace"
-            ))),
-        }
+/// Refuses an invoice number that another service on the vehicle already
+/// carries, naming that service.
+async fn require_invoice_ref_free(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    service_id: i32,
+    invoice_ref: &str,
+) -> DomainResult<()> {
+    let other = service_record::Entity::find()
+        .filter(service_record::Column::VehicleId.eq(vehicle_id))
+        .filter(service_record::Column::InvoiceRef.eq(invoice_ref))
+        .filter(service_record::Column::Id.ne(service_id))
+        .one(db)
+        .await?;
+    match other {
+        Some(other) => Err(DomainError::BadRequest(format!(
+            "Invoice ref '{invoice_ref}' already belongs to service {} on this vehicle",
+            other.id
+        ))),
+        None => Ok(()),
     }
 }
 
+pub use super::schedule::LinkMode;
+
 /// Link a service record to maintenance-schedule items without touching the
 /// rest of the record. Self-guarded: the record must belong to `vehicle_id`,
-/// and every item must be in the vehicle's schedule scope
-/// ([`require_schedule_items_in_scope`]) — wrong-parent ids read as missing.
-/// Linking is what clears the corresponding reminders.
+/// and every item must be in the vehicle's schedule scope; wrong-parent ids
+/// read as missing. An inherited item the vehicle has its own copy of links
+/// to the copy. Linking is what clears the corresponding reminders.
 pub async fn link_schedule_items<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -652,90 +1031,82 @@ pub async fn link_schedule_items<C: ConnectionTrait + TransactionTrait>(
     item_ids: &[i32],
     mode: LinkMode,
 ) -> DomainResult<ServiceRecordWithLinks> {
-    let existing = service_record::Entity::find_by_id(id)
-        .filter(service_record::Column::VehicleId.eq(vehicle_id))
-        .one(db)
-        .await?
-        .ok_or_else(|| DomainError::NotFound(format!("Service record {id} not found")))?;
+    let existing = require(db, vehicle_id, id).await?;
 
     let txn = db.begin().await?;
-    require_schedule_items_in_scope(&txn, vehicle_id, item_ids).await?;
-
-    let already_linked: std::collections::HashSet<i32> = match mode {
-        LinkMode::Replace => {
-            service_schedule_link::Entity::delete_many()
-                .filter(service_schedule_link::Column::ServiceRecordId.eq(existing.id))
-                .exec(&txn)
-                .await?;
-            std::collections::HashSet::new()
-        }
-        LinkMode::Add => service_schedule_link::Entity::find()
-            .filter(service_schedule_link::Column::ServiceRecordId.eq(existing.id))
-            .all(&txn)
-            .await?
-            .into_iter()
-            .map(|l| l.schedule_item_id)
-            .collect(),
-    };
-
-    let mut inserted = already_linked;
-    for item_id in item_ids {
-        if inserted.insert(*item_id) {
-            service_schedule_link::ActiveModel {
-                service_record_id: Set(existing.id),
-                schedule_item_id: Set(*item_id),
-            }
-            .insert(&txn)
-            .await?;
-        }
-    }
+    schedule::link_service(&txn, vehicle_id, existing.id, item_ids, mode).await?;
 
     // Linking changes what the record accounts for — stamp it like update().
     let mut active: service_record::ActiveModel = existing.into();
-    active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
+    active.updated_at = Set(super::now_stamp());
     let record = active.update(&txn).await?;
     txn.commit().await?;
 
-    let (schedule_item_ids, part_ids, line_items) = load_service_links(db, record.id).await?;
-    Ok(ServiceRecordWithLinks {
-        record,
-        schedule_item_ids,
-        part_ids,
-        line_items,
-        possible_duplicates: Vec::new(),
-    })
+    load_service_links(db, record).await
 }
 
-/// Delete a service record and its owned rows. Linked documents are handled
-/// per `docs` (unlinked or deleted — see
-/// [`super::document::detach_or_delete_for_entity`]); the returned paths are
-/// files the CALLER must remove after this commits.
+pub use super::recall::RecallsOnDelete;
+
+/// What [`delete`] changed besides the service itself.
+#[derive(Debug, Default, Serialize)]
+pub struct DeletedService {
+    /// Ids of the parts the service installed, now `purchased` and unlinked.
+    pub kept_part_ids: Vec<i32>,
+    /// Ids of the recalls that read `open` again after a `Reopen` delete.
+    pub reopened_recall_ids: Vec<i32>,
+    /// Ids of the recalls a `Reopen` delete left `done` because another service also performed them.
+    pub still_done_elsewhere_recall_ids: Vec<i32>,
+    /// Ids of the recalls stored as `done` because the caller chose `KeepDone`.
+    pub kept_done_recall_ids: Vec<i32>,
+}
+
+/// Deletes a service record and its owned rows, and reopens what it closed.
+///
+/// If the service performed recalls, `recalls` must say what becomes of them:
+/// with `None` nothing is deleted and the call returns `BadRequest` listing
+/// the recalls and telling the caller to ask the owner. Without recalls the
+/// parameter is ignored. A recall another service also performed stays `done` and is reported in
+/// `still_done_elsewhere_recall_ids`. Each incident the service resolved goes back to
+/// unresolved unless another service also resolved it. Each work item it
+/// completed returns to `planned`. Parts it installed stay, reverted to
+/// `purchased` with their install fields cleared, including parts created
+/// inline by this service; their ids come back in `kept_part_ids` so the
+/// caller can attach them to a re-filed service or delete them with
+/// `part::delete`.
 pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
     id: i32,
-    docs: DocumentDisposition,
-) -> DomainResult<Vec<String>> {
-    let existing = service_record::Entity::find_by_id(id)
-        .filter(service_record::Column::VehicleId.eq(vehicle_id))
-        .one(db)
-        .await?
-        .ok_or_else(|| DomainError::NotFound(format!("Service record {id} not found")))?;
+    recalls: Option<RecallsOnDelete>,
+) -> DomainResult<DeletedService> {
+    let existing = require(db, vehicle_id, id).await?;
 
     let txn = db.begin().await?;
+
+    let performed = recall::load_performed(&txn, &[existing.id])
+        .await?
+        .remove(&existing.id)
+        .unwrap_or_default();
+    // The choice is checked before anything is written.
+    let recall_choice = match (performed.is_empty(), recalls) {
+        (true, _) => None,
+        (false, None) => return Err(recalls_need_a_choice(&performed)),
+        (false, Some(choice)) => Some(choice),
+    };
+    let mut outcome = DeletedService::default();
+
+    work_item::reopen_completed_by(&txn, existing.id).await?;
+    reopen_resolved_incidents(&txn, existing.id).await?;
 
     // Unlink parts installed during this service (revert to purchased)
     let linked_parts = part::Entity::find()
         .filter(part::Column::InstalledServiceId.eq(existing.id))
+        .order_by_asc(part::Column::Id)
         .all(&txn)
         .await?;
+    outcome.kept_part_ids = linked_parts.iter().map(|p| p.id).collect();
     for p in linked_parts {
-        let mut active_part: part::ActiveModel = p.into();
-        active_part.status = Set("purchased".to_string());
-        active_part.installed_service_id = Set(None);
-        active_part.installed_date = Set(None);
-        active_part.installed_odometer = Set(None);
-        active_part.update(&txn).await?;
+        part_svc::uninstall(&txn, p, part_svc::UninstallStatus::Purchased).await?;
     }
 
     // Remove the auto-created mileage log(s) — an orphaned log would keep
@@ -755,17 +1126,8 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .exec(&txn)
         .await?;
 
-    // Visits reference their produced record via a soft link (no FK in
-    // migration 000020) — clear it or a completed visit points at a deleted
-    // service. Same dangling-link class as incident::delete's work_item
-    // cleanup.
-    visit::Entity::update_many()
-        .set(visit::ActiveModel {
-            service_record_id: Set(None),
-            updated_at: Set(super::now_stamp()),
-            ..Default::default()
-        })
-        .filter(visit::Column::ServiceRecordId.eq(existing.id))
+    service_recall_link::Entity::delete_many()
+        .filter(service_recall_link::Column::ServiceRecordId.eq(existing.id))
         .exec(&txn)
         .await?;
 
@@ -776,36 +1138,92 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .exec(&txn)
         .await?;
 
-    // Research findings mark their resolving record via the same polymorphic
-    // soft link documents use (no FK, set by visit::complete or ResearchTab)
-    // — clear it so a finding never points at a deleted service.
-    research_finding::Entity::update_many()
-        .set(research_finding::ActiveModel {
-            linked_entity_type: Set(None),
-            linked_entity_id: Set(None),
-            updated_at: Set(super::now_stamp()),
-            ..Default::default()
-        })
-        .filter(research_finding::Column::LinkedEntityType.eq("service"))
-        .filter(research_finding::Column::LinkedEntityId.eq(existing.id))
-        .exec(&txn)
-        .await?;
-
-    // Unlink or delete attached documents (rows only; files are the caller's)
-    let doc_files = super::document::detach_or_delete_for_entity(&txn, "service", id, docs).await?;
-
     // Delete the service record
     existing.delete(&txn).await?;
 
+    if let Some(choice) = recall_choice {
+        let finding_ids = performed.iter().map(|r| r.finding_id).collect();
+        let released = recall::release_from_deleted_service(&txn, finding_ids, choice).await?;
+        outcome.reopened_recall_ids = released.reopened;
+        outcome.kept_done_recall_ids = released.kept_done;
+        outcome.still_done_elsewhere_recall_ids = released.still_done_elsewhere;
+    }
+
     txn.commit().await?;
 
-    Ok(doc_files)
+    Ok(outcome)
+}
+
+fn recalls_need_a_choice(performed: &[RecallRef]) -> DomainError {
+    let listed = performed
+        .iter()
+        .map(|r| match &r.campaign_number {
+            Some(n) => format!("recall {} (campaign {n}): {}", r.finding_id, r.title),
+            None => format!("recall {}: {}", r.finding_id, r.title),
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    DomainError::BadRequest(format!(
+        "This service performed {listed}. Ask the owner whether these recalls should be reopened \
+         or kept as done, then call again with recalls: \"reopen\" or recalls: \"keep_done\". \
+         Nothing was deleted."
+    ))
+}
+
+/// Marks unresolved each incident a service that is about to be deleted
+/// resolved, unless another service also resolved it. Runs before the link
+/// rows are removed because it reads them.
+async fn reopen_resolved_incidents(
+    txn: &impl ConnectionTrait,
+    service_id: i32,
+) -> DomainResult<()> {
+    let resolved_here: Vec<i32> = incident_service_link::Entity::find()
+        .filter(incident_service_link::Column::ServiceRecordId.eq(service_id))
+        .filter(incident_service_link::Column::Role.eq(incident_svc::ROLE_RESOLVED))
+        .all(txn)
+        .await?
+        .into_iter()
+        .map(|l| l.incident_id)
+        .collect();
+    if resolved_here.is_empty() {
+        return Ok(());
+    }
+    let resolved_elsewhere: std::collections::HashSet<i32> = incident_service_link::Entity::find()
+        .filter(incident_service_link::Column::IncidentId.is_in(resolved_here.clone()))
+        .filter(incident_service_link::Column::Role.eq(incident_svc::ROLE_RESOLVED))
+        .filter(incident_service_link::Column::ServiceRecordId.ne(service_id))
+        .all(txn)
+        .await?
+        .into_iter()
+        .map(|l| l.incident_id)
+        .collect();
+    let reopen: Vec<i32> = resolved_here
+        .into_iter()
+        .filter(|id| !resolved_elsewhere.contains(id))
+        .collect();
+    if reopen.is_empty() {
+        return Ok(());
+    }
+    incident::Entity::update_many()
+        .set(incident::ActiveModel {
+            resolved: Set(false),
+            updated_at: Set(super::now_stamp()),
+            ..Default::default()
+        })
+        .filter(incident::Column::Id.is_in(reopen))
+        .exec(txn)
+        .await?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{VehicleFixture, test_db};
+    use crate::{
+        inputs::{incident::NewIncident, part::NewPart},
+        services::incident,
+        test_support::{VehicleFixture, row_count, test_db},
+    };
 
     async fn seed_vehicle(db: &impl ConnectionTrait) -> i32 {
         VehicleFixture::new().insert_id(db).await
@@ -861,19 +1279,26 @@ mod tests {
                 shop_name: None,
                 shop_id: None,
                 notes: None,
-                build_id: None,
                 paid_by: None,
                 payer_note: None,
                 schedule_item_ids: Some(vec![sched_id]),
                 part_ids: Some(vec![part_id]),
                 line_items: Some(vec![NewLineItem {
+                    paid_by: None,
                     description: "Synthetic oil".into(),
-                    category: Some("parts".into()),
+                    work_kind: "maintenance".into(),
                     quantity: Some(5.0),
                     unit_cost_cents: Some(1_000),
                     cost_cents: Some(5_000),
                 }]),
                 invoice_ref: None,
+                end_date: None,
+                performed_by: None,
+                work_item_ids: None,
+                resolved_incident_ids: None,
+                noticed_incident_ids: None,
+                recall_finding_ids: None,
+                parts: None,
             },
         )
         .await
@@ -934,19 +1359,26 @@ mod tests {
                 shop_name: None,
                 shop_id: None,
                 notes: None,
-                build_id: None,
                 paid_by: None,
                 payer_note: None,
                 schedule_item_ids: None,
                 part_ids: Some(vec![part_a]),
                 line_items: Some(vec![NewLineItem {
+                    paid_by: None,
                     description: "old".into(),
-                    category: None,
+                    work_kind: "maintenance".into(),
                     quantity: None,
                     unit_cost_cents: None,
                     cost_cents: Some(100),
                 }]),
                 invoice_ref: None,
+                end_date: None,
+                performed_by: None,
+                work_item_ids: None,
+                resolved_incident_ids: None,
+                noticed_incident_ids: None,
+                recall_finding_ids: None,
+                parts: None,
             },
         )
         .await
@@ -959,8 +1391,9 @@ mod tests {
             UpdateServiceRecord {
                 part_ids: Some(vec![part_b]),
                 line_items: Some(vec![NewLineItem {
+                    paid_by: None,
                     description: "new".into(),
-                    category: None,
+                    work_kind: "maintenance".into(),
                     quantity: None,
                     unit_cost_cents: None,
                     cost_cents: Some(200),
@@ -1015,21 +1448,29 @@ mod tests {
                 shop_name: None,
                 shop_id: None,
                 notes: None,
-                build_id: None,
                 paid_by: None,
                 payer_note: None,
                 schedule_item_ids: Some(vec![sched_id]),
                 part_ids: Some(vec![part_id]),
                 line_items: None,
                 invoice_ref: None,
+                end_date: None,
+                performed_by: None,
+                work_item_ids: None,
+                resolved_incident_ids: None,
+                noticed_incident_ids: None,
+                recall_finding_ids: None,
+                parts: None,
             },
         )
         .await
         .unwrap();
 
-        delete(&db, vid, created.record.id, DocumentDisposition::Keep)
+        let kept = delete(&db, vid, created.record.id, None)
             .await
-            .unwrap();
+            .unwrap()
+            .kept_part_ids;
+        assert_eq!(kept, vec![part_id], "the kept parts are reported");
 
         // Record gone
         assert!(matches!(
@@ -1053,7 +1494,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_unlinks_completed_visit_and_removes_incident_links() {
+    async fn delete_clears_finding_links_and_removes_incident_links() {
         use crate::entities::incident;
 
         let db = test_db().await;
@@ -1069,18 +1510,6 @@ mod tests {
         .unwrap()
         .id;
 
-        // A completed visit pointing at the record (soft link, no FK).
-        let visit_row = visit::ActiveModel {
-            vehicle_id: Set(vid),
-            status: Set("completed".into()),
-            service_record_id: Set(Some(svc_id)),
-            created_at: Set("2024-01-01 00:00:00".into()),
-            updated_at: Set("2024-01-01 00:00:00".into()),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap();
         // An incident linked to the record via the M2M link table.
         let inc = incident::ActiveModel {
             vehicle_id: Set(vid),
@@ -1096,91 +1525,15 @@ mod tests {
         incident_service_link::ActiveModel {
             incident_id: Set(inc.id),
             service_record_id: Set(svc_id),
+            role: Set("resolved".into()),
         }
         .insert(&db)
         .await
         .unwrap();
 
-        // A research finding resolved by this record (polymorphic soft link,
-        // no FK — the shape visit::complete writes).
-        let report = crate::entities::research_report::ActiveModel {
-            vehicle_id: Set(vid),
-            generated_at: Set("2024-01-01".into()),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap();
-        let finding = research_finding::ActiveModel {
-            report_id: Set(report.id),
-            category: Set("recall".into()),
-            title: Set("Recall fixed here".into()),
-            status: Set("completed".into()),
-            linked_entity_type: Set(Some("service".into())),
-            linked_entity_id: Set(Some(svc_id)),
-            created_at: Set("2024-01-01 00:00:00".into()),
-            updated_at: Set("2024-01-01 00:00:00".into()),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap();
+        delete(&db, vid, svc_id, None).await.unwrap();
 
-        // Negative control: a finding linked to a DIFFERENT service must keep
-        // its link — guards the update_many's id predicate.
-        let other_svc = service_record::ActiveModel {
-            vehicle_id: Set(vid),
-            service_date: Set("2024-04-01".into()),
-            paid_by: Set("self".into()),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap();
-        let bystander = research_finding::ActiveModel {
-            report_id: Set(report.id),
-            category: Set("recall".into()),
-            title: Set("Unrelated".into()),
-            status: Set("completed".into()),
-            linked_entity_type: Set(Some("service".into())),
-            linked_entity_id: Set(Some(other_svc.id)),
-            created_at: Set("2024-01-01 00:00:00".into()),
-            updated_at: Set("2024-01-01 00:00:00".into()),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap();
-
-        delete(&db, vid, svc_id, DocumentDisposition::Keep)
-            .await
-            .unwrap();
-
-        // The research finding survives, its resolving link cleared.
-        let f = research_finding::Entity::find_by_id(finding.id)
-            .one(&db)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(f.linked_entity_type, None);
-        assert_eq!(f.linked_entity_id, None);
-        assert_eq!(f.status, "completed");
-        let b = research_finding::Entity::find_by_id(bystander.id)
-            .one(&db)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(b.linked_entity_type.as_deref(), Some("service"));
-        assert_eq!(b.linked_entity_id, Some(other_svc.id));
-
-        // The visit survives, unlinked and re-stamped; the link rows are gone.
-        let v = visit::Entity::find_by_id(visit_row.id)
-            .one(&db)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(v.service_record_id, None);
-        assert_ne!(v.updated_at, "2024-01-01 00:00:00");
+        // The incident link rows are gone.
         let links = incident_service_link::Entity::find()
             .filter(incident_service_link::Column::ServiceRecordId.eq(svc_id))
             .all(&db)
@@ -1251,9 +1604,7 @@ mod tests {
         .await
         .unwrap();
 
-        delete(&db, vid, created.record.id, DocumentDisposition::Keep)
-            .await
-            .unwrap();
+        delete(&db, vid, created.record.id, None).await.unwrap();
 
         let logs = mileage_log::Entity::find()
             .filter(mileage_log::Column::VehicleId.eq(vid))
@@ -1372,22 +1723,28 @@ mod tests {
             shop_name: None,
             shop_id: None,
             notes: None,
-            build_id: None,
             paid_by: None,
             payer_note: None,
             schedule_item_ids,
             part_ids: None,
             line_items: None,
             invoice_ref: None,
+            end_date: None,
+            performed_by: None,
+            work_item_ids: None,
+            resolved_incident_ids: None,
+            noticed_incident_ids: None,
+            recall_finding_ids: None,
+            parts: None,
         }
     }
 
     // ─── invoice_ref idempotency + possible_duplicates advisory (hwaf) ───
 
-    /// Recording the same invoice_ref twice returns the existing record
-    /// UNTOUCHED — no second row, and the second call's extra links/line-items
-    /// (and even a bogus schedule id, which the short-circuit skips guarding)
-    /// are ignored.
+    // Recording the same invoice_ref twice returns the existing record
+    // UNTOUCHED — no second row, and the second call's extra links/line-items
+    // (and even a bogus schedule id, which the short-circuit skips guarding)
+    // are ignored.
     #[tokio::test]
     async fn record_same_invoice_ref_is_hard_idempotent_and_untouched() {
         let db = test_db().await;
@@ -1414,8 +1771,9 @@ mod tests {
                 // schedule id would fail the guard if it ran.
                 schedule_item_ids: Some(vec![9999]),
                 line_items: Some(vec![NewLineItem {
+                    paid_by: None,
                     description: "should not be added".into(),
-                    category: None,
+                    work_kind: "maintenance".into(),
                     quantity: None,
                     unit_cost_cents: None,
                     cost_cents: Some(100),
@@ -1434,7 +1792,7 @@ mod tests {
         assert_eq!(list(&db, vid).await.unwrap().len(), 1, "no duplicate row");
     }
 
-    /// Distinct invoice_refs are distinct records.
+    // Distinct invoice_refs are distinct records.
     #[tokio::test]
     async fn record_different_invoice_refs_are_distinct() {
         let db = test_db().await;
@@ -1454,8 +1812,8 @@ mod tests {
         assert_eq!(list(&db, vid).await.unwrap().len(), 2);
     }
 
-    /// Regression: two records with the SAME day and SAME cost but NO
-    /// invoice_ref must BOTH persist — resemblance is never a dedup signal.
+    // Regression: two records with the SAME day and SAME cost but NO
+    // invoice_ref must BOTH persist — resemblance is never a dedup signal.
     #[tokio::test]
     async fn record_no_ref_same_day_same_cost_coexist() {
         let db = test_db().await;
@@ -1479,8 +1837,8 @@ mod tests {
         );
     }
 
-    /// A ref-less create surfaces same-day peers as a soft advisory; the first
-    /// (no peers) is empty, the second sees the first.
+    // A ref-less create surfaces same-day peers as a soft advisory; the first
+    // (no peers) is empty, the second sees the first.
     #[tokio::test]
     async fn record_no_ref_surfaces_possible_duplicates() {
         let db = test_db().await;
@@ -1497,9 +1855,9 @@ mod tests {
         assert_eq!(second.possible_duplicates[0].id, first.record.id);
     }
 
-    /// A blank invoice_ref is normalized to absent: two ref-less records sent
-    /// with `Some("")`/whitespace must coexist, not collide on the unique
-    /// index. And a ref with surrounding whitespace is the same identity.
+    // A blank invoice_ref is normalized to absent: two ref-less records sent
+    // with `Some("")`/whitespace must coexist, not collide on the unique
+    // index. And a ref with surrounding whitespace is the same identity.
     #[tokio::test]
     async fn blank_invoice_ref_is_treated_as_absent() {
         let db = test_db().await;
@@ -1543,9 +1901,9 @@ mod tests {
         assert_eq!(b.record.id, a.record.id, "trimmed ref is the same identity");
     }
 
-    /// The partial unique index is a DB-level backstop: a raw second insert of
-    /// the same (vehicle_id, invoice_ref) — bypassing the service's
-    /// short-circuit — is rejected.
+    // The partial unique index is a DB-level backstop: a raw second insert of
+    // the same (vehicle_id, invoice_ref) — bypassing the service's
+    // short-circuit — is rejected.
     #[tokio::test]
     async fn invoice_ref_partial_unique_index_rejects_raw_duplicate() {
         let db = test_db().await;
@@ -1634,7 +1992,7 @@ mod tests {
         .unwrap_err();
         match err {
             DomainError::BadRequest(msg) => {
-                // The message lists the valid values (build-status whitelist shape).
+                // The message lists the valid values (whitelist shape).
                 assert!(
                     msg.contains("self"),
                     "message should list valid values: {msg}"
@@ -1736,6 +2094,31 @@ mod tests {
             DomainError::NotFound(_)
         ));
         assert!(list(&db, owner).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_repeated_schedule_item_id_links_once() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let item = seed_schedule_item(&db, vid, "Oil change").await;
+
+        let created = create(&db, vid, minimal_record(Some(vec![item, item])))
+            .await
+            .unwrap();
+        assert_eq!(created.schedule_item_ids, vec![item]);
+
+        let updated = update(
+            &db,
+            vid,
+            created.record.id,
+            UpdateServiceRecord {
+                schedule_item_ids: Some(vec![item, item]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.schedule_item_ids, vec![item]);
     }
 
     #[tokio::test]
@@ -1863,7 +2246,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_allows_inherited_template_and_platform_schedule_items() {
-        use crate::entities::{model_template, platform};
+        use crate::entities::{maintenance_schedule_item, model_template, platform};
         let db = test_db().await;
 
         let platform_id = platform::ActiveModel {
@@ -1920,5 +2303,1017 @@ mod tests {
             created.schedule_item_ids,
             vec![platform_item, template_item]
         );
+    }
+
+    // --- invoice detail: who did the work, date range, line kinds, parts ---
+
+    fn line(description: &str, work_kind: &str) -> NewLineItem {
+        NewLineItem {
+            paid_by: None,
+            description: description.into(),
+            work_kind: work_kind.into(),
+            quantity: None,
+            unit_cost_cents: None,
+            cost_cents: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_line_stores_its_own_payer_and_refuses_an_unknown_one() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let got = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: "2026-11-03".into(),
+                line_items: Some(vec![
+                    line("Oil change", "maintenance"),
+                    NewLineItem {
+                        paid_by: Some("manufacturer".into()),
+                        ..line("Water pump under warranty", "repair")
+                    },
+                ]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let payers: Vec<Option<&str>> = got
+            .line_items
+            .iter()
+            .map(|l| l.paid_by.as_deref())
+            .collect();
+        assert_eq!(payers, vec![None, Some("manufacturer")]);
+        assert_eq!(effective_payer(None, "insurance"), "insurance");
+        assert_eq!(effective_payer(Some("self"), "insurance"), "self");
+
+        let err = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: "2026-11-04".into(),
+                line_items: Some(vec![NewLineItem {
+                    paid_by: Some("my neighbor".into()),
+                    ..line("Oil change", "maintenance")
+                }]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::BadRequest(_)), "got: {err}");
+    }
+
+    fn inline_part(name: &str, supplied_by: &str) -> NewPart {
+        NewPart {
+            name: name.into(),
+            supplied_by: Some(supplied_by.into()),
+            ..Default::default()
+        }
+    }
+
+    fn kinds(got: &ServiceRecordWithLinks) -> Vec<&str> {
+        got.line_items
+            .iter()
+            .map(|l| l.work_kind.as_str())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn create_stores_who_did_it_the_date_range_and_line_kinds() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let got = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: "2025-03-24".into(),
+                end_date: Some("2025-03-25".into()),
+                performed_by: Some("shop".into()),
+                line_items: Some(vec![
+                    line("Replace suction jet pump", "repair"),
+                    line("Intake upgrade", "mod"),
+                ]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(got.record.performed_by, "shop");
+        assert_eq!(got.record.end_date.as_deref(), Some("2025-03-25"));
+        assert_eq!(kinds(&got), vec!["repair", "mod"]);
+    }
+
+    #[tokio::test]
+    async fn create_rejects_an_end_date_before_the_start() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let err = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: "2025-03-25".into(),
+                end_date: Some("2025-03-24".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "end_date"));
+        assert_eq!(row_count::<service_record::Entity>(&db).await, 0);
+    }
+
+    #[tokio::test]
+    async fn create_rejects_an_unknown_work_kind_and_performer() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let err = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: "2025-03-24".into(),
+                line_items: Some(vec![line("Upgrade", "upgrade")]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "work_kind"));
+
+        let err = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: "2025-03-24".into(),
+                performed_by: Some("dealer".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "performed_by"));
+        assert_eq!(row_count::<service_record::Entity>(&db).await, 0);
+    }
+
+    #[tokio::test]
+    async fn create_rejects_a_self_performed_service_with_a_shop_name() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let err = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: "2025-03-24".into(),
+                performed_by: Some("self".into()),
+                shop_name: Some("Example VW".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "shop_name"));
+    }
+
+    #[tokio::test]
+    async fn inline_parts_are_installed_by_the_service_and_keep_their_supplier() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let got = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: "2025-03-24".into(),
+                mileage: Some(52_747),
+                parts: Some(vec![
+                    NewPart {
+                        seller: Some("FCP Euro".into()),
+                        ..inline_part("Front brake pads", "self")
+                    },
+                    inline_part("Brake fluid", "shop"),
+                ]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(got.parts.len(), 2);
+        assert_eq!(got.part_ids.len(), 2);
+        assert_eq!(got.parts[0].supplied_by, "self");
+        assert_eq!(got.parts[0].installed_service_id, Some(got.record.id));
+        assert_eq!(got.parts[0].installed_odometer, Some(52_747));
+        assert_eq!(got.parts[0].installed_date.as_deref(), Some("2025-03-24"));
+        assert_eq!(got.parts[0].status, "installed");
+        assert_eq!(got.parts[1].supplied_by, "shop");
+    }
+
+    #[tokio::test]
+    async fn refiling_an_invoice_number_returns_the_first_record_untouched() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let first = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: "2025-03-24".into(),
+                invoice_ref: Some("07447".into()),
+                line_items: Some(vec![line("Oil change", "maintenance")]),
+                parts: Some(vec![inline_part("Oil filter", "shop")]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(!first.already_recorded);
+        assert!(first.message.is_none());
+
+        let second = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: "2025-03-24".into(),
+                invoice_ref: Some("07447".into()),
+                line_items: Some(vec![line("Other", "repair"), line("Another", "mod")]),
+                parts: Some(vec![inline_part("A", "self"), inline_part("B", "self")]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(second.already_recorded);
+        assert!(
+            second
+                .message
+                .as_deref()
+                .is_some_and(|m| m.contains(&format!("service {}", first.record.id))),
+            "got: {:?}",
+            second.message
+        );
+        assert_eq!(second.record.id, first.record.id);
+        assert_eq!(row_count::<service_record_line_item::Entity>(&db).await, 1);
+        assert_eq!(row_count::<part::Entity>(&db).await, 1);
+    }
+
+    #[tokio::test]
+    async fn a_bad_part_supplier_rolls_back_the_whole_service() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let result = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: "2025-03-24".into(),
+                mileage: Some(50_000),
+                line_items: Some(vec![line("Oil change", "maintenance")]),
+                parts: Some(vec![inline_part("Filter", "dealer")]),
+                ..Default::default()
+            },
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(DomainError::Invalid { ref field, .. }) if field == "supplied_by"
+        ));
+        assert_eq!(row_count::<service_record::Entity>(&db).await, 0);
+        assert_eq!(row_count::<service_record_line_item::Entity>(&db).await, 0);
+        assert_eq!(row_count::<part::Entity>(&db).await, 0);
+        assert_eq!(row_count::<mileage_log::Entity>(&db).await, 0);
+    }
+
+    #[tokio::test]
+    async fn a_self_performed_service_records_an_ecu_flash() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let got = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: "2025-03-24".into(),
+                performed_by: Some("self".into()),
+                line_items: Some(vec![line("IE Stage 1 tune flash", "mod")]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(got.record.performed_by, "self");
+        assert!(got.record.shop_name.is_none());
+    }
+
+    #[tokio::test]
+    async fn update_changes_performer_and_end_date_and_validates_them() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let made = create(&db, vid, minimal_record(None)).await.unwrap();
+
+        let updated = update(
+            &db,
+            vid,
+            made.record.id,
+            UpdateServiceRecord {
+                performed_by: Some("self".into()),
+                end_date: Some(Some("2024-03-02".into())),
+                line_items: Some(vec![line("Flash", "mod")]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.record.performed_by, "self");
+        assert_eq!(updated.record.end_date.as_deref(), Some("2024-03-02"));
+        assert_eq!(kinds(&updated), vec!["mod"]);
+
+        let err = update(
+            &db,
+            vid,
+            made.record.id,
+            UpdateServiceRecord {
+                end_date: Some(Some("2024-02-01".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "end_date"));
+
+        let cleared = update(
+            &db,
+            vid,
+            made.record.id,
+            UpdateServiceRecord {
+                end_date: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(cleared.record.end_date.is_none());
+    }
+    // --- incident links ---------------------------------------------------
+
+    async fn service_dated(db: &DatabaseConnection, vehicle_id: i32, date: &str) -> i32 {
+        create(
+            db,
+            vehicle_id,
+            NewServiceRecord {
+                service_date: date.into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .record
+        .id
+    }
+
+    async fn observation(
+        db: &DatabaseConnection,
+        vehicle_id: i32,
+        noticed_during: Option<i32>,
+    ) -> i32 {
+        incident::create(
+            db,
+            vehicle_id,
+            NewIncident {
+                category: "shop_observation".into(),
+                title: "N80 purge valve failing".into(),
+                noticed_during_service_id: noticed_during,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .incident
+        .id
+    }
+
+    #[tokio::test]
+    async fn a_shop_observation_links_the_service_that_noticed_it_and_the_one_that_fixed_it() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let svc_2023 = service_dated(&db, v, "2023-05-03").await;
+        let incident_id = observation(&db, v, Some(svc_2023)).await;
+        let svc_2024 = create(
+            &db,
+            v,
+            NewServiceRecord {
+                service_date: "2024-06-12".into(),
+                resolved_incident_ids: Some(vec![incident_id]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .record
+        .id;
+
+        let s23 = get(&db, v, svc_2023).await.unwrap();
+        assert_eq!(s23.noticed_incidents[0].title, "N80 purge valve failing");
+        assert!(s23.noticed_incidents[0].resolved);
+        assert_eq!(
+            s23.noticed_incidents[0]
+                .other_service
+                .as_ref()
+                .unwrap()
+                .service_date,
+            "2024-06-12"
+        );
+        let s24 = get(&db, v, svc_2024).await.unwrap();
+        assert_eq!(
+            s24.resolved_incidents[0]
+                .other_service
+                .as_ref()
+                .unwrap()
+                .service_date,
+            "2023-05-03"
+        );
+        let inc = incident::get(&db, v, incident_id).await.unwrap();
+        assert_eq!(inc.noticed_during.unwrap().id, svc_2023);
+        assert_eq!(inc.resolved_by[0].id, svc_2024);
+
+        // The list path carries the same links.
+        let listed = list(&db, v).await.unwrap();
+        let listed_23 = listed.iter().find(|s| s.record.id == svc_2023).unwrap();
+        assert_eq!(listed_23.noticed_incidents.len(), 1);
+        let listed_24 = listed.iter().find(|s| s.record.id == svc_2024).unwrap();
+        assert_eq!(listed_24.resolved_incidents.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_unresolved_observation_shows_as_open_on_the_service_that_noticed_it() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let svc_2023 = service_dated(&db, v, "2023-05-03").await;
+        observation(&db, v, Some(svc_2023)).await;
+
+        let s23 = get(&db, v, svc_2023).await.unwrap();
+        assert!(!s23.noticed_incidents[0].resolved);
+        assert!(s23.noticed_incidents[0].other_service.is_none());
+    }
+
+    #[tokio::test]
+    async fn recording_a_service_can_note_what_it_noticed() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let incident_id = observation(&db, v, None).await;
+        let svc = create(
+            &db,
+            v,
+            NewServiceRecord {
+                service_date: "2023-05-03".into(),
+                noticed_incident_ids: Some(vec![incident_id]),
+                recall_finding_ids: None,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(svc.noticed_incidents[0].id, incident_id);
+        let inc = incident::get(&db, v, incident_id).await.unwrap();
+        assert_eq!(inc.noticed_during.unwrap().id, svc.record.id);
+        assert!(!inc.incident.resolved);
+
+        // An incident is noticed during at most one service.
+        let err = create(
+            &db,
+            v,
+            NewServiceRecord {
+                service_date: "2023-06-01".into(),
+                noticed_incident_ids: Some(vec![incident_id]),
+                recall_finding_ids: None,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::BadRequest(_)), "got {err:?}");
+        assert_eq!(row_count::<service_record::Entity>(&db).await, 1);
+    }
+
+    #[tokio::test]
+    async fn completing_an_incident_sourced_work_item_resolves_the_incident() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let svc_2023 = service_dated(&db, v, "2023-05-03").await;
+        let incident_id = observation(&db, v, Some(svc_2023)).await;
+        let planned = work_item::create(
+            &db,
+            v,
+            crate::inputs::work_item::NewWorkItem {
+                title: "Replace purge valve".into(),
+                notes: None,
+                schedule_item_id: None,
+                research_finding_id: None,
+                incident_id: Some(incident_id),
+                est_cost_cents: None,
+                revisit_by_date: None,
+                revisit_by_miles: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        // Naming the incident as well as the work item must not double-link.
+        let svc_2024 = create(
+            &db,
+            v,
+            NewServiceRecord {
+                service_date: "2024-06-12".into(),
+                work_item_ids: Some(vec![planned.id]),
+                resolved_incident_ids: Some(vec![incident_id]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(svc_2024.resolved_incidents.len(), 1);
+        let inc = incident::get(&db, v, incident_id).await.unwrap();
+        assert!(inc.incident.resolved);
+        assert_eq!(inc.resolved_by.len(), 1);
+        assert_eq!(inc.resolved_by[0].id, svc_2024.record.id);
+
+        // The service names the to-do it completed, when created and when read
+        // back alone or in a list.
+        let listed = list(&db, v).await.unwrap();
+        let read = get(&db, v, svc_2024.record.id).await.unwrap();
+        for got in [&svc_2024, &read, &listed[0]] {
+            assert_eq!(got.completed_work_items.len(), 1);
+            assert_eq!(got.completed_work_items[0].id, planned.id);
+            assert_eq!(got.completed_work_items[0].title, "Replace purge valve");
+        }
+        assert!(listed[1].completed_work_items.is_empty());
+    }
+
+    #[tokio::test]
+    async fn incident_and_service_ids_from_another_vehicle_are_not_found() {
+        let db = test_db().await;
+        let v1 = seed_vehicle(&db).await;
+        let v2 = seed_vehicle(&db).await;
+        let foreign_incident = observation(&db, v2, None).await;
+        let foreign_service = service_dated(&db, v2, "2023-05-03").await;
+        let services_before = row_count::<service_record::Entity>(&db).await;
+
+        // A foreign noticed_during_service_id on create reads like a missing one.
+        let wrong = incident::create(
+            &db,
+            v1,
+            NewIncident {
+                noticed_during_service_id: Some(foreign_service),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        let missing = incident::create(
+            &db,
+            v1,
+            NewIncident {
+                noticed_during_service_id: Some(9999),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(wrong, DomainError::NotFound(_)));
+        assert_eq!(
+            wrong.to_string().replace(&foreign_service.to_string(), "N"),
+            missing.to_string().replace("9999", "N")
+        );
+        assert!(incident::list(&db, v1).await.unwrap().is_empty());
+
+        // Foreign incident ids on record_service leave no footprint at all.
+        let sched = seed_schedule_item(&db, v1, "Oil change").await;
+        let full = |as_resolved: bool, id: i32| {
+            let ids = Some(vec![id]);
+            NewServiceRecord {
+                service_date: "2024-06-12".into(),
+                mileage: Some(50_000),
+                line_items: Some(vec![line("Oil", "maintenance")]),
+                parts: Some(vec![NewPart {
+                    name: "Filter".into(),
+                    ..Default::default()
+                }]),
+                schedule_item_ids: Some(vec![sched]),
+                resolved_incident_ids: if as_resolved { ids.clone() } else { None },
+                noticed_incident_ids: if as_resolved { None } else { ids },
+                recall_finding_ids: None,
+                ..Default::default()
+            }
+        };
+        for as_resolved in [true, false] {
+            let err = create(&db, v1, full(as_resolved, foreign_incident))
+                .await
+                .unwrap_err();
+            let gone = create(&db, v1, full(as_resolved, 9999)).await.unwrap_err();
+            assert!(matches!(err, DomainError::NotFound(_)));
+            assert_eq!(
+                err.to_string().replace(&foreign_incident.to_string(), "N"),
+                gone.to_string().replace("9999", "N")
+            );
+            assert_eq!(
+                row_count::<service_record::Entity>(&db).await,
+                services_before
+            );
+            assert_eq!(row_count::<service_record_line_item::Entity>(&db).await, 0);
+            assert_eq!(row_count::<part::Entity>(&db).await, 0);
+            assert_eq!(row_count::<mileage_log::Entity>(&db).await, 0);
+            assert_eq!(row_count::<service_schedule_link::Entity>(&db).await, 0);
+            assert_eq!(row_count::<incident_service_link::Entity>(&db).await, 0);
+        }
+        assert!(
+            !incident::get(&db, v2, foreign_incident)
+                .await
+                .unwrap()
+                .incident
+                .resolved
+        );
+    }
+
+    // --- deleting a service reopens what it closed --------------------------
+
+    #[tokio::test]
+    async fn deleting_a_service_reopens_what_it_closed() {
+        use crate::{
+            inputs::{service_record::NewServiceRecord, work_item::NewWorkItem},
+            services::{recall, research, work_item as work_item_svc},
+        };
+
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+
+        let earlier = service_dated(&db, v, "2023-01-10").await;
+        let incident_a = observation(&db, v, None).await;
+        let incident_b = observation(&db, v, None).await;
+        incident::update(
+            &db,
+            v,
+            incident_b,
+            crate::inputs::incident::UpdateIncident {
+                resolved_by_service_ids: Some(vec![earlier]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let finding_id = research::record_recalls(
+            &db,
+            v,
+            &[crate::services::nhtsa::RecallInfo {
+                campaign_number: "24V123".into(),
+                manufacturer: None,
+                title: "Pump".into(),
+                summary: None,
+                consequence: None,
+                remedy: None,
+                report_date: None,
+                component: None,
+                action_number: None,
+            }],
+        )
+        .await
+        .unwrap()
+        .recalls[0]
+            .finding_id;
+        let work_item = work_item_svc::create(
+            &db,
+            v,
+            NewWorkItem {
+                title: "Do the thing".into(),
+                notes: None,
+                schedule_item_id: None,
+                research_finding_id: None,
+                incident_id: None,
+                est_cost_cents: None,
+                revisit_by_date: None,
+                revisit_by_miles: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let closing = create(
+            &db,
+            v,
+            NewServiceRecord {
+                service_date: "2024-06-01".into(),
+                work_item_ids: Some(vec![work_item.id]),
+                resolved_incident_ids: Some(vec![incident_a, incident_b]),
+                recall_finding_ids: Some(vec![finding_id]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let work_item_before = work_item_svc::get(&db, v, work_item.id).await.unwrap();
+        assert_eq!(work_item_before.status, "done");
+        assert_eq!(recall::list(&db, v).await.unwrap()[0].status, "done");
+
+        delete(&db, v, closing.record.id, Some(RecallsOnDelete::Reopen))
+            .await
+            .unwrap();
+
+        let work_item_after = work_item_svc::get(&db, v, work_item.id).await.unwrap();
+        assert_eq!(work_item_after.status, "planned");
+        assert_eq!(work_item_after.completed_service_id, None);
+        let incident_a_after = incident::get(&db, v, incident_a).await.unwrap();
+        let incident_b_after = incident::get(&db, v, incident_b).await.unwrap();
+        assert!(!incident_a_after.incident.resolved);
+        assert!(incident_b_after.incident.resolved);
+        assert_eq!(recall::list(&db, v).await.unwrap()[0].status, "open");
+    }
+
+    async fn seed_recall(db: &DatabaseConnection, v: i32, campaign: &str) -> i32 {
+        crate::services::research::record_recalls(
+            db,
+            v,
+            &[crate::services::nhtsa::RecallInfo {
+                campaign_number: campaign.into(),
+                manufacturer: None,
+                title: "Pump".into(),
+                summary: None,
+                consequence: None,
+                remedy: None,
+                report_date: None,
+                component: None,
+                action_number: None,
+            }],
+        )
+        .await
+        .unwrap()
+        .recalls[0]
+            .finding_id
+    }
+
+    async fn service_with_recall(db: &DatabaseConnection, v: i32, finding_id: i32) -> i32 {
+        create(
+            db,
+            v,
+            NewServiceRecord {
+                service_date: "2024-06-01".into(),
+                recall_finding_ids: Some(vec![finding_id]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .record
+        .id
+    }
+
+    async fn recall_status(db: &DatabaseConnection, v: i32) -> Vec<(String, Option<i32>)> {
+        crate::services::recall::list(db, v)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.status, r.done_service.map(|s| s.id)))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn deleting_a_service_with_recalls_and_no_choice_changes_nothing() {
+        use crate::{inputs::work_item::NewWorkItem, services::work_item as work_item_svc};
+
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let finding_id = seed_recall(&db, v, "24V123").await;
+        let incident_id = observation(&db, v, None).await;
+        let work_item = work_item_svc::create(
+            &db,
+            v,
+            NewWorkItem {
+                title: "Do the thing".into(),
+                notes: None,
+                schedule_item_id: None,
+                research_finding_id: None,
+                incident_id: None,
+                est_cost_cents: None,
+                revisit_by_date: None,
+                revisit_by_miles: None,
+            },
+        )
+        .await
+        .unwrap();
+        let svc = create(
+            &db,
+            v,
+            NewServiceRecord {
+                service_date: "2024-06-01".into(),
+                recall_finding_ids: Some(vec![finding_id]),
+                work_item_ids: Some(vec![work_item.id]),
+                resolved_incident_ids: Some(vec![incident_id]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let id = svc.record.id;
+
+        let err = delete(&db, v, id, None).await.unwrap_err();
+
+        let DomainError::BadRequest(message) = err else {
+            panic!("expected BadRequest, got {err:?}");
+        };
+        assert!(message.contains(&finding_id.to_string()), "{message}");
+        assert!(message.contains("24V123"), "{message}");
+        assert!(message.contains("Pump"), "{message}");
+        assert!(message.contains("reopen"), "{message}");
+        assert!(message.contains("keep_done"), "{message}");
+        assert!(get(&db, v, id).await.is_ok());
+        assert_eq!(recall_status(&db, v).await, vec![("done".into(), Some(id))]);
+        assert_eq!(
+            work_item_svc::get(&db, v, work_item.id)
+                .await
+                .unwrap()
+                .status,
+            "done"
+        );
+        assert!(
+            incident::get(&db, v, incident_id)
+                .await
+                .unwrap()
+                .incident
+                .resolved
+        );
+    }
+
+    #[tokio::test]
+    async fn reopen_makes_a_performed_recall_open_even_if_the_owner_marked_it_done() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let finding_id = seed_recall(&db, v, "24V999").await;
+        let svc = service_with_recall(&db, v, finding_id).await;
+        crate::services::recall::set_status(&db, v, finding_id, "done")
+            .await
+            .unwrap();
+
+        let out = delete(&db, v, svc, Some(RecallsOnDelete::Reopen))
+            .await
+            .unwrap();
+
+        assert_eq!(out.reopened_recall_ids, vec![finding_id]);
+        assert!(out.kept_done_recall_ids.is_empty());
+        assert_eq!(recall_status(&db, v).await, vec![("open".into(), None)]);
+    }
+
+    #[tokio::test]
+    async fn keep_done_leaves_a_performed_recall_done_with_no_service() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let finding_id = seed_recall(&db, v, "24V999").await;
+        let svc = service_with_recall(&db, v, finding_id).await;
+
+        let out = delete(&db, v, svc, Some(RecallsOnDelete::KeepDone))
+            .await
+            .unwrap();
+
+        assert_eq!(out.kept_done_recall_ids, vec![finding_id]);
+        assert!(out.reopened_recall_ids.is_empty());
+        assert_eq!(recall_status(&db, v).await, vec![("done".into(), None)]);
+    }
+
+    #[tokio::test]
+    async fn a_service_without_recalls_deletes_with_no_choice() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let svc = service_dated(&db, v, "2024-06-01").await;
+
+        let out = delete(&db, v, svc, None).await.unwrap();
+
+        assert!(out.reopened_recall_ids.is_empty() && out.kept_done_recall_ids.is_empty());
+        assert!(get(&db, v, svc).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn reopen_leaves_a_recall_done_through_another_service() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let finding_id = seed_recall(&db, v, "24V999").await;
+        let first = service_with_recall(&db, v, finding_id).await;
+        let second = service_with_recall(&db, v, finding_id).await;
+
+        let out = delete(&db, v, first, Some(RecallsOnDelete::Reopen))
+            .await
+            .unwrap();
+
+        assert!(out.reopened_recall_ids.is_empty());
+        assert_eq!(out.still_done_elsewhere_recall_ids, vec![finding_id]);
+        assert_eq!(
+            recall_status(&db, v).await,
+            vec![("done".into(), Some(second))]
+        );
+    }
+
+    #[tokio::test]
+    async fn deleting_a_service_keeps_its_inline_parts_as_purchased() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let svc = create(
+            &db,
+            v,
+            NewServiceRecord {
+                service_date: "2024-06-01".into(),
+                mileage: Some(40_000),
+                parts: Some(vec![NewPart {
+                    name: "Brake pads".into(),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let part_id = svc.parts[0].id;
+
+        delete(&db, v, svc.record.id, None).await.unwrap();
+
+        let kept = part_svc::get(&db, v, part_id).await.unwrap();
+        assert_eq!(kept.status, "purchased");
+        assert_eq!(kept.installed_service_id, None);
+    }
+
+    #[tokio::test]
+    async fn correcting_the_date_or_mileage_moves_the_install_of_its_parts() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let svc = create(
+            &db,
+            v,
+            NewServiceRecord {
+                service_date: "2024-03-01".into(),
+                mileage: Some(50_000),
+                parts: Some(vec![inline_part("Pads", "shop")]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let corrected = update(
+            &db,
+            v,
+            svc.record.id,
+            UpdateServiceRecord {
+                service_date: Some("2024-03-10".into()),
+                mileage: Some(Some(50_500)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            corrected.parts[0].installed_date.as_deref(),
+            Some("2024-03-10")
+        );
+        assert_eq!(corrected.parts[0].installed_odometer, Some(50_500));
+
+        // Clearing the service's mileage leaves the part its own reading.
+        let cleared = update(
+            &db,
+            v,
+            svc.record.id,
+            UpdateServiceRecord {
+                mileage: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(cleared.parts[0].installed_odometer, Some(50_500));
+        assert_eq!(
+            cleared.parts[0].installed_date.as_deref(),
+            Some("2024-03-10")
+        );
+    }
+
+    #[tokio::test]
+    async fn list_between_keeps_only_services_inside_the_bounds() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        for date in ["2023-01-05", "2024-03-01", "2025-07-09"] {
+            service_dated(&db, v, date).await;
+        }
+        let dates = |rows: Vec<ServiceRecordWithLinks>| {
+            rows.into_iter()
+                .map(|r| r.record.service_date)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            dates(
+                list_between(&db, v, Some("2024-01-01"), None)
+                    .await
+                    .unwrap()
+            ),
+            vec!["2025-07-09", "2024-03-01"]
+        );
+        assert_eq!(
+            dates(
+                list_between(&db, v, None, Some("2024-03-01"))
+                    .await
+                    .unwrap()
+            ),
+            vec!["2024-03-01", "2023-01-05"]
+        );
+        assert_eq!(list_between(&db, v, None, None).await.unwrap().len(), 3);
     }
 }

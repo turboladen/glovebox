@@ -1,7 +1,7 @@
-//! The unified incident primitive (2hea unit B): observations + accidents
-//! merged into one vehicle-scoped record with constrained categories,
-//! followups (generalized correspondence), M2M service links, and recurrence
-//! chains. Replaces the retired `observation` and `accident` services.
+//! Incidents: anything noticed about a vehicle, from a noise or a shop
+//! observation to an accident, as one vehicle-scoped record with a
+//! constrained category, dated followups, links to the services that noticed
+//! and fixed it, and recurrence chains.
 
 use sea_orm::*;
 use serde::Serialize;
@@ -9,16 +9,12 @@ use serde::Serialize;
 use crate::{
     entities::{incident, incident_followup, incident_service_link, service_record, work_item},
     error::{DomainError, DomainResult},
-    inputs::{
-        document::DocumentDisposition,
-        incident::{NewFollowup, NewIncident, UpdateIncident},
-    },
+    inputs::incident::{NewFollowup, NewIncident, UpdateIncident},
 };
 
-/// Category whitelist — the lossless union of every category the two retired
-/// tables actually held (no remapping of existing data) plus `accident`
-/// (migrated accidents) and `note` (the `save_note` MCP alias).
-pub const VALID_CATEGORIES: [&str; 10] = [
+/// Category whitelist: the categories an incident may carry. `shop_observation`
+/// is something a shop flagged during a service but did not fix.
+pub const VALID_CATEGORIES: [&str; 11] = [
     "general",
     "noise",
     "leak",
@@ -29,7 +25,14 @@ pub const VALID_CATEGORIES: [&str; 10] = [
     "damage",
     "accident",
     "note",
+    "shop_observation",
 ];
+
+/// Roles an `incident_service_links` row can carry.
+pub const VALID_LINK_ROLES: [&str; 2] = ["noticed", "resolved"];
+
+const ROLE_NOTICED: &str = "noticed";
+pub(crate) const ROLE_RESOLVED: &str = "resolved";
 
 fn validate_category(category: &str) -> DomainResult<()> {
     if VALID_CATEGORIES.contains(&category) {
@@ -44,7 +47,7 @@ fn validate_category(category: &str) -> DomainResult<()> {
 
 /// Fetch an incident scoped to its owning vehicle. A wrong-vehicle lookup is
 /// indistinguishable from a nonexistent incident.
-async fn require_incident(
+pub(crate) async fn require_incident(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     id: i32,
@@ -56,30 +59,23 @@ async fn require_incident(
         .ok_or_else(|| DomainError::NotFound(format!("Incident {id} not found")))
 }
 
-/// Verify every referenced service record belongs to the vehicle. Cross-vehicle
-/// references must be indistinguishable from nonexistent records.
-async fn require_service_records_owned(
-    db: &impl ConnectionTrait,
-    vehicle_id: i32,
-    service_record_ids: &[i32],
-) -> DomainResult<()> {
-    if service_record_ids.is_empty() {
-        return Ok(());
+/// A service record as seen from an incident: enough to name it without a
+/// second lookup.
+#[derive(Clone, Debug, Serialize)]
+pub struct ServiceRef {
+    pub id: i32,
+    pub service_date: String,
+    pub description: Option<String>,
+}
+
+impl From<service_record::Model> for ServiceRef {
+    fn from(s: service_record::Model) -> Self {
+        Self {
+            id: s.id,
+            service_date: s.service_date,
+            description: s.description,
+        }
     }
-    let owned: std::collections::HashSet<i32> = service_record::Entity::find()
-        .filter(service_record::Column::Id.is_in(service_record_ids.to_vec()))
-        .filter(service_record::Column::VehicleId.eq(vehicle_id))
-        .all(db)
-        .await?
-        .into_iter()
-        .map(|s| s.id)
-        .collect();
-    if let Some(missing) = service_record_ids.iter().find(|id| !owned.contains(id)) {
-        return Err(DomainError::NotFound(format!(
-            "Service record {missing} not found"
-        )));
-    }
-    Ok(())
 }
 
 #[derive(Debug, Serialize)]
@@ -87,84 +83,168 @@ pub struct IncidentWithDetails {
     #[serde(flatten)]
     pub incident: incident::Model,
     pub followups: Vec<incident_followup::Model>,
-    pub service_record_ids: Vec<i32>,
+    /// The service during which the incident was noticed, if recorded.
+    pub noticed_during: Option<ServiceRef>,
+    /// The services that fixed the incident, oldest first.
+    pub resolved_by: Vec<ServiceRef>,
 }
 
-/// Load followups and service link IDs for a single incident.
-async fn load_details(
+/// Builds the detail shape for each incident with three batched queries
+/// (followups, links, services) regardless of how many incidents there are.
+async fn with_details(
     db: &impl ConnectionTrait,
-    incident_id: i32,
-) -> DomainResult<(Vec<incident_followup::Model>, Vec<i32>)> {
+    incidents: Vec<incident::Model>,
+) -> DomainResult<Vec<IncidentWithDetails>> {
+    if incidents.is_empty() {
+        return Ok(vec![]);
+    }
+    let incident_ids: Vec<i32> = incidents.iter().map(|i| i.id).collect();
+
     let followups = incident_followup::Entity::find()
-        .filter(incident_followup::Column::IncidentId.eq(incident_id))
+        .filter(incident_followup::Column::IncidentId.is_in(incident_ids.clone()))
         .order_by_asc(incident_followup::Column::OccurredAt)
         .all(db)
         .await?;
-
     let links = incident_service_link::Entity::find()
-        .filter(incident_service_link::Column::IncidentId.eq(incident_id))
+        .filter(incident_service_link::Column::IncidentId.is_in(incident_ids))
         .all(db)
         .await?;
-    let service_record_ids = links.into_iter().map(|l| l.service_record_id).collect();
+    let service_ids: Vec<i32> = links.iter().map(|l| l.service_record_id).collect();
+    let services: std::collections::HashMap<i32, service_record::Model> = if service_ids.is_empty()
+    {
+        std::collections::HashMap::new()
+    } else {
+        service_record::Entity::find()
+            .filter(service_record::Column::Id.is_in(service_ids))
+            .all(db)
+            .await?
+            .into_iter()
+            .map(|s| (s.id, s))
+            .collect()
+    };
 
-    Ok((followups, service_record_ids))
+    Ok(incidents
+        .into_iter()
+        .map(|inc| {
+            let service_for = |role: &str| {
+                links
+                    .iter()
+                    .filter(|l| l.incident_id == inc.id && l.role == role)
+                    .filter_map(|l| services.get(&l.service_record_id))
+                    .cloned()
+                    .map(ServiceRef::from)
+                    .collect::<Vec<_>>()
+            };
+            let noticed_during = service_for(ROLE_NOTICED).into_iter().next();
+            let mut resolved_by = service_for(ROLE_RESOLVED);
+            resolved_by.sort_by(|a, b| (&a.service_date, a.id).cmp(&(&b.service_date, b.id)));
+            IncidentWithDetails {
+                followups: followups
+                    .iter()
+                    .filter(|f| f.incident_id == inc.id)
+                    .cloned()
+                    .collect(),
+                incident: inc,
+                noticed_during,
+                resolved_by,
+            }
+        })
+        .collect())
+}
+
+/// Links an incident to a service record in the given role (`noticed` or
+/// `resolved`), inside the caller's transaction when there is one. Both ids
+/// must belong to the vehicle; a wrong-vehicle id reads as nonexistent.
+///
+/// The `resolved` role also marks the incident resolved, and linking the same
+/// service twice is a no-op. An incident can be noticed during only one
+/// service, so a second `noticed` link is a `BadRequest`.
+pub(crate) async fn link_service(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    incident_id: i32,
+    service_record_id: i32,
+    role: &str,
+) -> DomainResult<()> {
+    if !VALID_LINK_ROLES.contains(&role) {
+        return Err(DomainError::BadRequest(format!(
+            "Invalid link role '{role}'. Must be one of: {}",
+            VALID_LINK_ROLES.join(", ")
+        )));
+    }
+    let inc = require_incident(db, vehicle_id, incident_id).await?;
+    super::service_record::require(db, vehicle_id, service_record_id).await?;
+
+    let existing = incident_service_link::Entity::find()
+        .filter(incident_service_link::Column::IncidentId.eq(incident_id))
+        .filter(incident_service_link::Column::Role.eq(role))
+        .all(db)
+        .await?;
+    if existing
+        .iter()
+        .any(|l| l.service_record_id == service_record_id)
+    {
+        return Ok(());
+    }
+    if role == ROLE_NOTICED && !existing.is_empty() {
+        return Err(DomainError::BadRequest(format!(
+            "Incident {incident_id} was already noticed during another service"
+        )));
+    }
+
+    incident_service_link::ActiveModel {
+        incident_id: Set(incident_id),
+        service_record_id: Set(service_record_id),
+        role: Set(role.to_string()),
+    }
+    .insert(db)
+    .await?;
+
+    if role == ROLE_RESOLVED && !inc.resolved {
+        let mut active: incident::ActiveModel = inc.into();
+        active.resolved = Set(true);
+        active.updated_at = Set(super::now_stamp());
+        active.update(db).await?;
+    }
+    Ok(())
 }
 
 pub async fn list(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
 ) -> DomainResult<Vec<IncidentWithDetails>> {
-    let incidents = incident::Entity::find()
-        .filter(incident::Column::VehicleId.eq(vehicle_id))
+    list_filtered(db, vehicle_id, None).await
+}
+
+/// Lists a vehicle's incidents newest first, keeping only resolved ones for
+/// `Some(true)`, only unresolved ones for `Some(false)`, and all for `None`.
+pub async fn list_filtered(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    resolved: Option<bool>,
+) -> DomainResult<Vec<IncidentWithDetails>> {
+    super::vehicle::require(db, vehicle_id).await?;
+    let incidents = list_rows(db, vehicle_id, resolved).await?;
+    with_details(db, incidents).await
+}
+
+/// The incident rows behind [`list_filtered`], without their followups and
+/// service links, for a caller that reads only the incidents themselves. The
+/// vehicle is not checked; an unknown one has no incidents.
+pub(crate) async fn list_rows(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    resolved: Option<bool>,
+) -> DomainResult<Vec<incident::Model>> {
+    let mut query = incident::Entity::find().filter(incident::Column::VehicleId.eq(vehicle_id));
+    if let Some(resolved) = resolved {
+        query = query.filter(incident::Column::Resolved.eq(resolved));
+    }
+    Ok(query
         .order_by_desc(incident::Column::OccurredAt)
         .order_by_desc(incident::Column::Id)
         .all(db)
-        .await?;
-
-    // Batch-load all followups and service links (avoids N+1).
-    let incident_ids: Vec<i32> = incidents.iter().map(|i| i.id).collect();
-
-    let all_followups = if incident_ids.is_empty() {
-        vec![]
-    } else {
-        incident_followup::Entity::find()
-            .filter(incident_followup::Column::IncidentId.is_in(incident_ids.clone()))
-            .order_by_asc(incident_followup::Column::OccurredAt)
-            .all(db)
-            .await?
-    };
-
-    let all_links = if incident_ids.is_empty() {
-        vec![]
-    } else {
-        incident_service_link::Entity::find()
-            .filter(incident_service_link::Column::IncidentId.is_in(incident_ids))
-            .all(db)
-            .await?
-    };
-
-    let results = incidents
-        .into_iter()
-        .map(|inc| {
-            let followups: Vec<_> = all_followups
-                .iter()
-                .filter(|f| f.incident_id == inc.id)
-                .cloned()
-                .collect();
-            let service_record_ids = all_links
-                .iter()
-                .filter(|l| l.incident_id == inc.id)
-                .map(|l| l.service_record_id)
-                .collect();
-            IncidentWithDetails {
-                incident: inc,
-                followups,
-                service_record_ids,
-            }
-        })
-        .collect();
-
-    Ok(results)
+        .await?)
 }
 
 pub async fn get(
@@ -173,26 +253,20 @@ pub async fn get(
     id: i32,
 ) -> DomainResult<IncidentWithDetails> {
     let inc = require_incident(db, vehicle_id, id).await?;
-    let (followups, service_record_ids) = load_details(db, inc.id).await?;
-    Ok(IncidentWithDetails {
-        incident: inc,
-        followups,
-        service_record_ids,
-    })
+    Ok(with_details(db, vec![inc])
+        .await?
+        .pop()
+        .expect("one incident in, one detail out"))
 }
 
-/// Guard the cross-record links a create/update may carry: build ownership,
-/// same-vehicle recurrence target. Wrong-vehicle references must be
+/// Guard the cross-record links a create/update may carry: the same-vehicle
+/// recurrence target. Wrong-vehicle references must be
 /// indistinguishable from nonexistent ones.
 async fn require_links_owned(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
-    build_id: Option<i32>,
     recurrence_of_id: Option<i32>,
 ) -> DomainResult<()> {
-    if let Some(build_id) = build_id {
-        crate::services::build::require_owned(db, vehicle_id, build_id).await?;
-    }
     if let Some(recurrence_of_id) = recurrence_of_id {
         require_incident(db, vehicle_id, recurrence_of_id).await?;
     }
@@ -204,14 +278,16 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     vehicle_id: i32,
     input: NewIncident,
 ) -> DomainResult<IncidentWithDetails> {
+    super::vehicle::require(db, vehicle_id).await?;
     validate_category(&input.category)?;
-    require_links_owned(db, vehicle_id, input.build_id, input.recurrence_of_id).await?;
-    let service_record_ids = input.service_record_ids.unwrap_or_default();
-    require_service_records_owned(db, vehicle_id, &service_record_ids).await?;
+    if let Some(at) = &input.occurred_at {
+        super::validate_datetime("occurred_at", at)?;
+    }
+    require_links_owned(db, vehicle_id, input.recurrence_of_id).await?;
 
     let txn = db.begin().await?;
 
-    let mut model = incident::ActiveModel {
+    let model = incident::ActiveModel {
         vehicle_id: Set(vehicle_id),
         category: Set(input.category),
         title: Set(input.title),
@@ -229,30 +305,23 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
         insurance_adjuster: Set(input.insurance_adjuster),
         insurance_adjuster_phone: Set(input.insurance_adjuster_phone),
         recurrence_of_id: Set(input.recurrence_of_id),
-        build_id: Set(input.build_id),
+        occurred_at: Set(input.occurred_at.unwrap_or_else(super::local_now_stamp)),
         ..Default::default()
     };
-    if let Some(occurred_at) = input.occurred_at {
-        model.occurred_at = Set(occurred_at);
-    }
     let inc = model.insert(&txn).await?;
 
-    for sid in &service_record_ids {
-        incident_service_link::ActiveModel {
-            incident_id: Set(inc.id),
-            service_record_id: Set(*sid),
-        }
-        .insert(&txn)
-        .await?;
+    if let Some(sid) = input.noticed_during_service_id {
+        link_service(&txn, vehicle_id, inc.id, sid, ROLE_NOTICED).await?;
+    }
+    for sid in super::dedup_ids(&input.resolved_by_service_ids.unwrap_or_default()) {
+        link_service(&txn, vehicle_id, inc.id, sid, ROLE_RESOLVED).await?;
     }
 
+    let inc = require_incident(&txn, vehicle_id, inc.id).await?;
+    let mut created = with_details(&txn, vec![inc]).await?;
     txn.commit().await?;
 
-    Ok(IncidentWithDetails {
-        incident: inc,
-        followups: vec![],
-        service_record_ids,
-    })
+    Ok(created.pop().expect("one incident in, one detail out"))
 }
 
 #[allow(clippy::too_many_lines)]
@@ -267,13 +336,10 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     if let Some(category) = &input.category {
         validate_category(category)?;
     }
-    require_links_owned(
-        db,
-        vehicle_id,
-        input.build_id.flatten(),
-        input.recurrence_of_id.flatten(),
-    )
-    .await?;
+    if let Some(at) = &input.occurred_at {
+        super::validate_datetime("occurred_at", at)?;
+    }
+    require_links_owned(db, vehicle_id, input.recurrence_of_id.flatten()).await?;
     // An incident cannot be a recurrence of itself — directly or through a
     // chain. Walk the proposed target's ancestors; if `id` appears, linking
     // would close a cycle and the first feature that traverses recurrence
@@ -331,9 +397,6 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     if let Some(v) = input.obd_codes {
         active.obd_codes = Set(v);
     }
-    if let Some(v) = input.resolved {
-        active.resolved = Set(v);
-    }
     if let Some(v) = input.notes {
         active.notes = Set(v);
     }
@@ -385,67 +448,65 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     if let Some(v) = input.recurrence_of_id {
         active.recurrence_of_id = Set(v);
     }
-    if let Some(v) = input.build_id {
-        active.build_id = Set(v);
-    }
 
-    active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
+    active.updated_at = Set(super::now_stamp());
 
     let inc = active.update(&txn).await?;
 
-    let service_record_ids = if let Some(sids) = input.service_record_ids {
-        require_service_records_owned(&txn, vehicle_id, &sids).await?;
+    // Replacing the resolving services with none leaves nothing that resolved
+    // the incident, so it reads as unresolved unless the caller says otherwise.
+    let cleared_all_resolvers = input
+        .resolved_by_service_ids
+        .as_ref()
+        .is_some_and(Vec::is_empty);
+    if let Some(sids) = input.resolved_by_service_ids {
         incident_service_link::Entity::delete_many()
             .filter(incident_service_link::Column::IncidentId.eq(inc.id))
+            .filter(incident_service_link::Column::Role.eq(ROLE_RESOLVED))
             .exec(&txn)
             .await?;
-        for sid in &sids {
-            incident_service_link::ActiveModel {
-                incident_id: Set(inc.id),
-                service_record_id: Set(*sid),
-            }
-            .insert(&txn)
-            .await?;
+        for sid in super::dedup_ids(&sids) {
+            link_service(&txn, vehicle_id, inc.id, sid, ROLE_RESOLVED).await?;
         }
-        sids
-    } else {
-        incident_service_link::Entity::find()
+    }
+
+    if let Some(noticed) = input.noticed_during_service_id {
+        incident_service_link::Entity::delete_many()
             .filter(incident_service_link::Column::IncidentId.eq(inc.id))
-            .all(&txn)
-            .await?
-            .into_iter()
-            .map(|l| l.service_record_id)
-            .collect()
+            .filter(incident_service_link::Column::Role.eq(ROLE_NOTICED))
+            .exec(&txn)
+            .await?;
+        if let Some(sid) = noticed {
+            link_service(&txn, vehicle_id, inc.id, sid, ROLE_NOTICED).await?;
+        }
+    }
+
+    // An explicit `resolved` wins over the flag the links just set.
+    let resolved_override = input.resolved.or(cleared_all_resolvers.then_some(false));
+    let inc = if let Some(resolved) = resolved_override {
+        let mut active: incident::ActiveModel =
+            require_incident(&txn, vehicle_id, inc.id).await?.into();
+        active.resolved = Set(resolved);
+        active.update(&txn).await?
+    } else {
+        require_incident(&txn, vehicle_id, inc.id).await?
     };
-
-    let followups = incident_followup::Entity::find()
-        .filter(incident_followup::Column::IncidentId.eq(inc.id))
-        .order_by_asc(incident_followup::Column::OccurredAt)
-        .all(&txn)
-        .await?;
-
+    let mut updated = with_details(&txn, vec![inc]).await?;
     txn.commit().await?;
 
-    Ok(IncidentWithDetails {
-        incident: inc,
-        followups,
-        service_record_ids,
-    })
+    Ok(updated.pop().expect("one incident in, one detail out"))
 }
 
 /// Delete an incident and its owned rows (followups, service links).
 /// Incidents that pointed at this one via `recurrence_of_id` are unlinked
 /// (the DB FK is ON DELETE SET NULL, but explicit keeps the behavior
 /// pragma-independent and inside the same transaction), as are work items
-/// referencing it (soft link, no FK). Linked documents are handled per
-/// `docs`; the returned paths are files the CALLER must remove after commit
-/// (see [`super::document::detach_or_delete_for_entity`]).
+/// referencing it (soft link, no FK).
 pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
     id: i32,
-    docs: DocumentDisposition,
-) -> DomainResult<Vec<String>> {
+) -> DomainResult<()> {
     let existing = require_incident(db, vehicle_id, id).await?;
 
     let txn = db.begin().await?;
@@ -468,8 +529,8 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .filter(incident::Column::RecurrenceOfId.eq(existing.id))
         .exec(&txn)
         .await?;
-    // Work items reference incidents via a soft link (no FK in migration
-    // 000020) — clear it or planning rows point at a deleted incident.
+    // Work items reference incidents through a plain integer column, so clear
+    // it here or planning rows point at a deleted incident.
     work_item::Entity::update_many()
         .set(work_item::ActiveModel {
             incident_id: Set(None),
@@ -480,14 +541,11 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .exec(&txn)
         .await?;
 
-    let doc_files =
-        super::document::detach_or_delete_for_entity(&txn, "incident", id, docs).await?;
-
     existing.delete(&txn).await?;
 
     txn.commit().await?;
 
-    Ok(doc_files)
+    Ok(())
 }
 
 pub async fn list_followups(
@@ -513,6 +571,7 @@ pub async fn create_followup(
 ) -> DomainResult<incident_followup::Model> {
     // Verify the incident belongs to this vehicle before attaching a followup.
     require_incident(db, vehicle_id, incident_id).await?;
+    super::validate_datetime("occurred_at", &input.occurred_at)?;
 
     let model = incident_followup::ActiveModel {
         incident_id: Set(incident_id),
@@ -578,7 +637,7 @@ mod tests {
         assert_eq!(fetched.incident.category, "noise");
         assert!(!fetched.incident.resolved);
         assert!(fetched.followups.is_empty());
-        assert!(fetched.service_record_ids.is_empty());
+        assert!(fetched.resolved_by.is_empty() && fetched.noticed_during.is_none());
     }
 
     #[tokio::test]
@@ -793,16 +852,22 @@ mod tests {
             &db,
             vid,
             NewIncident {
-                service_record_ids: Some(vec![svc_id]),
+                resolved_by_service_ids: Some(vec![svc_id]),
                 ..new_incident("Rear-ended", "accident")
             },
         )
         .await
         .unwrap();
-        assert_eq!(created.service_record_ids, vec![svc_id]);
+        assert_eq!(
+            created.resolved_by.iter().map(|s| s.id).collect::<Vec<_>>(),
+            vec![svc_id]
+        );
 
         let fetched = get(&db, vid, created.incident.id).await.unwrap();
-        assert_eq!(fetched.service_record_ids, vec![svc_id]);
+        assert_eq!(
+            fetched.resolved_by.iter().map(|s| s.id).collect::<Vec<_>>(),
+            vec![svc_id]
+        );
     }
 
     #[tokio::test]
@@ -818,7 +883,7 @@ mod tests {
                 &db,
                 owner,
                 NewIncident {
-                    service_record_ids: Some(vec![foreign_svc]),
+                    resolved_by_service_ids: Some(vec![foreign_svc]),
                     ..new_incident("t", "general")
                 },
             )
@@ -840,7 +905,7 @@ mod tests {
             &db,
             owner,
             NewIncident {
-                service_record_ids: Some(vec![own_svc]),
+                resolved_by_service_ids: Some(vec![own_svc]),
                 ..new_incident("t", "general")
             },
         )
@@ -853,7 +918,7 @@ mod tests {
                 owner,
                 inc.incident.id,
                 UpdateIncident {
-                    service_record_ids: Some(vec![foreign_svc]),
+                    resolved_by_service_ids: Some(vec![foreign_svc]),
                     ..Default::default()
                 },
             )
@@ -863,7 +928,10 @@ mod tests {
         ));
         // Existing links survive the rejected update (transaction rolled back).
         let fetched = get(&db, owner, inc.incident.id).await.unwrap();
-        assert_eq!(fetched.service_record_ids, vec![own_svc]);
+        assert_eq!(
+            fetched.resolved_by.iter().map(|s| s.id).collect::<Vec<_>>(),
+            vec![own_svc]
+        );
     }
 
     #[tokio::test]
@@ -876,7 +944,7 @@ mod tests {
             &db,
             vid,
             NewIncident {
-                service_record_ids: Some(vec![svc_a]),
+                resolved_by_service_ids: Some(vec![svc_a]),
                 ..new_incident("t", "general")
             },
         )
@@ -889,14 +957,77 @@ mod tests {
             inc.incident.id,
             UpdateIncident {
                 resolved: Some(true),
-                service_record_ids: Some(vec![svc_b]),
+                resolved_by_service_ids: Some(vec![svc_b]),
                 ..Default::default()
             },
         )
         .await
         .unwrap();
         assert!(updated.incident.resolved);
-        assert_eq!(updated.service_record_ids, vec![svc_b]);
+        assert_eq!(
+            updated.resolved_by.iter().map(|s| s.id).collect::<Vec<_>>(),
+            vec![svc_b]
+        );
+    }
+
+    #[tokio::test]
+    async fn clearing_every_resolving_service_marks_the_incident_unresolved() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let svc = seed_service(&db, vid).await;
+        let inc = create(
+            &db,
+            vid,
+            NewIncident {
+                resolved_by_service_ids: Some(vec![svc]),
+                ..new_incident("t", "general")
+            },
+        )
+        .await
+        .unwrap();
+        assert!(inc.incident.resolved);
+
+        let cleared = update(
+            &db,
+            vid,
+            inc.incident.id,
+            UpdateIncident {
+                resolved_by_service_ids: Some(vec![]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(cleared.resolved_by.is_empty());
+        assert!(!cleared.incident.resolved);
+
+        // An explicit flag in the same call wins over the derived one.
+        let relinked = update(
+            &db,
+            vid,
+            inc.incident.id,
+            UpdateIncident {
+                resolved_by_service_ids: Some(vec![svc]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(relinked.incident.resolved);
+        let explicit = update(
+            &db,
+            vid,
+            inc.incident.id,
+            UpdateIncident {
+                resolved: Some(true),
+                resolved_by_service_ids: Some(vec![]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(explicit.resolved_by.is_empty());
+        assert!(explicit.incident.resolved);
     }
 
     // --- recurrence ---------------------------------------------------------
@@ -1054,41 +1185,6 @@ mod tests {
         );
     }
 
-    // --- build links ---------------------------------------------------------
-
-    #[tokio::test]
-    async fn linking_other_vehicles_build_is_not_found() {
-        let db = test_db().await;
-        let owner = seed_vehicle(&db).await;
-        let other = seed_vehicle(&db).await;
-        let foreign_build = crate::services::build::create(
-            &db,
-            other,
-            crate::inputs::build::NewBuild {
-                name: "Foreign".into(),
-                description: None,
-                target_date: None,
-            },
-        )
-        .await
-        .unwrap();
-
-        assert!(matches!(
-            create(
-                &db,
-                owner,
-                NewIncident {
-                    build_id: Some(foreign_build.id),
-                    ..new_incident("t", "general")
-                },
-            )
-            .await
-            .unwrap_err(),
-            DomainError::NotFound(_)
-        ));
-        assert!(list(&db, owner).await.unwrap().is_empty());
-    }
-
     // --- followups ------------------------------------------------------------
 
     #[tokio::test]
@@ -1214,10 +1310,7 @@ mod tests {
         );
     }
 
-    // --- migrated-shape queries -----------------------------------------------
-    // (The migration itself is proven by test_db() running 000018 plus the
-    // populated-DB verification; this covers querying rows shaped like
-    // migrated data — e.g. an accident-category incident with links.)
+    // --- queries over accident-category incidents with links -------------------
 
     #[tokio::test]
     async fn migrated_shape_accident_with_followups_and_links_lists_correctly() {
@@ -1230,7 +1323,7 @@ mod tests {
             NewIncident {
                 description: Some("Sideswiped while parked".into()),
                 fault: Some("other".into()),
-                service_record_ids: Some(vec![svc]),
+                resolved_by_service_ids: Some(vec![svc]),
                 ..new_incident("Sideswiped while parked", "accident")
             },
         )
@@ -1254,7 +1347,7 @@ mod tests {
         let listed = list(&db, vid).await.unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].followups.len(), 1);
-        assert_eq!(listed[0].service_record_ids, vec![svc]);
+        assert_eq!(listed[0].resolved_by[0].id, svc);
     }
 
     // --- delete ----------------------------------------------------------
@@ -1269,7 +1362,7 @@ mod tests {
             &db,
             vid,
             NewIncident {
-                service_record_ids: Some(vec![svc]),
+                resolved_by_service_ids: Some(vec![svc]),
                 ..new_incident("Original rattle", "noise")
             },
         )
@@ -1312,10 +1405,7 @@ mod tests {
         .await
         .unwrap();
 
-        let paths = delete(&db, vid, doomed.incident.id, DocumentDisposition::Keep)
-            .await
-            .unwrap();
-        assert!(paths.is_empty());
+        delete(&db, vid, doomed.incident.id).await.unwrap();
 
         assert!(matches!(
             get(&db, vid, doomed.incident.id).await.unwrap_err(),
@@ -1347,48 +1437,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_handles_linked_documents_per_mode() {
-        let db = test_db().await;
-        let vid = seed_vehicle(&db).await;
-
-        let kept = create(&db, vid, new_incident("Keep my doc", "noise"))
-            .await
-            .unwrap();
-        let cascaded = create(&db, vid, new_incident("Take my doc", "noise"))
-            .await
-            .unwrap();
-        let kept_doc =
-            crate::test_support::seed_linked_document(&db, "incident", kept.incident.id).await;
-        let cascaded_doc =
-            crate::test_support::seed_linked_document(&db, "incident", cascaded.incident.id).await;
-
-        let paths = delete(&db, vid, kept.incident.id, DocumentDisposition::Keep)
-            .await
-            .unwrap();
-        assert!(paths.is_empty());
-        let doc = crate::services::document::get(&db, kept_doc).await.unwrap();
-        assert_eq!(doc.linked_entity_type, None);
-        assert!(doc.notes.unwrap().contains("Unlinked from incident"));
-
-        let paths = delete(&db, vid, cascaded.incident.id, DocumentDisposition::Delete)
-            .await
-            .unwrap();
-        assert_eq!(
-            paths,
-            vec![format!(
-                "general/other/incident-{}.pdf",
-                cascaded.incident.id
-            )]
-        );
-        assert!(matches!(
-            crate::services::document::get(&db, cascaded_doc)
-                .await
-                .unwrap_err(),
-            DomainError::NotFound(_)
-        ));
-    }
-
-    #[tokio::test]
     async fn delete_wrong_vehicle_is_byte_identical_to_nonexistent() {
         let db = test_db().await;
         let vid = seed_vehicle(&db).await;
@@ -1397,9 +1445,7 @@ mod tests {
             .await
             .unwrap();
 
-        let err = delete(&db, other_vid, inc.incident.id, DocumentDisposition::Keep)
-            .await
-            .unwrap_err();
+        let err = delete(&db, other_vid, inc.incident.id).await.unwrap_err();
         let DomainError::NotFound(msg) = err else {
             panic!("expected NotFound");
         };

@@ -2,18 +2,13 @@ use sea_orm::*;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    entities::{part, research_finding, research_report, service_record, vehicle},
+    entities::{research_finding, research_report},
     error::{DomainError, DomainResult},
-    inputs::research::UpdateFinding,
-    services::nhtsa::{self, RecallCheckResult, RecallInfo},
+    services::{
+        nhtsa::{self, RecallInfo},
+        recall::{self, RecallWithStatus},
+    },
 };
-
-#[derive(Debug, Serialize)]
-pub struct ReportWithFindings {
-    #[serde(flatten)]
-    pub report: research_report::Model,
-    pub findings: Vec<research_finding::Model>,
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct NewFinding {
@@ -38,43 +33,121 @@ pub struct NewFiledFinding {
 
 // --- Recall check ---
 
+/// What a recall check found: the count of recalls stored for the first time
+/// and every recall known for the vehicle with its status.
+#[derive(Debug, Serialize)]
+pub struct RecallCheck {
+    pub newly_found: usize,
+    pub recalls: Vec<RecallWithStatus>,
+    pub message: Option<String>,
+}
+
+/// Looks the vehicle up on NHTSA by make, model and year (a live web
+/// request), stores recalls not seen before, and returns all known recalls
+/// with their status.
+///
+/// A failed lookup is not an error: the result carries the recalls already
+/// known, `newly_found: 0`, and a `message` that starts with
+/// "NHTSA lookup failed:". A vehicle with no make, model or year is a
+/// `BadRequest`.
 pub async fn check_recalls<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
-) -> DomainResult<RecallCheckResult> {
-    let vehicle = vehicle::Entity::find_by_id(vehicle_id)
-        .one(db)
-        .await?
-        .ok_or_else(|| DomainError::NotFound("Vehicle not found".to_string()))?;
+) -> DomainResult<RecallCheck> {
+    check_recalls_with(db, vehicle_id, |make, model, year| async move {
+        nhtsa::check_recalls(&make, &model, year).await
+    })
+    .await
+}
 
-    let make = vehicle.make.as_deref().ok_or_else(|| {
+/// [`check_recalls`] with the NHTSA lookup supplied by the caller, so a test
+/// can stand in for the network.
+pub(crate) async fn check_recalls_with<C, F, Fut>(
+    db: &C,
+    vehicle_id: i32,
+    lookup: F,
+) -> DomainResult<RecallCheck>
+where
+    C: ConnectionTrait + TransactionTrait,
+    F: FnOnce(String, String, i32) -> Fut,
+    Fut: std::future::Future<Output = Result<nhtsa::RecallCheckResult, String>>,
+{
+    let vehicle = crate::services::vehicle::require(db, vehicle_id).await?;
+
+    let make = vehicle.make.ok_or_else(|| {
         DomainError::BadRequest("Vehicle has no make set — required for recall lookup".to_string())
     })?;
-    let model = vehicle.model.as_deref().ok_or_else(|| {
+    let model = vehicle.model.ok_or_else(|| {
         DomainError::BadRequest("Vehicle has no model set — required for recall lookup".to_string())
     })?;
     let year = vehicle.year.ok_or_else(|| {
         DomainError::BadRequest("Vehicle has no year set — required for recall lookup".to_string())
     })?;
 
-    let result = nhtsa::check_recalls(make, model, year)
-        .await
-        .map_err(DomainError::Internal)?;
-
-    // Persist recalls as research findings (deduplicating by campaign number)
-    if !result.recalls.is_empty() {
-        persist_recall_findings(db, vehicle_id, &result.recalls).await?;
+    match lookup(make, model, year).await {
+        Ok(result) => record_recalls(db, vehicle_id, &result.recalls).await,
+        Err(e) => {
+            tracing::warn!(vehicle_id, error = %e, "NHTSA recall lookup failed");
+            Ok(RecallCheck {
+                newly_found: 0,
+                recalls: recall::list(db, vehicle_id).await?,
+                message: Some(format!(
+                    "NHTSA lookup failed: {e}. The recalls listed are the ones already known; try \
+                     again later."
+                )),
+            })
+        }
     }
-
-    Ok(result)
 }
 
-/// Persist NHTSA recalls as research findings, skipping any already saved for this vehicle.
+/// Stores the recalls in `found` that this vehicle does not have yet and
+/// lists every recall on the vehicle with its status.
+pub(crate) async fn record_recalls<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    found: &[RecallInfo],
+) -> DomainResult<RecallCheck> {
+    let newly_found = persist_recall_findings(db, vehicle_id, found).await?;
+    let recalls = recall::list(db, vehicle_id).await?;
+    let message = if recalls.is_empty() {
+        Some("NHTSA lists no recalls for this make, model and year.".to_owned())
+    } else if newly_found == 0 {
+        Some("No new recalls; every recall below was already known.".to_owned())
+    } else {
+        None
+    };
+    Ok(RecallCheck {
+        newly_found,
+        recalls,
+        message,
+    })
+}
+
+/// The summary, consequence and remedy of a recall as one text, or `None`
+/// when NHTSA sent none of them.
+fn recall_description(recall: &RecallInfo) -> Option<String> {
+    let parts: Vec<String> = [
+        (None, &recall.summary),
+        (Some("Consequence"), &recall.consequence),
+        (Some("Remedy"), &recall.remedy),
+    ]
+    .into_iter()
+    .filter_map(|(label, text)| {
+        let text = text.as_deref()?.trim();
+        (!text.is_empty())
+            .then(|| label.map_or_else(|| text.to_owned(), |l| format!("{l}: {text}")))
+    })
+    .collect();
+    (!parts.is_empty()).then(|| parts.join("\n\n"))
+}
+
+/// Persist NHTSA recalls as research findings, skipping any already saved for
+/// this vehicle. Returns how many were stored.
 async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
     recalls: &[RecallInfo],
-) -> DomainResult<()> {
+) -> DomainResult<usize> {
     // Collect existing recall source_urls for this vehicle to deduplicate
     let existing_reports = research_report::Entity::find()
         .filter(research_report::Column::VehicleId.eq(vehicle_id))
@@ -82,48 +155,70 @@ async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
         .await?;
     let report_ids: Vec<i32> = existing_reports.iter().map(|r| r.id).collect();
 
-    let existing_urls: std::collections::HashSet<String> = if report_ids.is_empty() {
-        std::collections::HashSet::new()
-    } else {
-        research_finding::Entity::find()
-            .filter(research_finding::Column::ReportId.is_in(report_ids))
-            .filter(research_finding::Column::Category.eq("recall"))
-            .all(db)
-            .await?
-            .into_iter()
-            .filter_map(|f| f.source_url)
-            .collect()
-    };
+    // Maps each stored recall's source URL to its finding, so a repeated
+    // campaign can be recognized and a blank title repaired.
+    let mut known: std::collections::HashMap<String, research_finding::Model> =
+        if report_ids.is_empty() {
+            std::collections::HashMap::new()
+        } else {
+            research_finding::Entity::find()
+                .filter(research_finding::Column::ReportId.is_in(report_ids))
+                .filter(research_finding::Column::Category.eq("recall"))
+                .all(db)
+                .await?
+                .into_iter()
+                .filter_map(|f| f.source_url.clone().map(|u| (u, f)))
+                .collect()
+        };
 
-    let new_findings: Vec<NewFinding> = recalls
-        .iter()
-        .filter(|recall| {
-            let url = format!(
-                "https://www.nhtsa.gov/recalls?nhtsaId={}",
-                recall.campaign_number
-            );
-            !existing_urls.contains(&url)
-        })
-        .map(|recall| NewFinding {
+    let mut new_findings: Vec<NewFinding> = Vec::new();
+    let mut seen_urls: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for recall in recalls {
+        let url = format!(
+            "https://www.nhtsa.gov/recalls?nhtsaId={}",
+            recall.campaign_number
+        );
+        if let Some(existing) = known.remove(&url) {
+            // A campaign stored with a blank title, or with its raw NHTSA
+            // component as the title, gets the current one.
+            let stored_raw = recall
+                .component
+                .as_deref()
+                .is_some_and(|c| c.trim() == existing.title.trim());
+            if (existing.title.trim().is_empty() || stored_raw)
+                && !recall.title.trim().is_empty()
+                && recall.title != existing.title
+            {
+                let mut active: research_finding::ActiveModel = existing.into();
+                active.title = Set(recall.title.clone());
+                active.updated_at = Set(super::now_stamp());
+                active.update(db).await?;
+            }
+            // Stops a campaign repeated within `recalls` from being stored twice.
+            seen_urls.insert(url);
+            continue;
+        }
+        if !seen_urls.insert(url.clone()) {
+            continue;
+        }
+        new_findings.push(NewFinding {
             category: "recall".to_string(),
-            title: recall.subject.clone(),
-            description: recall.summary.clone(),
-            source_url: Some(format!(
-                "https://www.nhtsa.gov/recalls?nhtsaId={}",
-                recall.campaign_number
-            )),
+            title: recall.title.clone(),
+            description: recall_description(recall),
+            source_url: Some(url),
             severity: Some("critical".to_string()),
-        })
-        .collect();
+        });
+    }
 
     if new_findings.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
+    let count = new_findings.len();
 
     let summary = format!(
         "Found {} new recall{} from NHTSA.",
-        new_findings.len(),
-        if new_findings.len() == 1 { "" } else { "s" }
+        count,
+        if count == 1 { "" } else { "s" }
     );
     let raw_data = serde_json::to_string(&new_findings).ok();
 
@@ -153,168 +248,7 @@ async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
     }
 
     txn.commit().await?;
-    Ok(())
-}
-
-// --- Research reports ---
-
-pub async fn list_reports(
-    db: &impl ConnectionTrait,
-    vehicle_id: i32,
-) -> DomainResult<Vec<research_report::Model>> {
-    vehicle::Entity::find_by_id(vehicle_id)
-        .one(db)
-        .await?
-        .ok_or_else(|| DomainError::NotFound("Vehicle not found".to_string()))?;
-
-    Ok(research_report::Entity::find()
-        .filter(research_report::Column::VehicleId.eq(vehicle_id))
-        .order_by_desc(research_report::Column::GeneratedAt)
-        .all(db)
-        .await?)
-}
-
-pub async fn get_report(
-    db: &impl ConnectionTrait,
-    vehicle_id: i32,
-    id: i32,
-) -> DomainResult<ReportWithFindings> {
-    let report = research_report::Entity::find_by_id(id)
-        .filter(research_report::Column::VehicleId.eq(vehicle_id))
-        .one(db)
-        .await?
-        .ok_or_else(|| DomainError::NotFound("Research report not found".to_string()))?;
-
-    let findings = research_finding::Entity::find()
-        .filter(research_finding::Column::ReportId.eq(id))
-        .order_by_asc(research_finding::Column::Id)
-        .all(db)
-        .await?;
-
-    Ok(ReportWithFindings { report, findings })
-}
-
-// --- List findings by status (cross-report) ---
-
-pub async fn list_findings(
-    db: &impl ConnectionTrait,
-    vehicle_id: i32,
-    status: Option<String>,
-) -> DomainResult<Vec<research_finding::Model>> {
-    // Get all report IDs for this vehicle
-    let report_ids: Vec<i32> = research_report::Entity::find()
-        .filter(research_report::Column::VehicleId.eq(vehicle_id))
-        .all(db)
-        .await?
-        .into_iter()
-        .map(|r| r.id)
-        .collect();
-
-    if report_ids.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let mut select = research_finding::Entity::find()
-        .filter(research_finding::Column::ReportId.is_in(report_ids));
-
-    if let Some(status) = status {
-        select = select.filter(research_finding::Column::Status.eq(status));
-    }
-
-    Ok(select
-        .order_by_desc(research_finding::Column::Id)
-        .all(db)
-        .await?)
-}
-
-// --- Finding management ---
-
-pub async fn update_finding(
-    db: &impl ConnectionTrait,
-    vehicle_id: i32,
-    report_id: i32,
-    id: i32,
-    input: UpdateFinding,
-) -> DomainResult<research_finding::Model> {
-    // Verify the report belongs to the vehicle
-    research_report::Entity::find_by_id(report_id)
-        .filter(research_report::Column::VehicleId.eq(vehicle_id))
-        .one(db)
-        .await?
-        .ok_or_else(|| DomainError::NotFound("Research report not found".to_string()))?;
-
-    let finding = research_finding::Entity::find_by_id(id)
-        .filter(research_finding::Column::ReportId.eq(report_id))
-        .one(db)
-        .await?
-        .ok_or_else(|| DomainError::NotFound("Finding not found".to_string()))?;
-
-    // When this update SETS link fields, validate the effective post-update
-    // pair: a linked id must point at one of THIS vehicle's records (same
-    // invariant as incident service links / part.installed_service_id
-    // — no storing pointers into another vehicle's data), and its type must be
-    // a known kind. Unrelated updates (e.g. status-only) skip this so a link
-    // whose target was later deleted can't block them.
-    let sets_link = matches!(input.linked_entity_type, Some(Some(_)))
-        || matches!(input.linked_entity_id, Some(Some(_)));
-    let effective_type = match &input.linked_entity_type {
-        Some(t) => t.clone(),
-        None => finding.linked_entity_type.clone(),
-    };
-    let effective_id = match input.linked_entity_id {
-        Some(v) => v,
-        None => finding.linked_entity_id,
-    };
-    if let (true, Some(linked_id)) = (sets_link, effective_id) {
-        match effective_type.as_deref() {
-            Some("service") => {
-                service_record::Entity::find_by_id(linked_id)
-                    .filter(service_record::Column::VehicleId.eq(vehicle_id))
-                    .one(db)
-                    .await?
-                    .ok_or_else(|| {
-                        DomainError::NotFound(format!("Service record {linked_id} not found"))
-                    })?;
-            }
-            Some("part") => {
-                part::Entity::find_by_id(linked_id)
-                    .filter(part::Column::VehicleId.eq(vehicle_id))
-                    .one(db)
-                    .await?
-                    .ok_or_else(|| DomainError::NotFound(format!("Part {linked_id} not found")))?;
-            }
-            other => {
-                return Err(DomainError::BadRequest(format!(
-                    "Invalid linked_entity_type '{}'. Must be one of: service, part",
-                    other.unwrap_or("")
-                )));
-            }
-        }
-    }
-
-    let mut active: research_finding::ActiveModel = finding.into();
-
-    if let Some(status) = input.status {
-        let valid = ["new", "dismissed", "planned", "completed"];
-        if !valid.contains(&status.as_str()) {
-            return Err(DomainError::BadRequest(format!(
-                "Invalid status '{}'. Must be one of: {}",
-                status,
-                valid.join(", ")
-            )));
-        }
-        active.status = Set(status);
-    }
-    if let Some(linked_type) = input.linked_entity_type {
-        active.linked_entity_type = Set(linked_type);
-    }
-    if let Some(linked_id) = input.linked_entity_id {
-        active.linked_entity_id = Set(linked_id);
-    }
-
-    active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
-
-    Ok(active.update(db).await?)
+    Ok(count)
 }
 
 /// Persist an externally-researched finding (e.g. filed by an MCP client)
@@ -325,10 +259,7 @@ pub async fn file_finding(
     vehicle_id: i32,
     input: NewFiledFinding,
 ) -> DomainResult<research_finding::Model> {
-    vehicle::Entity::find_by_id(vehicle_id)
-        .one(db)
-        .await?
-        .ok_or_else(|| DomainError::NotFound("Vehicle not found".to_string()))?;
+    crate::services::vehicle::require(db, vehicle_id).await?;
 
     // order_by_asc(Id): should concurrent first-filings ever race-create two
     // anchors (no unique index on vehicle+type), every later call still picks
@@ -341,11 +272,10 @@ pub async fn file_finding(
         .await?
     {
         Some(r) => {
-            // Touch generated_at so the anchor sorts by its NEWEST filing in
-            // list_reports (order_by_desc(GeneratedAt)) instead of sinking
-            // below old recall reports with a stale first-filing date.
+            // Touch generated_at so the anchor dates from its newest filing,
+            // not a stale first-filing date.
             let mut active: research_report::ActiveModel = r.into();
-            active.generated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
+            active.generated_at = Set(super::now_stamp());
             active.update(db).await?
         }
         None => {
@@ -384,6 +314,153 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_failed_lookup_still_returns_the_known_recalls() {
+        let db = test_db().await;
+        let vid = crate::entities::vehicle::ActiveModel {
+            name: Set("GTI".into()),
+            make: Set(Some("Volkswagen".into())),
+            model: Set(Some("Golf GTI".into())),
+            year: Set(Some(2017)),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap()
+        .id;
+        let known = RecallInfo {
+            campaign_number: "24V110000".into(),
+            manufacturer: None,
+            title: "Suction jet pump".into(),
+            summary: None,
+            consequence: None,
+            remedy: None,
+            report_date: None,
+            component: Some("FUEL SYSTEM".into()),
+            action_number: None,
+        };
+        record_recalls(&db, vid, &[known]).await.unwrap();
+
+        let check = check_recalls_with(&db, vid, |_, _, _| async {
+            Err::<nhtsa::RecallCheckResult, _>("connection refused".to_string())
+        })
+        .await
+        .unwrap();
+        assert_eq!(check.newly_found, 0);
+        assert_eq!(check.recalls.len(), 1);
+        assert_eq!(check.recalls[0].status, "open");
+        let message = check.message.unwrap_or_default();
+        assert!(
+            message.starts_with("NHTSA lookup failed: connection refused"),
+            "got: {message}"
+        );
+
+        let missing = check_recalls(&db, 99_999).await.unwrap_err();
+        assert_eq!(missing.to_string(), "Vehicle 99999 not found");
+    }
+
+    fn full_recall(campaign: &str, title: &str) -> RecallInfo {
+        RecallInfo {
+            campaign_number: campaign.into(),
+            manufacturer: None,
+            title: title.into(),
+            summary: Some("Pump may fail.".into()),
+            consequence: Some("Engine stall.".into()),
+            remedy: Some("Replace the pump.".into()),
+            report_date: None,
+            component: None,
+            action_number: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_stored_recall_keeps_its_title_and_the_whole_notice_in_its_description() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let check = record_recalls(&db, vid, &[full_recall("17V1", "FUEL SYSTEM")])
+            .await
+            .unwrap();
+        assert_eq!(check.recalls[0].title, "FUEL SYSTEM");
+        let description = check.recalls[0].description.clone().unwrap();
+        assert_eq!(
+            description,
+            "Pump may fail.\n\nConsequence: Engine stall.\n\nRemedy: Replace the pump."
+        );
+    }
+
+    #[tokio::test]
+    async fn checking_again_fills_in_a_blank_title_without_touching_status_or_count() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let first = record_recalls(&db, vid, &[full_recall("17V1", "")])
+            .await
+            .unwrap();
+        let id = first.recalls[0].finding_id;
+        recall::set_status(&db, vid, id, "not_applicable")
+            .await
+            .unwrap();
+
+        let second = record_recalls(&db, vid, &[full_recall("17V1", "FUEL SYSTEM")])
+            .await
+            .unwrap();
+        assert_eq!(second.newly_found, 0);
+        assert_eq!(second.recalls.len(), 1);
+        assert_eq!(second.recalls[0].finding_id, id);
+        assert_eq!(second.recalls[0].title, "FUEL SYSTEM");
+        assert_eq!(second.recalls[0].status, "not_applicable");
+
+        let third = record_recalls(&db, vid, &[full_recall("17V1", "OTHER")])
+            .await
+            .unwrap();
+        assert_eq!(third.recalls[0].title, "FUEL SYSTEM");
+    }
+
+    #[tokio::test]
+    async fn checking_again_reformats_a_title_stored_in_the_raw_component_form() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let raw = "FUEL SYSTEM, GASOLINE:DELIVERY:FUEL PUMP";
+        let with_component = |title: &str| RecallInfo {
+            component: Some(raw.into()),
+            ..full_recall("17V1", title)
+        };
+        record_recalls(&db, vid, &[with_component(raw)])
+            .await
+            .unwrap();
+
+        let again = record_recalls(
+            &db,
+            vid,
+            &[with_component("Fuel System, Gasoline: Delivery: Fuel Pump")],
+        )
+        .await
+        .unwrap();
+        assert_eq!(again.newly_found, 0);
+        assert_eq!(
+            again.recalls[0].title,
+            "Fuel System, Gasoline: Delivery: Fuel Pump"
+        );
+
+        // A title someone chose is not the raw component, so it is kept.
+        let id = again.recalls[0].finding_id;
+        let mut active: research_finding::ActiveModel = research_finding::Entity::find_by_id(id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap()
+            .into();
+        active.title = Set("Fuel pump recall".into());
+        active.update(&db).await.unwrap();
+        let last = record_recalls(
+            &db,
+            vid,
+            &[with_component("Fuel System, Gasoline: Delivery: Fuel Pump")],
+        )
+        .await
+        .unwrap();
+        assert_eq!(last.recalls[0].title, "Fuel pump recall");
+    }
+
+    #[tokio::test]
     async fn file_finding_creates_and_reuses_external_research_report() {
         let db = test_db().await;
         let vid = seed_vehicle(&db).await;
@@ -415,14 +492,20 @@ mod tests {
         .unwrap();
         // Same anchor report, created once, type external_research.
         assert_eq!(f1.report_id, f2.report_id);
-        let report = get_report(&db, vid, f1.report_id).await.unwrap();
-        assert_eq!(
-            report.report.report_type.as_deref(),
-            Some("external_research")
-        );
-        assert_eq!(report.findings.len(), 2);
-        // Another vehicle gets its OWN anchor — never vehicle A's (the
-        // paxy-class regression this pins: dropping the VehicleId filter).
+        let report = research_report::Entity::find_by_id(f1.report_id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(report.report_type.as_deref(), Some("external_research"));
+        let findings = research_finding::Entity::find()
+            .filter(research_finding::Column::ReportId.eq(f1.report_id))
+            .count(&db)
+            .await
+            .unwrap();
+        assert_eq!(findings, 2);
+        // Another vehicle gets its own anchor, never vehicle A's, which is
+        // what a lookup missing its VehicleId filter would return.
         let other = seed_vehicle(&db).await;
         let f3 = file_finding(
             &db,
@@ -456,204 +539,5 @@ mod tests {
             .unwrap_err(),
             DomainError::NotFound(_)
         ));
-    }
-
-    #[tokio::test]
-    async fn update_finding_validates_status_and_persists() {
-        let db = test_db().await;
-        let vid = seed_vehicle(&db).await;
-        // Manually create a report + finding to update
-        let report = research_report::ActiveModel {
-            vehicle_id: Set(vid),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap();
-        let finding = research_finding::ActiveModel {
-            report_id: Set(report.id),
-            category: Set("recall".into()),
-            title: Set("Fix".into()),
-            status: Set("new".into()),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap();
-
-        // Invalid status is rejected
-        let err = update_finding(
-            &db,
-            vid,
-            report.id,
-            finding.id,
-            UpdateFinding {
-                status: Some("bogus".into()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, DomainError::BadRequest(_)));
-
-        // Valid status is applied
-        let updated = update_finding(
-            &db,
-            vid,
-            report.id,
-            finding.id,
-            UpdateFinding {
-                status: Some("dismissed".into()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(updated.status, "dismissed");
-    }
-
-    #[tokio::test]
-    async fn list_reports_missing_vehicle_is_not_found() {
-        let db = test_db().await;
-        assert!(matches!(
-            list_reports(&db, 999).await.unwrap_err(),
-            DomainError::NotFound(_)
-        ));
-    }
-
-    #[tokio::test]
-    async fn update_finding_scopes_linked_entity_to_vehicle() {
-        let db = test_db().await;
-        let vid = seed_vehicle(&db).await;
-        let other = seed_vehicle(&db).await;
-        let report = research_report::ActiveModel {
-            vehicle_id: Set(vid),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap();
-        let finding = research_finding::ActiveModel {
-            report_id: Set(report.id),
-            category: Set("recall".into()),
-            title: Set("Fix".into()),
-            status: Set("new".into()),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap();
-        let own_svc = service_record::ActiveModel {
-            vehicle_id: Set(vid),
-            service_date: Set("2026-01-01".into()),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap();
-        let foreign_svc = service_record::ActiveModel {
-            vehicle_id: Set(other),
-            service_date: Set("2026-01-01".into()),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap();
-
-        // Another vehicle's service record is indistinguishable from nonexistent
-        let err = update_finding(
-            &db,
-            vid,
-            report.id,
-            finding.id,
-            UpdateFinding {
-                linked_entity_type: Some(Some("service".into())),
-                linked_entity_id: Some(Some(foreign_svc.id)),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, DomainError::NotFound(_)));
-
-        // Unknown entity type is rejected outright
-        let err = update_finding(
-            &db,
-            vid,
-            report.id,
-            finding.id,
-            UpdateFinding {
-                linked_entity_type: Some(Some("vehicle".into())),
-                linked_entity_id: Some(Some(own_svc.id)),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, DomainError::BadRequest(_)));
-
-        // Linking this vehicle's own record works, and an explicit clear works
-        let updated = update_finding(
-            &db,
-            vid,
-            report.id,
-            finding.id,
-            UpdateFinding {
-                status: Some("completed".into()),
-                linked_entity_type: Some(Some("service".into())),
-                linked_entity_id: Some(Some(own_svc.id)),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(updated.linked_entity_id, Some(own_svc.id));
-        let cleared = update_finding(
-            &db,
-            vid,
-            report.id,
-            finding.id,
-            UpdateFinding {
-                linked_entity_type: Some(None),
-                linked_entity_id: Some(None),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(cleared.linked_entity_id, None);
-
-        // A stale stored link (target deleted after linking) must NOT block
-        // unrelated updates like a status-only change from the UI.
-        update_finding(
-            &db,
-            vid,
-            report.id,
-            finding.id,
-            UpdateFinding {
-                linked_entity_type: Some(Some("service".into())),
-                linked_entity_id: Some(Some(own_svc.id)),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        service_record::Entity::delete_by_id(own_svc.id)
-            .exec(&db)
-            .await
-            .unwrap();
-        let dismissed = update_finding(
-            &db,
-            vid,
-            report.id,
-            finding.id,
-            UpdateFinding {
-                status: Some("dismissed".into()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(dismissed.status, "dismissed");
     }
 }

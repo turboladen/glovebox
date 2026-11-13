@@ -27,12 +27,10 @@ pub struct Model {
     pub sold_price_cents: Option<i32>,
     pub sold_price_currency: Option<String>,
     pub sold_mileage: Option<i32>,
-    pub photo_path: Option<String>,
     pub notes: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub archived_at: Option<String>,
-    // Added by migration 20 (ALTER TABLE appends to end)
     pub warranty_expires_on: Option<String>,
     pub warranty_expires_miles: Option<i32>,
 }
@@ -55,24 +53,12 @@ pub enum Relation {
     MaintenanceScheduleItem,
     #[sea_orm(has_many = "super::incident::Entity")]
     Incident,
-    #[sea_orm(has_many = "super::document::Entity")]
-    Document,
     #[sea_orm(has_many = "super::part::Entity")]
     Part,
     #[sea_orm(has_many = "super::research_report::Entity")]
     ResearchReport,
-    #[sea_orm(has_many = "super::build::Entity")]
-    Build,
     #[sea_orm(has_many = "super::work_item::Entity")]
     WorkItem,
-    #[sea_orm(has_many = "super::visit::Entity")]
-    Visit,
-}
-
-impl Related<super::build::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::Build.def()
-    }
 }
 
 impl Related<super::model_template::Entity> for Entity {
@@ -111,12 +97,6 @@ impl Related<super::incident::Entity> for Entity {
     }
 }
 
-impl Related<super::document::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::Document.def()
-    }
-}
-
 impl Related<super::part::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Part.def()
@@ -132,12 +112,6 @@ impl Related<super::research_report::Entity> for Entity {
 impl Related<super::work_item::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::WorkItem.def()
-    }
-}
-
-impl Related<super::visit::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::Visit.def()
     }
 }
 

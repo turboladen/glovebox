@@ -12,9 +12,7 @@ pub struct Model {
     pub source: Option<String>,
     pub notes: Option<String>,
     pub created_at: String,
-    // Added by migration 000019 (ALTER TABLE appends to end).
-    // Set on logs auto-created by a service record; the activity feed keys
-    // its dedupe on this, and service update/delete maintain it.
+    // Set on logs created by a service record; the activity feed dedupes on it.
     pub service_record_id: Option<i32>,
 }
 

@@ -2,6 +2,21 @@ use serde::{Deserialize, Serialize};
 
 const NHTSA_RECALLS_URL: &str = "https://api.nhtsa.gov/recalls/recallsByVehicle";
 
+/// How long one NHTSA request may take before it counts as failed.
+const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Sends a GET to an NHTSA endpoint, failing once [`REQUEST_TIMEOUT`] passes.
+// The callers run inside a tool call and promise that a failed lookup does
+// not block the work around it, so a stalled connection must end as an error.
+pub(crate) async fn get(url: impl reqwest::IntoUrl) -> reqwest::Result<reqwest::Response> {
+    reqwest::Client::builder()
+        .timeout(REQUEST_TIMEOUT)
+        .build()?
+        .get(url)
+        .send()
+        .await
+}
+
 #[derive(Debug, Deserialize)]
 struct NhtsaRecallsResponse {
     results: Vec<NhtsaRecallResult>,
@@ -13,7 +28,6 @@ struct NhtsaRecallResult {
     #[serde(rename = "NHTSACampaignNumber")]
     nhtsa_campaign_number: Option<String>,
     manufacturer: Option<String>,
-    subject: Option<String>,
     summary: Option<String>,
     consequence: Option<String>,
     remedy: Option<String>,
@@ -27,7 +41,8 @@ struct NhtsaRecallResult {
 pub struct RecallInfo {
     pub campaign_number: String,
     pub manufacturer: Option<String>,
-    pub subject: String,
+    /// The recall's component, or `Recall <campaign number>` when the component is blank.
+    pub title: String,
     pub summary: Option<String>,
     pub consequence: Option<String>,
     pub remedy: Option<String>,
@@ -126,7 +141,7 @@ async fn fetch_recalls(
     )
     .map_err(|e| NhtsaError::Network(format!("Failed to build URL: {e}")))?;
 
-    let resp = reqwest::get(url.clone())
+    let resp = get(url.clone())
         .await
         .map_err(|e| NhtsaError::Network(e.to_string()))?;
 
@@ -156,14 +171,49 @@ async fn fetch_recalls(
     })
 }
 
+/// Rewrites an NHTSA component label for reading: title case, with a space
+/// after each colon. `FUEL SYSTEM, GASOLINE:DELIVERY:FUEL PUMP` becomes
+/// `Fuel System, Gasoline: Delivery: Fuel Pump`. A letter starts a word unless
+/// it follows a letter, digit or apostrophe.
+pub(crate) fn readable_component(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len() + 4);
+    let mut word_continues = false;
+    for ch in raw.trim().chars() {
+        if ch == ':' {
+            out.push_str(": ");
+            word_continues = false;
+        } else if ch.is_whitespace() && out.ends_with(' ') {
+            // Whitespace after a space collapses into it.
+        } else if ch.is_alphanumeric() {
+            if word_continues {
+                out.extend(ch.to_lowercase());
+            } else {
+                out.extend(ch.to_uppercase());
+            }
+            word_continues = true;
+        } else {
+            out.push(ch);
+            word_continues = ch == '\'';
+        }
+    }
+    out.trim_end().to_owned()
+}
+
 fn parse_recall_results(results: Vec<NhtsaRecallResult>) -> Vec<RecallInfo> {
     results
         .into_iter()
         .filter_map(|r| {
+            let campaign_number = r.nhtsa_campaign_number?;
+            let title = r
+                .component
+                .as_deref()
+                .map(str::trim)
+                .filter(|c| !c.is_empty())
+                .map_or_else(|| format!("Recall {campaign_number}"), readable_component);
             Some(RecallInfo {
-                campaign_number: r.nhtsa_campaign_number?,
+                campaign_number,
                 manufacturer: r.manufacturer,
-                subject: r.subject.unwrap_or_default(),
+                title,
                 summary: r.summary,
                 consequence: r.consequence,
                 remedy: r.remedy,
@@ -202,11 +252,10 @@ mod tests {
                     "NHTSACampaignNumber": "17V123000",
                     "NHTSAActionNumber": "N/A",
                     "ReportReceivedDate": "03/15/2017",
-                    "Component": "FUEL SYSTEM, GASOLINE",
+                    "Component": "FUEL SYSTEM, GASOLINE:DELIVERY:FUEL PUMP",
                     "Summary": "Fuel pump may fail causing engine stall.",
                     "Consequence": "Engine stall increases crash risk.",
                     "Remedy": "Dealers will replace the fuel pump.",
-                    "Subject": "Fuel Pump Failure",
                     "ModelYear": "2017",
                     "Make": "VOLKSWAGEN",
                     "Model": "GOLF GTI",
@@ -221,7 +270,6 @@ mod tests {
                     "Summary": "Airbag control module software issue.",
                     "Consequence": "Airbags may not deploy.",
                     "Remedy": "Dealers will update the software.",
-                    "Subject": "Airbag Control Module",
                     "ModelYear": "2017",
                     "Make": "VOLKSWAGEN",
                     "Model": "GOLF GTI",
@@ -232,11 +280,15 @@ mod tests {
         let recalls = parse_response_json(json).unwrap();
         assert_eq!(recalls.len(), 2);
         assert_eq!(recalls[0].campaign_number, "17V123000");
-        assert_eq!(recalls[0].subject, "Fuel Pump Failure");
+        assert_eq!(
+            recalls[0].title,
+            "Fuel System, Gasoline: Delivery: Fuel Pump"
+        );
         assert_eq!(
             recalls[0].component.as_deref(),
-            Some("FUEL SYSTEM, GASOLINE")
+            Some("FUEL SYSTEM, GASOLINE:DELIVERY:FUEL PUMP")
         );
+        assert_eq!(recalls[1].title, "Air Bags");
         assert_eq!(recalls[1].campaign_number, "18V456000");
     }
 
@@ -249,7 +301,7 @@ mod tests {
                 {
                     "Manufacturer": "Test",
                     "NHTSACampaignNumber": null,
-                    "Subject": "Test Subject",
+                    "Component": "Test Component",
                     "Summary": "Test summary"
                 }
             ]
@@ -268,8 +320,7 @@ mod tests {
             "Message": "Results returned successfully",
             "results": [
                 {
-                    "NHTSACampaignNumber": "20V999000",
-                    "Subject": "Minimal Recall"
+                    "NHTSACampaignNumber": "20V999000"
                 }
             ]
         }"#;
@@ -278,6 +329,27 @@ mod tests {
         assert_eq!(recalls[0].campaign_number, "20V999000");
         assert!(recalls[0].manufacturer.is_none());
         assert!(recalls[0].remedy.is_none());
+        assert_eq!(recalls[0].title, "Recall 20V999000");
+    }
+
+    #[test]
+    fn a_component_is_title_cased_with_a_space_after_each_colon() {
+        assert_eq!(
+            readable_component("FUEL SYSTEM, GASOLINE:DELIVERY:FUEL PUMP"),
+            "Fuel System, Gasoline: Delivery: Fuel Pump"
+        );
+        assert_eq!(
+            readable_component("  ELECTRICAL SYSTEM/BATTERY: x "),
+            "Electrical System/Battery: X"
+        );
+        assert_eq!(readable_component("Owner's Manual"), "Owner's Manual");
+    }
+
+    #[test]
+    fn a_blank_component_falls_back_to_the_campaign_number() {
+        let json = r#"{"results":[{"NHTSACampaignNumber":"21V001000","Component":"  "}]}"#;
+        let recalls = parse_response_json(json).unwrap();
+        assert_eq!(recalls[0].title, "Recall 21V001000");
     }
 
     #[test]
@@ -292,8 +364,8 @@ mod tests {
             "Count": 2,
             "Message": "Results returned successfully",
             "results": [
-                { "NHTSACampaignNumber": "17V123000", "Subject": "Valid" },
-                { "NHTSACampaignNumber": null, "Subject": "Filtered out" }
+                { "NHTSACampaignNumber": "17V123000", "Component": "Valid" },
+                { "NHTSACampaignNumber": null, "Component": "Filtered out" }
             ]
         }"#;
         let recalls = parse_response_json(json).unwrap();

@@ -8,6 +8,9 @@ pub struct Model {
     pub incident_id: i32,
     #[sea_orm(primary_key, auto_increment = false)]
     pub service_record_id: i32,
+    /// `noticed` or `resolved`.
+    #[sea_orm(primary_key, auto_increment = false)]
+    pub role: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
