@@ -366,7 +366,17 @@ async fn record_service_files_a_multi_line_invoice_in_one_call() {
     assert_eq!(out["parts"][0]["supplied_by"], "self");
     assert_eq!(out["parts"][0]["installed_odometer"], 53010);
     assert_eq!(out["line_items"][1]["work_kind"], "repair");
-    assert_eq!(out["already_recorded"], false);
+    assert!(out.get("already_recorded").is_none(), "got: {out}");
+    assert!(out.get("message").is_none(), "got: {out}");
+
+    let read = c
+        .call(
+            "get_service",
+            json!({"vehicle_id": v, "service_id": out["id"]}),
+        )
+        .await;
+    assert!(read.get("already_recorded").is_none(), "got: {read}");
+    assert!(read.get("message").is_none(), "got: {read}");
 
     let again = c
         .call(
@@ -376,6 +386,30 @@ async fn record_service_files_a_multi_line_invoice_in_one_call() {
         .await;
     assert_eq!(again["already_recorded"], true);
     assert_eq!(again["id"], out["id"]);
+    let id = out["id"].as_i64().unwrap();
+    assert_eq!(
+        again["message"],
+        format!(
+            "This invoice number is already recorded as service {id}; nothing in this call was \
+             applied. Use correct_service to change it."
+        )
+    );
+
+    // Different values sent with the same invoice number are ignored, and the message says so.
+    let refiled = c
+        .call(
+            "record_service",
+            json!({"vehicle_id": v, "service_date": "2025-03-24", "invoice_ref": "RO-1182",
+                   "total_cost_cents": 99_900}),
+        )
+        .await;
+    assert_eq!(refiled["total_cost_cents"], 48_250);
+    assert!(
+        refiled["message"]
+            .as_str()
+            .unwrap()
+            .contains("nothing in this call")
+    );
 }
 
 #[tokio::test]

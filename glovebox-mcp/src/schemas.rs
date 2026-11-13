@@ -89,8 +89,9 @@ pub struct RecordServiceInput {
     pub schedule_item_ids: Option<Vec<i32>>,
     /// The number printed on the invoice or repair order (e.g. "RO-1182").
     /// Re-recording the SAME ref for this vehicle returns the existing record
-    /// (with `already_recorded: true`) and ignores the lines and parts sent
-    /// this time; they are not merged. Omit for work with no paperwork number.
+    /// (with `already_recorded: true` and a `message` saying nothing was
+    /// applied) and ignores the lines and parts sent this time; they are not
+    /// merged. Omit for work with no paperwork number.
     pub invoice_ref: Option<String>,
     /// Ids of open to-do items (from `list_planned_work`) this service
     /// completes. Each is marked done, and its schedule item, if any, is

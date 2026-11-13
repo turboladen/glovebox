@@ -45,7 +45,7 @@ you link.
    - `total_cost_cents` is the amount the shop charged on the invoice. Fill `parts_cost_cents` and
      `labor_cost_cents` only when the invoice prints those subtotals.
    - `invoice_ref` is the number printed on the invoice. Always send it when there is one: filing
-     the same number again returns the existing record with `already_recorded: true` and ignores
+     the same number again returns the existing record with `already_recorded: true` and a `message`, and ignores
      everything else you sent, which makes a stack of scans safe to file twice.
    - `line_items` has one entry per job on the paperwork, each with a `work_kind` of
      `maintenance`, `mod`, `repair` or `inspection`. One invoice can mix kinds. Put inspection

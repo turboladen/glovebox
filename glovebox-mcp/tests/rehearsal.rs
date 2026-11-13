@@ -93,7 +93,10 @@ async fn a_new_owner_can_set_up_file_an_invoice_and_ask_whats_coming() {
             }),
         )
         .await;
-    assert_eq!(recorded["already_recorded"], false, "got: {recorded}");
+    assert!(
+        recorded.get("already_recorded").is_none(),
+        "got: {recorded}"
+    );
     let service_id = recorded["id"].as_i64().expect("service id");
 
     // 4. Capture the advisory the shop wrote on the invoice.

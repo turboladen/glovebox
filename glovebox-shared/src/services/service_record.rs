@@ -116,7 +116,13 @@ pub struct ServiceRecordWithLinks {
     pub completed_work_items: Vec<WorkItemRef>,
     /// True when `create` found a record with the same `invoice_ref` on this
     /// vehicle and returned it unchanged instead of writing anything.
+    /// Serialized only when true.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub already_recorded: bool,
+    /// Present only when `already_recorded` is true: says that nothing in the
+    /// call was applied and points at `correct_service`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
     /// Soft advisory: other same-day records on this vehicle, surfaced only
     /// when a record was created WITHOUT an `invoice_ref` so the caller can
     /// reconcile a possible duplicate. Never blocks — distinct records
@@ -251,6 +257,7 @@ impl ServiceRecordWithLinks {
             performed_recalls,
             completed_work_items: Vec::new(),
             already_recorded: false,
+            message: None,
             possible_duplicates: Vec::new(),
         }
     }
@@ -599,6 +606,22 @@ async fn link_incidents(
     Ok(())
 }
 
+/// Loads a record found under a repeated `invoice_ref`, flagged so the caller
+/// knows nothing in its call was applied.
+async fn load_existing(
+    db: &impl ConnectionTrait,
+    existing: service_record::Model,
+) -> DomainResult<ServiceRecordWithLinks> {
+    let mut found = load_service_links(db, existing).await?;
+    found.already_recorded = true;
+    found.message = Some(format!(
+        "This invoice number is already recorded as service {}; nothing in this call was applied. \
+         Use correct_service to change it.",
+        found.record.id
+    ));
+    Ok(found)
+}
+
 /// Creates a service record with its line items, installed parts, schedule
 /// links and odometer reading in one transaction; any failure leaves nothing
 /// behind. A record already filed under the same `invoice_ref` is returned
@@ -629,8 +652,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
             .one(db)
             .await?;
         if let Some(existing) = existing {
-            let mut found = load_service_links(db, existing).await?;
-            found.already_recorded = true;
+            let found = load_existing(db, existing).await?;
             return Ok(found);
         }
     }
@@ -2380,6 +2402,7 @@ mod tests {
         .await
         .unwrap();
         assert!(!first.already_recorded);
+        assert!(first.message.is_none());
 
         let second = create(
             &db,
@@ -2395,6 +2418,14 @@ mod tests {
         .await
         .unwrap();
         assert!(second.already_recorded);
+        assert!(
+            second
+                .message
+                .as_deref()
+                .is_some_and(|m| m.contains(&format!("service {}", first.record.id))),
+            "got: {:?}",
+            second.message
+        );
         assert_eq!(second.record.id, first.record.id);
         assert_eq!(row_count::<service_record_line_item::Entity>(&db).await, 1);
         assert_eq!(row_count::<part::Entity>(&db).await, 1);

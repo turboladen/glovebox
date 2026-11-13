@@ -120,7 +120,8 @@ it. Serde does not support it together with `#[serde(flatten)]`, so input struct
 **`record_service` is transactional.** One call writes the service, its lines, its parts and every
 link (schedule items, work items, recalls, incidents) in one transaction. One bad id fails the call
 and commits nothing. Re-recording an existing `invoice_ref` for the vehicle returns the stored
-record with `already_recorded: true` and writes nothing. Completing planned work happens by naming
+record with `already_recorded: true` and a `message` and writes nothing (both keys appear only
+on that path). Completing planned work happens by naming
 `work_item_ids` in `record_service`.
 
 **Resources**: `glovebox://vehicles`, `glovebox://vehicles/{id}` and `…/{id}/activity`.
