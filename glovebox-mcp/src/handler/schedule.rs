@@ -85,8 +85,10 @@ impl GloveboxMcp {
                        optional `est_cost_cents` for the budget forecast, a `source` and `notes`. \
                        It appears in `whats_coming` and clears when a service is linked to it. To \
                        change an item the car already has, inherited or not, use \
-                       `update_schedule_item` instead; adding an item under a name the car \
-                       already has its own item for is an error."
+                       `update_schedule_item` instead. Names are compared ignoring case and \
+                       surrounding spaces: an item named like one the car inherits (\"Cabin air \
+                       filter\" for \"Cabin Air Filter\") becomes this car's version of it, with \
+                       its history, and a name the car already has its own item for is an error."
     )]
     async fn add_schedule_item(
         &self,

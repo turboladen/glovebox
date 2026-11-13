@@ -9,7 +9,7 @@ use crate::{
         service_schedule_link, vehicle,
     },
     error::{DomainError, DomainResult},
-    services::schedule::{DEFAULT_WARNING_DAYS, DEFAULT_WARNING_MILES},
+    services::schedule::{DEFAULT_WARNING_DAYS, DEFAULT_WARNING_MILES, name_key},
 };
 
 #[derive(Debug, Serialize, Clone)]
@@ -447,7 +447,7 @@ async fn resolve_schedule(
                     .all(db)
                     .await?;
                 for item in items {
-                    schedule.insert(item.name.clone(), item);
+                    schedule.insert(name_key(&item.name), item);
                 }
             }
 
@@ -457,7 +457,7 @@ async fn resolve_schedule(
                 .all(db)
                 .await?;
             for item in items {
-                schedule.insert(item.name.clone(), item);
+                schedule.insert(name_key(&item.name), item);
             }
         }
     }
@@ -468,7 +468,7 @@ async fn resolve_schedule(
         .all(db)
         .await?;
     for item in items {
-        schedule.insert(item.name.clone(), item);
+        schedule.insert(name_key(&item.name), item);
     }
 
     // Filter disabled

@@ -227,6 +227,52 @@ async fn changing_an_inherited_item_keeps_its_service_history_and_plans() {
     assert_eq!(again["id"], updated["id"]);
 }
 
+#[tokio::test]
+async fn an_item_added_in_other_capitalization_takes_over_the_inherited_one() {
+    let t = connect().await;
+    let template = schedule_svc_template(&t).await;
+    let v = vehicle::create(
+        &t.db,
+        NewVehicle {
+            model_template_id: Some(template),
+            ..new_vehicle("Golf")
+        },
+    )
+    .await
+    .unwrap();
+    let before = t.call("whats_coming", json!({ "vehicle_id": v.id })).await;
+    let inherited_id = reminder(&before, "Cabin Air Filter")["schedule_item"]["id"].clone();
+
+    let added = t
+        .call(
+            "add_schedule_item",
+            json!({ "vehicle_id": v.id, "name": "Cabin air filter", "interval_months": 12 }),
+        )
+        .await;
+    assert_eq!(added["overrides_item_id"], inherited_id);
+
+    let coming = t.call("whats_coming", json!({ "vehicle_id": v.id })).await;
+    let matching = coming["reminders"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| {
+            r["schedule_item"]["name"]
+                .as_str()
+                .is_some_and(|n| n.eq_ignore_ascii_case("cabin air filter"))
+        })
+        .count();
+    assert_eq!(matching, 1, "listed once; got: {coming}");
+
+    let err = t
+        .call_err(
+            "add_schedule_item",
+            json!({ "vehicle_id": v.id, "name": "CABIN AIR FILTER", "interval_months": 12 }),
+        )
+        .await;
+    assert!(err.contains("already has"), "got: {err}");
+}
+
 async fn schedule_svc_template(t: &common::TestClient) -> i32 {
     glovebox_shared::services::model_template::list(&t.db)
         .await
