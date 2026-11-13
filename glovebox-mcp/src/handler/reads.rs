@@ -51,9 +51,19 @@ impl GloveboxMcp {
 
     #[tool(
         name = "cost_summary",
-        description = "What the vehicle has cost: service/parts/labor totals, an out-of-pocket vs \
-                       covered-by-others split (insurance/third-party-paid services), cost per \
-                       mile, and a monthly breakdown. All amounts are integer cents."
+        description = "What the vehicle has cost, as integer cents. `total_cost_cents` is \
+                       `service_totals_cents` (the sum of every service's total; parts the shop \
+                       supplied are already inside those invoices) plus \
+                       `self_supplied_parts_cents` (parts the owner bought outside any invoice). \
+                       `out_of_pocket_cents` and `covered_cents` (services paid by insurance, a \
+                       third party or the manufacturer) add up to the total. \
+                       `labor_subtotals_cents` and `parts_subtotals_cents` sum the subtotals \
+                       entered on services and are null when none was entered. \
+                       `cost_per_1000_miles_cents` divides the total by `miles_driven`, the \
+                       latest service mileage minus the purchase mileage; both are null when that \
+                       is unknown or not positive. `monthly_costs` plus `unbucketed_parts_cents` \
+                       (self-supplied parts with neither a purchase nor an install date) add up \
+                       to the total."
     )]
     async fn cost_summary(
         &self,

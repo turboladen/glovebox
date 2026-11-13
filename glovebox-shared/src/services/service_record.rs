@@ -23,8 +23,17 @@ use crate::{
 /// Allowed values for `service_records.performed_by`.
 pub const VALID_PERFORMED_BY: [&str; 2] = ["shop", "self"];
 
-/// Allowed values for `service_record_line_items.work_kind`.
-pub const VALID_WORK_KINDS: [&str; 4] = ["maintenance", "mod", "repair", "inspection"];
+/// Allowed values for `service_record_line_items.work_kind`. `fee` is a
+/// charge on the invoice that is not work, such as tax, shop supplies or
+/// disposal.
+pub const VALID_WORK_KINDS: [&str; 6] = [
+    "maintenance",
+    "mod",
+    "repair",
+    "inspection",
+    "recall",
+    "fee",
+];
 
 fn validate_choice(field: &str, value: &str, allowed: &[&str]) -> DomainResult<()> {
     if allowed.contains(&value) {
@@ -82,7 +91,7 @@ fn normalize_invoice_ref(invoice_ref: Option<&str>) -> Option<String> {
 }
 
 /// Payer whitelist for `service_records.paid_by`.
-const VALID_PAYERS: [&str; 3] = ["self", "insurance", "third_party"];
+const VALID_PAYERS: [&str; 4] = ["self", "insurance", "third_party", "manufacturer"];
 
 fn validate_payer(paid_by: &str) -> DomainResult<()> {
     if VALID_PAYERS.contains(&paid_by) {

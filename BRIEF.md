@@ -26,7 +26,7 @@ community-recommended preemptive fixes that fit the same shop trip.
 ## What the system does
 
 - **Records services** the way an invoice does: who did the work, over which dates, each line and
-  its kind (maintenance, mod, repair, inspection), what it cost, and who supplied each part (the
+  its kind (maintenance, mod, repair, inspection, recall, fee), what it cost, and who supplied each part (the
   owner or the shop), with the seller and warranty expiry for parts the owner bought.
 - **Captures shop advisories.** A thing the shop flagged but did not fix is an incident noticed during
   a service, plus a planned work item with a revisit-by date or mileage.

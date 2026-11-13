@@ -944,3 +944,59 @@ async fn delete_service_asks_what_to_do_with_the_recalls_it_performed() {
     assert_eq!(read["status"], "done");
     assert!(read["done_service"].is_null(), "got: {read}");
 }
+
+#[tokio::test]
+async fn recall_and_fee_lines_and_a_manufacturer_payer_are_accepted() {
+    let c = connect().await;
+    let v = vehicle::create(&c.db, new_vehicle("Daily"))
+        .await
+        .unwrap()
+        .id;
+    let out = c
+        .call(
+            "record_service",
+            json!({
+                "vehicle_id": v, "service_date": "2025-03-24", "total_cost_cents": 0,
+                "paid_by": "manufacturer",
+                "line_items": [
+                    {"description": "Fuel pump recall", "work_kind": "recall", "cost_cents": 0},
+                    {"description": "Shop supplies", "work_kind": "fee", "cost_cents": 0}]
+            }),
+        )
+        .await;
+    assert_eq!(out["paid_by"], "manufacturer");
+    assert_eq!(out["line_items"][0]["work_kind"], "recall");
+    assert_eq!(out["line_items"][1]["work_kind"], "fee");
+
+    let err = c
+        .call_err(
+            "record_service",
+            json!({"vehicle_id": v, "service_date": "2025-03-25", "paid_by": "dealer"}),
+        )
+        .await;
+    assert!(err.contains("manufacturer"), "got: {err}");
+}
+
+#[tokio::test]
+async fn a_shop_part_is_not_added_to_the_invoice_total_but_a_self_part_is() {
+    let c = connect().await;
+    let v = vehicle::create(&c.db, new_vehicle("Daily"))
+        .await
+        .unwrap()
+        .id;
+    c.call(
+        "record_service",
+        json!({
+            "vehicle_id": v, "service_date": "2025-03-24", "total_cost_cents": 56_900,
+            "parts": [
+                {"name": "Brake fluid", "supplied_by": "shop", "cost_cents": 2_200},
+                {"name": "Pads", "supplied_by": "self", "cost_cents": 8_900,
+                 "purchase_date": "2025-03-01"}]
+        }),
+    )
+    .await;
+    let summary = c.call("cost_summary", json!({ "vehicle_id": v })).await;
+    assert_eq!(summary["service_totals_cents"], 56_900);
+    assert_eq!(summary["self_supplied_parts_cents"], 8_900);
+    assert_eq!(summary["total_cost_cents"], 65_800);
+}

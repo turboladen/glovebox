@@ -19,22 +19,26 @@ impl GloveboxMcp {
                        `performed_by` (`shop` or `self`), `mileage` (also logs an odometer \
                        reading), and costs in integer cents: `total_cost_cents` is the amount the \
                        shop charged on the invoice, and `parts_cost_cents` and `labor_cost_cents` \
-                       are optional subtotals to fill only when the invoice prints them. Put each \
-                       job on the paperwork in `line_items` with a `work_kind` (`maintenance`, \
-                       `mod`, `repair`, `inspection`), and list anything installed in `parts` so \
-                       each part is created and installed by this service. A part already \
-                       recorded with `record_part` (e.g. bought before the visit) goes in \
-                       `part_ids` instead, by its id from `list_parts`, and is marked installed \
-                       by this service; do not list it again under `parts`. A part with \
-                       `supplied_by: \"self\"` was paid for elsewhere, so its `cost_cents` is not \
-                       part of the invoice total. `invoice_ref` is the number printed on the \
-                       paperwork; filing the same one again returns the existing record with \
-                       `already_recorded: true` and a `message` saying nothing was applied, and \
-                       ignores everything sent this time, including lines, parts, and incident \
-                       and recall ids (nothing is merged), so fix the existing record with \
-                       `correct_service` instead. If the work completes to-do items from \
-                       `list_planned_work`, pass their ids in `work_item_ids`; each is marked \
-                       done and its schedule item's reminder clears. If the work satisfies \
+                       are optional subtotals to fill only when the invoice prints them. Work the \
+                       manufacturer or dealer paid for, as with a recall or warranty repair, \
+                       takes `paid_by: \"manufacturer\"`; the default `self` records it as \
+                       owner-paid. Put each job on the paperwork in `line_items` with a \
+                       `work_kind` (`maintenance`, `mod`, `repair`, `inspection`, `recall` for \
+                       work done under a recall campaign, or `fee` for tax, shop supplies and \
+                       disposal charges, so the lines add up to the total), and list anything \
+                       installed in `parts` so each part is created and installed by this \
+                       service. A part already recorded with `record_part` (e.g. bought before \
+                       the visit) goes in `part_ids` instead, by its id from `list_parts`, and is \
+                       marked installed by this service; do not list it again under `parts`. A \
+                       part with `supplied_by: \"self\"` was paid for elsewhere, so its \
+                       `cost_cents` is not part of the invoice total. `invoice_ref` is the number \
+                       printed on the paperwork; filing the same one again returns the existing \
+                       record with `already_recorded: true` and a `message` saying nothing was \
+                       applied, and ignores everything sent this time, including lines, parts, \
+                       and incident and recall ids (nothing is merged), so fix the existing \
+                       record with `correct_service` instead. If the work completes to-do items \
+                       from `list_planned_work`, pass their ids in `work_item_ids`; each is \
+                       marked done and its schedule item's reminder clears. If the work satisfies \
                        due/overdue schedule items from `whats_coming`, pass the ids of every item \
                        it satisfies, not only the one the owner mentioned, in `schedule_item_ids` \
                        so the reminders clear; for records that already exist, reconcile with \

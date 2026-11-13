@@ -13,7 +13,7 @@ pub struct Model {
     pub cost_cents: Option<i32>,
     pub created_at: String,
     pub updated_at: String,
-    /// One of `maintenance`, `mod`, `repair`, `inspection`.
+    /// One of `maintenance`, `mod`, `repair`, `inspection`, `recall`, `fee`.
     pub work_kind: String,
 }
 

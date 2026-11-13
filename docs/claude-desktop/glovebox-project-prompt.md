@@ -48,8 +48,12 @@ you link.
      the same number again returns the existing record with `already_recorded: true` and a `message`, and ignores
      everything else you sent, which makes a stack of scans safe to file twice.
    - `line_items` has one entry per job on the paperwork, each with a `work_kind` of
-     `maintenance`, `mod`, `repair` or `inspection`. One invoice can mix kinds. Put inspection
-     results, such as pass or fail and the certificate number, in `notes`.
+     `maintenance`, `mod`, `repair`, `inspection`, `recall` or `fee`. One invoice can mix kinds. A
+     recall line uses `work_kind: "recall"`. File tax, shop supplies and disposal charges as `fee`
+     lines so the lines add up to the total. Put inspection results, such as pass or fail and the
+     certificate number, in `notes`. Work the manufacturer paid for, such as a recall or warranty
+     repair, uses `paid_by: "manufacturer"` on the service; the default `self` records it as an
+     owner-paid repair.
    - `parts` has every part the invoice lists, each with `supplied_by` set to `self` when Steve
      bought it and `shop` when the shop sourced it. Ask Steve who supplied a part when the invoice
      does not make it clear. For a self-supplied part, record the `seller` (for example "FCP

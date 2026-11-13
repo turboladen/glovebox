@@ -305,7 +305,7 @@ pub struct CorrectServiceInput {
     pub service_date: Option<String>,
     /// `shop` or `self`. A `self` job takes no shop name.
     pub performed_by: Option<String>,
-    /// `self`, `insurance` or `third_party`.
+    /// `self`, `insurance`, `third_party` or `manufacturer`.
     pub paid_by: Option<String>,
     /// REPLACES the schedule items this service satisfies with exactly this list (ids from `list_schedule`). Omit to leave the links alone.
     pub schedule_item_ids: Option<Vec<i32>>,

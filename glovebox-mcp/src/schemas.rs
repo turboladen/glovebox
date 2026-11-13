@@ -66,9 +66,10 @@ pub struct RecordServiceInput {
     pub shop_name: Option<String>,
     /// Free-form notes.
     pub notes: Option<String>,
-    /// Who paid: `self` (default), `insurance`, or `third_party` (e.g. the
-    /// other driver). Anything not paid by the owner counts as covered, not
-    /// out-of-pocket, in cost summaries.
+    /// Who paid: `self` (default), `insurance`, `third_party` (e.g. the
+    /// other driver), or `manufacturer` (the manufacturer or dealer covered
+    /// the work, as with a recall or warranty repair). Anything not paid by
+    /// the owner counts as covered, not out-of-pocket, in cost summaries.
     pub paid_by: Option<String>,
     /// Who exactly paid / claim number, e.g. "Progressive claim #12345".
     pub payer_note: Option<String>,
@@ -116,8 +117,10 @@ pub struct RecordServiceInput {
 pub struct LineItemInput {
     /// Line description, e.g. "5W-30 synthetic oil, 5qt".
     pub description: String,
-    /// What kind of work this line is: `maintenance`, `mod`, `repair`, or
-    /// `inspection`.
+    /// What kind of work this line is: `maintenance`, `mod`, `repair`,
+    /// `inspection`, `recall` (work done under a recall campaign), or `fee`
+    /// (tax, shop supplies, disposal and similar charges on the invoice that
+    /// are not work).
     pub work_kind: String,
     /// How many units, e.g. 5 for five quarts of oil. May be fractional.
     pub quantity: Option<f64>,
@@ -301,11 +304,14 @@ pub struct InlinePartInput {
     pub seller: Option<String>,
     /// Purchase date, `YYYY-MM-DD`.
     pub purchase_date: Option<String>,
-    /// What the part cost, integer cents. With `supplied_by: "self"` it was
-    /// paid for elsewhere and is not part of the invoice's `total_cost_cents`.
+    /// What the part cost, integer cents. With `supplied_by: "shop"` the cost
+    /// is already inside the invoice's `total_cost_cents` and is not added
+    /// again; with `supplied_by: "self"` it was paid for elsewhere and is
+    /// added on top of the invoice total.
     pub cost_cents: Option<i32>,
-    /// Who supplied the part: `self` (the owner bought it, the default) or
-    /// `shop` (the shop sourced it and billed for it).
+    /// Who supplied the part: `self` (the owner bought it, the default; its
+    /// cost is added to the total) or `shop` (the shop sourced and billed it;
+    /// its cost is already inside the invoice total).
     pub supplied_by: Option<String>,
     /// Where it goes on the car (free text), e.g. "Front brakes".
     pub location: Option<String>,
