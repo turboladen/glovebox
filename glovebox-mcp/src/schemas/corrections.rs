@@ -34,7 +34,7 @@ pub struct AddVehicleInput {
     pub name: String,
     /// Model template id from `list_model_templates`. Gives the car its inherited maintenance schedule and fills year, make, model, trim, body style, engine, transmission and drivetrain left empty (a VIN decode fills first, then the template).
     pub model_template_id: Option<i32>,
-    /// VIN. When given, the vehicle's blank year, make, model, trim, body style, engine, transmission and drivetrain are filled from an NHTSA lookup; values sent here always win. If the lookup fails the vehicle is still created and the result carries `vin_decode_error`.
+    /// VIN. When given, the vehicle's blank year, make, model, trim, body style, engine, transmission and drivetrain are filled from an NHTSA lookup; values sent here and values from the model template win over it. If the lookup fails the vehicle is still created and the result carries `vin_decode_error`.
     pub vin: Option<String>,
     /// Model year.
     pub year: Option<i32>,

@@ -134,9 +134,9 @@ impl GloveboxMcp {
                        one, so it inherits that platform's maintenance schedule (`list_schedule` \
                        shows it) and takes the template's year, make, model, trim, body style, \
                        engine, transmission and drivetrain for every one of them you leave out. \
-                       Pass `vin` to fill blank fields of the same kind from NHTSA; the order is \
-                       what you send, then the VIN decode, then the template, and if the lookup \
-                       fails (offline, invalid VIN) the car is still added and the result carries \
+                       Pass `vin` to fill what is still blank from NHTSA; the order is what you \
+                       send, then the template, then the VIN decode, and if the lookup fails \
+                       (offline, invalid VIN) the car is still added and the result carries \
                        `vin_decode_error`. Use `update_vehicle` to change a car that already \
                        exists."
     )]

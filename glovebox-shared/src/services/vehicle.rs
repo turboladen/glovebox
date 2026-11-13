@@ -46,6 +46,25 @@ async fn require_template(
         })
 }
 
+/// Fills each detail the input leaves empty from its model template, when it
+/// names one.
+async fn fill_new_from_template(
+    db: &impl ConnectionTrait,
+    input: &mut NewVehicle,
+) -> DomainResult<()> {
+    if let Some(t) = require_template(db, input.model_template_id).await? {
+        input.year = input.year.or(t.year);
+        input.make = input.make.take().or(t.make);
+        input.model = input.model.take().or(t.model);
+        input.trim_level = input.trim_level.take().or(t.trim_level);
+        input.body_style = input.body_style.take().or(t.body_style);
+        input.engine = input.engine.take().or(t.engine);
+        input.transmission = input.transmission.take().or(t.transmission);
+        input.drivetrain = input.drivetrain.take().or(t.drivetrain);
+    }
+    Ok(())
+}
+
 /// Creates a vehicle. When `model_template_id` is set, every one of year, make,
 /// model, trim, body style, engine, transmission and drivetrain that the input
 /// leaves empty takes the template's value; a supplied value always wins.
@@ -55,16 +74,7 @@ pub async fn create(
 ) -> DomainResult<vehicle::Model> {
     super::validate_optional_date("purchase_date", input.purchase_date.as_deref())?;
     super::validate_optional_date("warranty_expires_on", input.warranty_expires_on.as_deref())?;
-    if let Some(t) = require_template(db, input.model_template_id).await? {
-        input.year = input.year.or(t.year);
-        input.make = input.make.or(t.make);
-        input.model = input.model.or(t.model);
-        input.trim_level = input.trim_level.or(t.trim_level);
-        input.body_style = input.body_style.or(t.body_style);
-        input.engine = input.engine.or(t.engine);
-        input.transmission = input.transmission.or(t.transmission);
-        input.drivetrain = input.drivetrain.or(t.drivetrain);
-    }
+    fill_new_from_template(db, &mut input).await?;
     let model = vehicle::ActiveModel {
         name: Set(input.name),
         model_template_id: Set(input.model_template_id),
@@ -91,20 +101,22 @@ pub async fn create(
     Ok(model.insert(db).await?)
 }
 
-/// Creates a vehicle, filling the fields the caller left empty from a VIN
-/// decode and storing the decoded attributes.
+/// Creates a vehicle, filling the fields the caller left empty and storing the
+/// decoded VIN attributes.
 ///
 /// Year, make, model, trim, body style, engine, transmission and drivetrain
-/// each take the decoded value only when the input has none; a supplied value
-/// always wins. A model template then fills whatever is still empty, so the
-/// precedence is caller, then VIN decode, then template. With `decoded` of `None` this behaves like [`create`]. The
-/// decode is a parameter so the lookup (a live web request) stays with the
-/// caller and this function stays testable offline.
+/// each take the first value available from the caller, then the model
+/// template, then the VIN decode. With `decoded` of `None` this behaves like
+/// [`create`]. The decode is a parameter so the lookup (a live web request)
+/// stays with the caller and this function stays testable offline.
 pub async fn create_with_vin_decode<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     mut input: NewVehicle,
     decoded: Option<&VinDecodeResult>,
 ) -> DomainResult<vehicle::Model> {
+    // The template goes first: a chosen template names one trim and engine,
+    // where the decode often returns every option the model line offers.
+    fill_new_from_template(db, &mut input).await?;
     if let Some(d) = decoded {
         input.year = input.year.or(d.year);
         input.make = input.make.or_else(|| d.make.clone());
@@ -527,12 +539,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn precedence_is_caller_then_vin_decode_then_template() {
+    async fn precedence_is_caller_then_template_then_vin_decode() {
         let db = test_db().await;
         let tid = seed_template(&db).await;
+        // The decode carries the vague multi-value trim NHTSA returns for a GTI.
         let mut d = decoded();
-        d.trim = None;
-        d.engine = None;
+        d.trim = Some("S, Sport, SE, Autobahn".into());
         let made = create_with_vin_decode(
             &db,
             NewVehicle {
@@ -547,16 +559,14 @@ mod tests {
         .unwrap();
         assert_eq!(made.year, Some(2020), "caller wins");
         assert_eq!(
-            made.make.as_deref(),
-            Some("Volkswagen"),
-            "decode beats template"
-        );
-        assert_eq!(
             made.trim_level.as_deref(),
             Some("SE"),
-            "template fills the gap"
+            "template beats decode"
         );
         assert_eq!(made.engine.as_deref(), Some("2.0L TSI"));
+        assert_eq!(made.transmission.as_deref(), Some("6MT"));
+        assert_eq!(made.body_style.as_deref(), Some("Wagon"));
+        assert_eq!(attribute_count(&db, made.id).await, 1);
     }
 
     #[tokio::test]

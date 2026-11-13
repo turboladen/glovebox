@@ -144,8 +144,8 @@ item's spelling of the name and, for every field the caller leaves out, its valu
 (`schedule::fill_from_inherited`, shared with the copy `update_schedule_item` makes), and
 `list_schedule` shows it with `overrides` (the replaced item's id and `inherited_from`). A vehicle
 created with a `model_template_id` takes the template's year, make, model, trim, body style, engine,
-transmission and drivetrain for each one left empty, with the precedence caller, then VIN decode,
-then template; `update_vehicle` setting a template fills only the empty ones. Each reminder
+transmission and drivetrain for each one left empty, with the precedence caller, then template,
+then VIN decode; `update_vehicle` setting a template fills only the empty ones. Each reminder
 carries a `baseline` (`last_service`, `purchase` or `none`), the forecast names the schedule items
 and planned work it left unpriced, `bundle_suggestions` is one entry listing every overdue or
 due-soon item when there are two or more, and a stored recall title is the NHTSA component in title
