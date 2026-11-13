@@ -100,7 +100,7 @@ named as things a person would say:
   `delete_planned_work`
 - `schedule.rs`: `list_schedule`, `add_schedule_item`, `update_schedule_item`,
   `dismiss_schedule_item`, `restore_schedule_item`
-- `recalls.rs`: `check_recalls`, `set_recall_status`, `file_research_finding`
+- `recalls.rs`: `check_recalls`, `list_recalls`, `set_recall_status`, `file_research_finding`
 - `reads.rs`: `summarize_recent_activity`, `search_records`, `cost_summary`, `get_service`,
   `get_incident`
 

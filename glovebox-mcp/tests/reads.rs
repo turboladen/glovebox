@@ -156,6 +156,7 @@ async fn the_server_offers_exactly_the_expected_tools() {
             "list_model_templates",
             "list_parts",
             "list_planned_work",
+            "list_recalls",
             "list_schedule",
             "list_services",
             "list_vehicles",

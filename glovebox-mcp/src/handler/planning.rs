@@ -69,14 +69,15 @@ impl GloveboxMcp {
                        covers scheduled maintenance (each item's status, `overdue`, `due_soon` or \
                        `ok`, when it is due, and bundle suggestions), the planned to-do list \
                        sorted by urgency with its estimated cost, a 12-month budget forecast, \
-                       open recalls, unresolved incidents, the estimated mileage and the warranty \
-                       status (possibly_covered: remind the user to check coverage before \
-                       paying). Group overdue and due-soon items into one shop trip when \
-                       advising. For items worth doing, offer to plan_work them (linked via \
-                       schedule_item_id); when recorded work satisfies an item, link it via \
-                       `record_service`'s `schedule_item_ids` so the reminder clears, or for \
-                       service records that already exist call `link_service_to_maintenance`; for \
-                       an item that does not apply to this vehicle, use `dismiss_schedule_item`."
+                       open and planned recalls only (`list_recalls` shows done ones too),
+                       unresolved incidents, the estimated mileage and the warranty status \
+                       (possibly_covered: remind the user to check coverage before paying). Group \
+                       overdue and due-soon items into one shop trip when advising. For items \
+                       worth doing, offer to plan_work them (linked via schedule_item_id); when \
+                       recorded work satisfies an item, link it via `record_service`'s \
+                       `schedule_item_ids` so the reminder clears, or for service records that \
+                       already exist call `link_service_to_maintenance`; for an item that does \
+                       not apply to this vehicle, use `dismiss_schedule_item`."
     )]
     async fn whats_coming(
         &self,

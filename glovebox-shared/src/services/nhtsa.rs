@@ -28,7 +28,6 @@ struct NhtsaRecallResult {
     #[serde(rename = "NHTSACampaignNumber")]
     nhtsa_campaign_number: Option<String>,
     manufacturer: Option<String>,
-    subject: Option<String>,
     summary: Option<String>,
     consequence: Option<String>,
     remedy: Option<String>,
@@ -42,7 +41,8 @@ struct NhtsaRecallResult {
 pub struct RecallInfo {
     pub campaign_number: String,
     pub manufacturer: Option<String>,
-    pub subject: String,
+    /// The recall's component, or `Recall <campaign number>` when the component is blank.
+    pub title: String,
     pub summary: Option<String>,
     pub consequence: Option<String>,
     pub remedy: Option<String>,
@@ -175,10 +175,17 @@ fn parse_recall_results(results: Vec<NhtsaRecallResult>) -> Vec<RecallInfo> {
     results
         .into_iter()
         .filter_map(|r| {
+            let campaign_number = r.nhtsa_campaign_number?;
+            let title = r
+                .component
+                .as_deref()
+                .map(str::trim)
+                .filter(|c| !c.is_empty())
+                .map_or_else(|| format!("Recall {campaign_number}"), str::to_owned);
             Some(RecallInfo {
-                campaign_number: r.nhtsa_campaign_number?,
+                campaign_number,
                 manufacturer: r.manufacturer,
-                subject: r.subject.unwrap_or_default(),
+                title,
                 summary: r.summary,
                 consequence: r.consequence,
                 remedy: r.remedy,
@@ -217,11 +224,10 @@ mod tests {
                     "NHTSACampaignNumber": "17V123000",
                     "NHTSAActionNumber": "N/A",
                     "ReportReceivedDate": "03/15/2017",
-                    "Component": "FUEL SYSTEM, GASOLINE",
+                    "Component": "FUEL SYSTEM, GASOLINE:DELIVERY:FUEL PUMP",
                     "Summary": "Fuel pump may fail causing engine stall.",
                     "Consequence": "Engine stall increases crash risk.",
                     "Remedy": "Dealers will replace the fuel pump.",
-                    "Subject": "Fuel Pump Failure",
                     "ModelYear": "2017",
                     "Make": "VOLKSWAGEN",
                     "Model": "GOLF GTI",
@@ -236,7 +242,6 @@ mod tests {
                     "Summary": "Airbag control module software issue.",
                     "Consequence": "Airbags may not deploy.",
                     "Remedy": "Dealers will update the software.",
-                    "Subject": "Airbag Control Module",
                     "ModelYear": "2017",
                     "Make": "VOLKSWAGEN",
                     "Model": "GOLF GTI",
@@ -247,11 +252,8 @@ mod tests {
         let recalls = parse_response_json(json).unwrap();
         assert_eq!(recalls.len(), 2);
         assert_eq!(recalls[0].campaign_number, "17V123000");
-        assert_eq!(recalls[0].subject, "Fuel Pump Failure");
-        assert_eq!(
-            recalls[0].component.as_deref(),
-            Some("FUEL SYSTEM, GASOLINE")
-        );
+        assert_eq!(recalls[0].title, "FUEL SYSTEM, GASOLINE:DELIVERY:FUEL PUMP");
+        assert_eq!(recalls[1].title, "AIR BAGS");
         assert_eq!(recalls[1].campaign_number, "18V456000");
     }
 
@@ -264,7 +266,7 @@ mod tests {
                 {
                     "Manufacturer": "Test",
                     "NHTSACampaignNumber": null,
-                    "Subject": "Test Subject",
+                    "Component": "Test Component",
                     "Summary": "Test summary"
                 }
             ]
@@ -283,8 +285,7 @@ mod tests {
             "Message": "Results returned successfully",
             "results": [
                 {
-                    "NHTSACampaignNumber": "20V999000",
-                    "Subject": "Minimal Recall"
+                    "NHTSACampaignNumber": "20V999000"
                 }
             ]
         }"#;
@@ -293,6 +294,14 @@ mod tests {
         assert_eq!(recalls[0].campaign_number, "20V999000");
         assert!(recalls[0].manufacturer.is_none());
         assert!(recalls[0].remedy.is_none());
+        assert_eq!(recalls[0].title, "Recall 20V999000");
+    }
+
+    #[test]
+    fn a_blank_component_falls_back_to_the_campaign_number() {
+        let json = r#"{"results":[{"NHTSACampaignNumber":"21V001000","Component":"  "}]}"#;
+        let recalls = parse_response_json(json).unwrap();
+        assert_eq!(recalls[0].title, "Recall 21V001000");
     }
 
     #[test]
@@ -307,8 +316,8 @@ mod tests {
             "Count": 2,
             "Message": "Results returned successfully",
             "results": [
-                { "NHTSACampaignNumber": "17V123000", "Subject": "Valid" },
-                { "NHTSACampaignNumber": null, "Subject": "Filtered out" }
+                { "NHTSACampaignNumber": "17V123000", "Component": "Valid" },
+                { "NHTSACampaignNumber": null, "Component": "Filtered out" }
             ]
         }"#;
         let recalls = parse_response_json(json).unwrap();

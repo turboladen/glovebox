@@ -124,7 +124,7 @@ mod tests {
         RecallInfo {
             campaign_number: campaign.into(),
             manufacturer: None,
-            subject: format!("Recall {campaign}"),
+            title: format!("Recall {campaign}"),
             summary: None,
             consequence: None,
             remedy: None,

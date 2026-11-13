@@ -123,6 +123,24 @@ pub(crate) async fn record_recalls<C: ConnectionTrait + TransactionTrait>(
     })
 }
 
+/// The summary, consequence and remedy of a recall as one text, or `None`
+/// when NHTSA sent none of them.
+fn recall_description(recall: &RecallInfo) -> Option<String> {
+    let parts: Vec<String> = [
+        (None, &recall.summary),
+        (Some("Consequence"), &recall.consequence),
+        (Some("Remedy"), &recall.remedy),
+    ]
+    .into_iter()
+    .filter_map(|(label, text)| {
+        let text = text.as_deref()?.trim();
+        (!text.is_empty())
+            .then(|| label.map_or_else(|| text.to_owned(), |l| format!("{l}: {text}")))
+    })
+    .collect();
+    (!parts.is_empty()).then(|| parts.join("\n\n"))
+}
+
 /// Persist NHTSA recalls as research findings, skipping any already saved for
 /// this vehicle. Returns how many were stored.
 async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
@@ -137,33 +155,48 @@ async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
         .await?;
     let report_ids: Vec<i32> = existing_reports.iter().map(|r| r.id).collect();
 
-    let mut known_urls: std::collections::HashSet<String> = if report_ids.is_empty() {
-        std::collections::HashSet::new()
-    } else {
-        research_finding::Entity::find()
-            .filter(research_finding::Column::ReportId.is_in(report_ids))
-            .filter(research_finding::Column::Category.eq("recall"))
-            .all(db)
-            .await?
-            .into_iter()
-            .filter_map(|f| f.source_url)
-            .collect()
-    };
+    // Maps each stored recall's source URL to its finding, so a repeated
+    // campaign can be recognized and a blank title repaired.
+    let mut known: std::collections::HashMap<String, research_finding::Model> =
+        if report_ids.is_empty() {
+            std::collections::HashMap::new()
+        } else {
+            research_finding::Entity::find()
+                .filter(research_finding::Column::ReportId.is_in(report_ids))
+                .filter(research_finding::Column::Category.eq("recall"))
+                .all(db)
+                .await?
+                .into_iter()
+                .filter_map(|f| f.source_url.clone().map(|u| (u, f)))
+                .collect()
+        };
 
     let mut new_findings: Vec<NewFinding> = Vec::new();
+    let mut seen_urls: std::collections::HashSet<String> = std::collections::HashSet::new();
     for recall in recalls {
         let url = format!(
             "https://www.nhtsa.gov/recalls?nhtsaId={}",
             recall.campaign_number
         );
-        // `insert` also drops a campaign repeated within `recalls`.
-        if !known_urls.insert(url.clone()) {
+        if let Some(existing) = known.remove(&url) {
+            // A campaign stored earlier with a blank title gets the current one.
+            if existing.title.trim().is_empty() && !recall.title.trim().is_empty() {
+                let mut active: research_finding::ActiveModel = existing.into();
+                active.title = Set(recall.title.clone());
+                active.updated_at = Set(super::now_stamp());
+                active.update(db).await?;
+            }
+            // Stops a campaign repeated within `recalls` from being stored twice.
+            seen_urls.insert(url);
+            continue;
+        }
+        if !seen_urls.insert(url.clone()) {
             continue;
         }
         new_findings.push(NewFinding {
             category: "recall".to_string(),
-            title: recall.subject.clone(),
-            description: recall.summary.clone(),
+            title: recall.title.clone(),
+            description: recall_description(recall),
             source_url: Some(url),
             severity: Some("critical".to_string()),
         });
@@ -289,7 +322,7 @@ mod tests {
         let known = RecallInfo {
             campaign_number: "24V110000".into(),
             manufacturer: None,
-            subject: "Suction jet pump".into(),
+            title: "Suction jet pump".into(),
             summary: None,
             consequence: None,
             remedy: None,
@@ -315,6 +348,62 @@ mod tests {
 
         let missing = check_recalls(&db, 99_999).await.unwrap_err();
         assert_eq!(missing.to_string(), "Vehicle 99999 not found");
+    }
+
+    fn full_recall(campaign: &str, title: &str) -> RecallInfo {
+        RecallInfo {
+            campaign_number: campaign.into(),
+            manufacturer: None,
+            title: title.into(),
+            summary: Some("Pump may fail.".into()),
+            consequence: Some("Engine stall.".into()),
+            remedy: Some("Replace the pump.".into()),
+            report_date: None,
+            component: None,
+            action_number: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_stored_recall_keeps_its_title_and_the_whole_notice_in_its_description() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let check = record_recalls(&db, vid, &[full_recall("17V1", "FUEL SYSTEM")])
+            .await
+            .unwrap();
+        assert_eq!(check.recalls[0].title, "FUEL SYSTEM");
+        let description = check.recalls[0].description.clone().unwrap();
+        assert_eq!(
+            description,
+            "Pump may fail.\n\nConsequence: Engine stall.\n\nRemedy: Replace the pump."
+        );
+    }
+
+    #[tokio::test]
+    async fn checking_again_fills_in_a_blank_title_without_touching_status_or_count() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let first = record_recalls(&db, vid, &[full_recall("17V1", "")])
+            .await
+            .unwrap();
+        let id = first.recalls[0].finding_id;
+        recall::set_status(&db, vid, id, "not_applicable")
+            .await
+            .unwrap();
+
+        let second = record_recalls(&db, vid, &[full_recall("17V1", "FUEL SYSTEM")])
+            .await
+            .unwrap();
+        assert_eq!(second.newly_found, 0);
+        assert_eq!(second.recalls.len(), 1);
+        assert_eq!(second.recalls[0].finding_id, id);
+        assert_eq!(second.recalls[0].title, "FUEL SYSTEM");
+        assert_eq!(second.recalls[0].status, "not_applicable");
+
+        let third = record_recalls(&db, vid, &[full_recall("17V1", "OTHER")])
+            .await
+            .unwrap();
+        assert_eq!(third.recalls[0].title, "FUEL SYSTEM");
     }
 
     #[tokio::test]

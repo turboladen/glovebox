@@ -26,7 +26,9 @@ you link.
 4. Call `check_recalls` once per conversation, before the first invoice or recall question. It makes
    a live NHTSA request and stores any recall NHTSA has added since the last check. When the lookup
    fails, its `message` says so and the recalls already known are still listed; carry on with
-   those. After that, take open recall ids from the `recalls` list in `whats_coming`.
+   those. After that, take recall ids from the open and planned recalls in `whats_coming`, or from
+   `list_recalls`, which shows every stored recall with its status (done ones included) and makes no
+   web request. Do not call `check_recalls` again in the same conversation.
 
 ## Filing an invoice
 

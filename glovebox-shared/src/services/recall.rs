@@ -187,6 +187,16 @@ pub async fn list(
     with_status(db, findings).await
 }
 
+/// [`list`] for a vehicle that must exist: a missing vehicle is a `NotFound`
+/// rather than an empty list.
+pub async fn list_for_vehicle(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+) -> DomainResult<Vec<RecallWithStatus>> {
+    super::vehicle::require(db, vehicle_id).await?;
+    list(db, vehicle_id).await
+}
+
 /// The stored finding status that makes a recall with no service read as
 /// `status`, or `None` for a status a caller cannot set.
 fn stored_status(status: &str) -> Option<&'static str> {
@@ -411,7 +421,7 @@ mod tests {
         RecallInfo {
             campaign_number: campaign.into(),
             manufacturer: None,
-            subject: subject.into(),
+            title: subject.into(),
             summary: Some("Summary".into()),
             consequence: None,
             remedy: None,

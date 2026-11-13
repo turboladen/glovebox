@@ -2808,7 +2808,7 @@ mod tests {
             &[crate::services::nhtsa::RecallInfo {
                 campaign_number: "24V123".into(),
                 manufacturer: None,
-                subject: "Pump".into(),
+                title: "Pump".into(),
                 summary: None,
                 consequence: None,
                 remedy: None,
@@ -2876,7 +2876,7 @@ mod tests {
             &[crate::services::nhtsa::RecallInfo {
                 campaign_number: campaign.into(),
                 manufacturer: None,
-                subject: "Pump".into(),
+                title: "Pump".into(),
                 summary: None,
                 consequence: None,
                 remedy: None,

@@ -2,7 +2,9 @@
 
 use rmcp::{ErrorData as McpError, model::CallToolResult, tool, tool_router};
 
-use super::{GloveboxMcp, Parameters, domain_result};
+use serde::Serialize;
+
+use super::{GloveboxMcp, Parameters, domain_error, domain_result, tool_json_result};
 use glovebox_shared::services::{recall, research};
 
 use crate::schemas::{FileResearchFindingInput, SetRecallStatusInput, VehicleParams};
@@ -18,7 +20,8 @@ impl GloveboxMcp {
                        this call. If NHTSA cannot be reached, the call still succeeds with the \
                        recalls already known, `newly_found: 0`, and a `message` starting \"NHTSA \
                        lookup failed:\"; carry on with those. Call it once per conversation; \
-                       `whats_coming` lists the open recalls after that. NHTSA is queried by \
+                       `whats_coming` lists the open and planned recalls after that, and \
+                       `list_recalls` lists every recall with its status. NHTSA is queried by \
                        make, model and year, so it cannot know whether a recall was already \
                        performed on this car: when an invoice names a campaign number, match it \
                        to a recall here and pass its `finding_id` in `record_service`'s \
@@ -36,8 +39,31 @@ impl GloveboxMcp {
     }
 
     #[tool(
+        name = "list_recalls",
+        description = "Every recall stored for this vehicle with its status (`open`, `planned`, \
+                       `done` or `not_applicable`), campaign number, title, the planned work item \
+                       and the service that performed it. Reads only what is stored and makes no \
+                       web request. Use this to see recall statuses, including recalls already \
+                       done; `check_recalls` is only for asking NHTSA whether new recalls exist."
+    )]
+    async fn list_recalls(
+        &self,
+        params: Parameters<VehicleParams>,
+    ) -> Result<CallToolResult, McpError> {
+        #[derive(Serialize)]
+        struct Recalls {
+            recalls: Vec<recall::RecallWithStatus>,
+        }
+        let p = tool_input!(params, "list_recalls");
+        match recall::list_for_vehicle(&*self.db, p.vehicle_id).await {
+            Ok(recalls) => tool_json_result(&Recalls { recalls }),
+            Err(e) => domain_error(e),
+        }
+    }
+
+    #[tool(
         name = "set_recall_status",
-        description = "Mark a recall (a `finding_id` from `whats_coming` or `check_recalls`) \
+        description = "Mark a recall (a `finding_id` from `whats_coming` or `list_recalls`) \
                        `done` when the work was done but left no paperwork, `not_applicable` when \
                        it does not apply to this car, or `open` to undo either. A recall already \
                        linked to a service stays done until that service is deleted, so changing \
