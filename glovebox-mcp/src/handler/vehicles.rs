@@ -2,7 +2,7 @@
 
 use rmcp::{ErrorData as McpError, model::CallToolResult, tool, tool_router};
 
-use super::{GloveboxMcp, LenientParameters, deleted_result, domain_result};
+use super::{GloveboxMcp, Parameters, deleted_result, domain_result};
 use glovebox_shared::{
     entities,
     services::{mileage, model_template, vehicle, vin_decode},
@@ -28,12 +28,13 @@ struct AddedVehicle {
 impl GloveboxMcp {
     #[tool(
         name = "list_vehicles",
-        description = "List the garage — every vehicle's id, name, year, make, and model. Call this first: almost every other tool takes a vehicle_id from here. Use `get_vehicle` for the full record.",
-        input_schema = rmcp::handler::server::common::schema_for_type::<EmptyParams>()
+        description = "List the garage — every vehicle's id, name, year, make, and model. Call \
+                       this first: almost every other tool takes a vehicle_id from here. Use \
+                       `get_vehicle` for the full record."
     )]
     async fn list_vehicles(
         &self,
-        params: LenientParameters<EmptyParams>,
+        params: Parameters<EmptyParams>,
     ) -> Result<CallToolResult, McpError> {
         tool_input!(params, "list_vehicles");
         domain_result(
@@ -45,12 +46,13 @@ impl GloveboxMcp {
 
     #[tool(
         name = "get_vehicle",
-        description = "Read one vehicle's full record: VIN, engine/transmission/drivetrain, purchase info, plate, color, notes. Call after `list_vehicles` when the conversation needs specifics.",
-        input_schema = rmcp::handler::server::common::schema_for_type::<VehicleParams>()
+        description = "Read one vehicle's full record: VIN, engine/transmission/drivetrain, \
+                       purchase info, plate, color, notes. Call after `list_vehicles` when the \
+                       conversation needs specifics."
     )]
     async fn get_vehicle(
         &self,
-        params: LenientParameters<VehicleParams>,
+        params: Parameters<VehicleParams>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "get_vehicle");
         domain_result(vehicle::get(&*self.db, p.vehicle_id).await)
@@ -58,12 +60,13 @@ impl GloveboxMcp {
 
     #[tool(
         name = "log_mileage",
-        description = "Record an odometer reading. Keeps mileage-based maintenance reminders accurate — log whenever the user mentions their current mileage. (`record_service` with `mileage` set logs one automatically.)",
-        input_schema = rmcp::handler::server::common::schema_for_type::<LogMileageInput>()
+        description = "Record an odometer reading. Keeps mileage-based maintenance reminders \
+                       accurate — log whenever the user mentions their current mileage. \
+                       (`record_service` with `mileage` set logs one automatically.)"
     )]
     async fn log_mileage(
         &self,
-        params: LenientParameters<LogMileageInput>,
+        params: Parameters<LogMileageInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "log_mileage");
         let (vehicle_id, input) = p.into_domain();
@@ -72,12 +75,14 @@ impl GloveboxMcp {
 
     #[tool(
         name = "list_mileage",
-        description = "List the car's odometer readings, newest first, each with its `id`, `mileage`, `recorded_at` and source. A reading a service logged carries that service's `service_record_id`. Use it to find a mistyped reading for `delete_mileage`.",
-        input_schema = rmcp::handler::server::common::schema_for_type::<VehicleParams>()
+        description = "List the car's odometer readings, newest first, each with its `id`, \
+                       `mileage`, `recorded_at` and source. A reading a service logged carries \
+                       that service's `service_record_id`. Use it to find a mistyped reading for \
+                       `delete_mileage`."
     )]
     async fn list_mileage(
         &self,
-        params: LenientParameters<VehicleParams>,
+        params: Parameters<VehicleParams>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "list_mileage");
         domain_result(mileage::list(&*self.db, p.vehicle_id).await)
@@ -85,12 +90,14 @@ impl GloveboxMcp {
 
     #[tool(
         name = "delete_mileage",
-        description = "Delete one odometer reading, e.g. a mistyped `log_mileage` entry, by its id from `list_mileage`. A reading that carries a `service_record_id` follows that service: fix it with `correct_service` (`mileage`) instead; deleting it here is an error.",
-        input_schema = rmcp::handler::server::common::schema_for_type::<DeleteMileageInput>()
+        description = "Delete one odometer reading, e.g. a mistyped `log_mileage` entry, by its \
+                       id from `list_mileage`. A reading that carries a `service_record_id` \
+                       follows that service: fix it with `correct_service` (`mileage`) instead; \
+                       deleting it here is an error."
     )]
     async fn delete_mileage(
         &self,
-        params: LenientParameters<DeleteMileageInput>,
+        params: Parameters<DeleteMileageInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "delete_mileage");
         deleted_result(
@@ -102,12 +109,15 @@ impl GloveboxMcp {
 
     #[tool(
         name = "delete_vehicle",
-        description = "Delete a vehicle that has no history, to undo a mistaken or duplicate `add_vehicle`. It is refused when the vehicle has any service record, part, incident, planned work or research finding; its odometer readings and car-specific schedule items go with it. There is no way to delete a car with history through this tool.",
-        input_schema = rmcp::handler::server::common::schema_for_type::<VehicleParams>()
+        description = "Delete a vehicle that has no history, to undo a mistaken or duplicate \
+                       `add_vehicle`. It is refused when the vehicle has any service record, \
+                       part, incident, planned work or research finding; its odometer readings \
+                       and car-specific schedule items go with it. There is no way to delete a \
+                       car with history through this tool."
     )]
     async fn delete_vehicle(
         &self,
-        params: LenientParameters<VehicleParams>,
+        params: Parameters<VehicleParams>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "delete_vehicle");
         deleted_result(
@@ -119,12 +129,18 @@ impl GloveboxMcp {
 
     #[tool(
         name = "add_vehicle",
-        description = "Add a car to the garage. Give a `name` and whatever is known. Pass `model_template_id` (from `list_model_templates`) when the car matches one, so it inherits that platform's maintenance schedule (`list_schedule` shows it). Pass `vin` to fill blank year, make, model, trim, engine, transmission and drivetrain from NHTSA; anything sent explicitly wins, and if the lookup fails (offline, invalid VIN) the car is still added and the result carries `vin_decode_error`. Use `update_vehicle` to change a car that already exists.",
-        input_schema = rmcp::handler::server::common::schema_for_type::<AddVehicleInput>()
+        description = "Add a car to the garage. Give a `name` and whatever is known. Pass \
+                       `model_template_id` (from `list_model_templates`) when the car matches \
+                       one, so it inherits that platform's maintenance schedule (`list_schedule` \
+                       shows it). Pass `vin` to fill blank year, make, model, trim, engine, \
+                       transmission and drivetrain from NHTSA; anything sent explicitly wins, and \
+                       if the lookup fails (offline, invalid VIN) the car is still added and the \
+                       result carries `vin_decode_error`. Use `update_vehicle` to change a car \
+                       that already exists."
     )]
     async fn add_vehicle(
         &self,
-        params: LenientParameters<AddVehicleInput>,
+        params: Parameters<AddVehicleInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "add_vehicle");
         let input = p.into_domain();
@@ -147,12 +163,14 @@ impl GloveboxMcp {
 
     #[tool(
         name = "update_vehicle",
-        description = "Change details of an existing vehicle: name, plate, color, VIN, purchase or sale details, warranty expiry, notes, model template. Send only the fields to change; a field sent as null is cleared, and a field left out is untouched. Use `add_vehicle` for a car that is not in the garage yet.",
-        input_schema = rmcp::handler::server::common::schema_for_type::<UpdateVehicleInput>()
+        description = "Change details of an existing vehicle: name, plate, color, VIN, purchase \
+                       or sale details, warranty expiry, notes, model template. Send only the \
+                       fields to change; a field sent as null is cleared, and a field left out is \
+                       untouched. Use `add_vehicle` for a car that is not in the garage yet."
     )]
     async fn update_vehicle(
         &self,
-        params: LenientParameters<UpdateVehicleInput>,
+        params: Parameters<UpdateVehicleInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "update_vehicle");
         let (vehicle_id, input) = p.into_domain();
@@ -161,12 +179,14 @@ impl GloveboxMcp {
 
     #[tool(
         name = "list_model_templates",
-        description = "List the known model templates (year, make, model, trim and the platform each belongs to). Call before `add_vehicle` to find the `model_template_id` that gives a new car its inherited maintenance schedule. A car that matches none can still be added without one.",
-        input_schema = rmcp::handler::server::common::schema_for_type::<EmptyParams>()
+        description = "List the known model templates (year, make, model, trim and the platform \
+                       each belongs to). Call before `add_vehicle` to find the \
+                       `model_template_id` that gives a new car its inherited maintenance \
+                       schedule. A car that matches none can still be added without one."
     )]
     async fn list_model_templates(
         &self,
-        params: LenientParameters<EmptyParams>,
+        params: Parameters<EmptyParams>,
     ) -> Result<CallToolResult, McpError> {
         tool_input!(params, "list_model_templates");
         domain_result(model_template::list_with_platform(&*self.db).await)

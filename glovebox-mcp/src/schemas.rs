@@ -54,11 +54,13 @@ pub struct RecordServiceInput {
     pub description: Option<String>,
     /// Odometer reading at service time. Also logs a mileage entry.
     pub mileage: Option<i32>,
-    /// Total invoice amount in integer cents (e.g. $123.45 -> 12345).
+    /// The amount the shop charged on the invoice, in integer cents (e.g.
+    /// $123.45 -> 12345). It excludes the cost of any part with
+    /// `supplied_by: "self"`, which was paid for elsewhere.
     pub total_cost_cents: Option<i32>,
-    /// Parts portion of the invoice, integer cents.
+    /// Parts subtotal, integer cents. Fill it only when the invoice prints one.
     pub parts_cost_cents: Option<i32>,
-    /// Labor portion of the invoice, integer cents.
+    /// Labor subtotal, integer cents. Fill it only when the invoice prints one.
     pub labor_cost_cents: Option<i32>,
     /// Shop that did the work (free text). Omit for DIY.
     pub shop_name: Option<String>,
@@ -81,8 +83,9 @@ pub struct RecordServiceInput {
     /// at this service's date and mileage. Do not list such a part again
     /// under `parts`.
     pub part_ids: Option<Vec<i32>>,
-    /// Ids of schedule items (from `whats_coming`) this work
-    /// satisfies — linking clears the reminder and restarts its interval.
+    /// Ids of schedule items (from `whats_coming`) this work satisfies, every
+    /// one of them and not only the one the owner mentioned. Linking clears
+    /// the reminder and restarts its interval.
     pub schedule_item_ids: Option<Vec<i32>>,
     /// The number printed on the invoice or repair order (e.g. "RO-1182").
     /// Re-recording the SAME ref for this vehicle returns the existing record
@@ -115,6 +118,7 @@ pub struct LineItemInput {
     /// What kind of work this line is: `maintenance`, `mod`, `repair`, or
     /// `inspection`.
     pub work_kind: String,
+    /// How many units, e.g. 5 for five quarts of oil. May be fractional.
     pub quantity: Option<f64>,
     /// Per-unit cost, integer cents.
     pub unit_cost_cents: Option<i32>,
@@ -296,7 +300,8 @@ pub struct InlinePartInput {
     pub seller: Option<String>,
     /// Purchase date, `YYYY-MM-DD`.
     pub purchase_date: Option<String>,
-    /// What it cost, integer cents.
+    /// What the part cost, integer cents. With `supplied_by: "self"` it was
+    /// paid for elsewhere and is not part of the invoice's `total_cost_cents`.
     pub cost_cents: Option<i32>,
     /// Who supplied the part: `self` (the owner bought it, the default) or
     /// `shop` (the shop sourced it and billed for it).

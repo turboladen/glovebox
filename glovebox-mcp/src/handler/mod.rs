@@ -19,6 +19,7 @@ use rmcp::{
     service::RequestContext,
     tool_handler,
 };
+use schemars::JsonSchema;
 use sea_orm::DatabaseConnection;
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -29,7 +30,7 @@ use glovebox_shared::{
 
 use crate::schemas::VehicleBrief;
 
-/// Unwraps a tool's [`LenientParameters`], returning the tool-level error
+/// Unwraps a tool's [`Parameters`], returning the tool-level error
 /// result from the enclosing tool when the arguments did not deserialize.
 macro_rules! tool_input {
     ($params:expr, $name:literal) => {
@@ -311,19 +312,16 @@ fn tool_user_error(message: impl Into<String>) -> CallToolResult {
     CallToolResult::error(vec![ContentBlock::text(message.into())])
 }
 
-/// Parameter wrapper that defers deserialize errors to the handler so
-/// malformed arguments come back as tool-level errors (with the schema
-/// hint) instead of bare JSON-RPC `-32602`s that clients render as a
-/// generic failure. Pattern lifted from fewd's MCP handler.
+/// A tool's arguments, deserialized into `T`. A failure to deserialize is kept
+/// and surfaces from [`Parameters::into_tool_input`] as a tool-level error that
+/// names the tool, rather than as a bare JSON-RPC `-32602`.
 ///
-/// The `#[tool]` attribute MUST also set
-/// `input_schema = rmcp::handler::server::common::schema_for_type::<T>()`:
-/// rmcp's macro only auto-derives schemas from a literal `Parameters<T>`
-/// in the signature, so without the override the tool advertises an empty
-/// input schema.
-pub(crate) struct LenientParameters<T>(Result<T, String>);
+/// The `#[tool]` macro recognizes this wrapper by its name and advertises the
+/// schema of `T`, with every nested type written out in place, so a tool needs
+/// no `input_schema` attribute.
+pub(crate) struct Parameters<T>(Result<T, String>);
 
-impl<T> LenientParameters<T> {
+impl<T> Parameters<T> {
     /// Unwrap into the deserialized value or a tool-level error naming the
     /// tool. Handlers call it through `tool_input!`.
     pub(crate) fn into_tool_input(self, tool_name: &'static str) -> Result<T, CallToolResult> {
@@ -333,7 +331,24 @@ impl<T> LenientParameters<T> {
     }
 }
 
-impl<S, T> FromContextPart<ToolCallContext<'_, S>> for LenientParameters<T>
+impl<T: JsonSchema> JsonSchema for Parameters<T> {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        T::schema_name()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        // Claude Desktop hides the fields behind a `$ref` from the model and sends such an
+        // object parameter as a JSON string, so subschemas are inlined instead of collected
+        // under `$defs`. The settings are the caller's, so the draft stays whatever rmcp
+        // chose. A type that refers to itself would still get a `$ref`; no input type does.
+        let mut settings = generator.settings().clone();
+        settings.inline_subschemas = true;
+        settings.meta_schema = None;
+        settings.into_generator().root_schema_for::<T>()
+    }
+}
+
+impl<S, T> FromContextPart<ToolCallContext<'_, S>> for Parameters<T>
 where
     T: DeserializeOwned,
 {

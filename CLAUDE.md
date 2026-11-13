@@ -105,9 +105,13 @@ named as things a person would say:
   `get_incident`
 
 Inputs are schemars-derived structs in `src/schemas.rs` and `src/schemas/corrections.rs`; their doc
-comments become the LLM-visible field descriptions. `LenientParameters<T>` defers deserialize errors
-so malformed arguments come back as actionable tool errors, not bare JSON-RPC `-32602`s. Pair it
-with an explicit `input_schema = schema_for_type::<T>()` on every `#[tool]`. A `correct_*` or
+comments become the LLM-visible field descriptions. `Parameters<T>` defers deserialize errors
+so malformed arguments come back as actionable tool errors, not bare JSON-RPC `-32602`s. The
+wrapper is named `Parameters` so the `#[tool]` macro derives the input schema from it; do not add
+an `input_schema` attribute. The wrapper's `JsonSchema` impl inlines every subschema, because Claude
+Desktop does not resolve `$ref` (it hides the nested fields from the model and sends the object as
+a JSON string); the tools-list test fails if a reference survives. A `Parameters` type must not
+refer to itself. A `correct_*` or
 `update_*` input uses `Option<Option<T>>`: an absent key leaves the field alone, and an explicit
 `null` clears it. Every input struct, nested ones included, carries
 `#[serde(deny_unknown_fields)]`, so an argument the tool does not define is a tool error that names

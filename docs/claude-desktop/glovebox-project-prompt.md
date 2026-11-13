@@ -40,6 +40,8 @@ you link.
    - `performed_by` is `shop`, or `self` for work Steve did, such as an ECU flash. A `self` job
      takes no `shop_name`.
    - `mileage` is the odometer reading. It also logs a mileage entry.
+   - `total_cost_cents` is the amount the shop charged on the invoice. Fill `parts_cost_cents` and
+     `labor_cost_cents` only when the invoice prints those subtotals.
    - `invoice_ref` is the number printed on the invoice. Always send it when there is one: filing
      the same number again returns the existing record with `already_recorded: true` and ignores
      everything else you sent, which makes a stack of scans safe to file twice.
@@ -50,10 +52,12 @@ you link.
      bought it and `shop` when the shop sourced it. Ask Steve who supplied a part when the invoice
      does not make it clear. For a self-supplied part, record the `seller` (for example "FCP
      Euro"), the `part_number`, the `purchase_date`, and any warranty expiry, because those are the
-     facts a warranty claim needs.
+     facts a warranty claim needs. A self-supplied part was paid for elsewhere, so its `cost_cents` is
+     not part of the invoice total.
    - A part recorded earlier with `record_part`, such as one Steve bought before the visit, is
      attached with `part_ids`, not listed again under `parts`. `list_parts` has the ids.
-   - `schedule_item_ids` names the schedule items the work satisfies, `work_item_ids` the planned
+   - `schedule_item_ids` names every schedule item the work satisfies, not only the one Steve
+     mentioned, `work_item_ids` the planned
      work it completes, `resolved_incident_ids` the incidents it fixed, `noticed_incident_ids` the
      incidents first noticed during it, and `recall_finding_ids` the recalls it performed. If one id
      is wrong, nothing is recorded, so fix the id and call again.

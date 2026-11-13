@@ -2,7 +2,7 @@
 
 use rmcp::{ErrorData as McpError, model::CallToolResult, tool, tool_router};
 
-use super::{GloveboxMcp, LenientParameters, deleted_result, domain_result};
+use super::{GloveboxMcp, Parameters, deleted_result, domain_result};
 use glovebox_shared::{inputs::part::PartFilter, services::part};
 
 use crate::schemas::{CorrectPartInput, DeletePartInput, ListPartsInput, RecordPartInput};
@@ -11,12 +11,15 @@ use crate::schemas::{CorrectPartInput, DeletePartInput, ListPartsInput, RecordPa
 impl GloveboxMcp {
     #[tool(
         name = "record_part",
-        description = "Record a part you bought or installed for this vehicle — purchase info, cost (integer cents), who supplied it (`supplied_by`: `self` or `shop`), where it goes (location), and an optional link to the installing service. For parts listed on an invoice, pass them in `parts` on `record_service` instead; use this tool for a part bought ahead of the install.",
-        input_schema = rmcp::handler::server::common::schema_for_type::<RecordPartInput>()
+        description = "Record a part you bought or installed for this vehicle — purchase info, \
+                       cost (integer cents), who supplied it (`supplied_by`: `self` or `shop`), \
+                       where it goes (location), and an optional link to the installing service. \
+                       For parts listed on an invoice, pass them in `parts` on `record_service` \
+                       instead; use this tool for a part bought ahead of the install."
     )]
     async fn record_part(
         &self,
-        params: LenientParameters<RecordPartInput>,
+        params: Parameters<RecordPartInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "record_part");
         let (vehicle_id, input) = p.into_domain();
@@ -25,12 +28,14 @@ impl GloveboxMcp {
 
     #[tool(
         name = "list_parts",
-        description = "The vehicle's parts, newest first: what was bought, what is installed (and by which service), and what has been replaced. Filter with `status` (`purchased`, `installed`, `replaced`). Use this to find the `part_id` for `correct_part` or `delete_part`.",
-        input_schema = rmcp::handler::server::common::schema_for_type::<ListPartsInput>()
+        description = "The vehicle's parts, newest first: what was bought, what is installed (and \
+                       by which service), and what has been replaced. Filter with `status` \
+                       (`purchased`, `installed`, `replaced`). Use this to find the `part_id` for \
+                       `correct_part` or `delete_part`."
     )]
     async fn list_parts(
         &self,
-        params: LenientParameters<ListPartsInput>,
+        params: Parameters<ListPartsInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "list_parts");
         domain_result(part::list(&*self.db, p.vehicle_id, PartFilter { status: p.status }).await)
@@ -38,12 +43,15 @@ impl GloveboxMcp {
 
     #[tool(
         name = "correct_part",
-        description = "Fix a part record: name, maker, part number, seller, cost, status, where it goes, install or replacement details, warranty. Send only the fields to change; null clears a field, and a field left out is untouched. Use this to mark a part `replaced` or to link it to the service that installed it. To remove a part that should never have been recorded, use `delete_part`.",
-        input_schema = rmcp::handler::server::common::schema_for_type::<CorrectPartInput>()
+        description = "Fix a part record: name, maker, part number, seller, cost, status, where \
+                       it goes, install or replacement details, warranty. Send only the fields to \
+                       change; null clears a field, and a field left out is untouched. Use this \
+                       to mark a part `replaced` or to link it to the service that installed it. \
+                       To remove a part that should never have been recorded, use `delete_part`."
     )]
     async fn correct_part(
         &self,
-        params: LenientParameters<CorrectPartInput>,
+        params: Parameters<CorrectPartInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "correct_part");
         let (vehicle_id, part_id, input) = p.into_domain();
@@ -52,12 +60,15 @@ impl GloveboxMcp {
 
     #[tool(
         name = "delete_part",
-        description = "Permanently delete a part record that was entered by mistake or is a duplicate. A part that was only replaced or is no longer on the car should be marked `replaced` with `correct_part`, which keeps the history. Deleting a service keeps the parts it installed (reverted to purchased), so use this tool to remove them as well.",
-        input_schema = rmcp::handler::server::common::schema_for_type::<DeletePartInput>()
+        description = "Permanently delete a part record that was entered by mistake or is a \
+                       duplicate. A part that was only replaced or is no longer on the car should \
+                       be marked `replaced` with `correct_part`, which keeps the history. \
+                       Deleting a service keeps the parts it installed (reverted to purchased), \
+                       so use this tool to remove them as well."
     )]
     async fn delete_part(
         &self,
-        params: LenientParameters<DeletePartInput>,
+        params: Parameters<DeletePartInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "delete_part");
         deleted_result(

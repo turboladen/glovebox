@@ -121,6 +121,12 @@ async fn tools_list_advertises_the_remaining_verb_set() {
             tool["inputSchema"]["additionalProperties"], false,
             "tool {name} must advertise additionalProperties: false; got: {tool}"
         );
+        // The client does not hand `$defs` to the model, so a `$ref` hides the fields behind it.
+        assert!(
+            !contains_ref(&tool["inputSchema"]),
+            "tool {name} input schema must inline every subschema; got: {}",
+            tool["inputSchema"]
+        );
         if name == "list_vehicles" || name == "list_model_templates" {
             continue; // deliberately take no arguments
         }
@@ -344,4 +350,76 @@ async fn only_a_vehicle_with_no_history_can_be_deleted() {
         .call_err("delete_vehicle", json!({ "vehicle_id": 99_999 }))
         .await;
     assert!(missing.contains("not found"), "got: {missing}");
+}
+
+/// True when a `$ref` or `$defs` key appears anywhere in the JSON tree.
+fn contains_ref(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.contains_key("$ref") || map.contains_key("$defs") || map.values().any(contains_ref)
+        }
+        serde_json::Value::Array(items) => items.iter().any(contains_ref),
+        _ => false,
+    }
+}
+
+/// The `properties` of the objects inside an optional array property, however the
+/// generated schema spells the nullable array (`items` directly or under `anyOf`).
+fn array_item_properties<'a>(
+    schema: &'a serde_json::Value,
+    property: &str,
+) -> &'a serde_json::Map<String, serde_json::Value> {
+    let prop = &schema["properties"][property];
+    let items = if prop["items"].is_object() {
+        &prop["items"]
+    } else {
+        prop["anyOf"]
+            .as_array()
+            .and_then(|v| v.iter().find(|s| s["items"].is_object()))
+            .map(|s| &s["items"])
+            .unwrap_or_else(|| panic!("{property} has no array items: {prop}"))
+    };
+    items["properties"]
+        .as_object()
+        .unwrap_or_else(|| panic!("{property} items expose no properties: {items}"))
+}
+
+#[tokio::test]
+async fn record_service_schema_exposes_nested_fields_with_descriptions() {
+    let t = connect().await;
+    let tools = t.tools().await;
+    let tool = tools
+        .iter()
+        .find(|t| t["name"] == "record_service")
+        .expect("record_service is advertised");
+    let schema = &tool["inputSchema"];
+    for (property, keys) in [
+        (
+            "line_items",
+            &[
+                "description",
+                "work_kind",
+                "quantity",
+                "unit_cost_cents",
+                "cost_cents",
+            ][..],
+        ),
+        (
+            "parts",
+            &["name", "seller", "cost_cents", "supplied_by"][..],
+        ),
+    ] {
+        let props = array_item_properties(schema, property);
+        for key in keys {
+            let description = props
+                .get(*key)
+                .unwrap_or_else(|| panic!("{property} items lack {key}: {props:?}"))["description"]
+                .as_str()
+                .unwrap_or("");
+            assert!(
+                !description.is_empty(),
+                "{property}.{key} must carry a description"
+            );
+        }
+    }
 }
