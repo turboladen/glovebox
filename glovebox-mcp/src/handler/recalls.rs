@@ -16,15 +16,15 @@ impl GloveboxMcp {
         description = "Check NHTSA for safety recalls on this vehicle (requires make/model/year \
                        on the record; makes a live web request). Returns every known recall with \
                        its status (`open`, `planned`, `done` or `not_applicable`) and the work \
-                       item or service linked to it; `newly_found` counts only recalls stored by \
-                       this call. If NHTSA cannot be reached, the call still succeeds with the \
-                       recalls already known, `newly_found: 0`, and a `message` starting \"NHTSA \
-                       lookup failed:\"; carry on with those. Call it once per conversation; \
-                       `whats_coming` lists the open and planned recalls after that, and \
-                       `list_recalls` lists every recall with its status. NHTSA is queried by \
-                       make, model and year, so it cannot know whether a recall was already \
-                       performed on this car: when an invoice names a campaign number, match it \
-                       to a recall here and pass its `finding_id` in `record_service`'s \
+                       item (`work_item_id`) or service linked to it; `newly_found` counts only \
+                       recalls stored by this call. If NHTSA cannot be reached, the call still \
+                       succeeds with the recalls already known, `newly_found: 0`, and a `message` \
+                       starting \"NHTSA lookup failed:\"; carry on with those. Call it once per \
+                       conversation; `whats_coming` lists the open and planned recalls after \
+                       that, and `list_recalls` lists every recall with its status. NHTSA is \
+                       queried by make, model and year, so it cannot know whether a recall was \
+                       already performed on this car: when an invoice names a campaign number, \
+                       match it to a recall here and pass its `finding_id` in `record_service`'s \
                        `recall_finding_ids`. To act on an open recall, `plan_work` it with \
                        `research_finding_id`; completing that work through `record_service` links \
                        the service to the recall. Use `set_recall_status` for a recall that was \
@@ -41,10 +41,12 @@ impl GloveboxMcp {
     #[tool(
         name = "list_recalls",
         description = "Every recall stored for this vehicle with its status (`open`, `planned`, \
-                       `done` or `not_applicable`), campaign number, title, the planned work item \
-                       and the service that performed it. Reads only what is stored and makes no \
-                       web request. Use this to see recall statuses, including recalls already \
-                       done; `check_recalls` is only for asking NHTSA whether new recalls exist."
+                       `done` or `not_applicable`), campaign number, title, the work item that \
+                       addresses or addressed it (`work_item_id`: the planned one, else the \
+                       latest completed one) and the service that performed it. Reads only what \
+                       is stored and makes no web request. Use this to see recall statuses, \
+                       including recalls already done; `check_recalls` is only for asking NHTSA \
+                       whether new recalls exist."
     )]
     async fn list_recalls(
         &self,

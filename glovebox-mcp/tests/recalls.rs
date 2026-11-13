@@ -112,9 +112,10 @@ async fn list_recalls_shows_every_status_without_a_network_call() {
     assert_eq!(by_id(open)["status"], "open");
     assert_eq!(by_id(open)["campaign_number"], "24V110000");
     assert_eq!(by_id(planned)["status"], "planned");
-    assert_eq!(by_id(planned)["planned_work_item_id"], item["id"]);
+    assert_eq!(by_id(planned)["work_item_id"], item["id"]);
     assert_eq!(by_id(done)["status"], "done");
     assert_eq!(by_id(done)["done_service"]["id"], service["id"]);
+    assert_eq!(by_id(open)["work_item_id"], serde_json::Value::Null);
     assert_eq!(by_id(skipped)["status"], "not_applicable");
     assert!(by_id(open)["title"].is_string());
 

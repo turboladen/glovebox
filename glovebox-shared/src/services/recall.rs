@@ -30,8 +30,10 @@ pub struct RecallWithStatus {
     pub source_url: Option<String>,
     /// One of `open`, `planned`, `done` or `not_applicable`.
     pub status: String,
-    /// The open work item planned for this recall, if any.
-    pub planned_work_item_id: Option<i32>,
+    /// The work item that addresses or addressed this recall: the planned
+    /// one when there is one, otherwise the latest completed one. Only a
+    /// planned item makes `status` read `planned`.
+    pub work_item_id: Option<i32>,
     /// The latest service linked to this recall, if any.
     pub done_service: Option<ServiceRef>,
 }
@@ -123,16 +125,24 @@ async fn with_status(
         }
     }
 
+    // The planned item wins; otherwise the most recently completed one.
     let mut planned: HashMap<i32, i32> = HashMap::new();
+    let mut completed: HashMap<i32, i32> = HashMap::new();
     for item in work_item::Entity::find()
         .filter(work_item::Column::ResearchFindingId.is_in(ids))
-        .filter(work_item::Column::Status.eq("planned"))
+        .filter(work_item::Column::Status.is_in(["planned", "done"]))
         .order_by_asc(work_item::Column::Id)
         .all(db)
         .await?
     {
-        if let Some(finding_id) = item.research_finding_id {
+        let Some(finding_id) = item.research_finding_id else {
+            continue;
+        };
+        if item.status == "planned" {
             planned.entry(finding_id).or_insert(item.id);
+        } else {
+            let slot = completed.entry(finding_id).or_insert(item.id);
+            *slot = item.id;
         }
     }
 
@@ -143,6 +153,7 @@ async fn with_status(
                 .get(&f.id)
                 .map(|s| ServiceRef::from((*s).clone()));
             let planned_work_item_id = planned.get(&f.id).copied();
+            let work_item_id = planned_work_item_id.or_else(|| completed.get(&f.id).copied());
             let status = if done_service.is_some() || f.status == "completed" {
                 "done"
             } else if f.status == "dismissed" {
@@ -159,7 +170,7 @@ async fn with_status(
                 description: f.description,
                 source_url: f.source_url,
                 status: status.to_owned(),
-                planned_work_item_id,
+                work_item_id,
                 done_service,
             }
         })
@@ -529,7 +540,7 @@ mod tests {
         let item = plan_work_for_recall(&db, v, check.recalls[0].finding_id).await;
         let r = &list(&db, v).await.unwrap()[0];
         assert_eq!(
-            (r.status.as_str(), r.planned_work_item_id),
+            (r.status.as_str(), r.work_item_id),
             ("planned", Some(item.id))
         );
 
@@ -703,7 +714,7 @@ mod tests {
         .unwrap();
         assert_eq!(svc.performed_recalls.len(), 1);
         let r = &list(&db, v).await.unwrap()[0];
-        assert_eq!((r.status.as_str(), r.planned_work_item_id), ("done", None));
+        assert_eq!((r.status.as_str(), r.work_item_id), ("done", Some(item.id)));
         assert_eq!(r.done_service.as_ref().unwrap().id, svc.record.id);
     }
 
