@@ -19,6 +19,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let db_path = std::env::var("GLOVEBOX_DB_PATH").unwrap_or_else(|_| DEFAULT_DB_PATH.to_owned());
+    if std::env::args().nth(1).as_deref() == Some("backup") {
+        // The path goes to stderr like every other diagnostic, so stdout
+        // stays reserved for protocol frames in every mode.
+        match glovebox_shared::db::backup_now(&db_path).await? {
+            Some(copy) => eprintln!("Backed up {db_path} to {}", copy.display()),
+            None => eprintln!("Nothing to back up: {db_path} is missing or empty."),
+        }
+        return Ok(());
+    }
     let db = glovebox_shared::db::connect(&db_path).await?;
     tracing::info!(%db_path, "serving glovebox MCP on stdio");
 

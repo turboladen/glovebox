@@ -8,7 +8,11 @@ use sea_orm::{
 };
 use sea_orm_migration::MigratorTrait;
 
-use crate::{error::DomainResult, migration::Migrator};
+use crate::{
+    backup,
+    error::{DomainError, DomainResult},
+    migration::Migrator,
+};
 
 /// Builds the connection options shared by production and tests: WAL journal
 /// mode and enforced foreign keys. `file` of `None` selects a private in-memory
@@ -44,15 +48,62 @@ pub async fn connect(db_path: &str) -> DomainResult<DatabaseConnection> {
     let path = Path::new(db_path);
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         tokio::fs::create_dir_all(parent).await.map_err(|e| {
-            crate::error::DomainError::Internal(format!(
+            DomainError::Internal(format!(
                 "cannot create database directory {}: {e}",
                 parent.display()
             ))
         })?;
     }
+    let had_data = backup::has_data(path);
     let db = Database::connect(connect_options(Some(path.to_path_buf()))).await?;
+    if had_data {
+        backup_before_migrating(&db, path).await?;
+    }
     Migrator::up(&db, None).await?;
     Ok(db)
+}
+
+/// Backs up a database that already holds data: always when a migration is
+/// about to change it, and otherwise once per calendar day.
+///
+/// # Errors
+///
+/// A failed backup stops the open only when a migration is pending, because
+/// that is the case where the file is about to be changed in place.
+async fn backup_before_migrating(db: &DatabaseConnection, path: &Path) -> DomainResult<()> {
+    let now = chrono::Local::now();
+    let pending = !Migrator::get_pending_migrations(db).await?.is_empty();
+    if !pending && backup::has_backup_on(path, now) {
+        return Ok(());
+    }
+    match backup::write(db, path, now).await {
+        Ok(copy) => {
+            tracing::info!(path = %copy.display(), "backed up the database");
+            backup::prune(path);
+            Ok(())
+        }
+        Err(e) if pending => Err(DomainError::Internal(format!(
+            "refusing to migrate {} because it could not be backed up first: {e}",
+            path.display()
+        ))),
+        Err(e) => {
+            tracing::warn!(error = %e, "could not back up the database");
+            Ok(())
+        }
+    }
+}
+
+/// Backs up the database at `db_path` now and returns the copy's path, or
+/// `None` when the file is missing or empty.
+pub async fn backup_now(db_path: &str) -> DomainResult<Option<PathBuf>> {
+    let path = Path::new(db_path);
+    if !backup::has_data(path) {
+        return Ok(None);
+    }
+    let db = Database::connect(connect_options(Some(path.to_path_buf()))).await?;
+    let copy = backup::write(&db, path, chrono::Local::now()).await?;
+    backup::prune(path);
+    Ok(Some(copy))
 }
 
 /// Opens a fresh in-memory database with the production options and applies
@@ -119,6 +170,63 @@ mod tests {
         for t in ["builds", "visits", "documents"] {
             assert!(!tables.contains(&t.to_string()), "{t} must not exist");
         }
+    }
+
+    #[tokio::test]
+    async fn a_new_database_is_not_backed_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("glovebox.db");
+        connect(path.to_str().unwrap()).await.unwrap();
+        assert!(backup::list(&path).is_empty());
+    }
+
+    #[tokio::test]
+    async fn reopening_backs_up_once_per_day() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("glovebox.db");
+        let p = path.to_str().unwrap();
+        drop(connect(p).await.unwrap());
+        drop(connect(p).await.unwrap());
+        assert_eq!(backup::list(&path).len(), 1);
+        drop(connect(p).await.unwrap());
+        assert_eq!(backup::list(&path).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_pending_migration_forces_a_backup_even_with_one_today() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("glovebox.db");
+        let p = path.to_str().unwrap();
+        drop(connect(p).await.unwrap());
+        drop(connect(p).await.unwrap());
+        assert_eq!(backup::list(&path).len(), 1);
+        // Forgetting the newest migration makes it pending again; it is
+        // rerun-safe, so applying it a second time succeeds.
+        let raw = Database::connect(connect_options(Some(path.clone())))
+            .await
+            .unwrap();
+        raw.execute_unprepared(
+            "DELETE FROM seaql_migrations WHERE version = (SELECT version FROM seaql_migrations \
+             ORDER BY version DESC LIMIT 1)",
+        )
+        .await
+        .unwrap();
+        drop(raw);
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        drop(connect(p).await.unwrap());
+        assert_eq!(backup::list(&path).len(), 2);
+    }
+
+    #[tokio::test]
+    async fn backup_now_copies_an_existing_database_and_skips_a_missing_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("glovebox.db");
+        let p = path.to_str().unwrap();
+        assert_eq!(backup_now(p).await.unwrap(), None);
+        assert!(!path.exists());
+        drop(connect(p).await.unwrap());
+        let copy = backup_now(p).await.unwrap().unwrap();
+        assert!(copy.starts_with(dir.path().join("backups")));
     }
 
     #[tokio::test]

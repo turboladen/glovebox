@@ -25,7 +25,7 @@ cargo test -p glovebox-mcp --test rehearsal       # One MCP integration test fil
 just ci                   # Everything CI runs: nightly fmt-check, layering, build, test, clippy
 just fmt                  # cargo +nightly fmt — rustfmt.toml uses nightly-only options; plain `cargo fmt` passes locally but CI's format job will fail
 just check-layering       # Layering gate only (scripts/check-layering.sh)
-just reset-db             # Delete data/glovebox.db; the next start recreates it
+just backup               # Copy the database to data/backups/ now
 
 cargo clippy --workspace -- -D clippy::pedantic   # Rust lints (pedantic is the CI gate)
 
@@ -55,6 +55,16 @@ sets the tracing filter (default `info`). The Claude Desktop config snippet sets
 
 **`db.rs`**: `db::connect(path)` is the only place a SQLite connection is opened. It creates the
 parent directory, uses WAL mode with foreign keys enforced, and runs `Migrator::up()`.
+
+**`backup.rs`**: `db::connect` copies a database that already holds data to `backups/` beside it
+(`VACUUM INTO`, so the copy is consistent while another process writes) before any pending
+migration runs and otherwise once per calendar day, and keeps the newest 14. A backup that fails
+stops the open only when a migration is pending. To restore, quit Claude Desktop, copy a backup
+over `data/glovebox.db`, and delete `data/glovebox.db-wal` and `data/glovebox.db-shm`.
+
+**The database holds the owner's real records and there is no recipe that deletes it.** Never
+delete, reset or overwrite `data/glovebox.db`, and never run a command against it to see what the
+command does. Tests use `test_db()` or a temporary directory.
 
 **Entities** (`entities/`): Hand-written `DeriveEntityModel` structs. Parent entities declare
 `has_many` relations; junction tables have `via()` impls.
