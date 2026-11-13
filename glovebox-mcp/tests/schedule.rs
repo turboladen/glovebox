@@ -308,3 +308,17 @@ async fn schedule_tools_reject_unknown_arguments() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn add_schedule_item_defaults_the_warning_window() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let added = t
+        .call(
+            "add_schedule_item",
+            json!({ "vehicle_id": v.id, "name": "Smog check", "interval_months": 24 }),
+        )
+        .await;
+    assert_eq!(added["warning_miles"], 1000, "got: {added}");
+    assert_eq!(added["warning_days"], 30, "got: {added}");
+}

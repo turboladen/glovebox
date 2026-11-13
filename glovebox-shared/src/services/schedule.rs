@@ -12,6 +12,13 @@ use crate::{
     inputs::schedule::{NewScheduleItem, ScheduleFilter, UpdateScheduleItem},
 };
 
+/// Miles before an item's due point at which it reads as due soon, when the
+/// item sets no warning of its own.
+pub const DEFAULT_WARNING_MILES: i32 = 1000;
+/// Days before an item's due date at which it reads as due soon, when the item
+/// sets no warning of its own.
+pub const DEFAULT_WARNING_DAYS: i32 = 30;
+
 #[derive(Serialize)]
 pub struct ResolvedScheduleItem {
     pub effective_item: maintenance_schedule_item::Model,
@@ -93,8 +100,8 @@ pub async fn create(
         description: Set(input.description),
         interval_miles: Set(input.interval_miles),
         interval_months: Set(input.interval_months),
-        warning_miles: Set(input.warning_miles),
-        warning_days: Set(input.warning_days),
+        warning_miles: Set(Some(input.warning_miles.unwrap_or(DEFAULT_WARNING_MILES))),
+        warning_days: Set(Some(input.warning_days.unwrap_or(DEFAULT_WARNING_DAYS))),
         enabled: Set(input.enabled.unwrap_or(true)),
         source: Set(input.source),
         notes: Set(input.notes),
@@ -131,10 +138,10 @@ pub async fn update(
         active.interval_months = Set(v);
     }
     if let Some(v) = input.warning_miles {
-        active.warning_miles = Set(v);
+        active.warning_miles = Set(Some(v.unwrap_or(DEFAULT_WARNING_MILES)));
     }
     if let Some(v) = input.warning_days {
-        active.warning_days = Set(v);
+        active.warning_days = Set(Some(v.unwrap_or(DEFAULT_WARNING_DAYS)));
     }
     if let Some(v) = input.enabled {
         active.enabled = Set(v);
@@ -810,6 +817,82 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(err, DomainError::Invalid { .. }));
+    }
+
+    #[tokio::test]
+    async fn a_new_item_without_warning_values_gets_the_default_window() {
+        use crate::{
+            entities::{service_record, service_schedule_link},
+            services::reminders::calculate_reminders,
+        };
+        let db = test_db().await;
+        let vid = seed_vehicle(&db, None).await;
+        let created = create(
+            &db,
+            NewScheduleItem {
+                vehicle_id: Some(vid),
+                interval_miles: None,
+                interval_months: Some(24),
+                ..item_named("Smog check")
+            },
+        )
+        .await
+        .unwrap();
+        let read_back = get(&db, created.id).await.unwrap();
+        assert_eq!(read_back.warning_miles, Some(1000));
+        assert_eq!(read_back.warning_days, Some(30));
+
+        // Done 23.5 months (715 days) ago: due in about 15 days, inside the window.
+        let svc = service_record::ActiveModel {
+            vehicle_id: Set(vid),
+            service_date: Set(days_ago(715)),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        service_schedule_link::ActiveModel {
+            service_record_id: Set(svc.id),
+            schedule_item_id: Set(created.id),
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        let resp = calculate_reminders(&db, vid).await.unwrap();
+        assert_eq!(resp.reminders[0].status, "due_soon");
+    }
+
+    #[tokio::test]
+    async fn explicit_warning_values_are_kept_and_clearing_restores_the_default() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db, None).await;
+        let created = create(
+            &db,
+            NewScheduleItem {
+                vehicle_id: Some(vid),
+                warning_miles: Some(500),
+                warning_days: Some(14),
+                ..item_named("Brake fluid")
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(created.warning_miles, Some(500));
+        assert_eq!(created.warning_days, Some(14));
+
+        let cleared = update(
+            &db,
+            created.id,
+            UpdateScheduleItem {
+                warning_miles: Some(None),
+                warning_days: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(cleared.warning_miles, Some(1000));
+        assert_eq!(cleared.warning_days, Some(30));
     }
 
     #[tokio::test]

@@ -10,6 +10,7 @@ use crate::{
     entities::{mileage_log, research_finding, research_report, work_item},
     error::{DomainError, DomainResult},
     inputs::work_item::{NewWorkItem, UpdateWorkItem},
+    services::schedule::{DEFAULT_WARNING_DAYS, DEFAULT_WARNING_MILES},
 };
 
 /// Lifecycle whitelist for `work_items.status`.
@@ -28,8 +29,8 @@ fn validate_status(status: &str) -> DomainResult<()> {
 
 /// Days before a revisit date, and miles before a revisit odometer reading,
 /// at which an item counts as due soon.
-const DUE_SOON_DAYS: i64 = 30;
-const DUE_SOON_MILES: i32 = 1000;
+const DUE_SOON_DAYS: i32 = DEFAULT_WARNING_DAYS;
+const DUE_SOON_MILES: i32 = DEFAULT_WARNING_MILES;
 
 fn validate_revisit(date: Option<&str>, miles: Option<i32>) -> DomainResult<()> {
     super::validate_optional_date("revisit_by_date", date)?;
@@ -62,7 +63,7 @@ pub fn revisit_status(
             if days < 0 {
                 2
             } else {
-                i32::from(days <= DUE_SOON_DAYS)
+                i32::from(days <= i64::from(DUE_SOON_DAYS))
             }
         });
     let by_miles = item

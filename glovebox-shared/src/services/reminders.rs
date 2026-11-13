@@ -9,6 +9,7 @@ use crate::{
         service_schedule_link, vehicle,
     },
     error::{DomainError, DomainResult},
+    services::schedule::{DEFAULT_WARNING_DAYS, DEFAULT_WARNING_MILES},
 };
 
 #[derive(Debug, Serialize, Clone)]
@@ -294,8 +295,8 @@ pub async fn calculate_reminders(
         let days_remaining = due_at_date.map(|due| (due - today).num_days());
 
         // Determine status based on whichever is closer to due
-        let warning_miles = item.warning_miles.unwrap_or(1000);
-        let warning_days = item.warning_days.unwrap_or(30);
+        let warning_miles = item.warning_miles.unwrap_or(DEFAULT_WARNING_MILES);
+        let warning_days = item.warning_days.unwrap_or(DEFAULT_WARNING_DAYS);
 
         let miles_status = miles_remaining.map(|r| {
             if r <= 0 {
