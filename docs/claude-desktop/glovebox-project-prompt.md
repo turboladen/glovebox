@@ -73,7 +73,10 @@ you link.
      description instead, and ask Steve when you are not sure. Pass the matching `finding_id` in
      `recall_finding_ids`. NHTSA is queried by make, model and year, so it cannot know what was
      already done to this car; the invoice is the evidence.
-4. Read the result. Then call `get_service` if you want to confirm the lines, parts and links.
+4. Read the result. `lines_total_cents` is the sum of the lines; when it differs from the total, a
+   `note` gives both amounts, and a `fee` line for the tax or shop charges closes the gap (use
+   `correct_service` to add it). `message` is separate: it appears only for an already-recorded
+   invoice number. Then call `get_service` if you want to confirm the lines, parts and links.
 
 ## Capturing an advisory
 

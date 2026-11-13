@@ -123,6 +123,9 @@ and commits nothing. Re-recording an existing `invoice_ref` for the vehicle retu
 record with `already_recorded: true` and a `message` and writes nothing (both keys appear only
 on that path). Completing planned work happens by naming
 `work_item_ids` in `record_service`.
+Every service read carries `lines_total_cents`, and a `note` when the total differs from it (the
+kinds are `maintenance`, `mod`, `repair`, `inspection`, `recall` and `fee`; payers are `self`,
+`insurance`, `third_party` and `manufacturer`).
 
 **Resources**: `glovebox://vehicles`, `glovebox://vehicles/{id}` and `…/{id}/activity`.
 `list_resources` enumerates concrete URIs from the database and `read_resource` parses them.

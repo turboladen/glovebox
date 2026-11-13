@@ -132,6 +132,14 @@ pub struct ServiceRecordWithLinks {
     /// call was applied and points at `correct_service`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// The sum of the line items' `cost_cents`, or `None` when the service has
+    /// no lines or none has a cost.
+    pub lines_total_cents: Option<i64>,
+    /// Present only when `total_cost_cents` and `lines_total_cents` both exist
+    /// and differ: states both amounts and the difference. It is information
+    /// about the record, unlike `message`, which reports what a call did.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
     /// Soft advisory: other same-day records on this vehicle, surfaced only
     /// when a record was created WITHOUT an `invoice_ref` so the caller can
     /// reconcile a possible duplicate. Never blocks — distinct records
@@ -255,7 +263,23 @@ impl ServiceRecordWithLinks {
         resolved_incidents: Vec<IncidentRef>,
         performed_recalls: Vec<RecallRef>,
     ) -> Self {
+        let lines_total_cents = line_items
+            .iter()
+            .filter_map(|l| l.cost_cents)
+            .map(i64::from)
+            .fold(None, |acc, c| Some(acc.unwrap_or(0) + c));
+        let note = match (record.total_cost_cents, lines_total_cents) {
+            (Some(total), Some(lines)) if i64::from(total) != lines => Some(format!(
+                "The total is {total} cents and the line items add up to {lines} cents, a \
+                 difference of {} cents. Tax or fees can be recorded as a line with work_kind \
+                 \"fee\".",
+                i64::from(total) - lines
+            )),
+            _ => None,
+        };
         Self {
+            lines_total_cents,
+            note,
             record,
             schedule_item_ids,
             part_ids: parts.iter().map(|p| p.id).collect(),

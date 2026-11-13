@@ -1000,3 +1000,58 @@ async fn a_shop_part_is_not_added_to_the_invoice_total_but_a_self_part_is() {
     assert_eq!(summary["self_supplied_parts_cents"], 8_900);
     assert_eq!(summary["total_cost_cents"], 65_800);
 }
+
+#[tokio::test]
+async fn a_total_that_differs_from_its_lines_carries_a_note_and_a_fee_line_closes_it() {
+    let c = connect().await;
+    let v = vehicle::create(&c.db, new_vehicle("Daily"))
+        .await
+        .unwrap()
+        .id;
+    let out = c
+        .call(
+            "record_service",
+            json!({
+                "vehicle_id": v, "service_date": "2025-03-24", "total_cost_cents": 57_500,
+                "line_items": [
+                    {"description": "Brakes", "work_kind": "repair", "cost_cents": 56_900}]
+            }),
+        )
+        .await;
+    assert_eq!(out["lines_total_cents"], 56_900);
+    let note = out["note"].as_str().expect("note");
+    assert!(
+        note.contains("57500")
+            && note.contains("56900")
+            && note.contains("600")
+            && note.contains("fee"),
+        "got: {note}"
+    );
+    assert!(out.get("message").is_none());
+
+    let listed = c.call("list_services", json!({ "vehicle_id": v })).await;
+    assert_eq!(listed[0]["lines_total_cents"], 56_900);
+
+    let fixed = c
+        .call(
+            "correct_service",
+            json!({
+                "vehicle_id": v, "service_id": out["id"],
+                "line_items": [
+                    {"description": "Brakes", "work_kind": "repair", "cost_cents": 56_900},
+                    {"description": "Shop supplies and tax", "work_kind": "fee", "cost_cents": 600}]
+            }),
+        )
+        .await;
+    assert_eq!(fixed["lines_total_cents"], 57_500);
+    assert!(fixed.get("note").is_none(), "got: {fixed}");
+
+    let bare = c
+        .call(
+            "record_service",
+            json!({"vehicle_id": v, "service_date": "2025-04-01", "total_cost_cents": 100}),
+        )
+        .await;
+    assert!(bare["lines_total_cents"].is_null());
+    assert!(bare.get("note").is_none());
+}
