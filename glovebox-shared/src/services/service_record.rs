@@ -15,7 +15,8 @@ use crate::{
         incident::{self as incident_svc, ServiceRef},
         part as part_svc,
         recall::{self, RecallRef},
-        schedule, work_item,
+        schedule,
+        work_item::{self, WorkItemRef},
     },
 };
 
@@ -111,6 +112,8 @@ pub struct ServiceRecordWithLinks {
     pub resolved_incidents: Vec<IncidentRef>,
     /// Recalls this service performed.
     pub performed_recalls: Vec<RecallRef>,
+    /// To-do items this service completed.
+    pub completed_work_items: Vec<WorkItemRef>,
     /// True when `create` found a record with the same `invoice_ref` on this
     /// vehicle and returned it unchanged instead of writing anything.
     pub already_recorded: bool,
@@ -246,13 +249,15 @@ impl ServiceRecordWithLinks {
             noticed_incidents,
             resolved_incidents,
             performed_recalls,
+            completed_work_items: Vec::new(),
             already_recorded: false,
             possible_duplicates: Vec::new(),
         }
     }
 }
 
-/// Load a record's schedule link ids, installed parts, and line items.
+/// Load a record's schedule link ids, installed parts, line items, incident
+/// links, performed recalls and completed to-do items.
 async fn load_service_links(
     db: &impl ConnectionTrait,
     record: service_record::Model,
@@ -291,7 +296,12 @@ async fn load_service_links(
         .remove(&record.id)
         .unwrap_or_default();
 
-    Ok(ServiceRecordWithLinks::assemble(
+    let completed_work_items = work_item::load_completed_by(db, &[record.id])
+        .await?
+        .remove(&record.id)
+        .unwrap_or_default();
+
+    let mut links = ServiceRecordWithLinks::assemble(
         record,
         schedule_item_ids,
         parts,
@@ -299,7 +309,9 @@ async fn load_service_links(
         noticed,
         resolved,
         performed_recalls,
-    ))
+    );
+    links.completed_work_items = completed_work_items;
+    Ok(links)
 }
 
 /// Insert line items for a service record within a transaction.
@@ -440,6 +452,7 @@ pub async fn list_between(
 
     let mut incident_links = load_incident_links(db, &record_ids).await?;
     let mut performed = recall::load_performed(db, &record_ids).await?;
+    let mut completed = work_item::load_completed_by(db, &record_ids).await?;
 
     let all_line_items = if record_ids.is_empty() {
         vec![]
@@ -478,7 +491,8 @@ pub async fn list_between(
                 .remove(&record.id)
                 .unwrap_or_default();
             let performed_recalls = performed.remove(&record.id).unwrap_or_default();
-            ServiceRecordWithLinks::assemble(
+            let completed_work_items = completed.remove(&record.id).unwrap_or_default();
+            let mut links = ServiceRecordWithLinks::assemble(
                 record,
                 schedule_item_ids,
                 parts,
@@ -486,11 +500,27 @@ pub async fn list_between(
                 noticed,
                 resolved,
                 performed_recalls,
-            )
+            );
+            links.completed_work_items = completed_work_items;
+            links
         })
         .collect();
 
     Ok(results)
+}
+
+/// Fetches a service record scoped to its vehicle. A record that belongs to
+/// another vehicle produces the same `NotFound` as one that does not exist.
+pub(crate) async fn require(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    id: i32,
+) -> DomainResult<service_record::Model> {
+    service_record::Entity::find_by_id(id)
+        .filter(service_record::Column::VehicleId.eq(vehicle_id))
+        .one(db)
+        .await?
+        .ok_or_else(|| DomainError::NotFound(format!("Service record {id} not found")))
 }
 
 pub async fn get(
@@ -498,12 +528,7 @@ pub async fn get(
     vehicle_id: i32,
     id: i32,
 ) -> DomainResult<ServiceRecordWithLinks> {
-    let record = service_record::Entity::find_by_id(id)
-        .filter(service_record::Column::VehicleId.eq(vehicle_id))
-        .one(db)
-        .await?
-        .ok_or_else(|| DomainError::NotFound(format!("Service record {id} not found")))?;
-
+    let record = require(db, vehicle_id, id).await?;
     load_service_links(db, record).await
 }
 
@@ -724,11 +749,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     id: i32,
     input: UpdateServiceRecord,
 ) -> DomainResult<ServiceRecordWithLinks> {
-    let existing = service_record::Entity::find_by_id(id)
-        .filter(service_record::Column::VehicleId.eq(vehicle_id))
-        .one(db)
-        .await?
-        .ok_or_else(|| DomainError::NotFound(format!("Service record {id} not found")))?;
+    let existing = require(db, vehicle_id, id).await?;
 
     validate_who_and_when(
         input
@@ -762,6 +783,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
 
     let txn = db.begin().await?;
 
+    let (date_before, mileage_before) = (existing.service_date.clone(), existing.mileage);
     let mut active: service_record::ActiveModel = existing.into();
     if let Some(v) = invoice_ref {
         active.invoice_ref = Set(v);
@@ -849,6 +871,10 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         for &part_id in &new_part_ids {
             part_svc::install(&txn, vehicle_id, part_id, &record, Set(record.mileage)).await?;
         }
+    } else if record.service_date != date_before || record.mileage != mileage_before {
+        // The parts this service installed carry its date and mileage as
+        // their install date and odometer.
+        part_svc::follow_service(&txn, &record).await?;
     }
 
     if let Some(recall_ids) = input.recall_finding_ids {
@@ -912,11 +938,7 @@ pub async fn link_schedule_items<C: ConnectionTrait + TransactionTrait>(
     item_ids: &[i32],
     mode: LinkMode,
 ) -> DomainResult<ServiceRecordWithLinks> {
-    let existing = service_record::Entity::find_by_id(id)
-        .filter(service_record::Column::VehicleId.eq(vehicle_id))
-        .one(db)
-        .await?
-        .ok_or_else(|| DomainError::NotFound(format!("Service record {id} not found")))?;
+    let existing = require(db, vehicle_id, id).await?;
 
     let txn = db.begin().await?;
     schedule::link_service(&txn, vehicle_id, existing.id, item_ids, mode).await?;
@@ -964,11 +986,7 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     id: i32,
     recalls: Option<RecallsOnDelete>,
 ) -> DomainResult<DeletedService> {
-    let existing = service_record::Entity::find_by_id(id)
-        .filter(service_record::Column::VehicleId.eq(vehicle_id))
-        .one(db)
-        .await?
-        .ok_or_else(|| DomainError::NotFound(format!("Service record {id} not found")))?;
+    let existing = require(db, vehicle_id, id).await?;
 
     let txn = db.begin().await?;
 
@@ -2659,6 +2677,17 @@ mod tests {
         assert!(inc.incident.resolved);
         assert_eq!(inc.resolved_by.len(), 1);
         assert_eq!(inc.resolved_by[0].id, svc_2024.record.id);
+
+        // The service names the to-do it completed, when created and when read
+        // back alone or in a list.
+        let listed = list(&db, v).await.unwrap();
+        let read = get(&db, v, svc_2024.record.id).await.unwrap();
+        for got in [&svc_2024, &read, &listed[0]] {
+            assert_eq!(got.completed_work_items.len(), 1);
+            assert_eq!(got.completed_work_items[0].id, planned.id);
+            assert_eq!(got.completed_work_items[0].title, "Replace purge valve");
+        }
+        assert!(listed[1].completed_work_items.is_empty());
     }
 
     #[tokio::test]
@@ -3047,6 +3076,60 @@ mod tests {
         let kept = part_svc::get(&db, v, part_id).await.unwrap();
         assert_eq!(kept.status, "purchased");
         assert_eq!(kept.installed_service_id, None);
+    }
+
+    #[tokio::test]
+    async fn correcting_the_date_or_mileage_moves_the_install_of_its_parts() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let svc = create(
+            &db,
+            v,
+            NewServiceRecord {
+                service_date: "2024-03-01".into(),
+                mileage: Some(50_000),
+                parts: Some(vec![inline_part("Pads", "shop")]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let corrected = update(
+            &db,
+            v,
+            svc.record.id,
+            UpdateServiceRecord {
+                service_date: Some("2024-03-10".into()),
+                mileage: Some(Some(50_500)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            corrected.parts[0].installed_date.as_deref(),
+            Some("2024-03-10")
+        );
+        assert_eq!(corrected.parts[0].installed_odometer, Some(50_500));
+
+        // Clearing the service's mileage leaves the part its own reading.
+        let cleared = update(
+            &db,
+            v,
+            svc.record.id,
+            UpdateServiceRecord {
+                mileage: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(cleared.parts[0].installed_odometer, Some(50_500));
+        assert_eq!(
+            cleared.parts[0].installed_date.as_deref(),
+            Some("2024-03-10")
+        );
     }
 
     #[tokio::test]

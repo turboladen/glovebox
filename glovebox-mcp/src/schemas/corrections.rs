@@ -888,9 +888,9 @@ pub struct AddScheduleItemInput {
     pub is_factory_recommended: Option<bool>,
     /// What the item covers.
     pub description: Option<String>,
-    /// Repeat every this many miles.
+    /// Repeat every this many miles. Must be greater than zero.
     pub interval_miles: Option<i32>,
-    /// Repeat every this many months.
+    /// Repeat every this many months. Must be greater than zero.
     pub interval_months: Option<i32>,
     /// Start warning this many miles before due.
     pub warning_miles: Option<i32>,
@@ -950,13 +950,13 @@ pub struct UpdateScheduleItemInput {
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<String>")]
     pub description: Option<Option<String>>,
-    /// Repeat every this many miles.
+    /// Repeat every this many miles. Must be greater than zero.
     ///
     /// Send `null` to clear it; omit the key to leave it unchanged.
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<i32>")]
     pub interval_miles: Option<Option<i32>>,
-    /// Repeat every this many months.
+    /// Repeat every this many months. Must be greater than zero.
     ///
     /// Send `null` to clear it; omit the key to leave it unchanged.
     #[serde(default, deserialize_with = "nullable")]

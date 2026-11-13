@@ -164,15 +164,20 @@ async fn revisit_by_work_reports_its_status_and_a_service_completes_it() {
     assert_eq!(item["revisit_by_miles"], 200_000);
     assert_eq!(item["revisit_status"], "ok");
 
-    t.call(
-        "record_service",
-        json!({
-            "vehicle_id": v.id,
-            "service_date": "2026-11-12",
-            "work_item_ids": [item_id]
-        }),
-    )
-    .await;
+    let service = t
+        .call(
+            "record_service",
+            json!({
+                "vehicle_id": v.id,
+                "service_date": "2026-11-12",
+                "work_item_ids": [item_id]
+            }),
+        )
+        .await;
+    assert_eq!(
+        service["completed_work_items"],
+        json!([{ "id": item_id, "title": "Re-check the valve cover seep" }])
+    );
     let open = t
         .call("list_planned_work", json!({ "vehicle_id": v.id }))
         .await;

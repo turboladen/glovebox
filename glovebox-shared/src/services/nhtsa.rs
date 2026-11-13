@@ -2,6 +2,21 @@ use serde::{Deserialize, Serialize};
 
 const NHTSA_RECALLS_URL: &str = "https://api.nhtsa.gov/recalls/recallsByVehicle";
 
+/// How long one NHTSA request may take before it counts as failed.
+const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Sends a GET to an NHTSA endpoint, failing once [`REQUEST_TIMEOUT`] passes.
+// The callers run inside a tool call and promise that a failed lookup does
+// not block the work around it, so a stalled connection must end as an error.
+pub(crate) async fn get(url: impl reqwest::IntoUrl) -> reqwest::Result<reqwest::Response> {
+    reqwest::Client::builder()
+        .timeout(REQUEST_TIMEOUT)
+        .build()?
+        .get(url)
+        .send()
+        .await
+}
+
 #[derive(Debug, Deserialize)]
 struct NhtsaRecallsResponse {
     results: Vec<NhtsaRecallResult>,
@@ -126,7 +141,7 @@ async fn fetch_recalls(
     )
     .map_err(|e| NhtsaError::Network(format!("Failed to build URL: {e}")))?;
 
-    let resp = reqwest::get(url.clone())
+    let resp = get(url.clone())
         .await
         .map_err(|e| NhtsaError::Network(e.to_string()))?;
 

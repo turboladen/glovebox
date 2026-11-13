@@ -202,6 +202,14 @@ pub async fn calculate_reminders(
             .await?
     };
 
+    // A service filed without an odometer reading is placed by the readings
+    // around its date, which are loaded only when there is such a service.
+    let readings = if all_services.iter().any(|s| s.mileage.is_none()) {
+        dated_readings(db, &v).await?
+    } else {
+        Vec::new()
+    };
+
     // For each schedule item, find last service and calculate status
     let mut reminders = Vec::new();
 
@@ -220,10 +228,14 @@ pub async fn calculate_reminders(
 
         // Baseline: last service or vehicle purchase
         let (baseline_miles, baseline_date) = match &last_service {
-            Some(svc) => (
-                svc.mileage.unwrap_or(v.purchase_mileage.unwrap_or(0)),
-                parse_date(&svc.service_date).unwrap_or(today),
-            ),
+            Some(svc) => {
+                let date = parse_date(&svc.service_date).unwrap_or(today);
+                let miles = svc
+                    .mileage
+                    .or_else(|| odometer_on(date, &readings, avg_daily_miles))
+                    .unwrap_or(v.purchase_mileage.unwrap_or(0));
+                (miles, date)
+            }
             None => (
                 v.purchase_mileage.unwrap_or(0),
                 v.purchase_date
@@ -322,6 +334,58 @@ pub async fn calculate_reminders(
         reminders,
         bundle_suggestions,
     })
+}
+
+/// The vehicle's odometer readings with their dates, oldest first: every
+/// logged reading, and the purchase reading when the vehicle has both a
+/// purchase date and a purchase mileage.
+async fn dated_readings(
+    db: &impl ConnectionTrait,
+    v: &vehicle::Model,
+) -> DomainResult<Vec<(NaiveDate, i32)>> {
+    let mut readings: Vec<(NaiveDate, i32)> = mileage_log::Entity::find()
+        .filter(mileage_log::Column::VehicleId.eq(v.id))
+        .all(db)
+        .await?
+        .into_iter()
+        .filter_map(|log| Some((parse_date(&log.recorded_at)?, log.mileage)))
+        .collect();
+    let purchased_on = v.purchase_date.as_deref().and_then(parse_date);
+    if let (Some(date), Some(miles)) = (purchased_on, v.purchase_mileage) {
+        readings.push((date, miles));
+    }
+    readings.sort_unstable();
+    Ok(readings)
+}
+
+/// Estimates the odometer on `date` from dated readings sorted oldest first.
+/// Between two readings the estimate is interpolated. After the newest
+/// reading or before the oldest one it moves away from that reading at
+/// `avg_daily_miles`, never below zero. `None` when there are no readings.
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn odometer_on(
+    date: NaiveDate,
+    readings: &[(NaiveDate, i32)],
+    avg_daily_miles: f64,
+) -> Option<i32> {
+    let before = readings.iter().rev().find(|(day, _)| *day <= date);
+    let after = readings.iter().find(|(day, _)| *day >= date);
+    let drift = |from: NaiveDate| (avg_daily_miles * (date - from).num_days() as f64) as i32;
+    match (before, after) {
+        (Some(&(day0, miles0)), Some(&(day1, miles1))) => {
+            let span = (day1 - day0).num_days();
+            if span == 0 {
+                return Some(miles0);
+            }
+            let elapsed = (date - day0).num_days();
+            let gained = (i64::from(miles1) - i64::from(miles0)) * elapsed / span;
+            Some(miles0 + gained as i32)
+        }
+        (Some(&(day, miles)), None) | (None, Some(&(day, miles))) => {
+            Some(Ord::max(miles + drift(day), 0))
+        }
+        (None, None) => None,
+    }
 }
 
 /// Resolve effective schedule items for a vehicle (Platform → Model Template → Vehicle).
@@ -452,7 +516,7 @@ fn days_in_month(year: i32, month: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{VehicleFixture, test_db};
+    use crate::test_support::{VehicleFixture, days_ago, test_db};
 
     async fn seed_vehicle(
         db: &impl ConnectionTrait,
@@ -591,5 +655,83 @@ mod tests {
         let resp = calculate_reminders(&db, vid).await.unwrap();
         assert_eq!(resp.reminders[0].status, "due_soon");
         assert_eq!(resp.reminders[0].trigger.as_deref(), Some("time"));
+    }
+
+    fn day(s: &str) -> NaiveDate {
+        NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
+    }
+
+    #[test]
+    fn odometer_on_interpolates_between_readings_and_drifts_past_them() {
+        let readings = [(day("2020-01-01"), 10_000), (day("2020-01-11"), 11_000)];
+        assert_eq!(
+            odometer_on(day("2020-01-01"), &readings, 50.0),
+            Some(10_000)
+        );
+        assert_eq!(
+            odometer_on(day("2020-01-06"), &readings, 50.0),
+            Some(10_500)
+        );
+        assert_eq!(
+            odometer_on(day("2020-01-21"), &readings, 50.0),
+            Some(11_500)
+        );
+        assert_eq!(odometer_on(day("2019-12-22"), &readings, 50.0), Some(9_500));
+        assert_eq!(odometer_on(day("2019-01-01"), &readings, 50.0), Some(0));
+        assert_eq!(odometer_on(day("2020-01-06"), &[], 50.0), None);
+    }
+
+    #[tokio::test]
+    async fn a_service_with_no_odometer_reading_still_restarts_a_mileage_interval() {
+        let db = test_db().await;
+        let vid = VehicleFixture::new()
+            .purchase_date("2017-03-05")
+            .purchase_mileage(40)
+            .insert_id(&db)
+            .await;
+        mileage_log::ActiveModel {
+            vehicle_id: Set(vid),
+            mileage: Set(64_000),
+            recorded_at: Set(days_ago(0)),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        let item = maintenance_schedule_item::ActiveModel {
+            vehicle_id: Set(Some(vid)),
+            name: Set("Spark plugs".into()),
+            interval_miles: Set(Some(60_000)),
+            enabled: Set(true),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        assert_eq!(
+            calculate_reminders(&db, vid).await.unwrap().reminders[0].status,
+            "overdue"
+        );
+
+        // The invoice had no odometer reading on it.
+        let svc = service_record::ActiveModel {
+            vehicle_id: Set(vid),
+            service_date: Set(days_ago(0)),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        service_schedule_link::ActiveModel {
+            service_record_id: Set(svc.id),
+            schedule_item_id: Set(item.id),
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        let plugs = &calculate_reminders(&db, vid).await.unwrap().reminders[0];
+        assert_eq!(plugs.status, "ok");
+        assert_eq!(plugs.due_at_miles, Some(124_000));
     }
 }

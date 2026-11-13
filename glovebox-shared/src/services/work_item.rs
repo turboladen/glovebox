@@ -241,6 +241,40 @@ pub(crate) async fn complete_with_service(
     Ok(completed)
 }
 
+/// A to-do item as seen from the service that completed it.
+#[derive(Clone, Debug, Serialize)]
+pub struct WorkItemRef {
+    pub id: i32,
+    pub title: String,
+}
+
+/// The to-do items each of the given services completed, keyed by service id
+/// and ordered by item id, in one query.
+pub(crate) async fn load_completed_by(
+    db: &impl ConnectionTrait,
+    service_ids: &[i32],
+) -> DomainResult<std::collections::HashMap<i32, Vec<WorkItemRef>>> {
+    let mut out: std::collections::HashMap<i32, Vec<WorkItemRef>> =
+        std::collections::HashMap::new();
+    if service_ids.is_empty() {
+        return Ok(out);
+    }
+    let items = work_item::Entity::find()
+        .filter(work_item::Column::CompletedServiceId.is_in(service_ids.to_vec()))
+        .order_by_asc(work_item::Column::Id)
+        .all(db)
+        .await?;
+    for item in items {
+        if let Some(service_id) = item.completed_service_id {
+            out.entry(service_id).or_default().push(WorkItemRef {
+                id: item.id,
+                title: item.title,
+            });
+        }
+    }
+    Ok(out)
+}
+
 /// Returns to `planned` every work item a service that is about to be
 /// deleted completed, on the caller's transaction.
 pub(crate) async fn reopen_completed_by(

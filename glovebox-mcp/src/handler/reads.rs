@@ -61,7 +61,7 @@ impl GloveboxMcp {
 
     #[tool(
         name = "get_service",
-        description = "One service record in full: line items, parts, schedule links, and the incidents it noticed or fixed. Each noticed incident names the service that later fixed it (if any), and each fixed incident names the service where it was first noticed.",
+        description = "One service record in full: line items, parts, schedule links, the recalls it performed, the to-do items it completed, and the incidents it noticed or fixed. Each noticed incident names the service that later fixed it (if any), and each fixed incident names the service where it was first noticed.",
         input_schema = rmcp::handler::server::common::schema_for_type::<GetServiceInput>()
     )]
     async fn get_service(

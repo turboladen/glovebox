@@ -49,7 +49,7 @@ pub async fn decode_vin(vin: &str) -> Result<VinDecodeResult, String> {
     }
 
     let url = format!("{NHTSA_API_URL}/{vin}?format=json");
-    let resp = reqwest::get(&url)
+    let resp = super::nhtsa::get(&url)
         .await
         .map_err(|e| format!("NHTSA API request failed: {e}"))?;
 

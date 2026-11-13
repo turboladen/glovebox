@@ -173,13 +173,7 @@ pub(crate) async fn link_service(
         )));
     }
     let inc = require_incident(db, vehicle_id, incident_id).await?;
-    service_record::Entity::find_by_id(service_record_id)
-        .filter(service_record::Column::VehicleId.eq(vehicle_id))
-        .one(db)
-        .await?
-        .ok_or_else(|| {
-            DomainError::NotFound(format!("Service record {service_record_id} not found"))
-        })?;
+    super::service_record::require(db, vehicle_id, service_record_id).await?;
 
     let existing = incident_service_link::Entity::find()
         .filter(incident_service_link::Column::IncidentId.eq(incident_id))
@@ -230,16 +224,27 @@ pub async fn list_filtered(
     resolved: Option<bool>,
 ) -> DomainResult<Vec<IncidentWithDetails>> {
     super::vehicle::require(db, vehicle_id).await?;
+    let incidents = list_rows(db, vehicle_id, resolved).await?;
+    with_details(db, incidents).await
+}
+
+/// The incident rows behind [`list_filtered`], without their followups and
+/// service links, for a caller that reads only the incidents themselves. The
+/// vehicle is not checked; an unknown one has no incidents.
+pub(crate) async fn list_rows(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    resolved: Option<bool>,
+) -> DomainResult<Vec<incident::Model>> {
     let mut query = incident::Entity::find().filter(incident::Column::VehicleId.eq(vehicle_id));
     if let Some(resolved) = resolved {
         query = query.filter(incident::Column::Resolved.eq(resolved));
     }
-    let incidents = query
+    Ok(query
         .order_by_desc(incident::Column::OccurredAt)
         .order_by_desc(incident::Column::Id)
         .all(db)
-        .await?;
-    with_details(db, incidents).await
+        .await?)
 }
 
 pub async fn get(

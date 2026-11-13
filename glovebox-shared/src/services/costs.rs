@@ -6,6 +6,9 @@ use crate::{
     error::{DomainError, DomainResult},
 };
 
+/// The `parts.supplied_by` value of a part the shop sourced and billed for.
+const SUPPLIED_BY_SHOP: &str = "shop";
+
 #[derive(Serialize)]
 pub struct CostSummary {
     pub vehicle_id: i32,
@@ -14,8 +17,8 @@ pub struct CostSummary {
     pub total_labor_cost_cents: i64,
     pub total_cost_cents: i64,
     /// What was actually paid out of pocket: self-paid service totals plus
-    /// parts (parts have no payer). Sums with `covered_cents` to
-    /// `total_cost_cents`.
+    /// the parts the owner bought (parts have no payer). Sums with
+    /// `covered_cents` to `total_cost_cents`.
     pub out_of_pocket_cents: i64,
     /// Service totals paid by someone else (`paid_by != "self"`).
     pub covered_cents: i64,
@@ -80,15 +83,29 @@ pub async fn summary(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult
         .map(i64::from)
         .sum();
 
+    // A part the shop supplied is billed on its service's invoice, so its cost
+    // is already inside that service's total.
+    let shop_supplied_parts: i64 = parts
+        .iter()
+        .filter(|p| p.supplied_by == SUPPLIED_BY_SHOP)
+        .filter_map(|p| p.cost_cents)
+        .map(i64::from)
+        .sum();
+    let owner_supplied_parts = total_parts_purchased - shop_supplied_parts;
+
     // Parts cost: use purchased parts total (more accurate than service-reported)
     let total_parts_cost_cents = Ord::max(total_parts_purchased, total_parts_cost_from_services);
-    // Total: service totals (which include labor + parts on the bill) plus any
-    // separately purchased parts not already counted in service records
-    let extra_parts_cost = Ord::max(total_parts_purchased - total_parts_cost_from_services, 0);
+    // Total: service totals (which include labor + parts on the bill) plus the
+    // parts the owner bought. Service-reported parts cost that the
+    // shop-supplied parts do not account for is taken to be those same
+    // owner-bought parts, so that much of them is not added again.
+    let unexplained_service_parts =
+        Ord::max(total_parts_cost_from_services - shop_supplied_parts, 0);
+    let extra_parts_cost = Ord::max(owner_supplied_parts - unexplained_service_parts, 0);
     let total_cost_cents = total_service_cost_cents + extra_parts_cost;
 
     // Payer split: services paid by someone else are covered; self-paid
-    // services and all parts (no payer on parts) are out of pocket.
+    // services and owner-bought parts (no payer on parts) are out of pocket.
     let covered_cents: i64 = services
         .iter()
         .filter(|s| s.paid_by != "self")
@@ -129,7 +146,7 @@ pub async fn summary(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult
             entry.2 += cents;
         }
     }
-    for p in &parts {
+    for p in parts.iter().filter(|p| p.supplied_by != SUPPLIED_BY_SHOP) {
         if let Some(date) = &p.purchase_date {
             let month = date.get(..7).unwrap_or(date).to_string();
             let entry = monthly_map.entry(month).or_insert((0, 0, 0));
@@ -311,5 +328,57 @@ mod tests {
         assert_eq!(feb.out_of_pocket_cents, 0);
         assert_eq!(feb.covered_cents, 15_000);
         assert_eq!(feb.total_cents, 15_000);
+    }
+
+    #[tokio::test]
+    async fn a_shop_supplied_part_is_not_counted_on_top_of_its_invoice() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db, None).await;
+        let service_id = service_record::ActiveModel {
+            vehicle_id: Set(vid),
+            service_date: Set("2024-03-01".into()),
+            total_cost_cents: Set(Some(20_000)),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap()
+        .id;
+        for (name, supplied_by, cents) in [("Plugs", "shop", 6_000), ("Pads", "self", 9_000)] {
+            part::ActiveModel {
+                vehicle_id: Set(vid),
+                name: Set(name.into()),
+                status: Set("installed".into()),
+                supplied_by: Set(supplied_by.into()),
+                cost_cents: Set(Some(cents)),
+                purchase_date: Set(Some("2024-03-01".into())),
+                installed_service_id: Set(Some(service_id)),
+                ..Default::default()
+            }
+            .insert(&db)
+            .await
+            .unwrap();
+        }
+
+        // The invoice total already holds the shop's part; only the pads the
+        // owner bought are spend beyond it.
+        let s = summary(&db, vid).await.unwrap();
+        assert_eq!(s.total_parts_cost_cents, 15_000);
+        assert_eq!(s.total_cost_cents, 29_000);
+        assert_eq!(s.out_of_pocket_cents, 29_000);
+        assert_eq!(s.monthly_costs[0].parts_cost_cents, 9_000);
+        assert_eq!(s.monthly_costs[0].total_cents, 29_000);
+
+        // The same holds when the invoice also states its parts portion.
+        let mut active: service_record::ActiveModel =
+            service_record::Entity::find_by_id(service_id)
+                .one(&db)
+                .await
+                .unwrap()
+                .unwrap()
+                .into();
+        active.parts_cost_cents = Set(Some(6_000));
+        active.update(&db).await.unwrap();
+        assert_eq!(summary(&db, vid).await.unwrap().total_cost_cents, 29_000);
     }
 }

@@ -11,6 +11,15 @@ pub async fn test_db() -> DatabaseConnection {
     crate::db::connect_in_memory().await
 }
 
+/// The UTC date `days` days before today, written `YYYY-MM-DD`. A test that
+/// judges a reminder against the current date dates its fixtures with this,
+/// so that it holds on whatever day it runs.
+pub fn days_ago(days: i64) -> String {
+    (chrono::Utc::now().date_naive() - chrono::Duration::days(days))
+        .format("%Y-%m-%d")
+        .to_string()
+}
+
 /// The number of rows in `E`'s table. Panics if the query fails.
 pub async fn row_count<E>(db: &DatabaseConnection) -> u64
 where

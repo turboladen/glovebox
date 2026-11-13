@@ -187,18 +187,12 @@ mod tests {
         error::DomainError,
         inputs::work_item::{NewWorkItem, UpdateWorkItem},
         services::{reminders, work_item as work_item_svc},
-        test_support::{VehicleFixture, test_db},
+        test_support::{VehicleFixture, days_ago, test_db},
     };
 
     async fn forecast(db: &DatabaseConnection, vehicle_id: i32) -> DomainResult<BudgetForecast> {
         let rems = reminders::calculate_reminders(db, vehicle_id).await?;
         forecast_from(db, vehicle_id, &rems).await
-    }
-
-    fn days_ago(days: i64) -> String {
-        (chrono::Utc::now().date_naive() - chrono::Duration::days(days))
-            .format("%Y-%m-%d")
-            .to_string()
     }
 
     async fn seed_item(

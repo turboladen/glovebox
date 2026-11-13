@@ -119,6 +119,21 @@ async fn add_and_update_schedule_items_round_trip() {
     assert!(cleared["notes"].is_null(), "null clears notes: {cleared}");
     assert_eq!(cleared["est_cost_cents"], 5800, "absent keys stay put");
 
+    // An interval of zero would read as overdue from the day it was serviced.
+    for (tool, args) in [
+        (
+            "add_schedule_item",
+            json!({ "vehicle_id": v.id, "name": "Wipers", "interval_months": 0 }),
+        ),
+        (
+            "update_schedule_item",
+            json!({ "vehicle_id": v.id, "schedule_item_id": item_id, "interval_months": 0 }),
+        ),
+    ] {
+        let err = t.call_err(tool, args).await;
+        assert!(err.starts_with("interval_months: "), "{tool} got: {err}");
+    }
+
     let other = vehicle::create(&t.db, new_vehicle("Other")).await.unwrap();
     let wrong = t
         .call_err(

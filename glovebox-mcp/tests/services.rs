@@ -6,6 +6,7 @@ use common::{
 use glovebox_shared::{
     inputs::vehicle::NewVehicle,
     services::{schedule as schedule_svc, service_record as svc_svc, vehicle},
+    test_support::days_ago,
 };
 use serde_json::json;
 
@@ -66,11 +67,13 @@ async fn record_service_schedule_item_ids_clears_the_overdue_reminder() {
         "overdue"
     );
 
+    // Dated today, so the 12-month interval has only just restarted on
+    // whatever day this runs.
     t.call(
         "record_service",
         json!({
             "vehicle_id": v.id,
-            "service_date": "2026-06-20",
+            "service_date": days_ago(0),
             "description": "Brake fluid flush",
             "schedule_item_ids": [item.id]
         }),
@@ -203,11 +206,12 @@ async fn link_service_to_maintenance_add_defaults_and_replace_overwrites() {
         .unwrap();
 
     // An imported record, created without links, leaves the oil reminder
-    // overdue.
+    // overdue. It is dated today so that linking it reads `ok` on whatever
+    // day this runs.
     let imported = svc_svc::create(
         &t.db,
         v.id,
-        minimal_service("2026-06-01", "Oil + brake fluid service"),
+        minimal_service(&days_ago(0), "Oil + brake fluid service"),
     )
     .await
     .unwrap();
@@ -673,6 +677,47 @@ async fn correct_service_replaces_the_recalls_it_performed() {
 }
 
 #[tokio::test]
+async fn correcting_a_service_moves_its_parts_and_a_shop_part_is_not_charged_twice() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let service = t
+        .call(
+            "record_service",
+            json!({
+                "vehicle_id": v.id,
+                "service_date": "2024-03-01",
+                "mileage": 50_000,
+                "total_cost_cents": 20_000,
+                "parts": [
+                    { "name": "Spark plug set", "supplied_by": "shop", "cost_cents": 6_000 },
+                    { "name": "Front pads", "supplied_by": "self", "cost_cents": 9_000 }
+                ]
+            }),
+        )
+        .await;
+
+    // The shop's part is inside the invoice total; the owner's pads are not.
+    let costs = t.call("cost_summary", json!({ "vehicle_id": v.id })).await;
+    assert_eq!(costs["total_cost_cents"], 29_000, "got: {costs}");
+
+    let corrected = t
+        .call(
+            "correct_service",
+            json!({
+                "vehicle_id": v.id,
+                "service_id": service["id"],
+                "service_date": "2024-03-10",
+                "mileage": 50_500
+            }),
+        )
+        .await;
+    for part in corrected["parts"].as_array().expect("parts") {
+        assert_eq!(part["installed_date"], "2024-03-10", "got: {part}");
+        assert_eq!(part["installed_odometer"], 50_500, "got: {part}");
+    }
+}
+
+#[tokio::test]
 async fn record_service_installs_parts_recorded_earlier() {
     let t = connect().await;
     let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
@@ -748,6 +793,11 @@ async fn malformed_dates_are_refused_naming_the_field() {
         (
             "record_service",
             json!({ "vehicle_id": id, "service_date": "11/10/2026" }),
+            "service_date",
+        ),
+        (
+            "record_service",
+            json!({ "vehicle_id": id, "service_date": "2026-1-5" }),
             "service_date",
         ),
         (

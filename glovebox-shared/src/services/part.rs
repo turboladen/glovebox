@@ -22,21 +22,6 @@ fn validate_supplied_by(supplied_by: &str) -> DomainResult<()> {
     })
 }
 
-/// Verify a referenced service record belongs to the vehicle. A cross-vehicle
-/// service must be indistinguishable from a nonexistent one.
-async fn require_service_record_owned(
-    db: &impl ConnectionTrait,
-    vehicle_id: i32,
-    service_id: i32,
-) -> DomainResult<()> {
-    service_record::Entity::find_by_id(service_id)
-        .filter(service_record::Column::VehicleId.eq(vehicle_id))
-        .one(db)
-        .await?
-        .ok_or_else(|| DomainError::NotFound(format!("Service record {service_id} not found")))?;
-    Ok(())
-}
-
 pub async fn list(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -72,7 +57,7 @@ pub async fn create(
     super::validate_optional_date("installed_date", input.installed_date.as_deref())?;
     super::validate_optional_date("warranty_expires_on", input.warranty_expires_on.as_deref())?;
     if let Some(service_id) = input.installed_service_id {
-        require_service_record_owned(db, vehicle_id, service_id).await?;
+        super::service_record::require(db, vehicle_id, service_id).await?;
     }
 
     let model = part::ActiveModel {
@@ -110,7 +95,7 @@ pub async fn update(
     let existing = get(db, vehicle_id, id).await?;
 
     if let Some(Some(service_id)) = input.installed_service_id {
-        require_service_record_owned(db, vehicle_id, service_id).await?;
+        super::service_record::require(db, vehicle_id, service_id).await?;
     }
 
     if let Some(v) = &input.supplied_by {
@@ -211,7 +196,31 @@ pub(crate) async fn install(
     active.installed_service_id = Set(Some(record.id));
     active.installed_date = Set(Some(record.service_date.clone()));
     active.installed_odometer = odometer;
+    active.updated_at = Set(super::now_stamp());
     active.update(db).await?;
+    Ok(())
+}
+
+/// Moves the install date of every part `record` installed to the record's
+/// date, and their install odometer to its mileage when it has one. A record
+/// with no mileage leaves each part's own reading.
+pub(crate) async fn follow_service(
+    db: &impl ConnectionTrait,
+    record: &service_record::Model,
+) -> DomainResult<()> {
+    let mut changes = part::ActiveModel {
+        installed_date: Set(Some(record.service_date.clone())),
+        updated_at: Set(super::now_stamp()),
+        ..Default::default()
+    };
+    if let Some(miles) = record.mileage {
+        changes.installed_odometer = Set(Some(miles));
+    }
+    part::Entity::update_many()
+        .set(changes)
+        .filter(part::Column::InstalledServiceId.eq(record.id))
+        .exec(db)
+        .await?;
     Ok(())
 }
 
@@ -242,6 +251,7 @@ pub(crate) async fn uninstall(
     active.installed_service_id = Set(None);
     active.installed_date = Set(None);
     active.installed_odometer = Set(None);
+    active.updated_at = Set(super::now_stamp());
     active.update(db).await?;
     Ok(())
 }

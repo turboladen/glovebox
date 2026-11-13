@@ -71,7 +71,7 @@ impl GloveboxMcp {
 
     #[tool(
         name = "update_planned_work",
-        description = "Change a to-do item: title, notes, estimated cost, revisit date or mileage, the schedule item, recall or incident it is linked to, or its `status`. Send only the fields to change; null clears a field, and a field left out is untouched. Set `status: \"dropped\"` when the owner no longer intends to do the work (it leaves `whats_coming` but stays in history), or `planned` to reopen an item. When the work was done and there is an invoice, record it with `record_service` and `work_item_ids` instead, so the service, reminder, incident and recall are linked; set `done` here only for work that left no paperwork. Use `delete_planned_work` only for an item added by mistake.",
+        description = "Change a to-do item: title, notes, estimated cost, revisit date or mileage, the schedule item, recall or incident it is linked to, or its `status`. Send only the fields to change; null clears a field, and a field left out is untouched. Set `status: \"dropped\"` when the owner no longer intends to do the work (it leaves `whats_coming` but stays in history), or `planned` to reopen an item. When the work was done and there is an invoice, record it with `record_service` and `work_item_ids` instead, so the service, reminder, incident and recall are linked; set `done` here only for work that left no paperwork. Setting `done` here does not close a recall or incident the item is linked to: also call `set_recall_status` or `update_incident` for it. Use `delete_planned_work` only for an item added by mistake.",
         input_schema = rmcp::handler::server::common::schema_for_type::<UpdatePlannedWorkInput>()
     )]
     async fn update_planned_work(

@@ -47,10 +47,26 @@ pub async fn get(
         .ok_or_else(|| DomainError::NotFound(format!("Schedule item {id} not found")))
 }
 
+/// Refuses an interval of zero or less. A reminder adds the interval to the
+/// last service, so such an item would read as overdue the moment it was
+/// serviced.
+fn validate_intervals(miles: Option<i32>, months: Option<i32>) -> DomainResult<()> {
+    for (field, value) in [("interval_miles", miles), ("interval_months", months)] {
+        if value.is_some_and(|v| v <= 0) {
+            return Err(DomainError::invalid(
+                field,
+                "must be greater than zero; leave it out for no interval",
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub async fn create(
     db: &impl ConnectionTrait,
     input: NewScheduleItem,
 ) -> DomainResult<maintenance_schedule_item::Model> {
+    validate_intervals(input.interval_miles, input.interval_months)?;
     // Validate exactly one owner is set
     let owner_count = [
         input.platform_id.is_some(),
@@ -95,6 +111,10 @@ pub async fn update(
     id: i32,
     input: UpdateScheduleItem,
 ) -> DomainResult<maintenance_schedule_item::Model> {
+    validate_intervals(
+        input.interval_miles.flatten(),
+        input.interval_months.flatten(),
+    )?;
     let existing = get(db, id).await?;
     let mut active: maintenance_schedule_item::ActiveModel = existing.into();
 
@@ -146,7 +166,7 @@ pub async fn update(
 /// An item named like one the vehicle inherits replaces it for this vehicle,
 /// and the vehicle's services and planned work linked to the inherited item
 /// move to the new one. A name the vehicle already has its own item for is a
-/// `BadRequest`.
+/// `BadRequest`, and an interval of zero or less is `Invalid`.
 pub async fn create_for_vehicle<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -184,9 +204,13 @@ pub async fn create_for_vehicle<C: ConnectionTrait + TransactionTrait>(
 /// first use and reused afterwards, whether the call names the inherited id
 /// or the copy's id. The vehicle's services and planned work linked to the
 /// inherited item move to the copy, so its history and plans still count.
-/// The copy keeps the inherited item's name; a rename is a `BadRequest`.
+/// The copy keeps the inherited item's name; a rename is a `BadRequest`. A
+/// vehicle-owned item renamed onto an inherited item's name replaces that
+/// item for this vehicle, as [`create_for_vehicle`] does, and then keeps the
+/// name too.
 ///
-/// An id that is not visible to this vehicle reads as nonexistent.
+/// An interval of zero or less is `Invalid`. An id that is not visible to
+/// this vehicle reads as nonexistent.
 pub async fn update_for_vehicle<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -227,6 +251,16 @@ pub async fn update_for_vehicle<C: ConnectionTrait + TransactionTrait>(
     };
     let updated = update(&txn, target.id, input).await?;
     let shadowed = inherited_named(&txn, &v, &updated.name).await?;
+    // An item renamed onto an inherited item's name stands in for it, as one
+    // created under that name does, so it is tied to it and keeps the name.
+    let updated = match effective_inherited(&shadowed) {
+        Some(inherited) if updated.overrides_item_id.is_none() => {
+            let mut active: maintenance_schedule_item::ActiveModel = updated.into();
+            active.overrides_item_id = Set(Some(inherited.id));
+            active.update(&txn).await?
+        }
+        _ => updated,
+    };
     repoint_links(&txn, vehicle_id, &shadowed, updated.id).await?;
     txn.commit().await?;
     Ok(updated)
@@ -738,7 +772,7 @@ pub async fn undismiss_for_vehicle(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{VehicleFixture, test_db};
+    use crate::test_support::{VehicleFixture, days_ago, test_db};
 
     async fn seed_vehicle(db: &impl ConnectionTrait, model_template_id: Option<i32>) -> i32 {
         let mut fixture = VehicleFixture::new();
@@ -1165,12 +1199,6 @@ mod tests {
         assert!(!get(&db, item.id).await.unwrap().enabled, "untouched");
     }
 
-    fn days_ago(days: i64) -> String {
-        (chrono::Utc::now().date_naive() - chrono::Duration::days(days))
-            .format("%Y-%m-%d")
-            .to_string()
-    }
-
     async fn service_on(db: &DatabaseConnection, vehicle_id: i32, item_id: i32) -> i32 {
         crate::services::service_record::create(
             db,
@@ -1539,5 +1567,117 @@ mod tests {
             foreign.to_string().replace(&own.id.to_string(), "N"),
             missing.to_string().replace("99999", "N")
         );
+    }
+
+    #[tokio::test]
+    async fn an_interval_of_zero_or_less_is_refused_and_nothing_is_stored() {
+        let db = test_db().await;
+        let (_pid, template_id, vid) = seed_chain(&db).await;
+        for (miles, months, field) in [
+            (Some(0), None, "interval_miles"),
+            (Some(-5), None, "interval_miles"),
+            (None, Some(0), "interval_months"),
+        ] {
+            let err = create_for_vehicle(
+                &db,
+                vid,
+                NewScheduleItem {
+                    interval_miles: miles,
+                    interval_months: months,
+                    ..item_named("Smog check")
+                },
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                matches!(&err, DomainError::Invalid { field: f, .. } if f == field),
+                "got: {err}"
+            );
+        }
+
+        // A refused change to an inherited item leaves no copy behind.
+        let inherited = create(
+            &db,
+            NewScheduleItem {
+                model_template_id: Some(template_id),
+                ..item_named("Spark Plugs")
+            },
+        )
+        .await
+        .unwrap();
+        let err = update_for_vehicle(
+            &db,
+            vid,
+            inherited.id,
+            UpdateScheduleItem {
+                interval_months: Some(Some(0)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Invalid { .. }), "got: {err}");
+        let own = list(
+            &db,
+            ScheduleFilter {
+                vehicle_id: Some(vid),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(own.is_empty(), "got: {} own items", own.len());
+    }
+
+    #[tokio::test]
+    async fn an_item_renamed_onto_an_inherited_name_takes_its_place_and_its_history() {
+        use crate::services::reminders;
+        let db = test_db().await;
+        let (_pid, template_id, vid) = seed_chain(&db).await;
+        let inherited = create(
+            &db,
+            NewScheduleItem {
+                model_template_id: Some(template_id),
+                ..item_named("Spark Plugs")
+            },
+        )
+        .await
+        .unwrap();
+        let svc = service_on(&db, vid, inherited.id).await;
+        let own = create_for_vehicle(&db, vid, item_named("Plugs"))
+            .await
+            .unwrap();
+
+        let renamed = update_for_vehicle(
+            &db,
+            vid,
+            own.id,
+            UpdateScheduleItem {
+                name: Some("Spark Plugs".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(renamed.overrides_item_id, Some(inherited.id));
+        let rems = reminders::calculate_reminders(&db, vid).await.unwrap();
+        let plugs = reminder_for(&rems, "Spark Plugs");
+        assert_eq!(plugs.schedule_item.id, own.id);
+        assert_eq!(plugs.last_service.as_ref().map(|s| s.id), Some(svc));
+
+        // Renaming it away again would strand that history on a name the
+        // inherited item takes back, so it keeps the name.
+        let err = update_for_vehicle(
+            &db,
+            vid,
+            own.id,
+            UpdateScheduleItem {
+                name: Some("Plugs".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::BadRequest(_)), "got: {err}");
     }
 }
