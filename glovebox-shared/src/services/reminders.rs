@@ -71,6 +71,7 @@ pub struct RemindersResponse {
     pub estimated_mileage: i32,
     pub mileage_is_estimate: bool,
     pub mileage_as_of: String,
+    /// Miles driven per day, measured as [`estimate_mileage`] describes.
     pub avg_daily_miles: f64,
     /// `None` when the vehicle has no warranty fields set.
     pub warranty: Option<WarrantyStatus>,
@@ -100,9 +101,55 @@ fn warranty_status(v: &vehicle::Model, estimated_mileage: i32) -> Option<Warrant
     })
 }
 
+/// Number of newest odometer readings the daily rate is measured over.
+const RATE_WINDOW_READINGS: u64 = 50;
+
+/// The fewest days the readings window must span for its rate to be trusted.
+/// A shorter span is dominated by how the readings happened to be filed, so
+/// the rate is measured from an earlier point instead.
+const RATE_MIN_SPAN_DAYS: i64 = 30;
+
+/// Miles per day between two dated odometer points. A span of zero or fewer
+/// days and a falling odometer (a mistyped reading) both give zero.
+#[allow(clippy::cast_precision_loss)]
+fn daily_rate(from: (NaiveDate, i32), to: (NaiveDate, i32)) -> f64 {
+    let days = (to.0 - from.0).num_days();
+    if days <= 0 {
+        return 0.0;
+    }
+    f64::from(Ord::max(to.1 - from.1, 0)) / days as f64
+}
+
+/// The oldest point to measure a rate from when the newest readings are too
+/// close together: the vehicle's oldest logged reading when it falls outside
+/// the readings window, else the purchase date and mileage when both are set.
+async fn earlier_rate_anchor(
+    db: &impl ConnectionTrait,
+    v: &vehicle::Model,
+    window_len: usize,
+) -> DomainResult<Option<(NaiveDate, i32)>> {
+    if window_len as u64 >= RATE_WINDOW_READINGS {
+        let oldest = mileage_log::Entity::find()
+            .filter(mileage_log::Column::VehicleId.eq(v.id))
+            .order_by_asc(mileage_log::Column::RecordedAt)
+            .one(db)
+            .await?;
+        if let Some(point) = oldest.and_then(|r| Some((parse_date(&r.recorded_at)?, r.mileage))) {
+            return Ok(Some(point));
+        }
+    }
+    let purchased_on = v.purchase_date.as_deref().and_then(parse_date);
+    Ok(purchased_on.zip(v.purchase_mileage))
+}
+
 /// Estimate current mileage from `mileage_log` entries.
-/// Calculates average daily miles from the oldest and newest of the last 50 entries,
-/// then extrapolates forward from the most recent entry to today.
+///
+/// The daily rate is measured across the newest 50 readings when they span at
+/// least 30 days. A shorter span is measured from an earlier point instead:
+/// the oldest logged reading when it lies outside those 50, else the purchase
+/// date and mileage when both are set. With neither, the rate comes from the
+/// readings alone, and is zero when they share a date. The estimate starts at
+/// the newest reading and projects forward at that rate.
 pub(crate) async fn estimate_mileage(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -111,7 +158,7 @@ pub(crate) async fn estimate_mileage(
     let entries = mileage_log::Entity::find()
         .filter(mileage_log::Column::VehicleId.eq(vehicle_id))
         .order_by_desc(mileage_log::Column::RecordedAt)
-        .limit(50)
+        .limit(RATE_WINDOW_READINGS)
         .all(db)
         .await?;
 
@@ -125,26 +172,20 @@ pub(crate) async fn estimate_mileage(
 
     let latest = &entries[0];
     let latest_date = parse_date(&latest.recorded_at).unwrap_or(today);
+    let latest_point = (latest_date, latest.mileage);
 
-    // Calculate average daily miles from the entries we have
-    #[allow(clippy::cast_precision_loss)]
-    let avg_daily = if entries.len() >= 2 {
-        let oldest = entries.last().unwrap();
-        let oldest_date = parse_date(&oldest.recorded_at).unwrap_or(latest_date);
-        let days = Ord::max((latest_date - oldest_date).num_days(), 1);
-        let miles = Ord::max(latest.mileage - oldest.mileage, 0);
-        f64::from(miles) / days as f64
+    let oldest = entries.last().unwrap();
+    let window_start = (
+        parse_date(&oldest.recorded_at).unwrap_or(latest_date),
+        oldest.mileage,
+    );
+    let avg_daily = if (latest_date - window_start.0).num_days() >= RATE_MIN_SPAN_DAYS {
+        daily_rate(window_start, latest_point)
     } else {
-        // With only one entry, use purchase mileage as baseline
-        let purchase_miles = v.purchase_mileage.unwrap_or(0);
-        let purchase_date = v
-            .purchase_date
-            .as_deref()
-            .and_then(parse_date)
-            .unwrap_or(latest_date);
-        let days = Ord::max((latest_date - purchase_date).num_days(), 1);
-        let miles = Ord::max(latest.mileage - purchase_miles, 0);
-        f64::from(miles) / days as f64
+        let from = earlier_rate_anchor(db, v, entries.len())
+            .await?
+            .unwrap_or(window_start);
+        daily_rate(from, latest_point)
     };
 
     // Extrapolate from latest entry to today
@@ -733,5 +774,178 @@ mod tests {
         let plugs = &calculate_reminders(&db, vid).await.unwrap().reminders[0];
         assert_eq!(plugs.status, "ok");
         assert_eq!(plugs.due_at_miles, Some(124_000));
+    }
+
+    async fn log_reading(db: &DatabaseConnection, vehicle_id: i32, age_days: i64, miles: i32) {
+        mileage_log::ActiveModel {
+            vehicle_id: Set(vehicle_id),
+            mileage: Set(miles),
+            recorded_at: Set(days_ago(age_days)),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap();
+    }
+
+    async fn vehicle_bought_2017(db: &DatabaseConnection) -> i32 {
+        VehicleFixture::new()
+            .purchase_date("2017-03-05")
+            .purchase_mileage(40)
+            .insert_id(db)
+            .await
+    }
+
+    fn days_since_purchase() -> f64 {
+        (chrono::Utc::now().date_naive() - day("2017-03-05")).num_days() as f64
+    }
+
+    #[tokio::test]
+    async fn close_together_readings_measure_the_rate_from_the_purchase() {
+        let db = test_db().await;
+        let vid = vehicle_bought_2017(&db).await;
+        log_reading(&db, vid, 2, 64_000).await;
+        log_reading(&db, vid, 0, 64_000).await;
+
+        let v = vehicle::Entity::find_by_id(vid)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        let (estimated, _, rate, _) = estimate_mileage(&db, vid, &v).await.unwrap();
+        let expected = 63_960.0 / days_since_purchase();
+        assert!(
+            (rate - expected).abs() < 0.5,
+            "rate {rate}, expected {expected}"
+        );
+        assert_eq!(estimated, 64_000);
+    }
+
+    #[tokio::test]
+    async fn a_mileage_item_approaches_due_at_the_purchase_anchored_rate() {
+        let db = test_db().await;
+        let vid = vehicle_bought_2017(&db).await;
+        log_reading(&db, vid, 2, 64_000).await;
+        log_reading(&db, vid, 0, 64_000).await;
+        let item = maintenance_schedule_item::ActiveModel {
+            vehicle_id: Set(Some(vid)),
+            name: Set("Oil".into()),
+            interval_miles: Set(Some(10_000)),
+            enabled: Set(true),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        // Last done at 54,500, so due at 64,500: 500 miles away.
+        let svc = service_record::ActiveModel {
+            vehicle_id: Set(vid),
+            service_date: Set(days_ago(300)),
+            mileage: Set(Some(54_500)),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        service_schedule_link::ActiveModel {
+            service_record_id: Set(svc.id),
+            schedule_item_id: Set(item.id),
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        let resp = calculate_reminders(&db, vid).await.unwrap();
+        assert!(resp.avg_daily_miles > 10.0, "rate {}", resp.avg_daily_miles);
+        assert_eq!(resp.reminders[0].status, "due_soon");
+        assert_eq!(resp.reminders[0].miles_remaining, Some(500));
+    }
+
+    #[tokio::test]
+    async fn a_window_spanning_ninety_days_keeps_its_own_rate() {
+        let db = test_db().await;
+        let vid = vehicle_bought_2017(&db).await;
+        log_reading(&db, vid, 90, 60_000).await;
+        log_reading(&db, vid, 0, 60_900).await;
+
+        let v = vehicle::Entity::find_by_id(vid)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        let (_, _, rate, _) = estimate_mileage(&db, vid, &v).await.unwrap();
+        assert!((rate - 10.0).abs() < 1e-9, "rate {rate}");
+    }
+
+    #[tokio::test]
+    async fn an_older_reading_outside_the_window_anchors_the_rate() {
+        let db = test_db().await;
+        let vid = vehicle_bought_2017(&db).await;
+        // 49 readings on today's date plus one the day before fill the
+        // window of 50; the reading 400 days back lies outside it.
+        log_reading(&db, vid, 400, 50_000).await;
+        log_reading(&db, vid, 1, 60_000).await;
+        for _ in 0..49 {
+            log_reading(&db, vid, 0, 60_000).await;
+        }
+
+        let v = vehicle::Entity::find_by_id(vid)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        let (_, _, rate, _) = estimate_mileage(&db, vid, &v).await.unwrap();
+        assert!((rate - 10_000.0 / 400.0).abs() < 1e-9, "rate {rate}");
+    }
+
+    #[tokio::test]
+    async fn two_same_day_readings_without_purchase_data_give_a_zero_rate() {
+        let db = test_db().await;
+        let vid = VehicleFixture::new().insert_id(&db).await;
+        log_reading(&db, vid, 0, 50_000).await;
+        log_reading(&db, vid, 0, 50_400).await;
+
+        let v = vehicle::Entity::find_by_id(vid)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        let (estimated, _, rate, _) = estimate_mileage(&db, vid, &v).await.unwrap();
+        assert!(rate.abs() < f64::EPSILON, "rate {rate}");
+        assert_eq!(estimated, 50_400);
+    }
+
+    #[tokio::test]
+    async fn one_reading_with_purchase_data_measures_from_the_purchase() {
+        let db = test_db().await;
+        let vid = vehicle_bought_2017(&db).await;
+        log_reading(&db, vid, 0, 64_000).await;
+
+        let v = vehicle::Entity::find_by_id(vid)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        let (_, _, rate, _) = estimate_mileage(&db, vid, &v).await.unwrap();
+        let expected = 63_960.0 / days_since_purchase();
+        assert!(
+            (rate - expected).abs() < 0.5,
+            "rate {rate}, expected {expected}"
+        );
+    }
+
+    #[tokio::test]
+    async fn one_reading_without_purchase_data_gives_a_zero_rate() {
+        let db = test_db().await;
+        let vid = VehicleFixture::new().insert_id(&db).await;
+        log_reading(&db, vid, 0, 64_000).await;
+
+        let v = vehicle::Entity::find_by_id(vid)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        let (_, _, rate, _) = estimate_mileage(&db, vid, &v).await.unwrap();
+        assert!(rate.abs() < f64::EPSILON, "rate {rate}");
     }
 }

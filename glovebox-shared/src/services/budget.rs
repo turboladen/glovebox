@@ -437,4 +437,56 @@ mod tests {
         // backlog estimates.
         assert_eq!(f.total_cents, 7 * 2_000 + 7_700);
     }
+
+    // A first session of filing invoices logs two readings a couple of days
+    // apart. The rate then comes from the purchase, so a mileage-interval
+    // item still projects into the 12-month forecast.
+    #[tokio::test]
+    async fn mileage_items_forecast_when_recent_readings_are_close_together() {
+        let db = test_db().await;
+        let vid = VehicleFixture::new()
+            .purchase_date("2017-03-05")
+            .purchase_mileage(40)
+            .insert_id(&db)
+            .await;
+        for age in [2, 0] {
+            mileage_log::ActiveModel {
+                vehicle_id: Set(vid),
+                mileage: Set(64_000),
+                recorded_at: Set(days_ago(age)),
+                ..Default::default()
+            }
+            .insert(&db)
+            .await
+            .unwrap();
+        }
+        let item = seed_item(&db, vid, "Oil change", Some(10_000), None, Some(2_000)).await;
+        let svc = service_record::ActiveModel {
+            vehicle_id: Set(vid),
+            service_date: Set(days_ago(300)),
+            mileage: Set(Some(60_000)),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        service_schedule_link::ActiveModel {
+            service_record_id: Set(svc.id),
+            schedule_item_id: Set(item),
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        let rems = reminders::calculate_reminders(&db, vid).await.unwrap();
+        let f = forecast_from(&db, vid, &rems).await.unwrap();
+        assert!(!f.lines.is_empty(), "rate {}", rems.avg_daily_miles);
+        let first_in_days = (6_000.0 / rems.avg_daily_miles).ceil() as i64;
+        assert_eq!(
+            f.lines[0].when,
+            (chrono::Utc::now().date_naive() + chrono::Duration::days(first_in_days))
+                .format("%Y-%m-%d")
+                .to_string()
+        );
+    }
 }
