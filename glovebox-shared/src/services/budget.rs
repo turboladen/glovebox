@@ -95,7 +95,7 @@ pub async fn forecast_from(
     let planned_schedule_items: HashSet<i32> =
         backlog.iter().filter_map(|i| i.schedule_item_id).collect();
 
-    let today = chrono::Utc::now().date_naive();
+    let today = crate::services::today();
     let avg_daily = rems.avg_daily_miles;
     let miles_to_days = |miles: i32| -> Option<i64> {
         (avg_daily > 0.0).then(|| (f64::from(miles) / avg_daily).ceil() as i64)
@@ -484,7 +484,7 @@ mod tests {
         let first_in_days = (6_000.0 / rems.avg_daily_miles).ceil() as i64;
         assert_eq!(
             f.lines[0].when,
-            (chrono::Utc::now().date_naive() + chrono::Duration::days(first_in_days))
+            (crate::services::today() + chrono::Duration::days(first_in_days))
                 .format("%Y-%m-%d")
                 .to_string()
         );

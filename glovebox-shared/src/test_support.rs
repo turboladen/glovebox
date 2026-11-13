@@ -11,11 +11,12 @@ pub async fn test_db() -> DatabaseConnection {
     crate::db::connect_in_memory().await
 }
 
-/// The UTC date `days` days before today, written `YYYY-MM-DD`. A test that
-/// judges a reminder against the current date dates its fixtures with this,
-/// so that it holds on whatever day it runs.
+/// The date `days` days before [`services::today`](crate::services::today),
+/// written `YYYY-MM-DD`. A test that judges a reminder against the current
+/// date dates its fixtures with this, so that it holds on whatever day it
+/// runs and agrees with the code under test about what "today" is.
 pub fn days_ago(days: i64) -> String {
-    (chrono::Utc::now().date_naive() - chrono::Duration::days(days))
+    (crate::services::today() - chrono::Duration::days(days))
         .format("%Y-%m-%d")
         .to_string()
 }

@@ -287,7 +287,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
 
     let txn = db.begin().await?;
 
-    let mut model = incident::ActiveModel {
+    let model = incident::ActiveModel {
         vehicle_id: Set(vehicle_id),
         category: Set(input.category),
         title: Set(input.title),
@@ -305,11 +305,9 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
         insurance_adjuster: Set(input.insurance_adjuster),
         insurance_adjuster_phone: Set(input.insurance_adjuster_phone),
         recurrence_of_id: Set(input.recurrence_of_id),
+        occurred_at: Set(input.occurred_at.unwrap_or_else(super::local_now_stamp)),
         ..Default::default()
     };
-    if let Some(occurred_at) = input.occurred_at {
-        model.occurred_at = Set(occurred_at);
-    }
     let inc = model.insert(&txn).await?;
 
     if let Some(sid) = input.noticed_during_service_id {

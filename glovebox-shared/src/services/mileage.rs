@@ -29,7 +29,7 @@ pub async fn create(
     if let Some(at) = &input.recorded_at {
         super::validate_datetime("recorded_at", at)?;
     }
-    let now = super::now_stamp();
+    let now = super::local_now_stamp();
     let model = mileage_log::ActiveModel {
         vehicle_id: Set(vehicle_id),
         mileage: Set(input.mileage),

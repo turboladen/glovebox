@@ -5,7 +5,7 @@ pub struct NewIncident {
     pub title: String,
     pub description: Option<String>,
     pub odometer: Option<i32>,
-    /// Defaults to now (DB default) when omitted.
+    /// Defaults to the current local date and time when omitted.
     pub occurred_at: Option<String>,
     pub obd_codes: Option<String>,
     pub notes: Option<String>,

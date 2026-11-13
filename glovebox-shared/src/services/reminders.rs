@@ -85,7 +85,7 @@ fn warranty_status(v: &vehicle::Model, estimated_mileage: i32) -> Option<Warrant
     if v.warranty_expires_on.is_none() && v.warranty_expires_miles.is_none() {
         return None;
     }
-    let today = chrono::Utc::now().date_naive();
+    let today = crate::services::today();
     let date_covers = v
         .warranty_expires_on
         .as_deref()
@@ -162,7 +162,7 @@ pub(crate) async fn estimate_mileage(
         .all(db)
         .await?;
 
-    let today = chrono::Utc::now().date_naive();
+    let today = crate::services::today();
     let now_str = today.format("%Y-%m-%d").to_string();
 
     if entries.is_empty() {
@@ -218,7 +218,7 @@ pub async fn calculate_reminders(
     // The same layering as `schedule::resolve`: vehicle over template over platform.
     let effective_items = resolve_schedule(db, &v).await?;
 
-    let today = chrono::Utc::now().date_naive();
+    let today = crate::services::today();
 
     // Batch-load all schedule links and service records for this vehicle (avoids N+1)
     let item_ids: Vec<i32> = effective_items.iter().map(|i| i.id).collect();
@@ -622,7 +622,7 @@ mod tests {
         let db = test_db().await;
         // Expired date but a live mileage bound: EITHER bound suffices.
         let vid = seed_vehicle(&db, Some("2020-01-01"), Some(60_000)).await;
-        let now = crate::services::now_stamp();
+        let now = days_ago(0);
         mileage_log::ActiveModel {
             vehicle_id: Set(vid),
             mileage: Set(50_000),
@@ -639,7 +639,7 @@ mod tests {
 
         // Same bounds but the odometer is already past → not covered.
         let past = seed_vehicle(&db, Some("2020-01-01"), Some(40_000)).await;
-        let now = crate::services::now_stamp();
+        let now = days_ago(0);
         mileage_log::ActiveModel {
             vehicle_id: Set(past),
             mileage: Set(50_000),
@@ -663,7 +663,7 @@ mod tests {
     async fn an_item_inside_its_warning_window_is_due_soon() {
         let db = test_db().await;
         let vid = seed_vehicle(&db, None, None).await;
-        let today = chrono::Utc::now().date_naive();
+        let today = crate::services::today();
         let item = maintenance_schedule_item::ActiveModel {
             vehicle_id: Set(Some(vid)),
             name: Set("Wipers".into()),
@@ -797,7 +797,7 @@ mod tests {
     }
 
     fn days_since_purchase() -> f64 {
-        (chrono::Utc::now().date_naive() - day("2017-03-05")).num_days() as f64
+        (crate::services::today() - day("2017-03-05")).num_days() as f64
     }
 
     #[tokio::test]
@@ -947,5 +947,14 @@ mod tests {
             .unwrap();
         let (_, _, rate, _) = estimate_mileage(&db, vid, &v).await.unwrap();
         assert!(rate.abs() < f64::EPSILON, "rate {rate}");
+    }
+
+    #[test]
+    fn daily_rate_is_zero_for_a_zero_day_span_and_a_falling_odometer() {
+        let start = (day("2020-01-01"), 1_000);
+        assert!(daily_rate(start, (day("2020-01-01"), 5_000)).abs() < f64::EPSILON);
+        assert!(daily_rate(start, (day("2019-12-31"), 5_000)).abs() < f64::EPSILON);
+        assert!(daily_rate(start, (day("2020-01-11"), 500)).abs() < f64::EPSILON);
+        assert!((daily_rate(start, (day("2020-01-11"), 1_500)) - 50.0).abs() < 1e-9);
     }
 }

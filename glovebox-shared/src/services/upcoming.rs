@@ -154,7 +154,7 @@ mod tests {
             .purchase_mileage(40)
             .insert_id(&db)
             .await;
-        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let today = crate::services::today().format("%Y-%m-%d").to_string();
         mileage::create(
             &db,
             v,
@@ -254,10 +254,10 @@ mod tests {
     async fn planned_work_sorts_by_urgency_then_creation_order() {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
-        let far = (chrono::Utc::now() + chrono::Duration::days(400))
+        let far = (crate::services::today() + chrono::Duration::days(400))
             .format("%Y-%m-%d")
             .to_string();
-        let soon = (chrono::Utc::now() + chrono::Duration::days(10))
+        let soon = (crate::services::today() + chrono::Duration::days(10))
             .format("%Y-%m-%d")
             .to_string();
         for (title, date) in [

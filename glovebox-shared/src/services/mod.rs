@@ -24,6 +24,21 @@ pub(crate) fn now_stamp() -> String {
     chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
+/// The calendar date where the server runs. Every day count and every default
+/// date value uses this, so "today" matches the owner's wall calendar. Stored
+/// `created_at`/`updated_at` stamps stay UTC (see [`now_stamp`]).
+#[must_use]
+pub fn today() -> chrono::NaiveDate {
+    chrono::Local::now().date_naive()
+}
+
+/// The server's local date and time as `YYYY-MM-DD HH:MM:SS`, for an event
+/// time the owner left out ("when the reading was taken"). It is not a
+/// bookkeeping stamp; those use [`now_stamp`].
+pub(crate) fn local_now_stamp() -> String {
+    chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
 /// Drops repeated ids, keeping first-seen order.
 pub(crate) fn dedup_ids(ids: &[i32]) -> Vec<i32> {
     let mut seen = std::collections::HashSet::new();

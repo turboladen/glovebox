@@ -190,7 +190,7 @@ pub async fn list_with_status(
     } else {
         None
     };
-    let today = chrono::Utc::now().date_naive();
+    let today = crate::services::today();
     Ok(items
         .into_iter()
         .map(|item| PlannedItem {
@@ -622,7 +622,7 @@ mod tests {
         .await
         .unwrap();
 
-        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let today = crate::services::today().format("%Y-%m-%d").to_string();
         let svc = service_svc::create(&db, v, service_on(&today, vec![planned.id]))
             .await
             .unwrap();
