@@ -1,6 +1,6 @@
 # Job checklist and the first web page: design
 
-Date: 2026-11-13. Status: awaiting owner approval.
+Date: 2026-11-13. Status: approved by the owner on 2026-11-13.
 
 ## Intent
 
@@ -128,6 +128,22 @@ set both.
 "Mark received" stores the date the part arrived on the part. Arrival is its own step because the
 box check on arrival is when a wrong part is caught.
 
+### Returning a wrong part
+
+A need that is `ordered` or `received` has a "wrong part, returning it" action that takes a reason
+and whether the chosen option itself was the mistake. In one write it:
+
+- marks the part `returned` (a fourth part status beside `purchased`, `installed` and `replaced`)
+  with the reason and the date, and keeps the record;
+- unlinks the part from the need, which sends the need back to `to_order`, or to `undecided` with
+  the option marked rejected for that reason when the option was the mistake;
+- adds a to-do "Return <part> to <seller>" on the need's appointment, or on the vehicle when the
+  job has none.
+
+A returned part is left out of parts spending in `cost_summary` and stays visible in the need's
+history and in past decisions, so Claude can say what was ordered by mistake before. The page and
+Claude can both do this.
+
 ### Appointment
 
 An appointment belongs to one vehicle and holds a purpose (required), a shop (optional, named the
@@ -206,6 +222,7 @@ them.
 - Choose an option from those listed and write the reason.
 - Mark a need ordered, with seller, date, price and order number (prefilled from the option).
 - Mark a need received.
+- Mark an ordered or received part as wrong and being returned, with the reason.
 - Tick, un-tick, add and delete to-dos.
 
 Everything else is read-only on the page.
@@ -236,8 +253,8 @@ named as the model:
   shows a banner with an undo form. Marking a need ordered has no undo on the page, because it
   creates a purchase record; a mistaken one is corrected through Claude. Supplier, approach, chosen
   option and reason are simply edited again. A failed write re-renders the page with the domain error's message beside the row.
-- One inline stylesheet in the base template with light and dark schemes. No red or green, and
-  color never carries meaning alone: every state is a word. Buttons have accessible names.
+- One inline stylesheet in the base template with light and dark schemes. Buttons have accessible
+  names. The look is described under "Look and feel".
 - It binds `127.0.0.1` only, on `GLOVEBOX_WEB_PORT` (default 4827), reads `GLOVEBOX_DB_PATH`,
   rejects requests whose Host or Origin is not local, and sends a content security policy that
   allows no scripts and no external resources.
@@ -246,6 +263,39 @@ named as the model:
 
 `scripts/check-layering.sh` keeps axum and rmcp out of `glovebox-shared` and gains a check that
 `glovebox-web` contains no SeaORM queries.
+
+### Look and feel
+
+The owner likes Porsche Design, and the Chronograph 1 watch of the 1970s in particular, and found
+the old site's black, red, white and silver scheme a cliche. The direction is that sensibility and
+not a copy of it: an instrument face. That means matte near-black and off-white surfaces, type
+chosen for legibility first with tabular numerals, thin rules in place of boxes and shadows, a
+strict grid, and one accent color used sparingly for the thing that needs attention. No Porsche
+marks, typefaces or imagery.
+
+Red and green may be used for state, and the owner has a mild color-vision deficiency, so every
+state is also a word and no pair of states differs by hue alone.
+
+The builder uses the `frontend-design` skill, and shows the owner a static mockup of the
+appointment page in this style, in light and dark, before the templates are finalized. The
+owner's approval of that mockup is a gate in the plan.
+
+### Environments
+
+The owner needs to try changes against a test database without touching live records.
+
+- `GLOVEBOX_ENV` names the environment and defaults to `live`. `live` uses `data/glovebox.db`, and
+  any other name uses `data/glovebox-<name>.db`. An explicit `GLOVEBOX_DB_PATH` still wins. Both
+  binaries follow the same rule through one function in `glovebox-shared`.
+- `just web env=test` serves that environment. A non-live environment uses a different default
+  port (4828) so it can run beside the live page, and every page shows the environment's name in
+  the header so the two cannot be confused.
+- `just seed env=test` fills an environment with made-up data that exercises every stage: a
+  vehicle, an appointment, jobs, needs at each stage, an option that does not fit, a returned part
+  and to-dos. It refuses to run against `live`. `just reset-db` takes the same `env` and refuses
+  `live` unless asked a second time.
+- `docs/claude-desktop/` gains a second config snippet for a test server entry
+  (`GLOVEBOX_ENV=test`), which the owner adds by hand when wanted.
 
 ### Two programs, one database
 
