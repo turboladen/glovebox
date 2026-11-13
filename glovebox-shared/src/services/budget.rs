@@ -240,21 +240,21 @@ mod tests {
         assert!(f.lines.is_empty());
     }
 
-    /// The pinned arithmetic scenario. Everything is seeded relative to
-    /// today (no wall-clock flakiness):
-    ///
-    /// - "Annual inspection": 12-month interval, $100, last serviced ~6
-    ///   months ago → due in ~6 months → exactly 1 occurrence.
-    /// - "Timing belt check": 12-month interval, $50, never serviced on a
-    ///   vehicle purchased 2 years ago → overdue → 1 occurrence now (the
-    ///   next lands ~12 months out, past the horizon).
-    /// - "Oil change": 5000-mile interval, $20, mileage rate pinned at
-    ///   exactly 100 mi/day (logs 100 days apart, 10k miles apart, latest
-    ///   today) → overdue (est. 20k vs due at 5k), cycle = 50 days →
-    ///   occurrences at days 0,50,...,350 = 8.
-    /// - A planned work item with a $75 estimate, which lands in
-    ///   `planned_work_cents`; a dropped item with a $999 estimate that must
-    ///   not count.
+    // The pinned arithmetic scenario. Everything is seeded relative to
+    // today (no wall-clock flakiness):
+    //
+    // - "Annual inspection": 12-month interval, $100, last serviced ~6
+    //   months ago → due in ~6 months → exactly 1 occurrence.
+    // - "Timing belt check": 12-month interval, $50, never serviced on a
+    //   vehicle purchased 2 years ago → overdue → 1 occurrence now (the
+    //   next lands ~12 months out, past the horizon).
+    // - "Oil change": 5000-mile interval, $20, mileage rate pinned at
+    //   exactly 100 mi/day (logs 100 days apart, 10k miles apart, latest
+    //   today) → overdue (est. 20k vs due at 5k), cycle = 50 days →
+    //   occurrences at days 0,50,...,350 = 8.
+    // - A planned work item with a $75 estimate, which lands in
+    //   `planned_work_cents`; a dropped item with a $999 estimate that must
+    //   not count.
     #[tokio::test]
     async fn pinned_interval_and_rate_scenario() {
         let db = test_db().await;
@@ -367,11 +367,11 @@ mod tests {
         assert_eq!(whens, sorted);
     }
 
-    /// A schedule-linked work item on the planned backlog skips that
-    /// schedule item's FIRST projected occurrence, so the spend is not
-    /// counted in both `planned_work` and `projected_maintenance`. Later
-    /// cycles still project; an item whose only in-horizon occurrence is the
-    /// planned one projects nothing.
+    // A schedule-linked work item on the planned backlog skips that
+    // schedule item's FIRST projected occurrence, so the spend is not
+    // counted in both `planned_work` and `projected_maintenance`. Later
+    // cycles still project; an item whose only in-horizon occurrence is the
+    // planned one projects nothing.
     #[tokio::test]
     async fn schedule_linked_backlog_item_skips_first_occurrence() {
         let db = test_db().await;

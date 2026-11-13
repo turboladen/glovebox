@@ -945,8 +945,8 @@ mod tests {
         }
     }
 
-    /// Platform → template → vehicle chain; returns (`platform_id`,
-    /// `template_id`, `vehicle_id`).
+    // Platform → template → vehicle chain; returns (`platform_id`,
+    // `template_id`, `vehicle_id`).
     async fn seed_chain(db: &impl ConnectionTrait) -> (i32, i32, i32) {
         use crate::entities::platform;
         let platform_id = platform::ActiveModel {

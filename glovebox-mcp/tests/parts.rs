@@ -9,8 +9,7 @@ async fn record_part_round_trips_and_rejects_a_missing_vehicle() {
     let t = connect().await;
     let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
 
-    // Parts have no MCP list surface; the tool result payload is the created
-    // part record itself.
+    // The tool result payload is the created part record itself.
     let part = t
         .call(
             "record_part",

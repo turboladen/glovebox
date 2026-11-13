@@ -1,6 +1,6 @@
-//! A new owner's first session, driven entirely through tool calls: add the
-//! car from a template, plan some work, file one realistic invoice, capture a
-//! shop advisory, and ask what is coming.
+// A new owner's first session, driven entirely through tool calls: add the
+// car from a template, plan some work, file one realistic invoice, capture a
+// shop advisory, and ask what is coming.
 
 mod common;
 

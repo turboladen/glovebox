@@ -1645,10 +1645,10 @@ mod tests {
 
     // ─── invoice_ref idempotency + possible_duplicates advisory (hwaf) ───
 
-    /// Recording the same invoice_ref twice returns the existing record
-    /// UNTOUCHED — no second row, and the second call's extra links/line-items
-    /// (and even a bogus schedule id, which the short-circuit skips guarding)
-    /// are ignored.
+    // Recording the same invoice_ref twice returns the existing record
+    // UNTOUCHED — no second row, and the second call's extra links/line-items
+    // (and even a bogus schedule id, which the short-circuit skips guarding)
+    // are ignored.
     #[tokio::test]
     async fn record_same_invoice_ref_is_hard_idempotent_and_untouched() {
         let db = test_db().await;
@@ -1695,7 +1695,7 @@ mod tests {
         assert_eq!(list(&db, vid).await.unwrap().len(), 1, "no duplicate row");
     }
 
-    /// Distinct invoice_refs are distinct records.
+    // Distinct invoice_refs are distinct records.
     #[tokio::test]
     async fn record_different_invoice_refs_are_distinct() {
         let db = test_db().await;
@@ -1715,8 +1715,8 @@ mod tests {
         assert_eq!(list(&db, vid).await.unwrap().len(), 2);
     }
 
-    /// Regression: two records with the SAME day and SAME cost but NO
-    /// invoice_ref must BOTH persist — resemblance is never a dedup signal.
+    // Regression: two records with the SAME day and SAME cost but NO
+    // invoice_ref must BOTH persist — resemblance is never a dedup signal.
     #[tokio::test]
     async fn record_no_ref_same_day_same_cost_coexist() {
         let db = test_db().await;
@@ -1740,8 +1740,8 @@ mod tests {
         );
     }
 
-    /// A ref-less create surfaces same-day peers as a soft advisory; the first
-    /// (no peers) is empty, the second sees the first.
+    // A ref-less create surfaces same-day peers as a soft advisory; the first
+    // (no peers) is empty, the second sees the first.
     #[tokio::test]
     async fn record_no_ref_surfaces_possible_duplicates() {
         let db = test_db().await;
@@ -1758,9 +1758,9 @@ mod tests {
         assert_eq!(second.possible_duplicates[0].id, first.record.id);
     }
 
-    /// A blank invoice_ref is normalized to absent: two ref-less records sent
-    /// with `Some("")`/whitespace must coexist, not collide on the unique
-    /// index. And a ref with surrounding whitespace is the same identity.
+    // A blank invoice_ref is normalized to absent: two ref-less records sent
+    // with `Some("")`/whitespace must coexist, not collide on the unique
+    // index. And a ref with surrounding whitespace is the same identity.
     #[tokio::test]
     async fn blank_invoice_ref_is_treated_as_absent() {
         let db = test_db().await;
@@ -1804,9 +1804,9 @@ mod tests {
         assert_eq!(b.record.id, a.record.id, "trimmed ref is the same identity");
     }
 
-    /// The partial unique index is a DB-level backstop: a raw second insert of
-    /// the same (vehicle_id, invoice_ref) — bypassing the service's
-    /// short-circuit — is rejected.
+    // The partial unique index is a DB-level backstop: a raw second insert of
+    // the same (vehicle_id, invoice_ref) — bypassing the service's
+    // short-circuit — is rejected.
     #[tokio::test]
     async fn invoice_ref_partial_unique_index_rejects_raw_duplicate() {
         let db = test_db().await;
