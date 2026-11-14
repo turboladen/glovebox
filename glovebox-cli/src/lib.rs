@@ -7,6 +7,7 @@ use glovebox_shared::{
     db,
     env::{self, Environment},
     error::{DomainError, DomainResult},
+    seed::{self, SeedSummary},
 };
 
 #[derive(Debug, Parser)]
@@ -29,6 +30,12 @@ pub enum Command {
         #[arg(long)]
         env: String,
     },
+    /// Fill a named non-live environment with made-up demo data.
+    Seed {
+        /// The environment to fill; `live` is always refused.
+        #[arg(long)]
+        env: String,
+    },
 }
 
 /// Runs one command and returns the text to print. `data_dir` is where the
@@ -38,7 +45,8 @@ pub enum Command {
 /// # Errors
 ///
 /// `backup` fails when the database file is missing or empty. `reset` fails
-/// for `live` and for an invalid environment name.
+/// for `live` and for an invalid environment name. `seed` fails for those
+/// too, and when the environment's database already holds a vehicle.
 pub async fn run(
     args: Cli,
     lookup: impl Fn(&str) -> Option<String>,
@@ -56,7 +64,35 @@ pub async fn run(
             let list: Vec<String> = removed.iter().map(|p| p.display().to_string()).collect();
             Ok(format!("Deleted {}", list.join(", ")))
         }
+        // Like `reset`, the file comes from `data_dir` and the validated name
+        // alone, so `GLOVEBOX_DB_PATH` cannot point the seed at live data.
+        Command::Seed { env } => {
+            let name = env::test_name(&env)?;
+            let path = data_dir.join(format!("glovebox-{name}.db"));
+            let conn = db::connect(&path.to_string_lossy()).await?;
+            let summary = seed::demo(&conn).await?;
+            conn.close().await?;
+            Ok(format!(
+                "Seeded environment {name} at {}: {}.",
+                path.display(),
+                describe(&summary)
+            ))
+        }
     }
+}
+
+fn describe(s: &SeedSummary) -> String {
+    let count = |n: u64, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+    format!(
+        "{}, {}, {}, {}, {}, {} and {}",
+        count(s.vehicles, "vehicle", "vehicles"),
+        count(s.appointments, "appointment", "appointments"),
+        count(s.jobs, "job", "jobs"),
+        count(s.needs, "need", "needs"),
+        count(s.options, "option", "options"),
+        count(s.parts, "part", "parts"),
+        count(s.todos, "to-do", "to-dos"),
+    )
 }
 
 async fn backup(environment: &Environment) -> DomainResult<String> {

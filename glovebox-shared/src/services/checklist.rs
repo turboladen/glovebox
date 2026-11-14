@@ -13,6 +13,7 @@ use serde::Serialize;
 use crate::{
     entities::{job_need, need_option, part, todo, vehicle, work_item},
     error::{DomainError, DomainResult},
+    money::format_cents,
     services::{
         appointment::{self, AppointmentSummary},
         need::{Stage, stage},
@@ -348,18 +349,11 @@ fn need_view(
     }
 }
 
-// Formats whole cents as dollars with integer math.
-fn dollars(cents: i32) -> String {
-    let sign = if cents < 0 { "-" } else { "" };
-    let abs = cents.unsigned_abs();
-    format!("{sign}${}.{:02}", abs / 100, abs % 100)
-}
-
 fn purchase_summary(part: &part::Model) -> Option<String> {
     let pieces: Vec<String> = [
         part.seller.clone(),
         part.purchase_date.clone(),
-        part.cost_cents.map(dollars),
+        part.cost_cents.map(format_cents),
         part.order_ref.as_ref().map(|r| format!("order {r}")),
     ]
     .into_iter()

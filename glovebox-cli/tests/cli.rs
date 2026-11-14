@@ -75,3 +75,60 @@ async fn reset_ignores_db_path_override() {
     assert!(live.exists());
     assert!(!dir.path().join("glovebox-test.db").exists());
 }
+
+#[tokio::test]
+async fn seed_fills_the_named_environment() {
+    assert!(Cli::try_parse_from(["glovebox", "seed"]).is_err());
+    let dir = tempfile::tempdir().unwrap();
+    let live = dir.path().join("glovebox.db");
+    let text = run(
+        cli(&["glovebox", "seed", "--env", "demo"]),
+        env_for(&live),
+        dir.path(),
+    )
+    .await
+    .unwrap();
+    assert!(text.contains("1 vehicle"), "{text}");
+    assert!(text.contains("1 appointment"), "{text}");
+    assert!(!live.exists(), "GLOVEBOX_DB_PATH must be ignored");
+    let seeded = dir.path().join("glovebox-demo.db");
+    assert!(seeded.exists());
+
+    let conn = db::connect(seeded.to_str().unwrap()).await.unwrap();
+    assert_eq!(
+        glovebox_shared::test_support::row_count::<glovebox_shared::entities::vehicle::Entity>(
+            &conn
+        )
+        .await,
+        1
+    );
+    conn.close().await.unwrap();
+
+    let err = run(
+        cli(&["glovebox", "seed", "--env", "demo"]),
+        |_| None,
+        dir.path(),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
+}
+
+#[tokio::test]
+async fn seed_refuses_live() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["live", "Bad Name", ""] {
+        let err = run(
+            cli(&["glovebox", "seed", "--env", name]),
+            |_| None,
+            dir.path(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, DomainError::Invalid { .. }),
+            "{name}: {err:?}"
+        );
+    }
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+}

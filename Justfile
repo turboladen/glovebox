@@ -7,6 +7,10 @@ backup:
 reset-env env:
     cargo run --quiet --release -p glovebox-cli -- reset --env {{quote(env)}}
 
+# Fill the named non-live environment with made-up demo data. `live` is refused.
+seed env:
+    cargo run --quiet --release -p glovebox-cli -- seed --env {{quote(env)}}
+
 # --- CI ---
 # These recipes are what GitHub Actions runs, so `just ci` reproduces CI locally.
 
