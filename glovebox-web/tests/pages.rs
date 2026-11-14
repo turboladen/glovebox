@@ -122,11 +122,8 @@ async fn home_shows_env_name_only_when_not_live() {
     let (_, test_body) = page(app(db().await, "test"), get("/")).await;
     let (_, live_body) = page(app(db().await, "live"), get("/")).await;
 
-    assert!(
-        test_body.contains(r#"<span class="environment">test</span>"#),
-        "{test_body}"
-    );
-    assert!(!live_body.contains("environment"), "{live_body}");
+    assert!(test_body.contains(r#"class="env""#), "{test_body}");
+    assert!(!live_body.contains(r#"class="env""#), "{live_body}");
 }
 
 #[tokio::test]

@@ -59,6 +59,25 @@ pub struct StepRow {
     pub stage: Stage,
 }
 
+impl StepRow {
+    /// The summary without its leading "{name}: ", so a page can show the
+    /// name in its own column.
+    #[must_use]
+    pub fn detail(&self) -> &str {
+        self.summary
+            .strip_prefix(self.name.as_str())
+            .and_then(|rest| rest.strip_prefix(": "))
+            .unwrap_or(&self.summary)
+    }
+}
+
+/// Splits a checklist warning at its first ": " into the need's name and the
+/// note. A warning with no ": " has an empty name.
+#[must_use]
+pub fn split_warning(warning: &str) -> (&str, &str) {
+    warning.split_once(": ").unwrap_or(("", warning))
+}
+
 /// A job with its needs.
 #[derive(Debug, Serialize)]
 pub struct JobView {
@@ -349,17 +368,24 @@ fn need_view(
     }
 }
 
+// Writes the purchase as a sentence such as "Bought from FCP Euro on
+// 2026-11-13 for $162.00, order FCP-10458", leaving out what is absent.
 fn purchase_summary(part: &part::Model) -> Option<String> {
-    let pieces: Vec<String> = [
-        part.seller.clone(),
-        part.purchase_date.clone(),
-        part.cost_cents.map(format_cents),
-        part.order_ref.as_ref().map(|r| format!("order {r}")),
+    let clauses: Vec<String> = [
+        part.seller.as_ref().map(|s| format!("from {s}")),
+        part.purchase_date.as_ref().map(|d| format!("on {d}")),
+        part.cost_cents.map(|c| format!("for {}", format_cents(c))),
     ]
     .into_iter()
     .flatten()
     .collect();
-    (!pieces.is_empty()).then(|| pieces.join(" \u{b7} "))
+    let order = part.order_ref.as_ref().map(|r| format!("order {r}"));
+    match (clauses.is_empty(), order) {
+        (true, None) => None,
+        (true, Some(order)) => Some(format!("Bought, {order}")),
+        (false, None) => Some(format!("Bought {}", clauses.join(" "))),
+        (false, Some(order)) => Some(format!("Bought {}, {order}", clauses.join(" "))),
+    }
 }
 
 fn assemble(
@@ -744,6 +770,111 @@ mod tests {
         .await
         .unwrap()
         .id
+    }
+
+    fn part_with(
+        seller: Option<&str>,
+        date: Option<&str>,
+        cost: Option<i32>,
+        order_ref: Option<&str>,
+    ) -> part::Model {
+        part::Model {
+            id: 1,
+            vehicle_id: 1,
+            name: "Part".into(),
+            manufacturer: None,
+            part_number: None,
+            oe_part_number_replaced: None,
+            seller: seller.map(Into::into),
+            purchase_date: date.map(Into::into),
+            cost_cents: cost,
+            cost_currency: None,
+            status: "purchased".into(),
+            installed_date: None,
+            installed_odometer: None,
+            installed_service_id: None,
+            replaced_date: None,
+            replaced_odometer: None,
+            notes: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+            manufacturer_url: None,
+            retailer_url: None,
+            location: None,
+            warranty_expires_on: None,
+            warranty_expires_miles: None,
+            supplied_by: "self".into(),
+            received_on: None,
+            returned_on: None,
+            return_reason: None,
+            order_ref: order_ref.map(Into::into),
+            returned_from_need_id: None,
+        }
+    }
+
+    #[test]
+    fn purchase_summary_reads_as_a_sentence() {
+        for (part, expected) in [
+            (
+                part_with(
+                    Some("FCP Euro"),
+                    Some("2026-11-13"),
+                    Some(16_200),
+                    Some("FCP-10458"),
+                ),
+                Some("Bought from FCP Euro on 2026-11-13 for $162.00, order FCP-10458"),
+            ),
+            (
+                part_with(Some("FCP Euro"), None, Some(2_150), None),
+                Some("Bought from FCP Euro for $21.50"),
+            ),
+            (
+                part_with(None, Some("2026-11-13"), None, None),
+                Some("Bought on 2026-11-13"),
+            ),
+            (
+                part_with(None, None, None, Some("A-1")),
+                Some("Bought, order A-1"),
+            ),
+            (part_with(None, None, None, None), None),
+        ] {
+            assert_eq!(purchase_summary(&part).as_deref(), expected);
+        }
+    }
+
+    #[test]
+    fn step_detail_drops_the_leading_name() {
+        let row = |name: &str, summary: &str| StepRow {
+            need_id: 1,
+            job_id: 1,
+            job_title: "Brakes".into(),
+            name: name.into(),
+            summary: summary.into(),
+            stage: Stage::Undecided,
+        };
+        assert_eq!(
+            row("Rear pads", "Rear pads: no part chosen").detail(),
+            "no part chosen"
+        );
+        assert_eq!(
+            row("Oil: 5W-30", "Oil: 5W-30: order Mann").detail(),
+            "order Mann"
+        );
+        // A summary that does not start with the name is returned whole.
+        assert_eq!(row("Pads", "something else").detail(), "something else");
+    }
+
+    #[test]
+    fn warnings_split_at_the_first_colon_and_space() {
+        assert_eq!(
+            split_warning("Front pads: Fitment is not confirmed."),
+            ("Front pads", "Fitment is not confirmed.")
+        );
+        assert_eq!(
+            split_warning("Oil: 5W-30: A part is linked."),
+            ("Oil", "5W-30: A part is linked.")
+        );
+        assert_eq!(split_warning("No colon here"), ("", "No colon here"));
     }
 
     fn rows(group: &[StepRow]) -> Vec<(&str, &str)> {
@@ -1132,7 +1263,7 @@ mod tests {
         assert_eq!(need_view.stage, Stage::Ordered);
         assert_eq!(
             need_view.purchase_summary.as_deref(),
-            Some("FCP Euro · 2026-11-06 · $84.99 · order 12345")
+            Some("Bought from FCP Euro on 2026-11-06 for $84.99, order 12345")
         );
     }
 
@@ -1155,7 +1286,10 @@ mod tests {
         .unwrap();
         need::link_part(&db, v, n, bought.id, None).await.unwrap();
         let view = for_job(&db, v, job).await.unwrap();
-        assert_eq!(view.needs[0].purchase_summary.as_deref(), Some("$0.05"));
+        assert_eq!(
+            view.needs[0].purchase_summary.as_deref(),
+            Some("Bought for $0.05")
+        );
     }
 
     #[tokio::test]

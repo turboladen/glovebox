@@ -465,7 +465,9 @@ pub struct ReturnOutcome {
 }
 
 impl Stage {
-    fn label(self) -> &'static str {
+    /// The stage as the lowercase word the tools and pages use, such as
+    /// `to_order`.
+    pub fn label(self) -> &'static str {
         match self {
             Stage::Undecided => "undecided",
             Stage::ToOrder => "to_order",

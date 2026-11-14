@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}{{ purpose }} - Glovebox{% endblock %}
+{% block banner %}{% if let Some(b) = banner %}{% include "banner.html" %}{% endif %}{% endblock %}
+{% block content %}
+{% if let Some(e) = top_error %}<div class="page notice"><p class="error" role="alert"><b>Not saved.</b> {{ e }}</p></div>{% endif %}
+<section class="appt page" aria-labelledby="appt-title">
+  <h1 id="appt-title">{{ purpose }}</h1>
+  <p>{{ vehicle }}{% if let Some(shop) = shop %} at {{ shop }}{% endif %}{% if let Some(date) = date %} on {{ date }}{% endif %}<span class="pill pill--{{ status_class }}">{{ status_text }}</span></p>
+  <p><b>{{ needs_open.n }}</b> {{ needs_open.text }}, <b>{{ todos_open.n }}</b> {{ todos_open.text }}, <b>{{ job_count.n }}</b> {{ job_count.text }}</p>
+</section>
+
+<section class="section page" aria-labelledby="steps-title">
+  <h2 id="steps-title">Next steps</h2>
+
+  {% if !steps.check.is_empty() %}
+  <section class="box tone-red" aria-labelledby="g-check">
+    <h3 class="box-head" id="g-check">Check <span class="count">{{ steps.check.len() }}</span></h3>
+    <ul class="rows">
+      {% for c in steps.check %}
+      <li class="step">
+        <p class="step-need">{{ c.name }}</p>
+        <p class="step-text">{{ c.note }}{% if let Some(t) = c.job_title %}<span class="tag">{{ t }}</span>{% endif %}</p>
+        {% if let Some(id) = c.need_id %}<div class="step-actions"><a class="btn" href="#need-{{ id }}">Open</a></div>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  {% if !steps.decide.is_empty() %}
+  <section class="box tone-amber" aria-labelledby="g-decide">
+    <h3 class="box-head" id="g-decide">Decide <span class="count">{{ steps.decide.len() }}</span></h3>
+    <ol class="rows">
+      {% for s in steps.decide %}{% include "step_row.html" %}{% endfor %}
+    </ol>
+  </section>
+  {% endif %}
+
+  {% if !steps.order.is_empty() %}
+  <section class="box tone-amber" aria-labelledby="g-order">
+    <h3 class="box-head" id="g-order">Order <span class="count">{{ steps.order.len() }}</span></h3>
+    <ol class="rows">
+      {% for s in steps.order %}{% include "step_row.html" %}{% endfor %}
+    </ol>
+  </section>
+  {% endif %}
+
+  {% if !steps.arriving.is_empty() %}
+  <section class="box tone-steel" aria-labelledby="g-arriving">
+    <h3 class="box-head" id="g-arriving">Arriving <span class="count">{{ steps.arriving.len() }}</span></h3>
+    <ol class="rows">
+      {% for s in steps.arriving %}{% include "step_row.html" %}{% endfor %}
+    </ol>
+  </section>
+  {% endif %}
+
+  <section class="box tone-stone" aria-labelledby="g-todos">
+    <h3 class="box-head" id="g-todos">To-dos <span class="count">{{ steps.todos.len() }}</span></h3>
+    <ol class="rows">
+      {% for t in steps.todos %}{% include "todo_row.html" %}{% endfor %}
+      <li class="step step--todo">
+        <span aria-hidden="true"></span>
+        <details class="drawer drawer--add"{% if todo_form.error.is_some() %} open{% endif %}>
+          <summary>Add a to-do</summary>
+          <form class="form" method="post" action="/vehicles/{{ vid }}/todos">
+            {% if let Some(e) = todo_form.error %}<p class="error" role="alert"><b>Not saved.</b> {{ e }}</p>{% endif %}
+            <input type="hidden" name="appointment_id" value="{{ appointment_id }}">
+            <input type="hidden" name="back" value="{{ back }}">
+            <label class="field"><span>To-do</span><input type="text" name="title" value="{{ todo_form.title }}" required autocomplete="off"{% if todo_form.error.is_some() %} aria-invalid="true"{% endif %}></label>
+            <div class="form-actions"><button class="btn btn--primary" type="submit">Add to-do</button></div>
+          </form>
+        </details>
+      </li>
+    </ol>
+  </section>
+
+  {% if steps.done_count() > 0 %}
+  <details class="box tone-green">
+    <summary><h3 class="box-head" id="g-done">Done <span class="count">{{ steps.done_count() }}</span></h3></summary>
+    <ol class="rows">
+      {% for s in steps.done %}{% include "step_row.html" %}{% endfor %}
+      {% for t in steps.done_todos %}{% include "todo_row.html" %}{% endfor %}
+    </ol>
+  </details>
+  {% endif %}
+</section>
+
+<section class="section page" aria-labelledby="jobs-title">
+  <h2 id="jobs-title">By job</h2>
+  {% if jobs.is_empty() %}<p class="opt-meta">No jobs on this appointment yet.</p>{% endif %}
+  {% for j in jobs %}{% include "job_box.html" %}{% endfor %}
+</section>
+{% endblock %}

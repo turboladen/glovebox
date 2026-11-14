@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}{{ j.title }} - Glovebox{% endblock %}
+{% block banner %}{% if let Some(b) = banner %}{% include "banner.html" %}{% endif %}{% endblock %}
+{% block content %}
+{% if let Some(e) = top_error %}<div class="page notice"><p class="error" role="alert"><b>Not saved.</b> {{ e }}</p></div>{% endif %}
+<section class="appt page" aria-labelledby="job-title">
+  <h1 id="job-title">{{ j.title }}</h1>
+  <p>{{ vehicle }}{% if let Some(a) = appointment %}, on the appointment <a href="/vehicles/{{ vid }}/appointments/{{ a.id }}">{{ a.purpose }}</a>{% else %}, not on an appointment yet{% endif %}</p>
+</section>
+<section class="section page" aria-labelledby="jobs-title">
+  <h2 id="jobs-title">Needs</h2>
+  {% include "job_box.html" %}
+</section>
+{% endblock %}

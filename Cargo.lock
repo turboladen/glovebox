@@ -1275,6 +1275,7 @@ dependencies = [
  "chrono",
  "glovebox-shared",
  "http-body-util",
+ "serde",
  "tokio",
  "tower",
  "tracing",

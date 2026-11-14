@@ -1,12 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Glovebox{% endblock %}
 {% block content %}
+<div class="plain page">
 <h1>Open work</h1>
 {% if vehicles.is_empty() %}
 <p>No vehicles yet.</p>
 {% endif %}
 {% for v in vehicles %}
-<section>
+<section class="vehicle">
   <h2>{{ v.vehicle.name }}</h2>
 
   <h3>Appointments</h3>
@@ -16,7 +17,7 @@
   <ul>
     {% for a in v.appointments %}
     <li>
-      <strong>{{ a.purpose }}</strong>
+      <a href="/vehicles/{{ v.vehicle.id }}/appointments/{{ a.id }}"><strong>{{ a.purpose }}</strong></a>
       <span class="when">{{ a.when }}</span>
       {% if let Some(shop) = a.shop_name %}<span class="shop">{{ shop }}</span>{% endif %}
       <br><span class="counts">{{ a.counts }}</span>
@@ -31,7 +32,7 @@
   {% else %}
   <ul>
     {% for j in v.unscheduled_jobs %}
-    <li><strong>{{ j.title }}</strong> <span class="counts">{{ j.counts }}</span></li>
+    <li><a href="/vehicles/{{ v.vehicle.id }}/jobs/{{ j.id }}"><strong>{{ j.title }}</strong></a> <span class="counts">{{ j.counts }}</span></li>
     {% endfor %}
   </ul>
   {% endif %}
@@ -48,4 +49,5 @@
   {% endif %}
 </section>
 {% endfor %}
+</div>
 {% endblock %}
