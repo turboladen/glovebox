@@ -412,6 +412,62 @@ pub async fn close<C: ConnectionTrait + TransactionTrait>(
     })
 }
 
+/// Brings the appointments of jobs that have just returned to `planned` back
+/// in line with the rule that a closed or cancelled appointment holds no
+/// planned job, on the caller's transaction. A hand-closed appointment opens
+/// again, and a job on a cancelled one goes back to the unscheduled pool.
+pub(crate) async fn settle_reopened_jobs(
+    db: &impl ConnectionTrait,
+    job_ids: &[i32],
+) -> DomainResult<()> {
+    if job_ids.is_empty() {
+        return Ok(());
+    }
+    let appointment_ids: Vec<i32> = work_item::Entity::find()
+        .filter(work_item::Column::Id.is_in(job_ids.to_vec()))
+        .all(db)
+        .await?
+        .into_iter()
+        .filter_map(|j| j.appointment_id)
+        .collect();
+    let (cancelled, closed): (Vec<appointment::Model>, Vec<appointment::Model>) =
+        appointment::Entity::find()
+            .filter(appointment::Column::Id.is_in(appointment_ids))
+            .filter(
+                Condition::any()
+                    .add(appointment::Column::CancelledOn.is_not_null())
+                    .add(appointment::Column::ClosedOn.is_not_null()),
+            )
+            .all(db)
+            .await?
+            .into_iter()
+            .partition(|a| a.cancelled_on.is_some());
+    if !closed.is_empty() {
+        appointment::Entity::update_many()
+            .col_expr(appointment::Column::ClosedOn, Expr::value(None::<String>))
+            .col_expr(
+                appointment::Column::UpdatedAt,
+                Expr::value(super::now_stamp()),
+            )
+            .filter(appointment::Column::Id.is_in(closed.iter().map(|a| a.id)))
+            .exec(db)
+            .await?;
+    }
+    if !cancelled.is_empty() {
+        work_item::Entity::update_many()
+            .col_expr(work_item::Column::AppointmentId, Expr::value(None::<i32>))
+            .col_expr(
+                work_item::Column::UpdatedAt,
+                Expr::value(super::now_stamp()),
+            )
+            .filter(work_item::Column::Id.is_in(job_ids.to_vec()))
+            .filter(work_item::Column::AppointmentId.is_in(cancelled.iter().map(|a| a.id)))
+            .exec(db)
+            .await?;
+    }
+    Ok(())
+}
+
 /// Clears both `closed_on` and `cancelled_on`. Jobs that closing took off the
 /// appointment stay off it.
 ///
@@ -1062,6 +1118,44 @@ mod tests {
 
         todo_svc::complete(&db, v, t.id, None).await.unwrap();
         assert!(list(&db, v, false).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_job_set_back_to_planned_reopens_a_hand_closed_appointment() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let closed = create(&db, v, appt("Brakes")).await.unwrap();
+        let cancelled = create(&db, v, appt("Wipers")).await.unwrap();
+        let on_closed = add_job(&db, v, Some(closed.id)).await;
+        let on_cancelled = add_job(&db, v, Some(cancelled.id)).await;
+        let set_status = |job_id, status: &str| {
+            job::update(
+                &db,
+                v,
+                job_id,
+                UpdateWorkItem {
+                    status: Some(status.into()),
+                    ..Default::default()
+                },
+            )
+        };
+        set_status(on_closed, "done").await.unwrap();
+        set_status(on_cancelled, "dropped").await.unwrap();
+        close(&db, v, closed.id, false).await.unwrap();
+        close(&db, v, cancelled.id, true).await.unwrap();
+
+        set_status(on_closed, "planned").await.unwrap();
+        set_status(on_cancelled, "planned").await.unwrap();
+
+        let reopened = summary(&db, v, closed.id).await.unwrap();
+        assert_eq!(reopened.status, "planning");
+        assert_eq!(reopened.appointment.closed_on, None);
+        assert_eq!(
+            summary(&db, v, cancelled.id).await.unwrap().status,
+            "cancelled"
+        );
+        let unscheduled = job::get(&db, v, on_cancelled).await.unwrap();
+        assert_eq!(unscheduled.appointment_id, None);
     }
 
     #[tokio::test]

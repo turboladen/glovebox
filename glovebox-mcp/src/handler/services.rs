@@ -177,8 +177,11 @@ impl GloveboxMcp {
                        installed are kept, reverted to purchased with their install details \
                        cleared, and the result lists their ids in `kept_part_ids`: when re-filing \
                        the invoice, attach them with `record_service`'s `part_ids`; otherwise \
-                       remove them with `delete_part`. To change a record rather than remove it, \
-                       use `correct_service`."
+                       remove them with `delete_part`. A kept part the shop supplied is unlinked \
+                       from its need, so re-filing the invoice can name the need again. If its \
+                       appointment was closed by hand, it opens again; a job it completed on a \
+                       cancelled appointment goes back to the unscheduled jobs. To change a \
+                       record rather than remove it, use `correct_service`."
     )]
     async fn delete_service(
         &self,
