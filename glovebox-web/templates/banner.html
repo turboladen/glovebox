@@ -1,0 +1,9 @@
+<div class="banner" role="status">
+  <div class="page">
+    <p>{{ b.message }}</p>
+    <form method="post" action="{{ b.action }}">
+      <input type="hidden" name="back" value="{{ b.back }}">
+      <button class="btn" type="submit">Undo</button>
+    </form>
+  </div>
+</div>

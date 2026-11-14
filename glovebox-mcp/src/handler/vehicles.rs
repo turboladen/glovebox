@@ -111,9 +111,9 @@ impl GloveboxMcp {
         name = "delete_vehicle",
         description = "Delete a vehicle that has no history, to undo a mistaken or duplicate \
                        `add_vehicle`. It is refused when the vehicle has any service record, \
-                       part, incident, planned work or research finding; its odometer readings \
-                       and car-specific schedule items go with it. There is no way to delete a \
-                       car with history through this tool."
+                       part, incident, planned work, appointment, to-do or research finding; its \
+                       odometer readings and car-specific schedule items go with it. There is no \
+                       way to delete a car with history through this tool."
     )]
     async fn delete_vehicle(
         &self,

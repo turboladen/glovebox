@@ -191,6 +191,7 @@ pub fn minimal_service(date: &str, description: &str) -> NewServiceRecord {
         noticed_incident_ids: None,
         recall_finding_ids: None,
         parts: None,
+        appointment_id: None,
     }
 }
 
@@ -280,4 +281,18 @@ pub async fn seed_recall(db: &DatabaseConnection, vehicle_id: i32, campaign: &st
     .await
     .unwrap()
     .id
+}
+
+/// The `id` of a tool's payload. Panics when it carries none.
+pub fn id(value: &Value) -> i64 {
+    value["id"]
+        .as_i64()
+        .unwrap_or_else(|| panic!("payload must carry an id; got: {value}"))
+}
+
+/// Adds a vehicle named `name` through `add_vehicle` and returns its id.
+pub async fn add_vehicle(t: &TestClient, name: &str) -> i64 {
+    id(&t
+        .call("add_vehicle", serde_json::json!({ "name": name }))
+        .await)
 }

@@ -4,13 +4,17 @@ This project uses **bd** (beads) for issue tracking. Run `bd onboard` to get sta
 
 ## What Is This
 
-Car maintenance tracker, used only through Claude Desktop. A Rust cargo workspace with two crates:
-`glovebox-shared` (the domain library: SeaORM 2.0 + SQLite) and `glovebox-mcp` (an rmcp stdio
-server with domain-verb tools and read-only `glovebox://` resources). Claude Desktop launches the
-`glovebox-mcp` binary itself, so there is no server to keep running and no web UI. The question
-the app answers: given what has been done to the car, its mileage and its age, what maintenance is
-coming, when, how much will it cost, and what parts are worth buying and bringing to the shop.
-The design is in `docs/superpowers/specs/2026-11-12-mcp-first-reset-design.md`, and the Desktop
+Car maintenance tracker, used through Claude Desktop and a local web page. A Rust cargo workspace
+with four crates: `glovebox-shared` (the domain library: SeaORM 2.0 + SQLite), `glovebox-mcp` (an rmcp stdio
+server with domain-verb tools and read-only `glovebox://` resources), `glovebox-cli` (the
+`glovebox` command the owner runs by hand) and `glovebox-web` (a local page for working a job
+checklist). Claude Desktop launches the `glovebox-mcp` binary itself, so that server needs no
+babysitting; the web page runs only while the owner serves it with `just web`. The question the
+app answers: given what has been done to the car, its mileage and its age, what maintenance is
+coming, when, how much will it cost, and what parts are worth buying and bringing to the shop, and
+for each job, whether every part it needs has been decided, ordered and received.
+The design is in `docs/superpowers/specs/2026-11-12-mcp-first-reset-design.md` and
+`docs/superpowers/specs/2026-11-13-job-checklist-design.md`, and the Desktop
 setup and project prompt are in `docs/claude-desktop/`.
 
 ## Commands
@@ -25,7 +29,10 @@ cargo test -p glovebox-mcp --test rehearsal       # One MCP integration test fil
 just ci                   # Everything CI runs: nightly fmt-check, layering, build, test, clippy
 just fmt                  # cargo +nightly fmt — rustfmt.toml uses nightly-only options; plain `cargo fmt` passes locally but CI's format job will fail
 just check-layering       # Layering gate only (scripts/check-layering.sh)
-just backup               # Copy the database to data/backups/ now
+just backup               # Copy the current environment's database to data/backups/ now (glovebox backup)
+just reset-env test       # Delete the named non-live environment's database files (glovebox reset --env test)
+just seed test            # Fill the named non-live environment with made-up demo data (glovebox seed --env test)
+just web                  # Serve the live page on 127.0.0.1:4827 and open it; `just web test` serves data/glovebox-test.db on 4828
 
 cargo clippy --workspace -- -D clippy::pedantic   # Rust lints (pedantic is the CI gate)
 
@@ -35,26 +42,43 @@ cargo clippy --workspace -- -D clippy::pedantic   # Rust lints (pedantic is the 
 
 ## Environment
 
-`GLOVEBOX_DB_PATH` (default `data/glovebox.db`) is the only variable the server reads. `RUST_LOG`
-sets the tracing filter (default `info`). The Claude Desktop config snippet sets an absolute
-`GLOVEBOX_DB_PATH`.
+`GLOVEBOX_ENV` names the environment (`live` by default). `live` uses `data/glovebox.db`, and any
+other name such as `test` uses `data/glovebox-<name>.db` (`glovebox_shared::env::resolve`).
+`GLOVEBOX_DB_PATH` overrides the path only, and `GLOVEBOX_WEB_PORT` overrides the web port (4827 for
+`live`, 4828 otherwise). `RUST_LOG` sets the tracing filter (default `info`). The Claude Desktop
+config snippets set an absolute `GLOVEBOX_DB_PATH`. No command deletes the live database;
+`glovebox reset` and `glovebox seed` refuse `live`. `glovebox-web` reads the same variables as the
+MCP server, and its `--open` flag opens the browser.
 
 ## Architecture
 
 ### Workspace layout
 
 - **`glovebox-shared/`** (lib crate `glovebox_shared`) — the transport-agnostic domain:
-  `src/{db.rs,entities,migration,services,inputs,error.rs,test_support.rs}`. All SQL, validation
+  `src/{db.rs,env.rs,seed.rs,entities,migration,services,inputs,error.rs,test_support.rs}`. All SQL, validation
   and business logic live here. It never depends on axum or rmcp.
 - **`glovebox-mcp/`** (lib crate `glovebox_mcp` plus the `glovebox-mcp` binary) — the thin MCP
   surface. Every tool body is argument struct → shared-service call → serialize, with one
   `DomainError → MCP` mapping helper. `src/main.rs` serves `GloveboxMcp` over stdio.
-- `scripts/check-layering.sh` (run by CI and `just ci`) keeps axum and rmcp out of `glovebox-shared`.
+- **`glovebox-cli/`** (lib crate `glovebox_cli` plus the `glovebox` binary) — `backup`,
+  `reset --env <name>` and `seed --env <name>`, with `run` callable in process from tests. The
+  last two refuse `live` and build the file name themselves.
+- **`glovebox-web/`** (lib crate `glovebox_web` plus the `glovebox-web` binary) — an axum and askama
+  server that renders the checklist. `src/pages.rs` holds the three page handlers (home, appointment and job), `src/actions.rs`
+  the form posts, `src/view.rs` the view structs, `src/guard.rs` the request guard and the content
+  security policy, and `templates/` the askama templates.
+- `scripts/check-layering.sh` (run by CI and `just ci`) keeps axum and rmcp out of `glovebox-shared`
+  and SeaORM out of `glovebox-web`.
 
 ### Domain library (`glovebox-shared/src/`)
 
 **`db.rs`**: `db::connect(path)` is the only place a SQLite connection is opened. It creates the
-parent directory, uses WAL mode with foreign keys enforced, and runs `Migrator::up()`.
+parent directory, uses WAL mode with foreign keys enforced and a 5-second busy timeout (the MCP
+server and the web page open the same file at once), and runs `Migrator::up()`. It refuses to open
+a database that records a migration this binary does not contain, with a message to rebuild. Each
+binary opens through `db::connect_as` with its `db::Program`, so the message names that program's
+rebuild step. The check runs only at start, so the upgrade order in `docs/claude-desktop/README.md`
+matters.
 
 **`backup.rs`**: `db::connect` copies a database that already holds data to `backups/` beside it
 (`VACUUM INTO`, so the copy is consistent while another process writes) before any pending
@@ -78,17 +102,24 @@ command does. Tests use `test_db()` or a temporary directory.
 functions.
 
 **Services** (`services/`): One module per domain (`vehicle`, `service_record`, `part`, `incident`,
-`work_item`, `schedule`, `recall`, `research`, ...) of free functions taking `db: &impl
+`work_item`, `appointment`, `need`, `todo`, `schedule`, `recall`, `research`, ...) of free functions taking `db: &impl
 ConnectionTrait` first and returning `DomainResult<T>`. Composite reads: `upcoming` (the
 `whats_coming` answer: reminders, budget, planned work, recalls, open incidents), `reminders`,
-`budget`, `costs`, `activity`, `search`. `vin_decode` and `nhtsa` make the only network calls.
+`budget`, `costs`, `activity`, `search`, and `checklist` (the checklist for an appointment, an
+unscheduled job or one job, the past decisions across vehicles, and the home page's rows; the MCP
+tools and the web page both render it). `whats_coming` lists each open appointment.
+`seed::demo` fills an empty database with made-up data that exercises every need stage.
+`vin_decode` and `nhtsa` make the only network calls.
 
 **Errors** (`error.rs`): `DomainError::{NotFound, Invalid{field,message}, BadRequest, Db, Internal}`
 with the `DomainResult<T>` alias.
 
-**Migrations** (`migration/`): one squashed schema migration (`m20261112_000001_initial_schema`)
-and one seed migration (`m20261112_000002_seed_vw_mqb`: the VW MQB platform, the Golf GTI and
-Alltrack templates and their schedule items). They run on startup.
+**Migrations** (`migration/`): one squashed schema migration (`m20261112_000001_initial_schema`),
+one seed migration (`m20261112_000002_seed_vw_mqb`: the VW MQB platform, the Golf GTI and
+Alltrack templates and their schedule items), the job checklist migration
+(`m20261113_000001_job_checklist`: appointments, needs, options and to-dos, additive only) and
+`m20261113_000002_option_choice_history` (an option's `chosen_reason` and `chosen_on`). They run on
+startup.
 
 **Test harness** (`test_support.rs`): `test_db()` is an in-memory SQLite database with migrations
 applied. It is compiled under `#[cfg(any(test, feature = "test-support"))]`; `glovebox-mcp` uses it
@@ -113,13 +144,19 @@ named as things a person would say:
   `add_incident_followup`, `delete_incident`
 - `planning.rs`: `plan_work`, `list_planned_work`, `whats_coming`, `update_planned_work`,
   `delete_planned_work`
+- `checklist.rs`: `plan_appointment`, `update_appointment`, `list_appointments`,
+  `delete_appointment`, `get_checklist`, `past_decisions`, `add_need`, `update_need`, `delete_need`,
+  `add_need_option`, `update_need_option`, `delete_need_option`, `mark_need_ordered`,
+  `link_part_to_need`, `mark_need_received`, `return_part`, `add_todo`, `update_todo`,
+  `delete_todo`
 - `schedule.rs`: `list_schedule`, `add_schedule_item`, `update_schedule_item`,
   `dismiss_schedule_item`, `restore_schedule_item`
 - `recalls.rs`: `check_recalls`, `list_recalls`, `set_recall_status`, `file_research_finding`
 - `reads.rs`: `summarize_recent_activity`, `search_records`, `cost_summary`, `get_service`,
   `get_incident`
 
-Inputs are schemars-derived structs in `src/schemas.rs` and `src/schemas/corrections.rs`; their doc
+Inputs are schemars-derived structs in `src/schemas.rs`, `src/schemas/corrections.rs` and
+`src/schemas/checklist.rs`; their doc
 comments become the LLM-visible field descriptions. `Parameters<T>` defers deserialize errors
 so malformed arguments come back as actionable tool errors, not bare JSON-RPC `-32602`s. The
 wrapper is named `Parameters` so the `#[tool]` macro derives the input schema from it; do not add
@@ -153,6 +190,34 @@ lines. `cost_summary`'s `covered_work` lists the services with covered work, eac
 reading, dated by `history_starts_on`) is the base of the per-1,000-miles figure, which stays null
 until the records cover 1,000 miles (`costs::MIN_MILES_FOR_COST_PER_1000`).
 
+**Job checklist.** An appointment groups jobs (`work_items`) and to-dos for one shop trip, a job
+lists needs, and a need lists researched options. A need's stage (`undecided`, `to_order`,
+`shop_supplies`, `ordered`, `received`, `installed`) is derived by `need::stage` and never stored;
+the first matching row wins, so a linked part decides the stage. An appointment reads `done` when
+it has jobs and every one is done or dropped; only `cancelled` and a hand-closed date are stored,
+and closing or cancelling unassigns the jobs that are still planned. A closed or cancelled
+appointment therefore never holds a planned job: when a job on one returns to `planned` (its
+service is deleted, or its status is set back), a hand-closed appointment opens again and a
+cancelled one lets the job go to the unscheduled pool (`appointment::settle_reopened_jobs`).
+Deleting a service, or correcting its `part_ids`, also unlinks from its need every shop-supplied
+part the service stops installing. A need is
+open when `need::counts_as_open` says so (an open stage on a planned job); every open-needs count
+uses it. Rejecting or ruling out a chosen option keeps the need's reason and date on the option as
+`chosen_reason` and `chosen_on`, and `past_decisions` lists both kinds under `rejected`, so it
+still reports them. Choosing the option a need
+already has keeps `decided_on`. `mark_ordered` claims the need with a conditional write as the
+first statement of its transaction, so two orders at once create one part, and its default cost
+is the option's unit price times the need's quantity (`need::order_cost_cents`). `update_need` and
+`update_appointment` apply an edit together with a choice or a status change in one transaction
+(`need::update_with_choice`, `appointment::update_with_status`), so a refused choice or status
+leaves the other fields unchanged. An option that is `does_not_fit` or rejected cannot be chosen,
+and no tool chooses a supplier or an option for the owner. `return_part` is the only way a part
+becomes `returned`, and its to-do goes on the job's appointment only while that appointment is
+open (no list shows the to-dos of a closed or cancelled one). Naming an appointment in `record_service` installs and completes nothing; the
+result's `unfitted_needs` lists the linked parts the invoice did not install. `need_id` is accepted
+on the inline parts of `record_service` only, and `get_checklist` takes at most one of
+`appointment_id` and `work_item_id`.
+
 **Schedule names** compare through `schedule::name_key` (ASCII case and surrounding spaces do not
 matter), so a vehicle's "Cabin air filter" shadows the inherited "Cabin Air Filter". A new item that shadows an inherited one takes that
 item's spelling of the name and, for every field the caller leaves out, its value
@@ -175,9 +240,42 @@ become opaque JSON-RPC internal errors with the detail kept in tracing.
 
 **Tests** (`glovebox-mcp/tests/`): `common/mod.rs` is the harness (an in-process client over an
 in-memory duplex stream and an in-memory database). One file per handler area (`vehicles`,
-`services`, `parts`, `incidents`, `planning`, `schedule`, `recalls`, `reads`), plus `stdio.rs`
-(the binary's stdout) and `rehearsal.rs` (a new owner's whole first session through tool calls
-only). Add coverage for a new tool to its area's file.
+`services`, `parts`, `incidents`, `planning`, `checklist`, `schedule`, `recalls`, `reads`), plus
+`stdio.rs` (the binary's stdout) and `rehearsal.rs` (a new owner's whole first session through
+tool calls only). Add coverage for a new tool to its area's file.
+
+### Web page (`glovebox-web/`)
+
+A page is a view of the shared library, and a future page follows the same rules:
+
+- **No queries.** The crate holds `glovebox_shared::db::DatabaseConnection` and calls shared
+  services. It never names SeaORM, and the layering gate fails if a manifest, source or test file
+  does.
+- **No script.** Every action is an HTML form post followed by a redirect back to the page, and a
+  failed write renders the page again with the domain error beside the row. That page is served
+  at the form's address, so every link on a page names the page's own path. The content security
+  policy allows no scripts and no external resources, so a script would not run.
+- **Every count and sentence about the records comes from a tested shared function** (stage,
+  step sentences, open counts, option notes, warnings, errors). `src/view.rs` picks labels and
+  nouns for those values, such as "2 needed" or "Price for 2", and decides which forms a row shows;
+  templates print what `view.rs` built.
+- **Local only.** The server binds `127.0.0.1` on `GLOVEBOX_WEB_PORT` (4827 for `live`, 4828
+  otherwise) and refuses a request whose Host or Origin is not local. Every page shows the
+  environment's name in the header, `live` included, and the database file's name when
+  `GLOVEBOX_DB_PATH` chose the file. An option's link is shown only for an `http` or `https`
+  address.
+- **Tests** drive the router in process over an in-memory database with a fixed clock
+  (`AppState::today`).
+- **Marking a need ordered has no undo**, because it creates a purchase record. A to-do tick and a
+  received date show a banner with an undo form.
+
+The look lives in one inline stylesheet in `templates/base.html`. It uses one typeface in two
+weights and four sizes. A black bar heads each group of next steps and carries its count in a
+window, and a gray bar heads each job. A solid tag is a signal (amber needs the owner, green means
+finished, red means a problem) and an outlined tag states a fact. A solid button commits
+something, and underlined text does everything else. Every date is `YYYY-MM-DD`. The owner accepted
+this look as a starting point and a design pass is planned, so the stylesheet stays in that one
+template.
 
 ## Conventions
 
@@ -186,7 +284,7 @@ only). Add coverage for a new tool to its area's file.
 - Domain inputs, validation and SQL live in `glovebox-shared::{inputs,services}`. MCP handlers only
   map tool arguments to domain inputs and rely on `domain_error` for failures. No SeaORM queries,
   `ActiveModel`s or business logic in `glovebox-mcp/src/handler/`.
-- `glovebox-shared` never imports axum or rmcp.
+- `glovebox-shared` never imports axum or rmcp, and `glovebox-web` never names SeaORM.
 - Service functions take `db: &impl ConnectionTrait` as the first parameter, never a server type.
 - **Error model**: services return `DomainResult<T>`. `Invalid` renders as `"{field}: {message}"`;
   `BadRequest` renders its message verbatim; `Db` and `Internal` are opaque to the client.
@@ -211,7 +309,7 @@ only). Add coverage for a new tool to its area's file.
 - **Currency**: Stored as integer cents (`i32`). Tool inputs and outputs are cents. Use integer
   division for formatting, not `as f64 / 100.0`.
 - **DB datetimes**: `String` at the SeaORM boundary (SQLite TEXT). Dates are `YYYY-MM-DD`.
-- **Migrations**: new migrations go after `m20261112_000002_seed_vw_mqb`; the `new-migration` skill
+- **Migrations**: new migrations go after `m20261113_000002_option_choice_history`; the `new-migration` skill
   has the templates. Use `Expr::cust()` for expressions inside builder queries; raw
   `execute_unprepared` only where no builder form exists (FTS5 DDL, cross-table copies).
 - **Migrations are not transactional on SQLite** (sea-orm-migration only wraps Postgres), so write

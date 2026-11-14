@@ -274,8 +274,10 @@ pub async fn summary(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult
         .order_by_asc(service_record::Column::ServiceDate)
         .all(db)
         .await?;
+    // A returned part went back to the seller, so it is no spend at all.
     let parts = part::Entity::find()
         .filter(part::Column::VehicleId.eq(vehicle_id))
+        .filter(part::Column::Status.ne("returned"))
         .all(db)
         .await?;
 
@@ -655,6 +657,45 @@ mod tests {
             .find(|m| m.month == "2026-10")
             .unwrap();
         assert_eq!(oct.parts_cost_cents, 8_900);
+    }
+
+    #[tokio::test]
+    async fn cost_summary_leaves_out_returned_parts() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db, None).await;
+        insert_part(&db, vid, "self", 8_900, Some("2026-10-20"), None).await;
+        let before = summary(&db, vid).await.unwrap();
+        let returned = insert_part_with_status(&db, vid, "returned", 18_000, "2026-10-21").await;
+        assert!(returned > 0);
+        let after = summary(&db, vid).await.unwrap();
+        assert_eq!(after.self_supplied_parts_cents, 8_900);
+        assert_eq!(after.total_cost_cents, before.total_cost_cents);
+        assert_eq!(after.part_count, before.part_count);
+        assert_eq!(after.monthly_costs.len(), before.monthly_costs.len());
+        assert_eq!(after.monthly_costs[0].parts_cost_cents, 8_900);
+        assert_eq!(after.unbucketed_parts_cents, 0);
+    }
+
+    async fn insert_part_with_status(
+        db: &impl ConnectionTrait,
+        vid: i32,
+        status: &str,
+        cents: i32,
+        purchase_date: &str,
+    ) -> i32 {
+        part::ActiveModel {
+            vehicle_id: Set(vid),
+            name: Set("Part".into()),
+            status: Set(status.into()),
+            supplied_by: Set("self".into()),
+            cost_cents: Set(Some(cents)),
+            purchase_date: Set(Some(purchase_date.into())),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+        .id
     }
 
     #[tokio::test]

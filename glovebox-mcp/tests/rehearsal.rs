@@ -1,6 +1,6 @@
 // A new owner's first session, driven entirely through tool calls: add the
 // car from a template, plan some work, file one realistic invoice, capture a
-// shop advisory, and ask what is coming.
+// shop advisory, ask what is coming, and prepare the next shop visit.
 
 mod common;
 
@@ -172,4 +172,68 @@ async fn a_new_owner_can_set_up_file_an_invoice_and_ask_whats_coming() {
         .await;
     assert_eq!(again["already_recorded"], true);
     assert_eq!(again["id"].as_i64(), Some(service_id));
+
+    // 8. Prepare the next visit: an appointment, a job on it, a need with two
+    // researched options, and the owner's choice.
+    let appointment = t
+        .call(
+            "plan_appointment",
+            json!({ "vehicle_id": vehicle_id, "purpose": "Rear brakes", "shop_name": "Autohaus" }),
+        )
+        .await;
+    let job = t
+        .call(
+            "plan_work",
+            json!({
+                "vehicle_id": vehicle_id,
+                "title": "Replace rear pads and rotors",
+                "appointment_id": appointment["id"]
+            }),
+        )
+        .await;
+    let need = t
+        .call(
+            "add_need",
+            json!({ "vehicle_id": vehicle_id, "work_item_id": job["id"], "name": "Rear pads" }),
+        )
+        .await;
+    let fits = t
+        .call(
+            "add_need_option",
+            json!({
+                "vehicle_id": vehicle_id, "need_id": need["id"], "description": "OE-spec pads",
+                "manufacturer": "Textar", "part_number": "2530101", "fitment": "confirmed"
+            }),
+        )
+        .await;
+    t.call(
+        "add_need_option",
+        json!({
+            "vehicle_id": vehicle_id, "need_id": need["id"], "description": "Track pads",
+            "fitment": "does_not_fit", "fitment_note": "Wrong shape for the single-piston caliper"
+        }),
+    )
+    .await;
+    t.call(
+        "update_need",
+        json!({
+            "vehicle_id": vehicle_id, "need_id": need["id"], "supplied_by": "self",
+            "chosen_option_id": fits["id"], "decision_reason": "Quiet on the street"
+        }),
+    )
+    .await;
+    let checklist = t
+        .call(
+            "get_checklist",
+            json!({ "vehicle_id": vehicle_id, "appointment_id": appointment["id"] }),
+        )
+        .await;
+    assert_eq!(checklist["next_steps"]["order"][0]["name"], "Rear pads");
+    let coming = t
+        .call("whats_coming", json!({ "vehicle_id": vehicle_id }))
+        .await;
+    assert_eq!(
+        coming["appointments"][0]["purpose"], "Rear brakes",
+        "got: {coming}"
+    );
 }

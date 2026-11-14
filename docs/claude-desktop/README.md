@@ -2,7 +2,8 @@
 
 `glovebox-mcp` is a local MCP server that Claude Desktop starts over stdio. It keeps the garage in
 a SQLite database and exposes tools for recording services, planning work, and answering "what
-does the car need?". Claude Desktop is the only interface to the data.
+does the car need?". Claude Desktop and the local web page described below are the interfaces to the
+data.
 
 ## Build and install
 
@@ -48,14 +49,50 @@ glovebox conversation inside that project so the instructions apply.
 - [ ] Hand Claude one scanned invoice as a PDF and have it file the invoice. Then ask for the
       service back with `get_service` and check the lines, parts and suppliers.
 - [ ] Ask "what's coming?" and check that the answer reflects what you just filed.
+- [ ] Ask Claude to plan an appointment for an upcoming job. It calls `plan_appointment`, puts the
+      jobs on it, adds what each job needs and the options it researched, and asks you for each
+      decision. `get_checklist` then shows what is left to decide, order and receive.
+
+## The web page
+
+`just web` serves a page of what is open on each car at <http://127.0.0.1:4827/> and opens it in
+the browser. On it you can set a need's supplier and approach, choose an option and give the
+reason, mark a need ordered or received, mark a part wrong and being returned, and tick, add and
+delete to-dos. Everything else, such as creating appointments, jobs, needs and options, happens in
+Claude Desktop. The page listens on `127.0.0.1` only and reads the same database as the Claude
+Desktop server, so both programs can run at once.
+
+To try the page on made-up data, run `just seed test` and then `just web test`. The test
+environment uses `data/glovebox-test.db` on port 4828. Every page shows its environment's name in
+the header, `live` included, and the database file's name as well when `GLOVEBOX_DB_PATH` chose
+the file.
+
+## Upgrading
+
+A new version can change the database's structure, and a program older than the database refuses
+to open it. The Claude Desktop server only checks when it starts, so one that is already running
+keeps serving after the page has updated the file. Upgrade in this order:
+
+1. Stop the page if it is running.
+2. Run `just install`, then quit and reopen Claude Desktop, so the server it starts is the new one.
+3. Run `just web`, which builds the page from the same source before serving it.
 
 ## Environment
 
-- **`GLOVEBOX_DB_PATH`** sets the database path. It defaults to `data/glovebox.db` relative to the
-  directory the server starts in, so the snippet sets an absolute path.
+- **`GLOVEBOX_ENV`** names the environment. It defaults to `live`, which uses `data/glovebox.db`.
+  Any other name, such as `test`, uses `data/glovebox-<name>.db`.
+- **`GLOVEBOX_DB_PATH`** sets the database path. Without it the path follows `GLOVEBOX_ENV` and is
+  relative to the directory the server starts in, so the snippets set an absolute path.
 - **`RUST_LOG`** sets the log filter, such as `info` or `debug`. It defaults to `info`. Logs go to
   stderr, which Claude Desktop writes to `~/Library/Logs/Claude/mcp-server-glovebox.log`. Stdout
   carries only protocol frames.
+
+## A test environment
+
+To try the server against a throwaway database, add a second server entry by hand to Claude
+Desktop's config, copying `claude_desktop_config.test.snippet.json`. It sets `GLOVEBOX_ENV` to
+`test` and an absolute `GLOVEBOX_DB_PATH` ending in `data/glovebox-test.db`.
+`just reset-env test` deletes that database; no recipe deletes the live one.
 
 ## Smoke test without Claude Desktop
 
@@ -70,7 +107,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol
 
 The server copies the database to `data/backups/` before any update that changes the database's
 structure, and otherwise once a day while it holds a car. It keeps the newest 14 copies, the newest
-copy of every month, and the largest copy. `just backup` makes a copy on demand and fails if there
+copy of every month, and the largest copy. `just backup` (the `glovebox backup` command) makes a copy on demand and fails if there
 is no database to copy.
 
 The copies are on the same disk as the database. They protect against a deleted or damaged

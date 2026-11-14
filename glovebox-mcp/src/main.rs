@@ -6,8 +6,6 @@ use glovebox_mcp::GloveboxMcp;
 use rmcp::{ServiceExt, transport::stdio};
 use tracing_subscriber::EnvFilter;
 
-const DEFAULT_DB_PATH: &str = "data/glovebox.db";
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The subscriber is installed before anything else runs so that no log
@@ -18,20 +16,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
 
-    let db_path = std::env::var("GLOVEBOX_DB_PATH").unwrap_or_else(|_| DEFAULT_DB_PATH.to_owned());
-    if std::env::args().nth(1).as_deref() == Some("backup") {
-        // The messages go to stderr like every other diagnostic, so stdout
-        // stays reserved for protocol frames in every mode.
-        let shown = std::path::absolute(&db_path)
-            .map_or_else(|_| db_path.clone(), |p| p.display().to_string());
-        let Some(copy) = glovebox_shared::db::backup_now(&db_path).await? else {
-            return Err(format!("nothing to back up: {shown} is missing or empty").into());
-        };
-        eprintln!("Backed up {shown} to {}", copy.display());
-        return Ok(());
-    }
-    let db = glovebox_shared::db::connect(&db_path).await?;
-    tracing::info!(%db_path, "serving glovebox MCP on stdio");
+    let environment = glovebox_shared::env::resolve(|k| std::env::var(k).ok())?;
+    let db_path = environment.db_path;
+    let db =
+        glovebox_shared::db::connect_as(&db_path, glovebox_shared::db::Program::McpServer).await?;
+    tracing::info!(env = %environment.name, %db_path, "serving glovebox MCP on stdio");
 
     glovebox_shared::backup::spawn_daily(db.clone(), std::path::PathBuf::from(&db_path));
     let service = GloveboxMcp::new(db).serve(stdio()).await?;

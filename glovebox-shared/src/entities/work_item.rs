@@ -23,10 +23,17 @@ pub struct Model {
     pub revisit_by_date: Option<String>,
     pub revisit_by_miles: Option<i32>,
     pub completed_service_id: Option<i32>,
+    pub appointment_id: Option<i32>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
+    #[sea_orm(
+        belongs_to = "super::appointment::Entity",
+        from = "Column::AppointmentId",
+        to = "super::appointment::Column::Id"
+    )]
+    Appointment,
     #[sea_orm(
         belongs_to = "super::vehicle::Entity",
         from = "Column::VehicleId",
@@ -44,6 +51,12 @@ pub enum Relation {
 impl Related<super::vehicle::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Vehicle.def()
+    }
+}
+
+impl Related<super::appointment::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Appointment.def()
     }
 }
 

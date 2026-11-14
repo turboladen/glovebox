@@ -206,6 +206,7 @@ mod tests {
             noticed_incident_ids: None,
             recall_finding_ids: None,
             parts: None,
+            appointment_id: None,
         }
     }
 

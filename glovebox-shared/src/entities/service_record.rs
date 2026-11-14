@@ -30,10 +30,17 @@ pub struct Model {
     pub performed_by: String,
     /// Last day of a multi-day job; `service_date` is the first day.
     pub end_date: Option<String>,
+    pub appointment_id: Option<i32>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
+    #[sea_orm(
+        belongs_to = "super::appointment::Entity",
+        from = "Column::AppointmentId",
+        to = "super::appointment::Column::Id"
+    )]
+    Appointment,
     #[sea_orm(
         belongs_to = "super::vehicle::Entity",
         from = "Column::VehicleId",

@@ -1,0 +1,7 @@
+<form class="form" method="post" action="/vehicles/{{ n.vid }}/needs/{{ n.id }}/return">
+  {% if let Some(e) = n.error_in("return") %}<p class="error" role="alert"><b>Not saved.</b> {{ e }}</p>{% endif %}
+  <input type="hidden" name="back" value="{{ n.back }}">
+  <label class="field"><span>What was wrong</span><textarea name="reason" required{% if n.invalid("reason") %} aria-invalid="true"{% endif %}>{{ n.return_reason }}</textarea></label>
+  <label class="check"><input type="checkbox" name="option_was_wrong" value="true"{% if n.option_was_wrong %} checked{% endif %}> The chosen option was the mistake, so reject it</label>
+  <div class="form-actions"><button class="btn btn--primary" type="submit">Record the return</button></div>
+</form>

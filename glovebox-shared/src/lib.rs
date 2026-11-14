@@ -19,9 +19,12 @@
 pub mod backup;
 pub mod db;
 pub mod entities;
+pub mod env;
 pub mod error;
 pub mod inputs;
 pub mod migration;
+pub mod money;
+pub mod seed;
 pub mod services;
 
 #[cfg(any(test, feature = "test-support"))]

@@ -1,0 +1,15 @@
+<article class="box job tone-{{ j.status_class }}" aria-labelledby="job-{{ j.id }}">
+  <header class="box-head job-head">
+    <h3 id="job-{{ j.id }}"><a href="/vehicles/{{ j.vid }}/jobs/{{ j.id }}">{{ j.title }}</a></h3>
+    <span class="pill pill--{{ j.status_class }}">{{ j.status_text }}</span>
+    <span class="count">{{ j.open.n }} {{ j.open.text }}</span>
+  </header>
+  {% if j.needs.is_empty() %}
+  <p class="opt-meta need-body">No needs yet.</p>
+  {% else %}
+  <div class="need-cols" aria-hidden="true"><span>Need</span><span>Part</span><span>Decision</span><span></span></div>
+  <ul class="needs">
+    {% for n in j.needs %}{% include "need_row.html" %}{% endfor %}
+  </ul>
+  {% endif %}
+</article>

@@ -1,0 +1,31 @@
+{% let n = s.need %}
+<li class="step">
+  <p class="step-need">{{ n.name }}</p>
+  <p class="step-text">{{ s.detail }}{% if s.is("done") %}<span class="pill pill--{{ s.need.stage_class }}">{{ s.need.stage_text }}</span>{% endif %}<span class="tag">{{ s.job_title }}</span></p>
+  {% if let Some(e) = n.error_elsewhere() %}<p class="error" role="alert"><b>Not saved.</b> {{ e }}</p>{% endif %}
+  {% if s.is("decide") %}
+  {% if let Some(href) = s.decide_href %}
+  <div class="step-actions"><a class="btn" href="{{ href }}">{{ s.decide_label }}</a></div>
+  {% else %}
+  <p class="form-note">No options researched yet; ask Claude to research options for this part.</p>
+  {% endif %}
+  {% else if s.is("order") %}
+  <details class="drawer"{% if n.error_in("order").is_some() %} open{% endif %}>
+    <summary>Mark ordered</summary>
+    {% include "order_form.html" %}
+  </details>
+  {% else if s.is("arriving") %}
+  <div class="step-actions">
+    <form method="post" action="/vehicles/{{ n.vid }}/needs/{{ n.id }}/received">
+      <input type="hidden" name="back" value="{{ n.back }}">
+      <button class="btn" type="submit" aria-label="Mark {{ n.name }} received">Mark received</button>
+    </form>
+  </div>
+  {% endif %}
+  {% if n.can_return && (s.is("arriving") || s.is("done")) %}
+  <details class="drawer drawer--aside"{% if n.error_in("return").is_some() %} open{% endif %}>
+    <summary>Wrong part, returning it</summary>
+    {% include "return_form.html" %}
+  </details>
+  {% endif %}
+</li>

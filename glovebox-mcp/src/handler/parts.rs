@@ -15,7 +15,11 @@ impl GloveboxMcp {
                        cost (integer cents), who supplied it (`supplied_by`: `self` or `shop`), \
                        where it goes (location), and an optional link to the installing service. \
                        For parts listed on an invoice, pass them in `parts` on `record_service` \
-                       instead; use this tool for a part bought ahead of the install."
+                       instead; use this tool for a part bought ahead of the install, and give \
+                       the seller's order number as `order_ref`. To attach it to a need without \
+                       entering it twice, call `link_part_to_need`; for a need's own purchase, \
+                       `mark_need_ordered` creates the part. Status is `purchased`, `installed` \
+                       or `replaced`; a return is made with `return_part`."
     )]
     async fn record_part(
         &self,
@@ -30,8 +34,8 @@ impl GloveboxMcp {
         name = "list_parts",
         description = "The vehicle's parts, newest first: what was bought, what is installed (and \
                        by which service), and what has been replaced. Filter with `status` \
-                       (`purchased`, `installed`, `replaced`). Use this to find the `part_id` for \
-                       `correct_part` or `delete_part`."
+                       (`purchased`, `installed`, `replaced`, `returned`). Use this to find the \
+                       `part_id` for `correct_part` or `delete_part`."
     )]
     async fn list_parts(
         &self,
@@ -47,7 +51,11 @@ impl GloveboxMcp {
                        it goes, install or replacement details, warranty. Send only the fields to \
                        change; null clears a field, and a field left out is untouched. Use this \
                        to mark a part `replaced` or to link it to the service that installed it. \
-                       To remove a part that should never have been recorded, use `delete_part`."
+                       Status `returned` cannot be set here (a return is made with \
+                       `return_part`); setting a returned part back to `purchased` is how a \
+                       mistaken return is undone, and it clears the return details. `order_ref` \
+                       and `received_on` correct the order number and arrival date. To remove a \
+                       part that should never have been recorded, use `delete_part`."
     )]
     async fn correct_part(
         &self,

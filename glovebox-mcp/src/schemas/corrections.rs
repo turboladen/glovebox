@@ -19,7 +19,7 @@ use super::LineItemInput;
 
 /// Deserializes a present key into `Some(value)`, so that `null` becomes
 /// `Some(None)` and only an absent key stays `None` (via `serde(default)`).
-fn nullable<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+pub(super) fn nullable<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
 where
     T: Deserialize<'de>,
     D: Deserializer<'de>,
@@ -281,7 +281,7 @@ pub struct ListServicesInput {
 pub struct ListPartsInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
-    /// Only parts with this status: `purchased`, `installed` or `replaced`.
+    /// Only parts with this status: `purchased`, `installed`, `replaced` or `returned`.
     pub status: Option<String>,
 }
 
@@ -376,6 +376,12 @@ pub struct CorrectServiceInput {
     pub invoice_ref: Option<Option<String>>,
     /// REPLACES the recalls this service performed with exactly this list (`finding_id`s from `whats_coming` or `check_recalls`). A recall taken off the list reads as open again unless it was marked done by hand. Send `[]` to remove them all; omit to leave them alone.
     pub recall_finding_ids: Option<Vec<i32>>,
+    /// The appointment this invoice settles (from `list_appointments`). It must be open.
+    ///
+    /// Send `null` to clear it; omit the key to leave it unchanged.
+    #[serde(default, deserialize_with = "nullable")]
+    #[schemars(with = "Option<i32>")]
+    pub appointment_id: Option<Option<i32>>,
 }
 
 impl CorrectServiceInput {
@@ -400,6 +406,7 @@ impl CorrectServiceInput {
                 payer_note: self.payer_note,
                 invoice_ref: self.invoice_ref,
                 recall_finding_ids: self.recall_finding_ids,
+                appointment_id: self.appointment_id,
                 line_items: self
                     .line_items
                     .map(|items| items.into_iter().map(LineItemInput::into_domain).collect()),
@@ -452,7 +459,8 @@ pub struct CorrectPartInput {
     pub part_id: i32,
     /// New part name.
     pub name: Option<String>,
-    /// `purchased`, `installed` or `replaced`.
+    /// `purchased`, `installed` or `replaced`. A return is made on the need,
+    /// not here; a returned part can only be set back to `purchased`.
     pub status: Option<String>,
     /// `self` or `shop`.
     pub supplied_by: Option<String>,
@@ -546,6 +554,19 @@ pub struct CorrectPartInput {
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<i32>")]
     pub warranty_expires_miles: Option<Option<i32>>,
+    /// The seller's order or confirmation number.
+    ///
+    /// Send `null` to clear it; omit the key to leave it unchanged.
+    #[serde(default, deserialize_with = "nullable")]
+    #[schemars(with = "Option<String>")]
+    pub order_ref: Option<Option<String>>,
+    /// The date the part arrived, `YYYY-MM-DD`. For a part linked to a need,
+    /// prefer `mark_need_received`.
+    ///
+    /// Send `null` to clear it; omit the key to leave it unchanged.
+    #[serde(default, deserialize_with = "nullable")]
+    #[schemars(with = "Option<String>")]
+    pub received_on: Option<Option<String>>,
 }
 
 impl CorrectPartInput {
@@ -572,6 +593,8 @@ impl CorrectPartInput {
                 location: self.location,
                 warranty_expires_on: self.warranty_expires_on,
                 warranty_expires_miles: self.warranty_expires_miles,
+                order_ref: self.order_ref,
+                received_on: self.received_on,
                 ..Default::default()
             },
         )
@@ -846,6 +869,14 @@ pub struct UpdatePlannedWorkInput {
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<i32>")]
     pub revisit_by_miles: Option<Option<i32>>,
+    /// The appointment this job is on (from `list_appointments`). It must be
+    /// open.
+    ///
+    /// Send `null` to take the job off its appointment; omit the key to leave
+    /// it unchanged. Its needs, options and reasons stay with the job.
+    #[serde(default, deserialize_with = "nullable")]
+    #[schemars(with = "Option<i32>")]
+    pub appointment_id: Option<Option<i32>>,
 }
 
 impl UpdatePlannedWorkInput {
@@ -863,6 +894,7 @@ impl UpdatePlannedWorkInput {
                 est_cost_cents: self.est_cost_cents,
                 revisit_by_date: self.revisit_by_date,
                 revisit_by_miles: self.revisit_by_miles,
+                appointment_id: self.appointment_id,
             },
         )
     }

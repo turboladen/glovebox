@@ -25,8 +25,10 @@ impl GloveboxMcp {
                        have done. Link the source so completing the work closes the loop (a \
                        recall finding from check_recalls, an overdue schedule item from \
                        whats_coming, or an incident). Set revisit_by_date and/or revisit_by_miles \
-                       for work to watch rather than do now. Review the list with \
-                       list_planned_work."
+                       for work to watch rather than do now. Pass `appointment_id` to put the job \
+                       on an appointment (from `plan_appointment`); a job with no appointment is \
+                       still planned and can collect needs with `add_need` before there is a shop \
+                       or a date. Review the list with list_planned_work."
     )]
     async fn plan_work(
         &self,
@@ -99,17 +101,18 @@ impl GloveboxMcp {
     #[tool(
         name = "update_planned_work",
         description = "Change a to-do item: title, notes, estimated cost, revisit date or \
-                       mileage, the schedule item, recall or incident it is linked to, or its \
-                       `status`. Send only the fields to change; null clears a field, and a field \
-                       left out is untouched. Set `status: \"dropped\"` when the owner no longer \
-                       intends to do the work (it leaves `whats_coming` but stays in history), or \
-                       `planned` to reopen an item. When the work was done and there is an \
-                       invoice, record it with `record_service` and `work_item_ids` instead, so \
-                       the service, reminder, incident and recall are linked; set `done` here \
-                       only for work that left no paperwork. Setting `done` here does not close a \
-                       recall or incident the item is linked to: also call `set_recall_status` or \
-                       `update_incident` for it. Use `delete_planned_work` only for an item added \
-                       by mistake."
+                       mileage, the schedule item, recall or incident it is linked to, the \
+                       appointment it is on (`appointment_id`: another open appointment to move \
+                       it, null to take it off), or its `status`. Send only the fields to change; \
+                       null clears a field, and a field left out is untouched. Set `status: \
+                       \"dropped\"` when the owner no longer intends to do the work (it leaves \
+                       `whats_coming` but stays in history), or `planned` to reopen an item. When \
+                       the work was done and there is an invoice, record it with `record_service` \
+                       and `work_item_ids` instead, so the service, reminder, incident and recall \
+                       are linked; set `done` here only for work that left no paperwork. Setting \
+                       `done` here does not close a recall or incident the item is linked to: \
+                       also call `set_recall_status` or `update_incident` for it. Use \
+                       `delete_planned_work` only for an item added by mistake."
     )]
     async fn update_planned_work(
         &self,
