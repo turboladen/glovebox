@@ -278,6 +278,24 @@ pub async fn summary(
         .ok_or_else(|| DomainError::NotFound(format!("Appointment {id} not found")))
 }
 
+/// The summary of `appointment` from the statuses of its jobs and its counts
+/// of open needs and open to-dos.
+pub(crate) fn summarize(
+    appointment: appointment::Model,
+    job_statuses: &[&str],
+    needs_open: usize,
+    todos_open: usize,
+) -> AppointmentSummary {
+    AppointmentSummary {
+        status: status(&appointment, job_statuses),
+        booked: appointment.planned_date.is_some(),
+        jobs: job_statuses.len(),
+        needs_open,
+        todos_open,
+        appointment,
+    }
+}
+
 // Builds the summaries for every appointment of the vehicle, or for the one
 // named by `only`, in list order, with every count loaded in batches.
 async fn summaries(
@@ -348,14 +366,9 @@ async fn summaries(
         .into_iter()
         .map(|a| {
             let job_statuses = statuses.get(&a.id).map_or(&[][..], Vec::as_slice);
-            AppointmentSummary {
-                status: status(&a, job_statuses),
-                booked: a.planned_date.is_some(),
-                jobs: job_statuses.len(),
-                needs_open: needs_open.get(&a.id).copied().unwrap_or(0),
-                todos_open: todos_open.get(&a.id).copied().unwrap_or(0),
-                appointment: a,
-            }
+            let needs = needs_open.get(&a.id).copied().unwrap_or(0);
+            let todos = todos_open.get(&a.id).copied().unwrap_or(0);
+            summarize(a, job_statuses, needs, todos)
         })
         .collect();
     out.sort_by(|a, b| {

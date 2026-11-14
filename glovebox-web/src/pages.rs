@@ -7,11 +7,13 @@ use axum::{
     response::{Html, IntoResponse, Response},
 };
 use glovebox_shared::{
+    entities::{job_need, todo},
     error::{DomainError, DomainResult},
     services::{
         appointment,
-        checklist::{self, VehicleHome},
-        need, part, todo, vehicle,
+        checklist::{self, NeedView, VehicleHome},
+        need::{self, Stage},
+        part, todo as todo_svc, vehicle,
     },
 };
 use serde::Deserialize;
@@ -184,7 +186,7 @@ pub async fn home_response(state: &AppState, view: Page<'_>, status: StatusCode)
     for home in homes {
         let vid = home.vehicle.id;
         if banner_found.is_none() {
-            banner_found = banner(state, vid, "/", view.done).await;
+            banner_found = home_banner(state, vid, view.done).await;
         }
         let todos = home
             .todos
@@ -245,31 +247,77 @@ fn open_need(query: &PageQuery) -> Option<i32> {
     query.open.as_deref()?.strip_prefix("need-")?.parse().ok()
 }
 
-// Builds the undo strip for `?done=need-<id>` or `?done=todo-<id>`. A value
-// that names nothing the vehicle has shows no strip.
-async fn banner(state: &AppState, vid: i32, back: &str, done: Option<&str>) -> Option<Banner> {
-    let done = done?;
-    if let Some(id) = done.strip_prefix("need-").and_then(|n| n.parse().ok()) {
-        let found = need::require(&state.db, vid, id).await.ok()?;
-        let part_id = found.part_id?;
-        let part = part::get(&state.db, vid, part_id).await.ok()?;
-        if need::stage(&found, Some(&part)) != need::Stage::Received {
-            return None;
+/// The record a `?done=` value names: `need-<id>` or `todo-<id>`.
+enum Done {
+    Need(i32),
+    Todo(i32),
+}
+
+impl Done {
+    fn parse(done: Option<&str>) -> Option<Self> {
+        let done = done?;
+        if let Some(id) = done.strip_prefix("need-") {
+            return id.parse().ok().map(Self::Need);
         }
-        return Some(Banner {
-            message: format!("Marked \u{201c}{}\u{201d} received.", found.name),
-            action: format!("/vehicles/{vid}/needs/{id}/received/undo"),
-            back: back.to_owned(),
-        });
+        done.strip_prefix("todo-")?.parse().ok().map(Self::Todo)
     }
-    let id = done.strip_prefix("todo-")?.parse().ok()?;
-    let found = todo::require(&state.db, vid, id).await.ok()?;
-    found.done_on.as_ref()?;
-    Some(Banner {
-        message: format!("Ticked \u{201c}{}\u{201d}.", found.title),
-        action: format!("/vehicles/{vid}/todos/{id}/done/undo"),
+}
+
+// The undo strip for a need marked received, when it still reads received.
+fn need_banner(vid: i32, back: &str, need: &job_need::Model, stage: Stage) -> Option<Banner> {
+    (stage == Stage::Received).then(|| Banner {
+        message: format!("Marked \u{201c}{}\u{201d} received.", need.name),
+        action: format!("/vehicles/{vid}/needs/{}/received/undo", need.id),
         back: back.to_owned(),
     })
+}
+
+// The undo strip for a ticked to-do, when it is still done.
+fn todo_banner(vid: i32, back: &str, todo: &todo::Model) -> Option<Banner> {
+    todo.done_on.as_ref()?;
+    Some(Banner {
+        message: format!("Ticked \u{201c}{}\u{201d}.", todo.title),
+        action: format!("/vehicles/{vid}/todos/{}/done/undo", todo.id),
+        back: back.to_owned(),
+    })
+}
+
+// The undo strip for a page whose needs and to-dos are in hand. A value that
+// names nothing on the page shows no strip.
+fn page_banner<'a>(
+    vid: i32,
+    back: &str,
+    done: Option<&str>,
+    needs: impl IntoIterator<Item = &'a NeedView>,
+    todos: &[todo::Model],
+) -> Option<Banner> {
+    match Done::parse(done)? {
+        Done::Need(id) => needs
+            .into_iter()
+            .find(|n| n.need.id == id)
+            .and_then(|n| need_banner(vid, back, &n.need, n.stage)),
+        Done::Todo(id) => todos
+            .iter()
+            .find(|t| t.id == id)
+            .and_then(|t| todo_banner(vid, back, t)),
+    }
+}
+
+// The undo strip for the home page, which shows no needs and no ticked
+// to-dos, so the record is looked up on each vehicle in turn. A value that
+// names nothing the vehicle has shows no strip.
+async fn home_banner(state: &AppState, vid: i32, done: Option<&str>) -> Option<Banner> {
+    match Done::parse(done)? {
+        Done::Need(id) => {
+            let found = need::require(&state.db, vid, id).await.ok()?;
+            let part = part::get(&state.db, vid, found.part_id?).await.ok()?;
+            need_banner(vid, "/", &found, need::stage(&found, Some(&part)))
+        }
+        Done::Todo(id) => {
+            let found = todo_svc::require(&state.db, vid, id).await.ok()?;
+            todo_banner(vid, "/", &found)
+        }
+    }
 }
 
 /// What a page shows besides its record: an undo strip, the need to open and
@@ -369,7 +417,13 @@ async fn appointment_page(
 
     Ok(AppointmentPage {
         chrome: Chrome::of(state),
-        banner: banner(state, vid, &back, done).await,
+        banner: page_banner(
+            vid,
+            &back,
+            done,
+            list.jobs.iter().flat_map(|j| &j.needs),
+            &list.todos,
+        ),
         top_error: failure.filter(|_| !placed).map(|f| f.message.clone()),
         vid,
         appointment_id: id,
@@ -461,7 +515,7 @@ async fn job_page(state: &AppState, vid: i32, id: i32, view: Page<'_>) -> Domain
     };
     Ok(JobPage {
         chrome: Chrome::of(state),
-        banner: banner(state, vid, &back, done).await,
+        banner: page_banner(vid, &back, done, &view.needs, &[]),
         top_error: failure.filter(|_| !placed).map(|f| f.message.clone()),
         vid,
         vehicle: car.name,

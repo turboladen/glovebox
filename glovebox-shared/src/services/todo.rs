@@ -183,14 +183,24 @@ pub async fn list(
     include_done: bool,
 ) -> DomainResult<Vec<todo::Model>> {
     super::vehicle::require(db, vehicle_id).await?;
+    if let Some(Some(id)) = appointment_id {
+        super::appointment::require(db, vehicle_id, id).await?;
+    }
+    list_unchecked(db, vehicle_id, appointment_id, include_done).await
+}
+
+/// [`list`] for a vehicle and appointment the caller has already checked.
+pub(crate) async fn list_unchecked(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    appointment_id: Option<Option<i32>>,
+    include_done: bool,
+) -> DomainResult<Vec<todo::Model>> {
     let mut query = todo::Entity::find().filter(todo::Column::VehicleId.eq(vehicle_id));
     match appointment_id {
         None => {}
         Some(None) => query = query.filter(todo::Column::AppointmentId.is_null()),
-        Some(Some(id)) => {
-            super::appointment::require(db, vehicle_id, id).await?;
-            query = query.filter(todo::Column::AppointmentId.eq(id));
-        }
+        Some(Some(id)) => query = query.filter(todo::Column::AppointmentId.eq(id)),
     }
     if !include_done {
         query = query.filter(todo::Column::DoneOn.is_null());

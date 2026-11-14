@@ -169,14 +169,21 @@ pub async fn for_appointment(
     vehicle_id: i32,
     appointment_id: i32,
 ) -> DomainResult<Checklist> {
-    let summary = appointment::summary(db, vehicle_id, appointment_id).await?;
+    let found = appointment::require(db, vehicle_id, appointment_id).await?;
     let jobs = work_item::Entity::find()
         .filter(work_item::Column::AppointmentId.eq(appointment_id))
         .order_by_asc(work_item::Column::Id)
         .all(db)
         .await?;
-    let todos = todo_svc::list(db, vehicle_id, Some(Some(appointment_id)), true).await?;
-    Ok(assemble(Some(summary), job_views(db, jobs).await?, todos))
+    let todos = todo_svc::list_unchecked(db, vehicle_id, Some(Some(appointment_id)), true).await?;
+    let views = job_views(db, jobs).await?;
+    // The counts come from the rows the checklist shows, the same way
+    // `appointment::summary` counts them.
+    let job_statuses: Vec<&str> = views.iter().map(|j| j.job.status.as_str()).collect();
+    let needs_open = views.iter().map(JobView::open_needs).sum();
+    let todos_open = todos.iter().filter(|t| t.done_on.is_none()).count();
+    let summary = appointment::summarize(found, &job_statuses, needs_open, todos_open);
+    Ok(assemble(Some(summary), views, todos))
 }
 
 /// The checklist of the vehicle's planned jobs that are on no appointment and
