@@ -48,6 +48,9 @@ glovebox conversation inside that project so the instructions apply.
 - [ ] Hand Claude one scanned invoice as a PDF and have it file the invoice. Then ask for the
       service back with `get_service` and check the lines, parts and suppliers.
 - [ ] Ask "what's coming?" and check that the answer reflects what you just filed.
+- [ ] Ask Claude to plan an appointment for an upcoming job. It calls `plan_appointment`, puts the
+      jobs on it, adds what each job needs and the options it researched, and asks you for each
+      decision. `get_checklist` then shows what is left to decide, order and receive.
 
 ## Environment
 

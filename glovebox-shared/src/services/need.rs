@@ -356,6 +356,34 @@ pub async fn delete_option<C: ConnectionTrait + TransactionTrait>(
     Ok(())
 }
 
+/// Changes a need and, when `choice` is present, chooses an option for it (or
+/// clears the choice for `Some(None)`) in one transaction. The reason stored
+/// with a choice is `input.decision_reason`, and it is cleared when that field
+/// is absent or `None`; without a `choice`, `decision_reason` edits only the
+/// reason. A refused choice leaves every other change unapplied.
+///
+/// # Errors
+/// `NotFound` for a need that is not the vehicle's; `Invalid` as for
+/// [`update`]; `BadRequest` as for [`decide`].
+pub async fn update_with_choice<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    need_id: i32,
+    mut input: UpdateNeed,
+    choice: Option<Option<i32>>,
+) -> DomainResult<job_need::Model> {
+    let Some(option_id) = choice else {
+        return update(db, vehicle_id, need_id, input).await;
+    };
+    // `decide` writes the reason itself, so the edit leaves it alone.
+    let reason = input.decision_reason.take().flatten();
+    let txn = db.begin().await?;
+    update(&txn, vehicle_id, need_id, input).await?;
+    let decided = decide(&txn, vehicle_id, need_id, option_id, reason).await?;
+    txn.commit().await?;
+    Ok(decided)
+}
+
 /// Chooses an option for a need, or clears the choice when `option_id` is
 /// `None`, and records the reason in the same write. Choosing stamps
 /// `decided_on` with today's date; clearing removes it.
@@ -1116,6 +1144,124 @@ mod tests {
         let cleared = decide(&db, vehicle_id, n.id, None, None).await.unwrap();
         assert_eq!(cleared.chosen_option_id, None);
         assert_eq!(cleared.decided_on, None);
+    }
+
+    #[tokio::test]
+    async fn update_with_choice_applies_the_edit_and_the_choice_together() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let n = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
+        let o = add_option(&db, vehicle_id, n.id, option("Pads"))
+            .await
+            .unwrap();
+        let updated = update_with_choice(
+            &db,
+            vehicle_id,
+            n.id,
+            UpdateNeed {
+                supplied_by: Some(Some("self".into())),
+                decision_reason: Some(Some("best reviews".into())),
+                ..Default::default()
+            },
+            Some(Some(o.id)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.supplied_by.as_deref(), Some("self"));
+        assert_eq!(updated.chosen_option_id, Some(o.id));
+        assert_eq!(updated.decision_reason.as_deref(), Some("best reviews"));
+        assert!(updated.decided_on.is_some());
+
+        // Clearing the choice clears its reason and date.
+        let cleared = update_with_choice(&db, vehicle_id, n.id, UpdateNeed::default(), Some(None))
+            .await
+            .unwrap();
+        assert_eq!(cleared.chosen_option_id, None);
+        assert_eq!(cleared.decision_reason, None);
+        assert_eq!(cleared.decided_on, None);
+        assert_eq!(cleared.supplied_by.as_deref(), Some("self"));
+    }
+
+    #[tokio::test]
+    async fn update_with_choice_without_a_choice_edits_only_the_reason() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let n = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
+        let o = add_option(&db, vehicle_id, n.id, option("Pads"))
+            .await
+            .unwrap();
+        decide(&db, vehicle_id, n.id, Some(o.id), Some("old".into()))
+            .await
+            .unwrap();
+        let updated = update_with_choice(
+            &db,
+            vehicle_id,
+            n.id,
+            UpdateNeed {
+                decision_reason: Some(Some("new".into())),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.chosen_option_id, Some(o.id));
+        assert_eq!(updated.decision_reason.as_deref(), Some("new"));
+    }
+
+    #[tokio::test]
+    async fn a_refused_choice_leaves_the_other_edits_unapplied() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let n = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
+        let bad = add_option(
+            &db,
+            vehicle_id,
+            n.id,
+            NewOption {
+                fitment: Some("does_not_fit".into()),
+                ..option("Wrong pads")
+            },
+        )
+        .await
+        .unwrap();
+        let err = update_with_choice(
+            &db,
+            vehicle_id,
+            n.id,
+            UpdateNeed {
+                name: Some("Renamed".into()),
+                supplied_by: Some(Some("self".into())),
+                ..Default::default()
+            },
+            Some(Some(bad.id)),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(&err, DomainError::BadRequest(m) if m.contains("does not fit")));
+        let after = require(&db, vehicle_id, n.id).await.unwrap();
+        assert_eq!(after.name, "Pads");
+        assert_eq!(after.supplied_by, None);
+        assert_eq!(after.chosen_option_id, None);
+    }
+
+    #[tokio::test]
+    async fn update_with_choice_reads_a_wrong_vehicle_need_as_missing() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let other = VehicleFixture::new().name("Other").insert_id(&db).await;
+        let n = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
+        let missing = update_with_choice(&db, other, 99_999, UpdateNeed::default(), Some(None))
+            .await
+            .unwrap_err();
+        let wrong = update_with_choice(&db, other, n.id, UpdateNeed::default(), Some(None))
+            .await
+            .unwrap_err();
+        assert!(matches!(wrong, DomainError::NotFound(_)));
+        assert_eq!(
+            wrong.to_string().replace(&n.id.to_string(), "N"),
+            missing.to_string().replace("99999", "N")
+        );
     }
 
     #[tokio::test]

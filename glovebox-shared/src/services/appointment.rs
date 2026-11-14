@@ -9,7 +9,7 @@ use serde::Serialize;
 use crate::{
     entities::{appointment, job_need, part, todo, work_item},
     error::{DomainError, DomainResult},
-    inputs::appointment::{NewAppointment, UpdateAppointment},
+    inputs::appointment::{NewAppointment, StatusChange, UpdateAppointment},
     services::need::{Stage, stage},
 };
 
@@ -34,6 +34,14 @@ pub struct AppointmentSummary {
 pub struct ClosedAppointment {
     pub appointment: appointment::Model,
     /// The jobs that were still planned and are now off the appointment.
+    pub unassigned_job_ids: Vec<i32>,
+}
+
+/// An appointment after edits and a status change, with the jobs that closing
+/// or cancelling took off it.
+#[derive(Debug, Serialize)]
+pub struct RevisedAppointment {
+    pub appointment: AppointmentSummary,
     pub unassigned_job_ids: Vec<i32>,
 }
 
@@ -136,6 +144,38 @@ pub async fn update(
     }
     active.updated_at = Set(super::now_stamp());
     Ok(active.update(db).await?)
+}
+
+/// Edits an appointment and, when `change` is present, closes, cancels or
+/// reopens it, in one transaction. A refused status change leaves the edits
+/// unapplied.
+///
+/// # Errors
+/// As for [`update`], and as for [`close`] or [`reopen`] for the status change.
+pub async fn update_with_status<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    id: i32,
+    input: UpdateAppointment,
+    change: Option<StatusChange>,
+) -> DomainResult<RevisedAppointment> {
+    let txn = db.begin().await?;
+    update(&txn, vehicle_id, id, input).await?;
+    let unassigned_job_ids = match change {
+        Some(StatusChange::Close) => close(&txn, vehicle_id, id, false).await?.unassigned_job_ids,
+        Some(StatusChange::Cancel) => close(&txn, vehicle_id, id, true).await?.unassigned_job_ids,
+        Some(StatusChange::Reopen) => {
+            reopen(&txn, vehicle_id, id).await?;
+            Vec::new()
+        }
+        None => Vec::new(),
+    };
+    let appointment = summary(&txn, vehicle_id, id).await?;
+    txn.commit().await?;
+    Ok(RevisedAppointment {
+        appointment,
+        unassigned_job_ids,
+    })
 }
 
 /// Loads an appointment that belongs to `vehicle_id`.
@@ -636,6 +676,115 @@ mod tests {
         assert_eq!(
             err.to_string(),
             format!("Appointment {} is closed; reopen it first", b.id)
+        );
+    }
+
+    #[tokio::test]
+    async fn update_with_status_edits_and_closes_in_one_write() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let a = create(&db, v, appt("Brakes")).await.unwrap();
+        let planned = add_job(&db, v, Some(a.id)).await;
+
+        let revised = update_with_status(
+            &db,
+            v,
+            a.id,
+            UpdateAppointment {
+                purpose: Some("Brakes and plugs".into()),
+                ..Default::default()
+            },
+            Some(StatusChange::Cancel),
+        )
+        .await
+        .unwrap();
+        assert_eq!(revised.appointment.appointment.purpose, "Brakes and plugs");
+        assert_eq!(revised.appointment.status, "cancelled");
+        assert_eq!(revised.unassigned_job_ids, vec![planned]);
+
+        let reopened = update_with_status(
+            &db,
+            v,
+            a.id,
+            UpdateAppointment::default(),
+            Some(StatusChange::Reopen),
+        )
+        .await
+        .unwrap();
+        assert_eq!(reopened.appointment.status, "planning");
+        assert!(reopened.unassigned_job_ids.is_empty());
+
+        let closed = update_with_status(
+            &db,
+            v,
+            a.id,
+            UpdateAppointment::default(),
+            Some(StatusChange::Close),
+        )
+        .await
+        .unwrap();
+        assert_eq!(closed.appointment.status, "done");
+        assert!(closed.appointment.appointment.closed_on.is_some());
+
+        // No status change edits only.
+        let edited = update_with_status(
+            &db,
+            v,
+            a.id,
+            UpdateAppointment {
+                notes: Some(Some("bring pads".into())),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            edited.appointment.appointment.notes.as_deref(),
+            Some("bring pads")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refused_status_change_leaves_the_edits_unapplied() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let a = create(&db, v, appt("Brakes")).await.unwrap();
+        close(&db, v, a.id, false).await.unwrap();
+
+        let err = update_with_status(
+            &db,
+            v,
+            a.id,
+            UpdateAppointment {
+                purpose: Some("Renamed".into()),
+                ..Default::default()
+            },
+            Some(StatusChange::Cancel),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, DomainError::BadRequest(_)));
+        assert_eq!(require(&db, v, a.id).await.unwrap().purpose, "Brakes");
+    }
+
+    #[tokio::test]
+    async fn update_with_status_reads_a_wrong_vehicle_appointment_as_missing() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let other = VehicleFixture::new().name("Other").insert_id(&db).await;
+        let a = create(&db, v, appt("Brakes")).await.unwrap();
+        let missing = update_with_status(&db, other, 99_999, UpdateAppointment::default(), None)
+            .await
+            .unwrap_err();
+        let wrong = update_with_status(&db, other, a.id, UpdateAppointment::default(), None)
+            .await
+            .unwrap_err();
+        assert!(matches!(wrong, DomainError::NotFound(_)));
+        assert_eq!(
+            wrong.to_string().replace(&a.id.to_string(), "N"),
+            missing.to_string().replace("99999", "N")
         );
     }
 

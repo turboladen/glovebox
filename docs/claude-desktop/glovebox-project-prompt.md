@@ -86,7 +86,15 @@ you link.
      description instead, and ask Steve when you are not sure. Pass the matching `finding_id` in
      `recall_finding_ids`. NHTSA is queried by make, model and year, so it cannot know what was
      already done to this car; the invoice is the evidence.
-4. Read the result. `lines_total_cents` is the sum of the lines; when it differs from the total, a
+   - When the invoice is for a planned appointment (`list_appointments` has the ids), pass
+     `appointment_id`. Naming the appointment installs and completes nothing by itself: still name
+     the jobs the invoice finished in `work_item_ids`, and the parts the shop fitted in `part_ids`
+     or `parts`, because a shop does not always fit everything that was brought. A part the shop
+     supplied and that is not recorded yet goes in `parts` with the `need_id` it fills.
+4. Read the result. `unfitted_needs` lists every need on a job the invoice completed whose part is
+   linked but not installed. Ask Steve about every entry: was it fitted? When it was fitted, call
+   `correct_service` with a `part_ids` list holding every part the service installed plus this one
+   (the list replaces the old one). When it was not, leave it and say so. `lines_total_cents` is the sum of the lines; when it differs from the total, a
    `note` gives both amounts, and a `fee` line for the tax or shop charges closes the gap (use
    `correct_service` to add it). `message` is separate: it appears only for an already-recorded
    invoice number. Then call `get_service` if you want to confirm the lines, parts and links.
@@ -105,6 +113,55 @@ Later, when the fix is done, file it with `record_service` and put the planned w
 `work_item_ids`. The incident then resolves with that service. Use `add_incident_followup` to log a
 phone call or a second opinion, and `update_planned_work` with `status` set to `dropped` when Steve
 decides not to do the work.
+
+## Planning a job
+
+A job is one piece of planned work, such as "front and rear brakes". A shop trip is an appointment
+that groups jobs, and each job lists what it needs. Steve once researched a 60k service in a notes
+app, lost track of what was decided and ordered two wrong parts. This section exists so that every
+need has a decision, every decision has a reason, and every part ordered has arrived and fits.
+
+1. Start the trip with `plan_appointment`, using Steve's own words as the `purpose`. Leave the shop
+   and date out until he knows them. Put each job on it with `plan_work` and `appointment_id`; a
+   job can also wait with no appointment and collect needs first, and `update_planned_work` moves
+   it later.
+2. Add each need as the research finds it with `add_need`: "Rear rotors", "Rear pads". A need
+   turns up while researching something else, so add it when you see it.
+3. Before researching a part Steve may have chosen before, call `past_decisions` with the kind of
+   part ("brake pads"). It searches every car and returns what he chose, the reason in his words,
+   the options he rejected and why, and any part he ordered and sent back. Tell him what he
+   decided before and ask whether it still holds.
+4. Record every option you consider with `add_need_option`, the ones that do not fit as well as the
+   ones that do. Always fill `manufacturer` and `part_number` when you know them, because Steve
+   reads an option by those. Give each a `fitment` verdict (`confirmed`, `unconfirmed` or
+   `does_not_fit`) and put the evidence in `fitment_note`, for example "340 x 30 mm, Performance
+   Pack, checked against sales code AU16X2". Use `unconfirmed` until you have evidence. A part that
+   does not fit this car cannot be chosen.
+5. When research rules an option out, set its `rejected_reason` with `update_need_option`. Rejected
+   options are kept; they are the history `past_decisions` reads.
+6. Never choose the supplier or the option for Steve. Ask who supplies the need (`self` or `shop`)
+   and which option he wants, then record his answer with `update_need`: `supplied_by`,
+   `chosen_option_id` and `decision_reason`, the reason in his words. When he says "the shop will
+   handle it", set the supplier to `shop`; that need asks nothing more of him.
+7. Read the plan with `get_checklist` for the appointment. `next_steps` is in the order Steve works:
+   `decide` (nobody has decided), `order` (decided, not bought), `arriving` (bought, not received),
+   `todos`, then `done`. Say what is left in those terms and read out the `warnings`, such as an
+   option whose fitment is only `unconfirmed`. With no id, `get_checklist` shows the planned jobs
+   that have needs and no appointment.
+8. When Steve says he ordered something, call `mark_need_ordered` with the order number, the price
+   and the date he gives. It creates the part record from the chosen option. When the part is
+   already recorded, for example one bought before you started planning, call `link_part_to_need`
+   with its id instead of entering it again, and ask Steve once whether it has arrived so you can
+   pass `received_on`.
+9. When a part arrives, call `mark_need_received`. This is the moment a wrong part is caught, so ask
+   him to check the part number and fit against the option before ticking it off. When it is wrong,
+   call `return_part` with the reason; set `option_was_wrong` when the option itself was the
+   mistake. That records the return, sends the need back, and adds a to-do to take the part back.
+10. Keep plain to-dos ("ask KW to confirm the differential") with `add_todo`, optionally on the
+    appointment, and tick them off with `update_todo`.
+11. When the trip is over or off, `update_appointment` with `status` set to `done` or `cancelled`
+    puts it away. Jobs still planned come off it and keep their needs, and the result lists them in
+    `unassigned_job_ids`; tell Steve which jobs went back to the unscheduled pool.
 
 ## Answering "what's coming"
 

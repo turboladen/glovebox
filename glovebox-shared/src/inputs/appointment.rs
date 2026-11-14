@@ -21,3 +21,14 @@ pub struct UpdateAppointment {
     pub planned_date: Option<Option<String>>,
     pub notes: Option<Option<String>>,
 }
+
+/// A change to an appointment's status, made together with its other edits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StatusChange {
+    /// Close it by hand.
+    Close,
+    /// Cancel it.
+    Cancel,
+    /// Clear both the closed and the cancelled mark.
+    Reopen,
+}

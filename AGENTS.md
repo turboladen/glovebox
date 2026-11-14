@@ -120,13 +120,19 @@ named as things a person would say:
   `add_incident_followup`, `delete_incident`
 - `planning.rs`: `plan_work`, `list_planned_work`, `whats_coming`, `update_planned_work`,
   `delete_planned_work`
+- `checklist.rs`: `plan_appointment`, `update_appointment`, `list_appointments`,
+  `delete_appointment`, `get_checklist`, `past_decisions`, `add_need`, `update_need`, `delete_need`,
+  `add_need_option`, `update_need_option`, `delete_need_option`, `mark_need_ordered`,
+  `link_part_to_need`, `mark_need_received`, `return_part`, `add_todo`, `update_todo`,
+  `delete_todo`
 - `schedule.rs`: `list_schedule`, `add_schedule_item`, `update_schedule_item`,
   `dismiss_schedule_item`, `restore_schedule_item`
 - `recalls.rs`: `check_recalls`, `list_recalls`, `set_recall_status`, `file_research_finding`
 - `reads.rs`: `summarize_recent_activity`, `search_records`, `cost_summary`, `get_service`,
   `get_incident`
 
-Inputs are schemars-derived structs in `src/schemas.rs` and `src/schemas/corrections.rs`; their doc
+Inputs are schemars-derived structs in `src/schemas.rs`, `src/schemas/corrections.rs` and
+`src/schemas/checklist.rs`; their doc
 comments become the LLM-visible field descriptions. `Parameters<T>` defers deserialize errors
 so malformed arguments come back as actionable tool errors, not bare JSON-RPC `-32602`s. The
 wrapper is named `Parameters` so the `#[tool]` macro derives the input schema from it; do not add
@@ -160,6 +166,21 @@ lines. `cost_summary`'s `covered_work` lists the services with covered work, eac
 reading, dated by `history_starts_on`) is the base of the per-1,000-miles figure, which stays null
 until the records cover 1,000 miles (`costs::MIN_MILES_FOR_COST_PER_1000`).
 
+**Job checklist.** An appointment groups jobs (`work_items`) and to-dos for one shop trip, a job
+lists needs, and a need lists researched options. A need's stage (`undecided`, `to_order`,
+`shop_supplies`, `ordered`, `received`, `installed`) is derived by `need::stage` and never stored;
+the first matching row wins, so a linked part decides the stage. An appointment reads `done` when
+it has jobs and every one is done or dropped; only `cancelled` and a hand-closed date are stored,
+and closing or cancelling unassigns the jobs that are still planned. `update_need` and
+`update_appointment` apply an edit together with a choice or a status change in one transaction
+(`need::update_with_choice`, `appointment::update_with_status`), so a refused choice or status
+leaves the other fields unchanged. An option that is `does_not_fit` or rejected cannot be chosen,
+and no tool chooses a supplier or an option for the owner. `return_part` is the only way a part
+becomes `returned`. Naming an appointment in `record_service` installs and completes nothing; the
+result's `unfitted_needs` lists the linked parts the invoice did not install. `need_id` is accepted
+on the inline parts of `record_service` only, and `get_checklist` takes at most one of
+`appointment_id` and `work_item_id`.
+
 **Schedule names** compare through `schedule::name_key` (ASCII case and surrounding spaces do not
 matter), so a vehicle's "Cabin air filter" shadows the inherited "Cabin Air Filter". A new item that shadows an inherited one takes that
 item's spelling of the name and, for every field the caller leaves out, its value
@@ -182,7 +203,7 @@ become opaque JSON-RPC internal errors with the detail kept in tracing.
 
 **Tests** (`glovebox-mcp/tests/`): `common/mod.rs` is the harness (an in-process client over an
 in-memory duplex stream and an in-memory database). One file per handler area (`vehicles`,
-`services`, `parts`, `incidents`, `planning`, `schedule`, `recalls`, `reads`), plus `stdio.rs`
+`services`, `parts`, `incidents`, `planning`, `checklist`, `schedule`, `recalls`, `reads`), plus `stdio.rs`
 (the binary's stdout) and `rehearsal.rs` (a new owner's whole first session through tool calls
 only). Add coverage for a new tool to its area's file.
 

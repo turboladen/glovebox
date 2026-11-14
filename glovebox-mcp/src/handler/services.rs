@@ -61,7 +61,15 @@ impl GloveboxMcp {
                        `recall_finding_ids` (from `check_recalls`) for recalls this work \
                        performed, e.g. when the invoice names a campaign number; completing a \
                        to-do that was planned for a recall links that recall automatically. The \
-                       result lists `performed_recalls` and `completed_work_items`."
+                       result lists `performed_recalls` and `completed_work_items`. When the \
+                       invoice is for a planned appointment (from `list_appointments`), pass \
+                       `appointment_id`; naming it installs and completes nothing by itself, so \
+                       still name the finished jobs in `work_item_ids` and the parts the shop \
+                       fitted in `part_ids` (a part already recorded) or in `parts` (a new one, \
+                       which may name the need it fills with `need_id`). A shop does not always \
+                       fit everything that was brought. The result's `unfitted_needs` lists every \
+                       need on a completed job whose part is linked but not installed; ask the \
+                       owner about each one."
     )]
     async fn record_service(
         &self,
@@ -134,14 +142,15 @@ impl GloveboxMcp {
                        it, who paid, mileage, notes, the invoice number (`invoice_ref`; another \
                        service on the car with the same number is an error naming it), the \
                        invoice lines, the parts it installed, the schedule items it satisfies, or \
-                       the recalls it performed. Send only the fields to change; null clears a \
-                       field, and a field left out is untouched. `line_items`, \
-                       `schedule_item_ids`, `part_ids` and `recall_finding_ids` REPLACE the \
-                       existing lists with exactly what is sent. Use this when the invoice was \
-                       already recorded and something on it is wrong; do not record the work a \
-                       second time with `record_service`, which creates a duplicate. To close an \
-                       incident or a to-do, use `record_service` for new work, or \
-                       `update_incident` / `update_planned_work` for existing records."
+                       the recalls it performed, or the appointment it settles \
+                       (`appointment_id`). Send only the fields to change; null clears a field, \
+                       and a field left out is untouched. `line_items`, `schedule_item_ids`, \
+                       `part_ids` and `recall_finding_ids` REPLACE the existing lists with \
+                       exactly what is sent. Use this when the invoice was already recorded and \
+                       something on it is wrong; do not record the work a second time with \
+                       `record_service`, which creates a duplicate. To close an incident or a \
+                       to-do, use `record_service` for new work, or `update_incident` / \
+                       `update_planned_work` for existing records."
     )]
     async fn correct_service(
         &self,
