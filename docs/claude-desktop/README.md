@@ -54,9 +54,12 @@ glovebox conversation inside that project so the instructions apply.
 
 ## The web page
 
-`just web` serves a read-only page of what is open on each car at <http://127.0.0.1:4827/> and
-opens it in the browser. The page listens on `127.0.0.1` only and reads the same database as the
-Claude Desktop server, so both programs can run at once.
+`just web` serves a page of what is open on each car at <http://127.0.0.1:4827/> and opens it in
+the browser. On it you can set a need's supplier and approach, choose an option and give the
+reason, mark a need ordered or received, mark a part wrong and being returned, and tick, add and
+delete to-dos. Everything else, such as creating appointments, jobs, needs and options, happens in
+Claude Desktop. The page listens on `127.0.0.1` only and reads the same database as the Claude
+Desktop server, so both programs can run at once.
 
 To try the page on made-up data, run `just seed test` and then `just web test`. The test
 environment uses `data/glovebox-test.db` on port 4828 and shows its name in the page header.

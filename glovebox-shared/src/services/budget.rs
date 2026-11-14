@@ -287,21 +287,14 @@ mod tests {
         assert!(f.lines.is_empty());
     }
 
-    // The pinned arithmetic scenario. Everything is seeded relative to
-    // today (no wall-clock flakiness):
-    //
-    // - "Annual inspection": 12-month interval, $100, last serviced ~6
-    //   months ago → due in ~6 months → exactly 1 occurrence.
-    // - "Timing belt check": 12-month interval, $50, never serviced on a
-    //   vehicle purchased 2 years ago → overdue → 1 occurrence now (the
-    //   next lands ~12 months out, past the horizon).
-    // - "Oil change": 5000-mile interval, $20, mileage rate pinned at
-    //   exactly 100 mi/day (logs 100 days apart, 10k miles apart, latest
-    //   today) → overdue (est. 20k vs due at 5k), cycle = 50 days →
-    //   occurrences at days 0,50,...,350 = 8.
-    // - A planned work item with a $75 estimate, which lands in
-    //   `planned_work_cents`; a dropped item with a $999 estimate that must
-    //   not count.
+    // The pinned arithmetic scenario, seeded relative to today:
+    // - "Annual inspection" ($100, 12 months, serviced ~6 months ago) occurs once.
+    // - "Timing belt check" ($50, 12 months, never serviced) is overdue and
+    //   occurs once, because the next one lands past the horizon.
+    // - "Oil change" ($20, 5000 miles, 100 mi/day, overdue) cycles every 50
+    //   days and occurs 8 times, at days 0, 50, ..., 350.
+    // - A planned item with a $75 estimate counts toward `planned_work_cents`;
+    //   a dropped item with a $999 estimate does not.
     #[tokio::test]
     async fn pinned_interval_and_rate_scenario() {
         let db = test_db().await;

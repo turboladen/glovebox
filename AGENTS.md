@@ -4,14 +4,17 @@ This project uses **bd** (beads) for issue tracking. Run `bd onboard` to get sta
 
 ## What Is This
 
-Car maintenance tracker, used only through Claude Desktop. A Rust cargo workspace with three crates:
+Car maintenance tracker, used only through Claude Desktop. A Rust cargo workspace with four crates:
 `glovebox-shared` (the domain library: SeaORM 2.0 + SQLite), `glovebox-mcp` (an rmcp stdio
-server with domain-verb tools and read-only `glovebox://` resources) and `glovebox-cli` (the
-`glovebox` command the owner runs by hand). Claude Desktop launches the
-`glovebox-mcp` binary itself, so there is no server to keep running and no web UI. The question
-the app answers: given what has been done to the car, its mileage and its age, what maintenance is
-coming, when, how much will it cost, and what parts are worth buying and bringing to the shop.
-The design is in `docs/superpowers/specs/2026-11-12-mcp-first-reset-design.md`, and the Desktop
+server with domain-verb tools and read-only `glovebox://` resources), `glovebox-cli` (the
+`glovebox` command the owner runs by hand) and `glovebox-web` (a local page for working a job
+checklist). Claude Desktop launches the `glovebox-mcp` binary itself, so that server needs no
+babysitting; the web page runs only while the owner serves it with `just web`. The question the
+app answers: given what has been done to the car, its mileage and its age, what maintenance is
+coming, when, how much will it cost, and what parts are worth buying and bringing to the shop, and
+for each job, whether every part it needs has been decided, ordered and received.
+The design is in `docs/superpowers/specs/2026-11-12-mcp-first-reset-design.md` and
+`docs/superpowers/specs/2026-11-13-job-checklist-design.md`, and the Desktop
 setup and project prompt are in `docs/claude-desktop/`.
 
 ## Commands
@@ -28,6 +31,8 @@ just fmt                  # cargo +nightly fmt — rustfmt.toml uses nightly-onl
 just check-layering       # Layering gate only (scripts/check-layering.sh)
 just backup               # Copy the current environment's database to data/backups/ now (glovebox backup)
 just reset-env test       # Delete the named non-live environment's database files (glovebox reset --env test)
+just seed test            # Fill the named non-live environment with made-up demo data (glovebox seed --env test)
+just web                  # Serve the live page on 127.0.0.1:4827 and open it; `just web test` serves data/glovebox-test.db on 4828
 
 cargo clippy --workspace -- -D clippy::pedantic   # Rust lints (pedantic is the CI gate)
 
@@ -42,26 +47,35 @@ other name such as `test` uses `data/glovebox-<name>.db` (`glovebox_shared::env:
 `GLOVEBOX_DB_PATH` overrides the path only, and `GLOVEBOX_WEB_PORT` overrides the web port (4827 for
 `live`, 4828 otherwise). `RUST_LOG` sets the tracing filter (default `info`). The Claude Desktop
 config snippets set an absolute `GLOVEBOX_DB_PATH`. No command deletes the live database;
-`glovebox reset` refuses `live`.
+`glovebox reset` and `glovebox seed` refuse `live`. `glovebox-web` reads the same variables as the
+MCP server, and its `--open` flag opens the browser.
 
 ## Architecture
 
 ### Workspace layout
 
 - **`glovebox-shared/`** (lib crate `glovebox_shared`) — the transport-agnostic domain:
-  `src/{db.rs,env.rs,entities,migration,services,inputs,error.rs,test_support.rs}`. All SQL, validation
+  `src/{db.rs,env.rs,seed.rs,entities,migration,services,inputs,error.rs,test_support.rs}`. All SQL, validation
   and business logic live here. It never depends on axum or rmcp.
 - **`glovebox-mcp/`** (lib crate `glovebox_mcp` plus the `glovebox-mcp` binary) — the thin MCP
   surface. Every tool body is argument struct → shared-service call → serialize, with one
   `DomainError → MCP` mapping helper. `src/main.rs` serves `GloveboxMcp` over stdio.
-- **`glovebox-cli/`** (lib crate `glovebox_cli` plus the `glovebox` binary) — `backup` and
-  `reset --env <name>`, with `run` callable in process from tests.
-- `scripts/check-layering.sh` (run by CI and `just ci`) keeps axum and rmcp out of `glovebox-shared`.
+- **`glovebox-cli/`** (lib crate `glovebox_cli` plus the `glovebox` binary) — `backup`,
+  `reset --env <name>` and `seed --env <name>`, with `run` callable in process from tests. The
+  last two refuse `live` and build the file name themselves.
+- **`glovebox-web/`** (lib crate `glovebox_web` plus the `glovebox-web` binary) — an axum and askama
+  server that renders the checklist. `src/pages.rs` holds the two page handlers, `src/actions.rs`
+  the form posts, `src/view.rs` the view structs, `src/guard.rs` the request guard and the content
+  security policy, and `templates/` the askama templates.
+- `scripts/check-layering.sh` (run by CI and `just ci`) keeps axum and rmcp out of `glovebox-shared`
+  and SeaORM out of `glovebox-web`.
 
 ### Domain library (`glovebox-shared/src/`)
 
 **`db.rs`**: `db::connect(path)` is the only place a SQLite connection is opened. It creates the
-parent directory, uses WAL mode with foreign keys enforced, and runs `Migrator::up()`.
+parent directory, uses WAL mode with foreign keys enforced and a 5-second busy timeout (the MCP
+server and the web page open the same file at once), and runs `Migrator::up()`. It refuses to open
+a database that records a migration this binary does not contain, with a message to rebuild.
 
 **`backup.rs`**: `db::connect` copies a database that already holds data to `backups/` beside it
 (`VACUUM INTO`, so the copy is consistent while another process writes) before any pending
@@ -85,17 +99,23 @@ command does. Tests use `test_db()` or a temporary directory.
 functions.
 
 **Services** (`services/`): One module per domain (`vehicle`, `service_record`, `part`, `incident`,
-`work_item`, `schedule`, `recall`, `research`, ...) of free functions taking `db: &impl
+`work_item`, `appointment`, `need`, `todo`, `schedule`, `recall`, `research`, ...) of free functions taking `db: &impl
 ConnectionTrait` first and returning `DomainResult<T>`. Composite reads: `upcoming` (the
 `whats_coming` answer: reminders, budget, planned work, recalls, open incidents), `reminders`,
-`budget`, `costs`, `activity`, `search`. `vin_decode` and `nhtsa` make the only network calls.
+`budget`, `costs`, `activity`, `search`, and `checklist` (the checklist for an appointment, an
+unscheduled job or one job, the past decisions across vehicles, and the home page's rows; the MCP
+tools and the web page both render it). `whats_coming` lists each open appointment.
+`seed::demo` fills an empty database with made-up data that exercises every need stage.
+`vin_decode` and `nhtsa` make the only network calls.
 
 **Errors** (`error.rs`): `DomainError::{NotFound, Invalid{field,message}, BadRequest, Db, Internal}`
 with the `DomainResult<T>` alias.
 
-**Migrations** (`migration/`): one squashed schema migration (`m20261112_000001_initial_schema`)
-and one seed migration (`m20261112_000002_seed_vw_mqb`: the VW MQB platform, the Golf GTI and
-Alltrack templates and their schedule items). They run on startup.
+**Migrations** (`migration/`): one squashed schema migration (`m20261112_000001_initial_schema`),
+one seed migration (`m20261112_000002_seed_vw_mqb`: the VW MQB platform, the Golf GTI and
+Alltrack templates and their schedule items) and the job checklist migration
+(`m20261113_000001_job_checklist`: appointments, needs, options and to-dos, additive only). They
+run on startup.
 
 **Test harness** (`test_support.rs`): `test_db()` is an in-memory SQLite database with migrations
 applied. It is compiled under `#[cfg(any(test, feature = "test-support"))]`; `glovebox-mcp` uses it
@@ -207,6 +227,34 @@ in-memory duplex stream and an in-memory database). One file per handler area (`
 `stdio.rs` (the binary's stdout) and `rehearsal.rs` (a new owner's whole first session through
 tool calls only). Add coverage for a new tool to its area's file.
 
+### Web page (`glovebox-web/`)
+
+A page is a view of the shared library, and a future page follows the same rules:
+
+- **No queries.** The crate holds `glovebox_shared::db::DatabaseConnection` and calls shared
+  services. It never names SeaORM, and the layering gate fails if a manifest, source or test file
+  does.
+- **No script.** Every action is an HTML form post followed by a redirect back to the page, and a
+  failed write renders the page again with the domain error beside the row. The content security
+  policy allows no scripts and no external resources, so a script would not run.
+- **Every number and sentence comes from a tested shared function.** Templates arrange text that
+  `glovebox-shared` produced (stage, counts, warnings, errors) and never compute it.
+- **Local only.** The server binds `127.0.0.1` on `GLOVEBOX_WEB_PORT` (4827 for `live`, 4828
+  otherwise) and refuses a request whose Host or Origin is not local. A page served from a
+  non-live environment shows its name in the header.
+- **Tests** drive the router in process over an in-memory database with a fixed clock
+  (`AppState::today`).
+- **Marking a need ordered has no undo**, because it creates a purchase record. A to-do tick and a
+  received date show a banner with an undo form.
+
+The look lives in one inline stylesheet in `templates/base.html`. It uses one typeface in two
+weights and four sizes. A black bar heads each group of next steps and carries its count in a
+window, and a gray bar heads each job. A solid tag is a signal (amber needs the owner, green means
+finished, red means a problem) and an outlined tag states a fact. A solid button commits
+something, and underlined text does everything else. Every date is `YYYY-MM-DD`. The owner accepted
+this look as a starting point and a design pass is planned, so the stylesheet stays in that one
+template.
+
 ## Conventions
 
 ### Layering (enforced by `scripts/check-layering.sh` in CI)
@@ -214,7 +262,7 @@ tool calls only). Add coverage for a new tool to its area's file.
 - Domain inputs, validation and SQL live in `glovebox-shared::{inputs,services}`. MCP handlers only
   map tool arguments to domain inputs and rely on `domain_error` for failures. No SeaORM queries,
   `ActiveModel`s or business logic in `glovebox-mcp/src/handler/`.
-- `glovebox-shared` never imports axum or rmcp.
+- `glovebox-shared` never imports axum or rmcp, and `glovebox-web` never names SeaORM.
 - Service functions take `db: &impl ConnectionTrait` as the first parameter, never a server type.
 - **Error model**: services return `DomainResult<T>`. `Invalid` renders as `"{field}: {message}"`;
   `BadRequest` renders its message verbatim; `Db` and `Internal` are opaque to the client.
@@ -239,7 +287,7 @@ tool calls only). Add coverage for a new tool to its area's file.
 - **Currency**: Stored as integer cents (`i32`). Tool inputs and outputs are cents. Use integer
   division for formatting, not `as f64 / 100.0`.
 - **DB datetimes**: `String` at the SeaORM boundary (SQLite TEXT). Dates are `YYYY-MM-DD`.
-- **Migrations**: new migrations go after `m20261112_000002_seed_vw_mqb`; the `new-migration` skill
+- **Migrations**: new migrations go after `m20261113_000001_job_checklist`; the `new-migration` skill
   has the templates. Use `Expr::cust()` for expressions inside builder queries; raw
   `execute_unprepared` only where no builder form exists (FTS5 DDL, cross-table copies).
 - **Migrations are not transactional on SQLite** (sea-orm-migration only wraps Postgres), so write
