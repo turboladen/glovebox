@@ -1,7 +1,7 @@
 mod common;
 
 use axum::{body::Body, http::StatusCode};
-use common::{app, db, get, page, request, send};
+use common::{app, db, get_page, page, post_form, request};
 use glovebox_shared::{
     db::DatabaseConnection,
     inputs::{
@@ -158,7 +158,7 @@ impl World {
     }
 
     async fn get(&self, path: &str) -> (StatusCode, String) {
-        page(app(self.db.clone(), "test"), get(path)).await
+        get_page(&self.db, path).await
     }
 
     async fn post(
@@ -166,36 +166,8 @@ impl World {
         path: &str,
         fields: &[(&str, &str)],
     ) -> (StatusCode, Option<String>, String) {
-        let (res, body) = send(app(self.db.clone(), "test"), form_post(path, fields)).await;
-        let location = res
-            .headers()
-            .get("location")
-            .map(|v| v.to_str().unwrap().to_owned());
-        (res.status(), location, body)
+        post_form(&self.db, path, fields).await
     }
-}
-
-fn encode(text: &str) -> String {
-    text.bytes()
-        .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' => {
-                char::from(b).to_string()
-            }
-            _ => format!("%{b:02X}"),
-        })
-        .collect()
-}
-
-fn form_post(path: &str, fields: &[(&str, &str)]) -> axum::http::Request<Body> {
-    let body = fields
-        .iter()
-        .map(|(k, v)| format!("{}={}", encode(k), encode(v)))
-        .collect::<Vec<_>>()
-        .join("&");
-    request("POST", path)
-        .header("content-type", "application/x-www-form-urlencoded")
-        .body(Body::from(body))
-        .unwrap()
 }
 
 // The markup of one next-steps group, from its heading to the end of its box.

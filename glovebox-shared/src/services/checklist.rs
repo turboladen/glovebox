@@ -677,45 +677,10 @@ mod tests {
             need::{NewNeed, NewOption, OrderDetails, ReturnInput, UpdateNeed, UpdateOption},
             part::NewPart,
             todo::NewTodo,
-            work_item::{NewWorkItem, UpdateWorkItem},
         },
-        services::{need, part as part_svc, work_item as job_svc},
-        test_support::{VehicleFixture, test_db},
+        services::{need, part as part_svc},
+        test_support::{VehicleFixture, add_job, set_job_status, test_db},
     };
-
-    async fn new_job(
-        db: &DatabaseConnection,
-        vehicle_id: i32,
-        title: &str,
-        appointment_id: Option<i32>,
-    ) -> i32 {
-        job_svc::create(
-            db,
-            vehicle_id,
-            NewWorkItem {
-                title: title.into(),
-                appointment_id,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap()
-        .id
-    }
-
-    async fn set_job_status(db: &DatabaseConnection, vehicle_id: i32, job_id: i32, status: &str) {
-        job_svc::update(
-            db,
-            vehicle_id,
-            job_id,
-            UpdateWorkItem {
-                status: Some(status.into()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-    }
 
     async fn new_need(db: &DatabaseConnection, vehicle_id: i32, job_id: i32, name: &str) -> i32 {
         need::add(
@@ -909,7 +874,7 @@ mod tests {
     async fn step_detail_is_the_summary_without_the_leading_name() {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
-        let job = new_job(&db, v, "Oil change", None).await;
+        let job = add_job(&db, v, "Oil change", None).await;
         new_need(&db, v, job, "Oil: 5W-30").await;
 
         let list = for_unscheduled(&db, v).await.unwrap();
@@ -923,7 +888,7 @@ mod tests {
     async fn checks_name_the_need_and_job_even_when_the_name_has_a_colon() {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
-        let job = new_job(&db, v, "Oil change", None).await;
+        let job = add_job(&db, v, "Oil change", None).await;
         let n = new_need(&db, v, job, "Oil: 5W-30").await;
         let unsure = need::add_option(
             &db,
@@ -966,7 +931,7 @@ mod tests {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
         let a = appointment_id(&db, v).await;
-        let job = new_job(&db, v, "60k service", Some(a)).await;
+        let job = add_job(&db, v, "60k service", Some(a)).await;
         new_need(&db, v, job, "Rear pads").await;
         to_order_need_with(
             &db,
@@ -1036,7 +1001,7 @@ mod tests {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
         let a = appointment_id(&db, v).await;
-        let job = new_job(&db, v, "Brakes", Some(a)).await;
+        let job = add_job(&db, v, "Brakes", Some(a)).await;
         let n = new_need(&db, v, job, "Rear pads").await;
         let option_id = new_option(&db, v, n, "Textar pads", None).await;
         need::decide(&db, v, n, Some(option_id), None)
@@ -1054,7 +1019,7 @@ mod tests {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
         let a = appointment_id(&db, v).await;
-        let job = new_job(&db, v, "Brakes", Some(a)).await;
+        let job = add_job(&db, v, "Brakes", Some(a)).await;
         let n = new_need(&db, v, job, "Rear pads").await;
         set_supplier(&db, v, n, "shop").await;
         let list = for_appointment(&db, v, a).await.unwrap();
@@ -1070,7 +1035,7 @@ mod tests {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
         let a = appointment_id(&db, v).await;
-        let job = new_job(&db, v, "Brakes", Some(a)).await;
+        let job = add_job(&db, v, "Brakes", Some(a)).await;
         new_need(&db, v, job, "Rear pads").await;
         set_job_status(&db, v, job, "dropped").await;
         let list = for_appointment(&db, v, a).await.unwrap();
@@ -1090,7 +1055,7 @@ mod tests {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
         let a = appointment_id(&db, v).await;
-        let job = new_job(&db, v, "Brakes", Some(a)).await;
+        let job = add_job(&db, v, "Brakes", Some(a)).await;
         new_need(&db, v, job, "Rear pads").await;
         to_order_need(&db, v, job, "Rear rotors", "OE rotors").await;
         set_job_status(&db, v, job, "done").await;
@@ -1107,7 +1072,7 @@ mod tests {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
         let a = appointment_id(&db, v).await;
-        let job = new_job(&db, v, "Brakes", Some(a)).await;
+        let job = add_job(&db, v, "Brakes", Some(a)).await;
         let option =
             |description: &str, maker: Option<&str>, number: Option<&str>, seller| NewOption {
                 description: description.into(),
@@ -1172,7 +1137,7 @@ mod tests {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
         let a = appointment_id(&db, v).await;
-        let job = new_job(&db, v, "Brakes", Some(a)).await;
+        let job = add_job(&db, v, "Brakes", Some(a)).await;
         let n = to_order_need(&db, v, job, "Rear rotors", "Rear rotor").await;
         need::update(
             &db,
@@ -1201,7 +1166,7 @@ mod tests {
     async fn a_shop_part_with_no_decision_is_not_noted() {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
-        let job = new_job(&db, v, "Brakes", None).await;
+        let job = add_job(&db, v, "Brakes", None).await;
         let n = new_need(&db, v, job, "Brake fluid").await;
         set_supplier(&db, v, n, "shop").await;
         let fluid = part_svc::create(
@@ -1226,7 +1191,7 @@ mod tests {
     async fn open_needs_counts_only_a_planned_jobs_open_needs() {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
-        let job = new_job(&db, v, "Brakes", None).await;
+        let job = add_job(&db, v, "Brakes", None).await;
         new_need(&db, v, job, "Pads").await;
         to_order_need(&db, v, job, "Rotors", "Rotor").await;
         let shop = new_need(&db, v, job, "Fluid").await;
@@ -1241,7 +1206,7 @@ mod tests {
     async fn options_note_counts_options_and_rejections() {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
-        let job = new_job(&db, v, "Brakes", None).await;
+        let job = add_job(&db, v, "Brakes", None).await;
         let n = new_need(&db, v, job, "Pads").await;
         let note = || async { for_job(&db, v, job).await.unwrap().needs[0].options_note() };
         assert_eq!(note().await, "0 options researched");
@@ -1267,7 +1232,7 @@ mod tests {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
         let a = appointment_id(&db, v).await;
-        let job = new_job(&db, v, "Brakes", Some(a)).await;
+        let job = add_job(&db, v, "Brakes", Some(a)).await;
         to_order_need_with(
             &db,
             v,
@@ -1290,7 +1255,7 @@ mod tests {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
         let a = appointment_id(&db, v).await;
-        let job = new_job(&db, v, "Brakes", Some(a)).await;
+        let job = add_job(&db, v, "Brakes", Some(a)).await;
         let shop = new_need(&db, v, job, "Rear pads").await;
         set_supplier(&db, v, shop, "shop").await;
         let received = to_order_need(&db, v, job, "Front pads", "Textar pads").await;
@@ -1335,7 +1300,7 @@ mod tests {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
         let a = appointment_id(&db, v).await;
-        let job = new_job(&db, v, "Brakes", Some(a)).await;
+        let job = add_job(&db, v, "Brakes", Some(a)).await;
         let n = new_need(&db, v, job, "Rear rotors").await;
         let option_id = new_option(&db, v, n, "OE rotors", Some("5Q0615601E")).await;
         set_supplier(&db, v, n, "self").await;
@@ -1373,7 +1338,7 @@ mod tests {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
         let a = appointment_id(&db, v).await;
-        let job = new_job(&db, v, "Brakes", Some(a)).await;
+        let job = add_job(&db, v, "Brakes", Some(a)).await;
         let n = new_need(&db, v, job, "Rear rotors").await;
         let option_id = new_option(&db, v, n, "OE rotors", Some("5q0615601e")).await;
         need::update_option(
@@ -1412,7 +1377,7 @@ mod tests {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
         let a = appointment_id(&db, v).await;
-        let job = new_job(&db, v, "Brakes", Some(a)).await;
+        let job = add_job(&db, v, "Brakes", Some(a)).await;
         let n = new_need(&db, v, job, "Rear pads").await;
         let bought = part_svc::create(
             &db,
@@ -1443,7 +1408,7 @@ mod tests {
     async fn purchase_summary_uses_only_the_parts_present() {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
-        let job = new_job(&db, v, "Brakes", None).await;
+        let job = add_job(&db, v, "Brakes", None).await;
         let n = new_need(&db, v, job, "Rear pads").await;
         let bought = part_svc::create(
             &db,
@@ -1469,12 +1434,12 @@ mod tests {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
         let a = appointment_id(&db, v).await;
-        let with_needs = new_job(&db, v, "Wipers", None).await;
+        let with_needs = add_job(&db, v, "Wipers", None).await;
         new_need(&db, v, with_needs, "Blades").await;
-        new_job(&db, v, "Wash", None).await;
-        let scheduled = new_job(&db, v, "Brakes", Some(a)).await;
+        add_job(&db, v, "Wash", None).await;
+        let scheduled = add_job(&db, v, "Brakes", Some(a)).await;
         new_need(&db, v, scheduled, "Pads").await;
-        let done = new_job(&db, v, "Oil", None).await;
+        let done = add_job(&db, v, "Oil", None).await;
         new_need(&db, v, done, "Filter").await;
         set_job_status(&db, v, done, "done").await;
         crate::services::todo::add(
@@ -1506,7 +1471,7 @@ mod tests {
         let v1 = VehicleFixture::new().insert_id(&db).await;
         let v2 = VehicleFixture::new().name("Other").insert_id(&db).await;
         let a = appointment_id(&db, v1).await;
-        let job = new_job(&db, v1, "Brakes", Some(a)).await;
+        let job = add_job(&db, v1, "Brakes", Some(a)).await;
         let missing_appointment = for_appointment(&db, v1, 99_999).await.unwrap_err();
         let wrong_appointment = for_appointment(&db, v2, a).await.unwrap_err();
         assert!(matches!(wrong_appointment, DomainError::NotFound(_)));
@@ -1539,10 +1504,10 @@ mod tests {
         let db = test_db().await;
         let gti = VehicleFixture::new().name("GTI").insert_id(&db).await;
         let alltrack = VehicleFixture::new().name("Alltrack").insert_id(&db).await;
-        let gti_job = new_job(&db, gti, "Brakes", None).await;
+        let gti_job = add_job(&db, gti, "Brakes", None).await;
         let older = to_order_need(&db, gti, gti_job, "Brake pads", "Textar pads").await;
         set_decided_on(&db, older, "2026-10-01").await;
-        let alltrack_job = new_job(&db, alltrack, "Rotors", None).await;
+        let alltrack_job = add_job(&db, alltrack, "Rotors", None).await;
         let newer = new_need(&db, alltrack, alltrack_job, "Rear rotors").await;
         let option_id = new_option(&db, alltrack, newer, "OE", Some("5Q0615601E")).await;
         need::decide(
@@ -1592,7 +1557,7 @@ mod tests {
     async fn past_decisions_includes_rejected_options_and_returned_parts() {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
-        let job = new_job(&db, v, "Brakes", None).await;
+        let job = add_job(&db, v, "Brakes", None).await;
         let n = new_need(&db, v, job, "Rear pads").await;
         let wrong = new_option(&db, v, n, "Cheap pads", None).await;
         let right = new_option(&db, v, n, "Textar pads", None).await;
@@ -1645,7 +1610,7 @@ mod tests {
     async fn past_decisions_keeps_the_reason_for_a_choice_that_proved_wrong() {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
-        let job = new_job(&db, v, "Brakes", None).await;
+        let job = add_job(&db, v, "Brakes", None).await;
         let n = new_need(&db, v, job, "Rear rotors").await;
         let first = new_option(&db, v, n, "310 mm rotors", None).await;
         set_supplier(&db, v, n, "self").await;
@@ -1718,7 +1683,7 @@ mod tests {
         .await
         .unwrap()
         .id;
-        let job = new_job(&db, golf, "Brakes", Some(booked)).await;
+        let job = add_job(&db, golf, "Brakes", Some(booked)).await;
         new_need(&db, golf, job, "Rear pads").await;
         new_need(&db, golf, job, "Rear rotors").await;
         let todo_input = |title: &str, appointment_id| NewTodo {
@@ -1738,9 +1703,9 @@ mod tests {
         crate::services::todo::complete(&db, golf, done.id, None)
             .await
             .unwrap();
-        let loose = new_job(&db, golf, "Wiper blades", None).await;
+        let loose = add_job(&db, golf, "Wiper blades", None).await;
         new_need(&db, golf, loose, "Blades").await;
-        new_job(&db, golf, "Needless job", None).await;
+        add_job(&db, golf, "Needless job", None).await;
         crate::services::todo::add(&db, alltrack, todo_input("Check tire pressure", None))
             .await
             .unwrap();

@@ -71,3 +71,50 @@ pub async fn page(app: Router, req: Request<Body>) -> (StatusCode, String) {
     let (res, body) = send(app, req).await;
     (res.status(), body)
 }
+
+/// Percent-encodes `text` for a form body.
+pub fn encode(text: &str) -> String {
+    text.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' => {
+                char::from(b).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+/// A form post of `fields` to `path`, sent the way a browser sends it from the
+/// page itself.
+pub fn form_post(path: &str, fields: &[(&str, &str)]) -> Request<Body> {
+    let body = fields
+        .iter()
+        .map(|(k, v)| format!("{}={}", encode(k), encode(v)))
+        .collect::<Vec<_>>()
+        .join("&");
+    request("POST", path)
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap()
+}
+
+/// Loads `path` from the application over `db` and returns the status and
+/// body.
+pub async fn get_page(db: &DatabaseConnection, path: &str) -> (StatusCode, String) {
+    page(app(db.clone(), "test"), get(path)).await
+}
+
+/// Posts `fields` to `path` on the application over `db` and returns the
+/// status, the redirect location if there is one, and the body.
+pub async fn post_form(
+    db: &DatabaseConnection,
+    path: &str,
+    fields: &[(&str, &str)],
+) -> (StatusCode, Option<String>, String) {
+    let (res, body) = send(app(db.clone(), "test"), form_post(path, fields)).await;
+    let location = res
+        .headers()
+        .get("location")
+        .map(|v| v.to_str().unwrap().to_owned());
+    (res.status(), location, body)
+}

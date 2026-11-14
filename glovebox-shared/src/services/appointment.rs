@@ -562,7 +562,7 @@ mod tests {
             work_item::{NewWorkItem, UpdateWorkItem},
         },
         services::{need, todo as todo_svc, work_item as job},
-        test_support::{VehicleFixture, test_db},
+        test_support::{VehicleFixture, add_job, set_job_status, test_db},
     };
 
     fn appt(purpose: &str) -> NewAppointment {
@@ -570,21 +570,6 @@ mod tests {
             purpose: purpose.into(),
             ..Default::default()
         }
-    }
-
-    async fn add_job(db: &DatabaseConnection, vehicle_id: i32, appointment_id: Option<i32>) -> i32 {
-        job::create(
-            db,
-            vehicle_id,
-            NewWorkItem {
-                title: "Brake pads".into(),
-                appointment_id,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap()
-        .id
     }
 
     fn model(cancelled_on: Option<&str>, closed_on: Option<&str>) -> appointment::Model {
@@ -730,7 +715,7 @@ mod tests {
             wrong.to_string().replace(&theirs.id.to_string(), "N"),
             nonexistent.to_string().replace("99999", "N")
         );
-        let mine = add_job(&db, v1, None).await;
+        let mine = add_job(&db, v1, "Brake pads", None).await;
         let err = job::update(
             &db,
             v1,
@@ -769,7 +754,7 @@ mod tests {
         );
         let b = create(&db, v, appt("Other")).await.unwrap();
         close(&db, v, b.id).await.unwrap();
-        let mine = add_job(&db, v, None).await;
+        let mine = add_job(&db, v, "Brake pads", None).await;
         let err = job::update(
             &db,
             v,
@@ -793,7 +778,7 @@ mod tests {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
         let a = create(&db, v, appt("Brakes")).await.unwrap();
-        let planned = add_job(&db, v, Some(a.id)).await;
+        let planned = add_job(&db, v, "Brake pads", Some(a.id)).await;
 
         let revised = update_with_status(
             &db,
@@ -902,19 +887,9 @@ mod tests {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
         let a = create(&db, v, appt("Brakes")).await.unwrap();
-        let planned = add_job(&db, v, Some(a.id)).await;
-        let finished = add_job(&db, v, Some(a.id)).await;
-        job::update(
-            &db,
-            v,
-            finished,
-            UpdateWorkItem {
-                status: Some("done".into()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
+        let planned = add_job(&db, v, "Brake pads", Some(a.id)).await;
+        let finished = add_job(&db, v, "Brake pads", Some(a.id)).await;
+        set_job_status(&db, v, finished, "done").await;
         need::add(
             &db,
             v,
@@ -964,7 +939,7 @@ mod tests {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
         let a = create(&db, v, appt("Brakes")).await.unwrap();
-        let j = add_job(&db, v, Some(a.id)).await;
+        let j = add_job(&db, v, "Brake pads", Some(a.id)).await;
         let t = todo_svc::add(
             &db,
             v,
@@ -1037,8 +1012,8 @@ mod tests {
         .await
         .unwrap();
         let unbooked = create(&db, v, appt("Someday")).await.unwrap();
-        let j1 = add_job(&db, v, Some(a.id)).await;
-        let j2 = add_job(&db, v, Some(a.id)).await;
+        let j1 = add_job(&db, v, "Brake pads", Some(a.id)).await;
+        let j2 = add_job(&db, v, "Brake pads", Some(a.id)).await;
         for (job_id, name, supplied_by) in [
             (j1, "Pads", None),
             (j1, "Rotors", Some("shop")),
@@ -1141,18 +1116,8 @@ mod tests {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
         let a = create(&db, v, appt("Brakes")).await.unwrap();
-        let job_id = add_job(&db, v, Some(a.id)).await;
-        job::update(
-            &db,
-            v,
-            job_id,
-            UpdateWorkItem {
-                status: Some("done".into()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
+        let job_id = add_job(&db, v, "Brake pads", Some(a.id)).await;
+        set_job_status(&db, v, job_id, "done").await;
         let t = todo_svc::add(
             &db,
             v,
@@ -1179,8 +1144,8 @@ mod tests {
         let v = VehicleFixture::new().insert_id(&db).await;
         let closed = create(&db, v, appt("Brakes")).await.unwrap();
         let cancelled = create(&db, v, appt("Wipers")).await.unwrap();
-        let on_closed = add_job(&db, v, Some(closed.id)).await;
-        let on_cancelled = add_job(&db, v, Some(cancelled.id)).await;
+        let on_closed = add_job(&db, v, "Brake pads", Some(closed.id)).await;
+        let on_cancelled = add_job(&db, v, "Brake pads", Some(cancelled.id)).await;
         let set_status = |job_id, status: &str| {
             job::update(
                 &db,
@@ -1236,8 +1201,8 @@ mod tests {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
         let a = create(&db, v, appt("Brakes")).await.unwrap();
-        let kept = add_job(&db, v, Some(a.id)).await;
-        let dropped = add_job(&db, v, Some(a.id)).await;
+        let kept = add_job(&db, v, "Brake pads", Some(a.id)).await;
+        let dropped = add_job(&db, v, "Brake pads", Some(a.id)).await;
         for job_id in [kept, dropped] {
             need::add(
                 &db,
@@ -1251,17 +1216,7 @@ mod tests {
             .await
             .unwrap();
         }
-        job::update(
-            &db,
-            v,
-            dropped,
-            UpdateWorkItem {
-                status: Some("dropped".into()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
+        set_job_status(&db, v, dropped, "dropped").await;
         let all = list(&db, v, true).await.unwrap();
         assert_eq!(all[0].needs_open, 1);
     }

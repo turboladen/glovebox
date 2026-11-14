@@ -3,18 +3,8 @@
 
 mod common;
 
-use common::{TestClient, assert_unknown_field_rejected, connect};
+use common::{TestClient, add_vehicle, assert_unknown_field_rejected, connect, id};
 use serde_json::{Value, json};
-
-fn id(value: &Value) -> i64 {
-    value["id"]
-        .as_i64()
-        .unwrap_or_else(|| panic!("payload must carry an id; got: {value}"))
-}
-
-async fn add_vehicle(t: &TestClient, name: &str) -> i64 {
-    id(&t.call("add_vehicle", json!({ "name": name })).await)
-}
 
 async fn plan_appointment(t: &TestClient, vehicle_id: i64, purpose: &str) -> i64 {
     id(&t

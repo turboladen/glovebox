@@ -19,6 +19,45 @@ pub fn days_ago(days: i64) -> String {
     crate::services::date_label(crate::services::today() - chrono::Duration::days(days))
 }
 
+/// Creates a planned job titled `title` for `vehicle_id`, on
+/// `appointment_id` when one is given, and returns its id. Panics if the
+/// write fails.
+pub async fn add_job(
+    db: &DatabaseConnection,
+    vehicle_id: i32,
+    title: &str,
+    appointment_id: Option<i32>,
+) -> i32 {
+    crate::services::work_item::create(
+        db,
+        vehicle_id,
+        crate::inputs::work_item::NewWorkItem {
+            title: title.into(),
+            appointment_id,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id
+}
+
+/// Sets a job's status through the work-item service. Panics if the write
+/// fails.
+pub async fn set_job_status(db: &DatabaseConnection, vehicle_id: i32, job_id: i32, status: &str) {
+    crate::services::work_item::update(
+        db,
+        vehicle_id,
+        job_id,
+        crate::inputs::work_item::UpdateWorkItem {
+            status: Some(status.into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+}
+
 /// The number of rows in `E`'s table. Panics if the query fails.
 pub async fn row_count<E>(db: &DatabaseConnection) -> u64
 where

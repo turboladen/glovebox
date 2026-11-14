@@ -839,24 +839,12 @@ pub async fn return_part<C: ConnectionTrait + TransactionTrait>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        inputs::work_item::NewWorkItem,
-        test_support::{VehicleFixture, row_count, test_db},
-    };
+    use crate::test_support::{VehicleFixture, add_job, row_count, test_db};
 
     async fn seed_job(db: &DatabaseConnection) -> (i32, i32) {
         let vehicle_id = VehicleFixture::new().insert_id(db).await;
-        let job = super::super::work_item::create(
-            db,
-            vehicle_id,
-            NewWorkItem {
-                title: "Rear brakes".into(),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        (vehicle_id, job.id)
+        let job = add_job(db, vehicle_id, "Rear brakes", None).await;
+        (vehicle_id, job)
     }
 
     fn need(name: &str) -> NewNeed {
