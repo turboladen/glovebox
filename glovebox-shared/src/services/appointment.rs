@@ -14,8 +14,9 @@ use crate::{
 };
 
 /// An appointment with the counts the owner reads at a glance. `needs_open`
-/// counts needs on its jobs (dropped jobs excluded) that are undecided, waiting to be ordered or
-/// ordered but not yet received; `todos_open` counts its unfinished to-dos.
+/// counts the needs on its planned jobs that are undecided, waiting to be
+/// ordered or ordered but not yet received; `todos_open` counts its
+/// unfinished to-dos.
 #[derive(Debug, Serialize)]
 pub struct AppointmentSummary {
     #[serde(flatten)]
@@ -251,9 +252,9 @@ async fn summaries(
         .await?;
 
     let mut job_appointment: HashMap<i32, i32> = HashMap::new();
-    let dropped: HashSet<i32> = jobs
+    let planned: HashSet<i32> = jobs
         .iter()
-        .filter(|j| j.status == "dropped")
+        .filter(|j| j.status == "planned")
         .map(|j| j.id)
         .collect();
     let mut statuses: HashMap<i32, Vec<&str>> = HashMap::new();
@@ -270,7 +271,7 @@ async fn summaries(
     for need in &needs {
         let current = stage(need, need.part_id.and_then(|id| parts.get(&id)));
         if matches!(current, Stage::Undecided | Stage::ToOrder | Stage::Ordered)
-            && !dropped.contains(&need.work_item_id)
+            && planned.contains(&need.work_item_id)
             && let Some(appointment_id) = job_appointment.get(&need.work_item_id)
         {
             *needs_open.entry(*appointment_id).or_default() += 1;

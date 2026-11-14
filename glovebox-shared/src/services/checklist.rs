@@ -432,6 +432,22 @@ fn next_steps(jobs: &[JobView], todos: &[todo::Model]) -> NextSteps {
     steps
 }
 
+// Names an option in a sentence: by manufacturer and part number when it has
+// a part number, otherwise by its description.
+fn option_label(option: &need_option::Model) -> String {
+    if option.part_number.is_none() {
+        return option.description.clone();
+    }
+    [
+        option.manufacturer.as_deref(),
+        option.part_number.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" ")
+}
+
 fn step_summary(view: &NeedView, job_done: bool) -> String {
     let name = &view.need.name;
     match view.stage {
@@ -448,7 +464,7 @@ fn step_summary(view: &NeedView, job_done: bool) -> String {
                     .seller
                     .as_ref()
                     .map_or_else(String::new, |s| format!(" from {s}"));
-                format!(" {}{from}", c.description)
+                format!(" {}{from}", option_label(c))
             });
             format!("{name}: order{what}")
         }
@@ -575,6 +591,26 @@ mod tests {
         id
     }
 
+    // A to-order need whose only option is `option`.
+    async fn to_order_need_with(
+        db: &DatabaseConnection,
+        vehicle_id: i32,
+        job_id: i32,
+        name: &str,
+        option: NewOption,
+    ) -> i32 {
+        let id = new_need(db, vehicle_id, job_id, name).await;
+        let option_id = need::add_option(db, vehicle_id, id, option)
+            .await
+            .unwrap()
+            .id;
+        set_supplier(db, vehicle_id, id, "self").await;
+        need::decide(db, vehicle_id, id, Some(option_id), None)
+            .await
+            .unwrap();
+        id
+    }
+
     async fn set_supplier(db: &DatabaseConnection, vehicle_id: i32, need_id: i32, who: &str) {
         need::update(
             db,
@@ -631,7 +667,20 @@ mod tests {
         let a = appointment_id(&db, v).await;
         let job = new_job(&db, v, "60k service", Some(a)).await;
         new_need(&db, v, job, "Rear pads").await;
-        to_order_need(&db, v, job, "Rear rotors", "OE 5Q0615601E").await;
+        to_order_need_with(
+            &db,
+            v,
+            job,
+            "Rear rotors",
+            NewOption {
+                description: "Rear rotor, solid disc".into(),
+                manufacturer: Some("OE".into()),
+                part_number: Some("5Q0615601E".into()),
+                seller: Some("FCP Euro".into()),
+                ..Default::default()
+            },
+        )
+        .await;
         let front_pads = to_order_need(&db, v, job, "Front pads", "Textar pads").await;
         order(&db, v, front_pads, "2026-11-14").await;
         let front_rotors = to_order_need(&db, v, job, "Front rotors", "Zimmermann rotors").await;
@@ -749,6 +798,114 @@ mod tests {
         assert!(steps.decide.is_empty() && steps.order.is_empty() && steps.arriving.is_empty());
         assert_eq!(steps.done.len(), 2);
         assert_eq!(steps.done[0].stage, Stage::Undecided);
+        assert_eq!(list.appointment.unwrap().needs_open, 0);
+    }
+
+    #[tokio::test]
+    async fn order_summary_names_the_option_by_part_number_or_description() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let a = appointment_id(&db, v).await;
+        let job = new_job(&db, v, "Brakes", Some(a)).await;
+        let option =
+            |description: &str, maker: Option<&str>, number: Option<&str>, seller| NewOption {
+                description: description.into(),
+                manufacturer: maker.map(Into::into),
+                part_number: number.map(Into::into),
+                seller: seller,
+                ..Default::default()
+            };
+        let fcp = || Some("FCP Euro".to_string());
+        to_order_need_with(
+            &db,
+            v,
+            job,
+            "Rear rotors",
+            option("Rear rotor", Some("Zimmermann"), Some("600.3241.20"), fcp()),
+        )
+        .await;
+        to_order_need_with(
+            &db,
+            v,
+            job,
+            "Wiper blades",
+            option("Aero blades", None, Some("A123"), fcp()),
+        )
+        .await;
+        to_order_need_with(
+            &db,
+            v,
+            job,
+            "Cabin filter",
+            option("Mann cabin filter", Some("Mann"), None, fcp()),
+        )
+        .await;
+        to_order_need_with(
+            &db,
+            v,
+            job,
+            "Oil",
+            option("5W-40 oil", Some("Liqui Moly"), Some("2332"), None),
+        )
+        .await;
+        let list = for_appointment(&db, v, a).await.unwrap();
+        assert_eq!(
+            rows(&list.next_steps.order),
+            [
+                (
+                    "Rear rotors",
+                    "Rear rotors: order Zimmermann 600.3241.20 from FCP Euro"
+                ),
+                ("Wiper blades", "Wiper blades: order A123 from FCP Euro"),
+                (
+                    "Cabin filter",
+                    "Cabin filter: order Mann cabin filter from FCP Euro"
+                ),
+                ("Oil", "Oil: order Liqui Moly 2332"),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn done_group_sentences_are_exact() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let a = appointment_id(&db, v).await;
+        let job = new_job(&db, v, "Brakes", Some(a)).await;
+        let shop = new_need(&db, v, job, "Rear pads").await;
+        set_supplier(&db, v, shop, "shop").await;
+        let received = to_order_need(&db, v, job, "Front pads", "Textar pads").await;
+        order(&db, v, received, "2026-11-06").await;
+        need::mark_received(&db, v, received, Some("2026-11-09".into()))
+            .await
+            .unwrap();
+        let installed = to_order_need(&db, v, job, "Front rotors", "Zimmermann rotors").await;
+        order(&db, v, installed, "2026-11-06").await;
+        let linked = need::require(&db, v, installed).await.unwrap();
+        let mut part: part::ActiveModel = part::Entity::find_by_id(linked.part_id.unwrap())
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap()
+            .into();
+        part.status = Set("installed".into());
+        part.update(&db).await.unwrap();
+        let list = for_appointment(&db, v, a).await.unwrap();
+        assert_eq!(
+            rows(&list.next_steps.done),
+            [
+                ("Rear pads", "Rear pads: the shop supplies it"),
+                ("Front pads", "Front pads: received on 2026-11-09"),
+                ("Front rotors", "Front rotors: installed"),
+            ]
+        );
+
+        let open = new_need(&db, v, job, "Wipers").await;
+        let _ = open;
+        set_job_status(&db, v, job, "done").await;
+        let list = for_appointment(&db, v, a).await.unwrap();
+        let wipers = list.next_steps.done.last().unwrap();
+        assert_eq!(wipers.summary, "Wipers: the job is done");
     }
 
     const UNCONFIRMED: &str = "Fitment of the chosen option is not confirmed.";
@@ -1000,6 +1157,7 @@ mod tests {
 
         // Wildcard characters in the query match themselves only.
         assert!(past_decisions(&db, "%").await.unwrap().is_empty());
+        assert!(past_decisions(&db, "_").await.unwrap().is_empty());
         assert!(
             past_decisions(&db, "no such part")
                 .await
