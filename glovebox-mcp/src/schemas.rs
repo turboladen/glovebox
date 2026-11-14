@@ -373,8 +373,8 @@ pub struct RecordPartInput {
     /// Who supplied the part: `self` (the owner bought it, the default) or
     /// `shop` (the shop sourced it and billed for it).
     pub supplied_by: Option<String>,
-    /// Lifecycle status: `purchased`, `installed`, `replaced` or `returned`.
-    /// Defaults to `purchased`.
+    /// Lifecycle status: `purchased`, `installed` or `replaced`. Defaults to
+    /// `purchased`. A return is made on the need, not here.
     pub status: Option<String>,
     /// Where it goes on the car (free text), e.g. "Front brakes".
     pub location: Option<String>,

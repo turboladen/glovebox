@@ -452,7 +452,8 @@ pub struct CorrectPartInput {
     pub part_id: i32,
     /// New part name.
     pub name: Option<String>,
-    /// `purchased`, `installed`, `replaced` or `returned`.
+    /// `purchased`, `installed` or `replaced`. A return is made on the need,
+    /// not here; a returned part can only be set back to `purchased`.
     pub status: Option<String>,
     /// `self` or `shop`.
     pub supplied_by: Option<String>,

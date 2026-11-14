@@ -2508,6 +2508,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn installing_a_returned_part_through_a_service_is_refused() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let returned = part::ActiveModel {
+            vehicle_id: Set(vid),
+            name: Set("Rotors".into()),
+            status: Set("returned".into()),
+            supplied_by: Set("self".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        let err = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: "2026-11-10".into(),
+                part_ids: Some(vec![returned.id]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
+        assert_eq!(row_count::<service_record::Entity>(&db).await, 0);
+        let after = part::Entity::find_by_id(returned.id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.status, "returned");
+    }
+
+    #[tokio::test]
     async fn refiling_an_invoice_number_returns_the_first_record_untouched() {
         let db = test_db().await;
         let vid = seed_vehicle(&db).await;

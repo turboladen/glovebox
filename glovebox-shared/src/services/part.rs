@@ -9,6 +9,42 @@ use crate::{
 /// Allowed values for `parts.supplied_by`.
 pub const VALID_SUPPLIED_BY: [&str; 2] = ["self", "shop"];
 
+/// Allowed values for `parts.status`.
+pub const VALID_STATUSES: [&str; 4] = ["purchased", "installed", "replaced", "returned"];
+
+// Checks a status a caller asks for. `returned` is in the vocabulary but is
+// only reachable through the return action on a need, which records the
+// reason and unlinks the part in the same write.
+fn validate_requested_status(status: &str) -> DomainResult<()> {
+    if !VALID_STATUSES.contains(&status) {
+        return Err(DomainError::Invalid {
+            field: "status".into(),
+            message: format!(
+                "'{status}' is not valid. Must be one of: {}",
+                VALID_STATUSES.join(", ")
+            ),
+        });
+    }
+    if status == "returned" {
+        return Err(DomainError::BadRequest(
+            "A part is marked returned by returning it from its need (return_part)".into(),
+        ));
+    }
+    Ok(())
+}
+
+// A returned part may only go back to `purchased`.
+fn validate_status_change(existing: &part::Model, status: &str) -> DomainResult<()> {
+    validate_requested_status(status)?;
+    if existing.status == "returned" && status != "purchased" {
+        return Err(DomainError::BadRequest(format!(
+            "Part {} was returned; its status can only change back to purchased",
+            existing.id
+        )));
+    }
+    Ok(())
+}
+
 fn validate_supplied_by(supplied_by: &str) -> DomainResult<()> {
     if VALID_SUPPLIED_BY.contains(&supplied_by) {
         return Ok(());
@@ -53,6 +89,9 @@ pub async fn create(
     super::vehicle::require(db, vehicle_id).await?;
     let supplied_by = input.supplied_by.unwrap_or_else(|| "self".to_string());
     validate_supplied_by(&supplied_by)?;
+    if let Some(status) = &input.status {
+        validate_requested_status(status)?;
+    }
     super::validate_optional_date("purchase_date", input.purchase_date.as_deref())?;
     super::validate_optional_date("installed_date", input.installed_date.as_deref())?;
     super::validate_optional_date("warranty_expires_on", input.warranty_expires_on.as_deref())?;
@@ -102,6 +141,9 @@ pub async fn update(
     if let Some(v) = &input.supplied_by {
         validate_supplied_by(v)?;
     }
+    if let Some(status) = &input.status {
+        validate_status_change(&existing, status)?;
+    }
     for (field, value) in [
         ("purchase_date", &input.purchase_date),
         ("installed_date", &input.installed_date),
@@ -112,6 +154,7 @@ pub async fn update(
         super::validate_optional_date(field, value.as_ref().and_then(|v| v.as_deref()))?;
     }
 
+    let existing_returned = existing.status == "returned";
     let mut active: part::ActiveModel = existing.into();
 
     if let Some(v) = input.supplied_by {
@@ -148,6 +191,11 @@ pub async fn update(
         active.retailer_url = Set(v);
     }
     if let Some(v) = input.status {
+        if existing_returned {
+            active.returned_on = Set(None);
+            active.return_reason = Set(None);
+            active.returned_from_need_id = Set(None);
+        }
         active.status = Set(v);
     }
     if let Some(v) = input.installed_date {
@@ -279,7 +327,7 @@ pub async fn delete(db: &impl ConnectionTrait, vehicle_id: i32, id: i32) -> Doma
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{VehicleFixture, test_db};
+    use crate::test_support::{VehicleFixture, row_count, test_db};
 
     async fn seed_vehicle(db: &impl ConnectionTrait) -> i32 {
         VehicleFixture::new().insert_id(db).await
@@ -613,16 +661,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let p = create(
-            &db,
-            vid,
-            NewPart {
-                status: Some("returned".into()),
-                ..minimal_part("Rotors", None)
-            },
-        )
-        .await
-        .unwrap();
+        let p = seed_returned(&db, vid).await;
         let err = install(&db, vid, p.id, &record, NotSet).await.unwrap_err();
         assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
         let after = get(&db, vid, p.id).await.unwrap();
@@ -671,5 +710,145 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(err, DomainError::Invalid { .. }), "{err:?}");
+    }
+
+    async fn seed_returned(db: &impl ConnectionTrait, vid: i32) -> part::Model {
+        part::ActiveModel {
+            vehicle_id: Set(vid),
+            name: Set("Rotors".into()),
+            status: Set("returned".into()),
+            supplied_by: Set("self".into()),
+            returned_on: Set(Some("2026-11-06".into())),
+            return_reason: Set(Some("wrong size".into())),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn create_and_update_reject_an_unknown_status() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let err = create(
+            &db,
+            vid,
+            NewPart {
+                status: Some("lost".into()),
+                ..minimal_part("Rotors", None)
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "status"));
+        let p = create(&db, vid, minimal_part("Rotors", None))
+            .await
+            .unwrap();
+        let err = update(
+            &db,
+            vid,
+            p.id,
+            UpdatePart {
+                status: Some("lost".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "status"));
+        assert_eq!(get(&db, vid, p.id).await.unwrap().status, "purchased");
+    }
+
+    #[tokio::test]
+    async fn returned_cannot_be_set_through_create_or_update() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let err = create(
+            &db,
+            vid,
+            NewPart {
+                status: Some("returned".into()),
+                ..minimal_part("Rotors", None)
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(&err, DomainError::BadRequest(m) if m.contains("return_part")),
+            "{err:?}"
+        );
+        let p = create(&db, vid, minimal_part("Rotors", None))
+            .await
+            .unwrap();
+        let err = update(
+            &db,
+            vid,
+            p.id,
+            UpdatePart {
+                status: Some("returned".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(&err, DomainError::BadRequest(m) if m.contains("return_part")),
+            "{err:?}"
+        );
+        assert_eq!(get(&db, vid, p.id).await.unwrap().status, "purchased");
+        assert_eq!(row_count::<part::Entity>(&db).await, 1);
+    }
+
+    #[tokio::test]
+    async fn a_returned_part_can_only_go_back_to_purchased_and_loses_its_return_fields() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let p = seed_returned(&db, vid).await;
+        for status in ["installed", "replaced", "returned"] {
+            let err = update(
+                &db,
+                vid,
+                p.id,
+                UpdatePart {
+                    status: Some(status.into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                matches!(err, DomainError::BadRequest(_)),
+                "{status}: {err:?}"
+            );
+        }
+        let noted = update(
+            &db,
+            vid,
+            p.id,
+            UpdatePart {
+                notes: Some(Some("still at the door".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(noted.status, "returned");
+        assert_eq!(noted.return_reason.as_deref(), Some("wrong size"));
+        let back = update(
+            &db,
+            vid,
+            p.id,
+            UpdatePart {
+                status: Some("purchased".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(back.status, "purchased");
+        assert_eq!(back.returned_on, None);
+        assert_eq!(back.return_reason, None);
+        assert_eq!(back.returned_from_need_id, None);
     }
 }

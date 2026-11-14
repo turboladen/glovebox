@@ -643,7 +643,8 @@ pub async fn clear_received(
 /// Sends back the part of an `ordered` or `received` need. In one
 /// transaction the part becomes `returned` with the reason and today's date,
 /// the need loses the part (and, when `option_was_wrong`, its chosen option,
-/// which is rejected for the same reason), and a to-do to take the part back
+/// which is rejected for the same reason; the flag has no effect when the
+/// need has no chosen option), and a to-do to take the part back
 /// goes on the job's appointment, or on the vehicle when the job has none.
 ///
 /// # Errors
@@ -1363,15 +1364,12 @@ mod tests {
         let (vehicle_id, job_id) = seed_job(&db).await;
         let n = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
         let p = new_part(&db, vehicle_id, "Pads").await;
-        crate::services::part::update(
-            &db,
-            vehicle_id,
-            p.id,
-            crate::inputs::part::UpdatePart {
-                status: Some("returned".into()),
-                ..Default::default()
-            },
-        )
+        part::ActiveModel {
+            id: Unchanged(p.id),
+            status: Set("returned".into()),
+            ..Default::default()
+        }
+        .update(&db)
         .await
         .unwrap();
         let err = link_part(&db, vehicle_id, n.id, p.id, None)
