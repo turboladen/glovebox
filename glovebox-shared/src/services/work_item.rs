@@ -325,6 +325,9 @@ pub async fn create(
         input.incident_id,
     )
     .await?;
+    if let Some(id) = input.appointment_id {
+        crate::services::appointment::require_assignable(db, vehicle_id, id).await?;
+    }
 
     let model = work_item::ActiveModel {
         vehicle_id: Set(vehicle_id),
@@ -336,6 +339,7 @@ pub async fn create(
         est_cost_cents: Set(input.est_cost_cents),
         revisit_by_date: Set(input.revisit_by_date),
         revisit_by_miles: Set(input.revisit_by_miles),
+        appointment_id: Set(input.appointment_id),
         status: Set("planned".to_string()),
         ..Default::default()
     };
@@ -371,6 +375,9 @@ pub async fn update(
         input.incident_id.flatten(),
     )
     .await?;
+    if let Some(Some(id)) = input.appointment_id {
+        crate::services::appointment::require_assignable(db, vehicle_id, id).await?;
+    }
 
     let mut active: work_item::ActiveModel = existing.into();
 
@@ -397,6 +404,9 @@ pub async fn update(
     }
     if let Some(v) = input.revisit_by_miles {
         active.revisit_by_miles = Set(v);
+    }
+    if let Some(v) = input.appointment_id {
+        active.appointment_id = Set(v);
     }
     if let Some(v) = input.status {
         // A completing service link is kept only while the item is done.
@@ -495,6 +505,7 @@ mod tests {
             est_cost_cents: None,
             revisit_by_date: None,
             revisit_by_miles: None,
+            appointment_id: None,
         }
     }
 

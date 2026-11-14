@@ -13,6 +13,8 @@ pub struct NewWorkItem {
     pub revisit_by_date: Option<String>,
     /// Odometer reading by which to look at this item again.
     pub revisit_by_miles: Option<i32>,
+    /// The appointment the job goes on; it must be the vehicle's and still open.
+    pub appointment_id: Option<i32>,
 }
 
 #[derive(Default)]
@@ -27,4 +29,6 @@ pub struct UpdateWorkItem {
     pub revisit_by_miles: Option<Option<i32>>,
     /// One of `planned | done | dropped`.
     pub status: Option<String>,
+    /// Moves the job to an appointment (which must be open) or, with `None`, off it.
+    pub appointment_id: Option<Option<i32>>,
 }

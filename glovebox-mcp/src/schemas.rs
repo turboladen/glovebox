@@ -469,6 +469,7 @@ impl PlanWorkInput {
                 est_cost_cents: self.est_cost_cents,
                 revisit_by_date: self.revisit_by_date,
                 revisit_by_miles: self.revisit_by_miles,
+                ..Default::default()
             },
         )
     }

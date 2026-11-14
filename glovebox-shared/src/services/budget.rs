@@ -361,6 +361,7 @@ mod tests {
                 est_cost_cents: Some(7_500),
                 revisit_by_date: None,
                 revisit_by_miles: None,
+                appointment_id: None,
             },
         )
         .await
@@ -377,6 +378,7 @@ mod tests {
                 est_cost_cents: Some(99_900),
                 revisit_by_date: None,
                 revisit_by_miles: None,
+                appointment_id: None,
             },
         )
         .await
@@ -466,6 +468,7 @@ mod tests {
                     est_cost_cents: Some(est),
                     revisit_by_date: None,
                     revisit_by_miles: None,
+                    appointment_id: None,
                 },
             )
             .await
@@ -547,6 +550,7 @@ mod tests {
             est_cost_cents,
             revisit_by_date: None,
             revisit_by_miles: None,
+            appointment_id: None,
         }
     }
 

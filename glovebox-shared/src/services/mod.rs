@@ -1,4 +1,5 @@
 pub mod activity;
+pub mod appointment;
 pub mod budget;
 pub mod costs;
 pub mod incident;

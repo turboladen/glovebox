@@ -2843,6 +2843,7 @@ mod tests {
                 est_cost_cents: None,
                 revisit_by_date: None,
                 revisit_by_miles: None,
+                appointment_id: None,
             },
         )
         .await
@@ -3022,6 +3023,7 @@ mod tests {
                 est_cost_cents: None,
                 revisit_by_date: None,
                 revisit_by_miles: None,
+                appointment_id: None,
             },
         )
         .await
@@ -3125,6 +3127,7 @@ mod tests {
                 est_cost_cents: None,
                 revisit_by_date: None,
                 revisit_by_miles: None,
+                appointment_id: None,
             },
         )
         .await
