@@ -241,13 +241,17 @@ pub async fn add_option(
     Ok(model.insert(db).await?)
 }
 
-// Clears the need's choice, and the date it was made, when the need has chosen
-// `option_id`. The database nulls the reference when an option row goes, but
-// it cannot clear the date.
+// Clears the need's choice, the date it was made and the reason given for it
+// when the need has chosen `option_id`. The database nulls the reference when
+// an option row goes, but it cannot clear the other two.
 async fn clear_choice(db: &impl ConnectionTrait, need_id: i32, option_id: i32) -> DomainResult<()> {
     job_need::Entity::update_many()
         .col_expr(job_need::Column::ChosenOptionId, Expr::value(None::<i32>))
         .col_expr(job_need::Column::DecidedOn, Expr::value(None::<String>))
+        .col_expr(
+            job_need::Column::DecisionReason,
+            Expr::value(None::<String>),
+        )
         .col_expr(job_need::Column::UpdatedAt, Expr::value(super::now_stamp()))
         .filter(job_need::Column::Id.eq(need_id))
         .filter(job_need::Column::ChosenOptionId.eq(option_id))
@@ -257,13 +261,14 @@ async fn clear_choice(db: &impl ConnectionTrait, need_id: i32, option_id: i32) -
 }
 
 /// Changes an option. Rejecting or marking `does_not_fit` the option its need
-/// has chosen clears that choice in the same write.
+/// has chosen clears that choice, its date and its reason in the same
+/// transaction.
 ///
 /// # Errors
 /// `NotFound` for an option that is not the vehicle's; `Invalid` as for
 /// [`add_option`].
-pub async fn update_option(
-    db: &impl ConnectionTrait,
+pub async fn update_option<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
     vehicle_id: i32,
     option_id: i32,
     input: UpdateOption,
@@ -311,25 +316,32 @@ pub async fn update_option(
 
     let now_unusable = input.fitment.as_deref() == Some("does_not_fit")
         || input.rejected_reason.as_ref().is_some_and(Option::is_some);
-    let updated = active.update(db).await?;
+    // The option write and the choice clearing commit together, so a need
+    // never keeps a choice that was just rejected.
+    let txn = db.begin().await?;
+    let updated = active.update(&txn).await?;
     if now_unusable {
-        clear_choice(db, updated.need_id, updated.id).await?;
+        clear_choice(&txn, updated.need_id, updated.id).await?;
     }
+    txn.commit().await?;
     Ok(updated)
 }
 
-/// Deletes an option. A need that had chosen it is left with no choice.
+/// Deletes an option. A need that had chosen it is left with no choice, no
+/// decision date and no decision reason.
 ///
 /// # Errors
 /// `NotFound` for an option that is not the vehicle's.
-pub async fn delete_option(
-    db: &impl ConnectionTrait,
+pub async fn delete_option<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
     vehicle_id: i32,
     option_id: i32,
 ) -> DomainResult<()> {
     let option = require_option(db, vehicle_id, option_id).await?;
-    clear_choice(db, option.need_id, option.id).await?;
-    option.delete(db).await?;
+    let txn = db.begin().await?;
+    clear_choice(&txn, option.need_id, option.id).await?;
+    option.delete(&txn).await?;
+    txn.commit().await?;
     Ok(())
 }
 
@@ -466,6 +478,13 @@ mod tests {
         }
     }
 
+    async fn assert_choice_cleared(db: &DatabaseConnection, vehicle_id: i32, need_id: i32) {
+        let n = require(db, vehicle_id, need_id).await.unwrap();
+        assert_eq!(n.chosen_option_id, None);
+        assert_eq!(n.decided_on, None);
+        assert_eq!(n.decision_reason, None);
+    }
+
     #[test]
     fn stage_table_first_match_wins() {
         let cases = [
@@ -577,7 +596,10 @@ mod tests {
         let err = decide(&db, vehicle_id, n.id, Some(o.id), None)
             .await
             .unwrap_err();
-        assert!(matches!(err, DomainError::BadRequest(_)));
+        assert_eq!(
+            err.to_string(),
+            format!("Option {} is rejected; clear its rejection first", o.id)
+        );
     }
 
     #[tokio::test]
@@ -620,13 +642,7 @@ mod tests {
         .await
         .unwrap();
         assert!(rejected.rejected_on.is_some());
-        assert_eq!(
-            require(&db, vehicle_id, n.id)
-                .await
-                .unwrap()
-                .chosen_option_id,
-            None
-        );
+        assert_choice_cleared(&db, vehicle_id, n.id).await;
 
         let restored = update_option(
             &db,
@@ -643,8 +659,17 @@ mod tests {
             (restored.rejected_reason, restored.rejected_on),
             (None, None)
         );
+    }
 
-        decide(&db, vehicle_id, n.id, Some(o.id), None)
+    #[tokio::test]
+    async fn marking_the_chosen_option_does_not_fit_clears_the_choice() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let n = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
+        let o = add_option(&db, vehicle_id, n.id, option("Pads"))
+            .await
+            .unwrap();
+        decide(&db, vehicle_id, n.id, Some(o.id), Some("cheap".into()))
             .await
             .unwrap();
         update_option(
@@ -658,13 +683,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(
-            require(&db, vehicle_id, n.id)
-                .await
-                .unwrap()
-                .chosen_option_id,
-            None
-        );
+        assert_choice_cleared(&db, vehicle_id, n.id).await;
     }
 
     #[tokio::test]
@@ -675,17 +694,11 @@ mod tests {
         let o = add_option(&db, vehicle_id, n.id, option("Pads"))
             .await
             .unwrap();
-        decide(&db, vehicle_id, n.id, Some(o.id), None)
+        decide(&db, vehicle_id, n.id, Some(o.id), Some("cheap".into()))
             .await
             .unwrap();
         delete_option(&db, vehicle_id, o.id).await.unwrap();
-        assert_eq!(
-            require(&db, vehicle_id, n.id)
-                .await
-                .unwrap()
-                .chosen_option_id,
-            None
-        );
+        assert_choice_cleared(&db, vehicle_id, n.id).await;
     }
 
     #[tokio::test]
@@ -776,22 +789,24 @@ mod tests {
         let (vehicle_id, job_id) = seed_job(&db).await;
         let other = VehicleFixture::new().insert_id(&db).await;
         let n = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
-        let missing = require(&db, vehicle_id, 9999)
+        let expected = format!("Need {} not found", n.id);
+        let nonexistent = require(&db, vehicle_id, 9999)
             .await
             .unwrap_err()
             .to_string();
-        let wrong = require(&db, other, n.id).await.unwrap_err().to_string();
-        assert_eq!(wrong, missing.replace("9999", &n.id.to_string()));
-        assert!(
+        assert_eq!(nonexistent, "Need 9999 not found");
+        let same = |err: DomainError| assert_eq!(err.to_string(), expected);
+        same(require(&db, other, n.id).await.unwrap_err());
+        same(
             update(&db, other, n.id, UpdateNeed::default())
                 .await
-                .is_err()
+                .unwrap_err(),
         );
-        assert!(delete(&db, other, n.id).await.is_err());
-        assert!(add_option(&db, other, n.id, option("x")).await.is_err());
-        assert!(decide(&db, other, n.id, None, None).await.is_err());
+        same(delete(&db, other, n.id).await.unwrap_err());
+        same(add_option(&db, other, n.id, option("x")).await.unwrap_err());
+        same(decide(&db, other, n.id, None, None).await.unwrap_err());
         let err = add(&db, other, job_id, need("Pads")).await.unwrap_err();
-        assert!(matches!(err, DomainError::NotFound(_)));
+        assert_eq!(err.to_string(), format!("Work item {job_id} not found"));
         require(&db, vehicle_id, n.id).await.unwrap();
     }
 
@@ -812,12 +827,14 @@ mod tests {
             .await
             .unwrap_err()
             .to_string();
-        assert_eq!(wrong, missing.replace("9999", &o.id.to_string()));
+        let expected = format!("Option {} not found", o.id);
+        assert_eq!(missing, "Option 9999 not found");
+        assert_eq!(wrong, expected);
         let wrong = delete_option(&db, other, o.id)
             .await
             .unwrap_err()
             .to_string();
-        assert_eq!(wrong, missing.replace("9999", &o.id.to_string()));
+        assert_eq!(wrong, expected);
         assert_eq!(
             need_option::Entity::find().count(&db).await.unwrap(),
             1,
