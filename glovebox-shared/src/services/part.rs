@@ -45,6 +45,22 @@ fn validate_status_change(existing: &part::Model, status: &str) -> DomainResult<
     Ok(())
 }
 
+// A returned part is not on the car, so it takes no install details unless the
+// same update makes it `purchased` again.
+fn validate_install_details(existing: &part::Model, input: &UpdatePart) -> DomainResult<()> {
+    let goes_back = input.status.as_deref() == Some("purchased");
+    let sets_install = matches!(input.installed_service_id, Some(Some(_)))
+        || matches!(input.installed_date, Some(Some(_)))
+        || matches!(input.installed_odometer, Some(Some(_)));
+    if existing.status == "returned" && sets_install && !goes_back {
+        return Err(DomainError::BadRequest(format!(
+            "Part {} was returned and cannot be given install details",
+            existing.id
+        )));
+    }
+    Ok(())
+}
+
 fn validate_supplied_by(supplied_by: &str) -> DomainResult<()> {
     if VALID_SUPPLIED_BY.contains(&supplied_by) {
         return Ok(());
@@ -144,6 +160,7 @@ pub async fn update(
     if let Some(status) = &input.status {
         validate_status_change(&existing, status)?;
     }
+    validate_install_details(&existing, &input)?;
     for (field, value) in [
         ("purchase_date", &input.purchase_date),
         ("installed_date", &input.installed_date),
@@ -302,7 +319,9 @@ pub(crate) async fn uninstall(
     p: part::Model,
     status: UninstallStatus,
 ) -> DomainResult<()> {
+    // A returned part keeps its status in both modes.
     let revert = match status {
+        _ if p.status == "returned" => false,
         UninstallStatus::Purchased => true,
         UninstallStatus::PurchasedIfInstalled => p.status == "installed",
     };
@@ -850,5 +869,67 @@ mod tests {
         assert_eq!(back.returned_on, None);
         assert_eq!(back.return_reason, None);
         assert_eq!(back.returned_from_need_id, None);
+    }
+
+    #[tokio::test]
+    async fn deleting_a_service_leaves_a_returned_part_returned() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let sid = seed_service(&db, vid).await;
+        let p = seed_returned(&db, vid).await;
+        part::ActiveModel {
+            id: Unchanged(p.id),
+            installed_service_id: Set(Some(sid)),
+            ..Default::default()
+        }
+        .update(&db)
+        .await
+        .unwrap();
+        super::super::service_record::delete(&db, vid, sid, None)
+            .await
+            .unwrap();
+        let after = get(&db, vid, p.id).await.unwrap();
+        assert_eq!(after.status, "returned");
+        assert_eq!(after.returned_on.as_deref(), Some("2026-11-06"));
+        assert_eq!(after.return_reason.as_deref(), Some("wrong size"));
+        assert_eq!(after.installed_service_id, None);
+    }
+
+    #[tokio::test]
+    async fn a_returned_part_cannot_be_given_install_details() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let sid = seed_service(&db, vid).await;
+        let p = seed_returned(&db, vid).await;
+        let attempts = [
+            UpdatePart {
+                installed_service_id: Some(Some(sid)),
+                ..Default::default()
+            },
+            UpdatePart {
+                installed_date: Some(Some("2026-11-10".into())),
+                ..Default::default()
+            },
+            UpdatePart {
+                installed_odometer: Some(Some(50_000)),
+                ..Default::default()
+            },
+        ];
+        for attempt in attempts {
+            let err = update(&db, vid, p.id, attempt).await.unwrap_err();
+            assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
+        }
+        let cleared = update(
+            &db,
+            vid,
+            p.id,
+            UpdatePart {
+                installed_date: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(cleared.status, "returned");
     }
 }
