@@ -117,6 +117,17 @@ async fn home_lists_open_appointments_and_unscheduled_jobs() {
     );
 }
 
+// The page edits no research facts, so every page says where they are changed.
+#[tokio::test]
+async fn every_page_says_research_facts_are_changed_through_claude() {
+    const HINT: &str = "To add or change options, prices, part numbers or fitment, ask Claude.";
+    let (_, home) = page(app(db().await, "live"), get("/")).await;
+    let (_, missing) = page(app(db().await, "live"), get("/vehicles/99/jobs/99")).await;
+
+    assert!(home.contains(HINT), "{home}");
+    assert!(missing.contains(HINT), "{missing}");
+}
+
 #[tokio::test]
 async fn every_page_names_its_environment_and_an_overriding_file() {
     let (_, test_body) = page(app(db().await, "test"), get("/")).await;
