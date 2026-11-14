@@ -8,7 +8,7 @@ use glovebox_shared::{
     entities::{need_option, todo},
     money::format_cents,
     services::{
-        checklist::{self, Checklist, JobView, NeedView, StepRow},
+        checklist::{Checklist, JobView, NeedView, StepRow},
         need::Stage,
     },
 };
@@ -234,7 +234,7 @@ pub struct StepCard {
     pub stage_class: &'static str,
     pub stage_text: &'static str,
     /// The link target of a "decide" row's button, and its label.
-    pub decide_href: String,
+    pub decide_href: Option<String>,
     pub decide_label: &'static str,
 }
 
@@ -244,12 +244,12 @@ impl StepCard {
     }
 }
 
-/// One checklist warning, split into the need it names and the note.
+/// One checklist warning with the need and job it belongs to.
 pub struct CheckRow {
-    pub need_id: Option<i32>,
+    pub need_id: i32,
     pub name: String,
     pub note: String,
-    pub job_title: Option<String>,
+    pub job_title: String,
 }
 
 /// A job with its needs.
@@ -324,6 +324,8 @@ pub struct CardContext<'a> {
     pub back: &'a str,
     pub today: &'a str,
     pub failure: Option<&'a Failure>,
+    /// The need whose details start open, from the `open` query value.
+    pub open: Option<i32>,
 }
 
 /// Builds the card of one need. `failure` applies when it names this need.
@@ -370,7 +372,7 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
         back: ctx.back.to_owned(),
         stage_class: stage_class(stage),
         stage_text: stage_text(stage),
-        open: failure.is_some(),
+        open: failure.is_some() || ctx.open == Some(need.id),
         none_checked: !options.iter().any(|o| o.checked),
         options_note: options_note(&options),
         can_decide: view.part.is_none() && !options.is_empty(),
@@ -444,13 +446,19 @@ pub fn steps(list: &Checklist, jobs: &[JobCard], ctx: &CardContext<'_>) -> Steps
         .collect();
     let step = |group: &'static str, row: &StepRow| -> Option<StepCard> {
         let need = (*cards.get(&row.need_id)?).clone();
+        let id = row.need_id;
         let (decide_href, decide_label) = if need.chosen.is_some() {
             (
-                format!("#need-{}-supplier", row.need_id),
+                Some(format!("?open=need-{id}#need-{id}-supplier")),
                 "Set the supplier",
             )
+        } else if need.options.is_empty() {
+            (None, "")
         } else {
-            (format!("#need-{}-decide", row.need_id), "Choose a part")
+            (
+                Some(format!("?open=need-{id}#need-{id}-decide")),
+                "Choose a part",
+            )
         };
         Some(StepCard {
             group,
@@ -469,26 +477,14 @@ pub fn steps(list: &Checklist, jobs: &[JobCard], ctx: &CardContext<'_>) -> Steps
             .collect::<Vec<_>>()
     };
 
-    // The warnings come out of the checklist in job, need, note order, so
-    // walking the same order pairs each with its need.
-    let owners = list
-        .jobs
-        .iter()
-        .filter(|j| j.job.status != "dropped")
-        .flat_map(|j| j.needs.iter().map(move |n| (n, &j.job.title)))
-        .flat_map(|(n, title)| n.notes.iter().map(move |_| (n.need.id, title)));
     let check = list
-        .warnings
+        .checks
         .iter()
-        .zip(owners.map(Some).chain(std::iter::repeat(None)))
-        .map(|(warning, owner)| {
-            let (name, note) = checklist::split_warning(warning);
-            CheckRow {
-                need_id: owner.map(|(id, _)| id),
-                name: name.to_owned(),
-                note: note.to_owned(),
-                job_title: owner.map(|(_, title)| title.clone()),
-            }
+        .map(|c| CheckRow {
+            need_id: c.need_id,
+            name: c.need_name.clone(),
+            note: c.note.clone(),
+            job_title: c.job_title.clone(),
         })
         .collect();
 

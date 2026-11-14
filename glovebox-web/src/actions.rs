@@ -53,13 +53,17 @@ enum Page {
     Job(i32, i32),
 }
 
-fn page_of(back: &str) -> Option<Page> {
+fn page_of(back: &str, vehicle: i32) -> Option<Page> {
     let path = back.split(['?', '#']).next()?;
     let parts: Vec<&str> = path.split('/').collect();
     let [_, "vehicles", vid, kind, id] = parts.as_slice() else {
         return None;
     };
-    let (vid, id) = (vid.parse().ok()?, id.parse().ok()?);
+    let (vid, id): (i32, i32) = (vid.parse().ok()?, id.parse().ok()?);
+    // A page of another vehicle is never shown for this vehicle's write.
+    if vid != vehicle {
+        return None;
+    }
     match *kind {
         "appointments" => Some(Page::Appointment(vid, id)),
         "jobs" => Some(Page::Job(vid, id)),
@@ -152,20 +156,16 @@ impl Post<'_> {
             field: refused.field,
             values: self.values,
         };
-        match page_of(&self.back) {
+        let view = pages::Page {
+            failure: Some(&failure),
+            ..Default::default()
+        };
+        match page_of(&self.back, self.vid) {
             Some(Page::Appointment(vid, id)) => {
-                pages::appointment_response(
-                    self.state,
-                    vid,
-                    id,
-                    None,
-                    Some(&failure),
-                    refused.status,
-                )
-                .await
+                pages::appointment_response(self.state, vid, id, view, refused.status).await
             }
             Some(Page::Job(vid, id)) => {
-                pages::job_response(self.state, vid, id, None, Some(&failure), refused.status).await
+                pages::job_response(self.state, vid, id, view, refused.status).await
             }
             None => pages::failure_page(self.state, refused.status, refused.message),
         }
@@ -266,7 +266,10 @@ async fn decide(state: &AppState, vid: i32, id: i32, form: &DecisionForm) -> Dom
                 .map_err(|_| DomainError::invalid("option", "choose one of the listed options"))?,
         ),
     };
-    need::decide(&state.db, vid, id, option_id, present(&form.reason))
+    // The form sends the stored reason along with an empty choice; clearing
+    // the choice drops the reason.
+    let reason = option_id.and(present(&form.reason));
+    need::decide(&state.db, vid, id, option_id, reason)
         .await
         .map(|_| ())
 }

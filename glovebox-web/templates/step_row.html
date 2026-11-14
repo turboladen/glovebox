@@ -4,7 +4,11 @@
   <p class="step-text">{{ s.detail }}{% if s.is("done") %}<span class="pill pill--{{ s.stage_class }}">{{ s.stage_text }}</span>{% endif %}<span class="tag">{{ s.job_title }}</span></p>
   {% if let Some(e) = n.error_elsewhere() %}<p class="error" role="alert"><b>Not saved.</b> {{ e }}</p>{% endif %}
   {% if s.is("decide") %}
-  <div class="step-actions"><a class="btn" href="{{ s.decide_href }}">{{ s.decide_label }}</a></div>
+  {% if let Some(href) = s.decide_href %}
+  <div class="step-actions"><a class="btn" href="{{ href }}">{{ s.decide_label }}</a></div>
+  {% else %}
+  <p class="form-note">No options researched yet; ask Claude to research options for this part.</p>
+  {% endif %}
   {% else if s.is("order") %}
   <details class="drawer"{% if n.error_in("order").is_some() %} open{% endif %}>
     <summary>Mark ordered</summary>

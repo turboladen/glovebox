@@ -23,6 +23,7 @@
     --on-amber: #161616;
     --green: #1F7A4D;
     --red: #C4241B;
+    --invalid: #C4241B;
     --on-signal: #FFFFFF;
 
     --face: "Helvetica Neue", Helvetica, Arial, sans-serif;
@@ -47,6 +48,7 @@
       --rule: #34383A;
       --inset: #141516;
       --amber: #F2A900;
+      --invalid: #E0453A;
     }
   }
 
@@ -157,7 +159,6 @@
   .job > .box-head { background: var(--job-bar); color: var(--ink); }
   .job > .box-head .count { margin-inline-start: auto; min-width: 0; padding: 0; background: none; color: inherit; font-weight: 400; }
   .job-head .pill { border-color: var(--ink); }
-  .job-head .pill--done { border-color: var(--green); }
 
   /* Next-step rows */
 
@@ -256,7 +257,7 @@
   input[type="radio"], input[type="checkbox"] { accent-color: var(--ink); width: 1.05rem; height: 1.05rem; margin: 0; }
   .check { display: inline-flex; align-items: center; gap: 0.5rem; }
 
-  [aria-invalid="true"] { border: 2px solid var(--red) !important; }
+  [aria-invalid="true"] { border: 2px solid var(--invalid) !important; }
   .error { padding: 0.4rem 0.75rem; background: var(--red); color: var(--on-signal); overflow-wrap: anywhere; }
 
   /* Jobs */

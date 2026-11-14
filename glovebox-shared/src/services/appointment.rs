@@ -10,7 +10,7 @@ use crate::{
     entities::{appointment, job_need, part, todo, work_item},
     error::{DomainError, DomainResult},
     inputs::appointment::{NewAppointment, StatusChange, UpdateAppointment},
-    services::need::{Stage, stage},
+    services::need::stage,
 };
 
 /// An appointment with the counts the owner reads at a glance. `needs_open`

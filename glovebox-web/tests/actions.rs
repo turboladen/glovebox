@@ -823,3 +823,265 @@ async fn page_contains_no_script_tag() {
         assert!(!lower.contains(" onclick="), "{body}");
     }
 }
+
+#[tokio::test]
+async fn clearing_a_decision_with_the_prefilled_reason_clears_it() {
+    let w = World::new().await;
+    let back = w.page_path();
+    let good = w.good.to_string();
+    w.post(
+        &w.need_path("decision"),
+        &[("option_id", &good), ("reason", "Quiet."), ("back", &back)],
+    )
+    .await;
+
+    // The form sends the stored reason along with the empty choice.
+    let (status, _, body) = w
+        .post(
+            &w.need_path("decision"),
+            &[("option_id", ""), ("reason", "Quiet."), ("back", &back)],
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::SEE_OTHER, "{body}");
+    let (_, after) = w.get(&back).await;
+    assert!(group(&after, "decide").contains("Front pads"), "{after}");
+    assert!(!after.contains("Quiet."), "{after}");
+}
+
+#[tokio::test]
+async fn a_need_name_with_a_colon_renders_whole() {
+    let w = World::new().await;
+    let oil = need::add(
+        &w.db,
+        w.vehicle,
+        w.job,
+        NewNeed {
+            name: "Oil: 5W-30".into(),
+            supplied_by: Some("self".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    let option = need::add_option(
+        &w.db,
+        w.vehicle,
+        oil,
+        NewOption {
+            description: "Any oil".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    need::decide(&w.db, w.vehicle, oil, Some(option), None)
+        .await
+        .unwrap();
+
+    let (_, body) = w.get(&w.page_path()).await;
+
+    let order = group(&body, "order");
+    assert!(
+        order.contains(r#"<p class="step-need">Oil: 5W-30</p>"#),
+        "{order}"
+    );
+    assert!(order.contains("order Any oil"), "{order}");
+    let check = group(&body, "check");
+    assert!(
+        check.contains(r#"<p class="step-need">Oil: 5W-30</p>"#),
+        "{check}"
+    );
+    assert!(
+        check.contains("Fitment of the chosen option is not confirmed."),
+        "{check}"
+    );
+}
+
+#[tokio::test]
+async fn open_query_opens_the_need_and_the_decide_link_uses_it() {
+    let w = World::new().await;
+    let (_, closed) = w.get(&w.page_path()).await;
+    assert!(
+        closed.contains(&format!(
+            r##"href="?open=need-{0}#need-{0}-decide""##,
+            w.need
+        )),
+        "{closed}"
+    );
+    assert!(!closed.contains(&format!(r#"id="need-{}" open"#, w.need)));
+
+    let (_, opened) = w
+        .get(&format!("{}?open=need-{}", w.page_path(), w.need))
+        .await;
+
+    assert!(
+        opened.contains(&format!(r#"id="need-{}" open"#, w.need)),
+        "{opened}"
+    );
+}
+
+#[tokio::test]
+async fn a_need_with_no_options_asks_the_owner_to_ask_claude() {
+    let w = World::new().await;
+    let bare = need::add(
+        &w.db,
+        w.vehicle,
+        w.job,
+        NewNeed {
+            name: "Wiper blades".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+
+    let (_, body) = w.get(&w.page_path()).await;
+
+    let decide = group(&body, "decide");
+    assert!(decide.contains("Wiper blades"), "{decide}");
+    assert!(
+        decide.contains("ask Claude to research options"),
+        "{decide}"
+    );
+    assert!(
+        !body.contains(&format!("need-{bare}-decide")),
+        "no link to a form that is not rendered"
+    );
+}
+
+#[tokio::test]
+async fn the_undo_banner_needs_the_need_received_or_the_todo_done() {
+    let w = World::new().await;
+    let loose = todo::add(
+        &w.db,
+        w.vehicle,
+        glovebox_shared::inputs::todo::NewTodo {
+            title: "Bring keys".into(),
+            appointment_id: Some(w.appointment),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    for done in [format!("need-{}", w.need), format!("todo-{loose}")] {
+        let (_, body) = w.get(&format!("{}?done={done}", w.page_path())).await;
+        assert!(!body.contains(r#"role="status""#), "{done}: {body}");
+    }
+
+    w.choose_good().await;
+    w.order_it().await;
+    need::mark_received(&w.db, w.vehicle, w.need, None)
+        .await
+        .unwrap();
+    todo::complete(&w.db, w.vehicle, loose, None).await.unwrap();
+    for done in [format!("need-{}", w.need), format!("todo-{loose}")] {
+        let (_, body) = w.get(&format!("{}?done={done}", w.page_path())).await;
+        assert!(body.contains(r#"role="status""#), "{done}: {body}");
+    }
+}
+
+#[tokio::test]
+async fn a_failed_write_never_shows_another_vehicles_page() {
+    let w = World::new().await;
+    let other = VehicleFixture::new()
+        .name("Other car")
+        .insert_id(&w.db)
+        .await;
+    let other_appointment = appointment::create(
+        &w.db,
+        other,
+        NewAppointment {
+            purpose: "Other visit".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    let foreign_back = format!("/vehicles/{other}/appointments/{other_appointment}");
+
+    let (status, _, body) = w
+        .post(
+            &w.need_path("ordered"),
+            &[("cost", "abc"), ("back", &foreign_back)],
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(!body.contains("Other car"), "{body}");
+    assert!(!body.contains("Other visit"), "{body}");
+    assert!(body.contains("Not saved"), "{body}");
+}
+
+#[tokio::test]
+async fn cross_origin_post_to_an_action_is_refused() {
+    let w = World::new().await;
+    w.choose_good().await;
+    let req = request("POST", &w.need_path("ordered"))
+        .header("origin", "http://evil.example")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from("seller=X&back=%2F"))
+        .unwrap();
+
+    let (status, _) = page(app(w.db.clone(), "test"), req).await;
+
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(w.part_count().await, 0);
+}
+
+#[tokio::test]
+async fn todo_of_another_vehicle_is_404_like_a_missing_one() {
+    let w = World::new().await;
+    let other = VehicleFixture::new()
+        .name("Other car")
+        .insert_id(&w.db)
+        .await;
+    let mine = todo::add(
+        &w.db,
+        w.vehicle,
+        glovebox_shared::inputs::todo::NewTodo {
+            title: "Mine".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+
+    for action in ["done", "done/undo", "delete"] {
+        let (real, _, real_body) = w
+            .post(
+                &format!("/vehicles/{other}/todos/{mine}/{action}"),
+                &[("back", "/")],
+            )
+            .await;
+        let (missing, _, missing_body) = w
+            .post(
+                &format!("/vehicles/{other}/todos/99999/{action}"),
+                &[("back", "/")],
+            )
+            .await;
+        assert_eq!(real, StatusCode::NOT_FOUND, "{action}");
+        assert_eq!(missing, StatusCode::NOT_FOUND, "{action}");
+        // The messages differ only in the id.
+        let alert = |body: &str| {
+            let start = body.find(r#"role="alert">"#).expect("an error block") + 13;
+            body[start..start + body[start..].find("</p>").unwrap()].to_owned()
+        };
+        assert_eq!(
+            alert(&real_body).replace(&mine.to_string(), "N"),
+            alert(&missing_body).replace("99999", "N"),
+            "{action}"
+        );
+    }
+    let still = todo::list(&w.db, w.vehicle, Some(None), true)
+        .await
+        .unwrap();
+    assert_eq!(still.len(), 1);
+    assert!(still[0].done_on.is_none());
+}

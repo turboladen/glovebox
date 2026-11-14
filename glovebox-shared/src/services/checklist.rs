@@ -32,6 +32,19 @@ pub struct Checklist {
     pub todos: Vec<todo::Model>,
     /// Each need's notes, prefixed with the need's name.
     pub warnings: Vec<String>,
+    /// The same notes as `warnings`, one per note, with the need and job each
+    /// belongs to.
+    #[serde(skip)]
+    pub checks: Vec<Check>,
+}
+
+/// One note about a need, for a page that shows it in a row of its own.
+#[derive(Debug)]
+pub struct Check {
+    pub need_id: i32,
+    pub need_name: String,
+    pub job_title: String,
+    pub note: String,
 }
 
 /// What to do next, in the order the owner does it. Rows are ordered by job,
@@ -69,13 +82,6 @@ impl StepRow {
             .and_then(|rest| rest.strip_prefix(": "))
             .unwrap_or(&self.summary)
     }
-}
-
-/// Splits a checklist warning at its first ": " into the need's name and the
-/// note. A warning with no ": " has an empty name.
-#[must_use]
-pub fn split_warning(warning: &str) -> (&str, &str) {
-    warning.split_once(": ").unwrap_or(("", warning))
 }
 
 /// A job with its needs.
@@ -394,15 +400,22 @@ fn assemble(
     todos: Vec<todo::Model>,
 ) -> Checklist {
     let next_steps = next_steps(&jobs, &todos);
-    let warnings = jobs
+    let checks: Vec<Check> = jobs
         .iter()
         .filter(|j| j.job.status != "dropped")
-        .flat_map(|j| &j.needs)
-        .flat_map(|n| {
-            n.notes
-                .iter()
-                .map(|note| format!("{}: {note}", n.need.name))
+        .flat_map(|j| j.needs.iter().map(move |n| (j, n)))
+        .flat_map(|(j, n)| {
+            n.notes.iter().map(move |note| Check {
+                need_id: n.need.id,
+                need_name: n.need.name.clone(),
+                job_title: j.job.title.clone(),
+                note: note.clone(),
+            })
         })
+        .collect();
+    let warnings = checks
+        .iter()
+        .map(|c| format!("{}: {}", c.need_name, c.note))
         .collect();
     Checklist {
         appointment,
@@ -410,6 +423,7 @@ fn assemble(
         jobs,
         todos,
         warnings,
+        checks,
     }
 }
 
@@ -864,17 +878,39 @@ mod tests {
         assert_eq!(row("Pads", "something else").detail(), "something else");
     }
 
-    #[test]
-    fn warnings_split_at_the_first_colon_and_space() {
+    #[tokio::test]
+    async fn checks_name_the_need_and_job_even_when_the_name_has_a_colon() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let job = new_job(&db, v, "Oil change", None).await;
+        let n = new_need(&db, v, job, "Oil: 5W-30").await;
+        let unsure = need::add_option(
+            &db,
+            v,
+            n,
+            NewOption {
+                description: "Any oil".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+        set_supplier(&db, v, n, "self").await;
+        need::decide(&db, v, n, Some(unsure), None).await.unwrap();
+
+        let list = for_unscheduled(&db, v).await.unwrap();
+
+        assert_eq!(list.checks.len(), 1);
+        let check = &list.checks[0];
+        assert_eq!(check.need_id, n);
+        assert_eq!(check.need_name, "Oil: 5W-30");
+        assert_eq!(check.job_title, "Oil change");
+        assert_eq!(check.note, "Fitment of the chosen option is not confirmed.");
         assert_eq!(
-            split_warning("Front pads: Fitment is not confirmed."),
-            ("Front pads", "Fitment is not confirmed.")
+            list.warnings,
+            ["Oil: 5W-30: Fitment of the chosen option is not confirmed."]
         );
-        assert_eq!(
-            split_warning("Oil: 5W-30: A part is linked."),
-            ("Oil", "5W-30: A part is linked.")
-        );
-        assert_eq!(split_warning("No colon here"), ("", "No colon here"));
     }
 
     fn rows(group: &[StepRow]) -> Vec<(&str, &str)> {

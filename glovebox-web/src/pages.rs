@@ -11,7 +11,7 @@ use glovebox_shared::{
     services::{
         appointment,
         checklist::{self, VehicleHome},
-        need, todo, vehicle,
+        need, part, todo, vehicle,
     },
 };
 use serde::Deserialize;
@@ -169,6 +169,12 @@ pub fn failure_page(state: &AppState, status: StatusCode, message: String) -> Re
 #[derive(Deserialize)]
 pub struct PageQuery {
     done: Option<String>,
+    /// `need-<id>`: the need whose details start open.
+    open: Option<String>,
+}
+
+fn open_need(query: &PageQuery) -> Option<i32> {
+    query.open.as_deref()?.strip_prefix("need-")?.parse().ok()
 }
 
 // Builds the undo strip for `?done=need-<id>` or `?done=todo-<id>`. A value
@@ -177,6 +183,11 @@ async fn banner(state: &AppState, vid: i32, back: &str, done: Option<&str>) -> O
     let done = done?;
     if let Some(id) = done.strip_prefix("need-").and_then(|n| n.parse().ok()) {
         let found = need::require(&state.db, vid, id).await.ok()?;
+        let part_id = found.part_id?;
+        let part = part::get(&state.db, vid, part_id).await.ok()?;
+        if need::stage(&found, Some(&part)) != need::Stage::Received {
+            return None;
+        }
         return Some(Banner {
             message: format!("Marked \u{201c}{}\u{201d} received.", found.name),
             action: format!("/vehicles/{vid}/needs/{id}/received/undo"),
@@ -185,11 +196,21 @@ async fn banner(state: &AppState, vid: i32, back: &str, done: Option<&str>) -> O
     }
     let id = done.strip_prefix("todo-")?.parse().ok()?;
     let found = todo::require(&state.db, vid, id).await.ok()?;
+    found.done_on.as_ref()?;
     Some(Banner {
         message: format!("Ticked \u{201c}{}\u{201d}.", found.title),
         action: format!("/vehicles/{vid}/todos/{id}/done/undo"),
         back: back.to_owned(),
     })
+}
+
+/// What a page shows besides its record: an undo strip, the need to open and
+/// the failure of the write that led here.
+#[derive(Clone, Copy, Default)]
+pub struct Page<'a> {
+    pub done: Option<&'a str>,
+    pub open: Option<i32>,
+    pub failure: Option<&'a Failure>,
 }
 
 /// The path of an appointment's page.
@@ -207,7 +228,18 @@ pub async fn get_appointment(
     Path((vid, id)): Path<(i32, i32)>,
     Query(query): Query<PageQuery>,
 ) -> Response {
-    appointment_response(&state, vid, id, query.done.as_deref(), None, StatusCode::OK).await
+    appointment_response(
+        &state,
+        vid,
+        id,
+        Page {
+            done: query.done.as_deref(),
+            open: open_need(&query),
+            failure: None,
+        },
+        StatusCode::OK,
+    )
+    .await
 }
 
 /// Renders an appointment's page with `status`. `failure` is shown in the row
@@ -216,11 +248,10 @@ pub async fn appointment_response(
     state: &AppState,
     vid: i32,
     id: i32,
-    done: Option<&str>,
-    failure: Option<&Failure>,
+    view: Page<'_>,
     status: StatusCode,
 ) -> Response {
-    match appointment_page(state, vid, id, done, failure).await {
+    match appointment_page(state, vid, id, view).await {
         Ok(page) => html(status, page.render()),
         Err(e) => load_failed(state, &e),
     }
@@ -230,9 +261,13 @@ async fn appointment_page(
     state: &AppState,
     vid: i32,
     id: i32,
-    done: Option<&str>,
-    failure: Option<&Failure>,
+    view: Page<'_>,
 ) -> DomainResult<AppointmentPage> {
+    let Page {
+        done,
+        open,
+        failure,
+    } = view;
     let list = checklist::for_appointment(&state.db, vid, id).await?;
     let car = vehicle::require(&state.db, vid).await?;
     let summary = list
@@ -246,6 +281,7 @@ async fn appointment_page(
         back: &back,
         today: &today,
         failure,
+        open,
     };
     let jobs: Vec<JobCard> = list.jobs.iter().map(|j| job_card(j, &ctx)).collect();
     let grouped = steps(&list, &jobs, &ctx);
@@ -293,7 +329,18 @@ pub async fn get_job(
     Path((vid, id)): Path<(i32, i32)>,
     Query(query): Query<PageQuery>,
 ) -> Response {
-    job_response(&state, vid, id, query.done.as_deref(), None, StatusCode::OK).await
+    job_response(
+        &state,
+        vid,
+        id,
+        Page {
+            done: query.done.as_deref(),
+            open: open_need(&query),
+            failure: None,
+        },
+        StatusCode::OK,
+    )
+    .await
 }
 
 /// Renders a job's page with `status`. `failure` is shown in the row it
@@ -302,23 +349,21 @@ pub async fn job_response(
     state: &AppState,
     vid: i32,
     id: i32,
-    done: Option<&str>,
-    failure: Option<&Failure>,
+    view: Page<'_>,
     status: StatusCode,
 ) -> Response {
-    match job_page(state, vid, id, done, failure).await {
+    match job_page(state, vid, id, view).await {
         Ok(page) => html(status, page.render()),
         Err(e) => load_failed(state, &e),
     }
 }
 
-async fn job_page(
-    state: &AppState,
-    vid: i32,
-    id: i32,
-    done: Option<&str>,
-    failure: Option<&Failure>,
-) -> DomainResult<JobPage> {
+async fn job_page(state: &AppState, vid: i32, id: i32, view: Page<'_>) -> DomainResult<JobPage> {
+    let Page {
+        done,
+        open,
+        failure,
+    } = view;
     let view = checklist::for_job(&state.db, vid, id).await?;
     let car = vehicle::require(&state.db, vid).await?;
     let linked = match view.job.appointment_id {
@@ -338,6 +383,7 @@ async fn job_page(
         back: &back,
         today: &today,
         failure,
+        open,
     };
     let card = job_card(&view, &ctx);
     let placed = match failure.map(|f| f.target) {

@@ -19,8 +19,8 @@
       {% for c in steps.check %}
       <li class="step">
         <p class="step-need">{{ c.name }}</p>
-        <p class="step-text">{{ c.note }}{% if let Some(t) = c.job_title %}<span class="tag">{{ t }}</span>{% endif %}</p>
-        {% if let Some(id) = c.need_id %}<div class="step-actions"><a class="btn" href="#need-{{ id }}">Open</a></div>{% endif %}
+        <p class="step-text">{{ c.note }}<span class="tag">{{ c.job_title }}</span></p>
+        <div class="step-actions"><a class="btn" href="?open=need-{{ c.need_id }}#need-{{ c.need_id }}">Open</a></div>
       </li>
       {% endfor %}
     </ul>
