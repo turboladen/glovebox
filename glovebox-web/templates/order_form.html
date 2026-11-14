@@ -1,0 +1,15 @@
+<form class="form" method="post" action="/vehicles/{{ n.vid }}/needs/{{ n.id }}/ordered">
+  {% if let Some(e) = n.error_in("order") %}<p class="error" role="alert"><b>Not saved.</b> {{ e }}</p>{% endif %}
+  <input type="hidden" name="back" value="{{ n.back }}">
+  {% if let Some(c) = n.chosen %}{% if let Some(href) = c.link %}<p class="form-note"><a class="opt-link" href="{{ href }}" target="_blank" rel="noopener noreferrer">Open the listing</a></p>{% endif %}{% endif %}
+  <div class="fields">
+    <label class="field"><span>Seller</span><input type="text" name="seller" value="{{ n.order.seller }}" autocomplete="off"></label>
+    <label class="field"><span>Order date</span><input type="date" name="purchase_date" value="{{ n.order.date }}"{% if n.invalid("purchase_date") %} aria-invalid="true"{% endif %}></label>
+    <label class="field"><span>{{ n.order.cost_label }}</span><input type="text" name="cost" value="{{ n.order.cost }}" placeholder="$0.00" inputmode="decimal" autocomplete="off"{% if n.invalid("cost") %} aria-invalid="true"{% endif %}>{% if let Some(unit) = n.order.unit_note %}<span>{{ unit }}</span>{% endif %}</label>
+    <label class="field"><span>Order number</span><input type="text" name="order_ref" value="{{ n.order.order_ref }}" autocomplete="off"></label>
+  </div>
+  <div class="form-actions">
+    <button class="btn btn--primary" type="submit">Mark ordered</button>
+    <p class="form-note">This records a purchase and cannot be undone here. Correct a mistaken order through Claude.</p>
+  </div>
+</form>

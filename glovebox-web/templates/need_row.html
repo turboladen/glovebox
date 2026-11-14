@@ -1,0 +1,119 @@
+<li>
+  <details class="need" id="need-{{ n.id }}"{% if n.open %} open{% endif %}>
+    <summary class="need-row">
+      <span class="cell">
+        <span class="need-name">{{ n.name }}</span>
+        {% if let Some(q) = n.quantity %}<span class="qty">{{ q }}</span>{% endif %}
+        <span class="need-stage"><span class="pill pill--{{ n.stage_class }}">{{ n.stage_text }}</span></span>
+      </span>
+      <span class="cell">
+        {% if let Some(c) = n.chosen %}
+        <span class="pn">{% if let Some(m) = c.manufacturer %}<span class="mfr">{{ m }}</span>{% endif %}{{ c.title }}</span>
+        {% if let Some(d) = c.description %}<span class="opt-desc">{{ d }}</span>{% endif %}
+        {% if c.seller.is_some() || c.price.is_some() %}<span class="opt-meta">{% if let Some(s) = c.seller %}{{ s }}{% endif %}{% if c.seller.is_some() && c.price.is_some() %}, {% endif %}{% if let Some(p) = c.price %}<span class="money">{{ p }}</span>{% endif %}</span>{% endif %}
+        <span class="pill fit--{{ c.fit_class }}">{{ c.fit_text }}</span>
+        {% else %}
+        <span class="none">No part chosen</span>
+        {% if !n.options.is_empty() %}<span class="opt-meta">{{ n.options_note }}</span>{% endif %}
+        {% endif %}
+        {% if let Some(p) = n.purchase %}<span class="purchase">{{ p }}</span>{% endif %}
+        {% for note in n.notes %}<span class="need-note">{{ note }}</span>{% endfor %}
+      </span>
+      <span class="facts">
+        <span class="kinds">
+          <span class="pill {% if n.supplier_kind.is_some() %}pill--kind{% else %}pill--none{% endif %}">{{ n.supplier_text() }}</span>
+          <span class="pill {% if n.approach_kind.is_some() %}pill--kind{% else %}pill--none{% endif %}">{{ n.approach_text() }}</span>
+        </span>
+        {% if let Some(r) = n.decision_reason %}<span class="reason">{{ r }}</span>{% endif %}
+      </span>
+      <span class="marker" aria-hidden="true"></span>
+    </summary>
+
+    <div class="need-body">
+      {% if let Some(e) = n.error_elsewhere() %}<p class="error" role="alert"><b>Not saved.</b> {{ e }}</p>{% endif %}
+      {% if n.can_decide %}
+      <form class="form" method="post" action="/vehicles/{{ n.vid }}/needs/{{ n.id }}/decision" id="need-{{ n.id }}-decide">
+        {% if let Some(e) = n.error_in("decide") %}<p class="error" role="alert"><b>Not saved.</b> {{ e }}</p>{% endif %}
+        <input type="hidden" name="back" value="{{ n.back }}">
+        <fieldset>
+          <legend><h4>Options</h4></legend>
+          <div class="opts">
+            {% for o in n.options %}
+            <label class="opt{% if o.blocked %} opt--blocked opt--{% if o.is_rejected() %}rejected{% else %}{{ o.fit_class }}{% endif %}{% endif %}">
+              <input type="radio" name="option_id" value="{{ o.id }}"{% if o.checked %} checked{% endif %}{% if o.blocked %} disabled aria-describedby="opt-{{ o.id }}-why"{% endif %}>
+              <span>
+                <span class="pn">{% if let Some(m) = o.manufacturer %}<span class="mfr">{{ m }}</span>{% endif %}{{ o.title }}</span><br>
+                {% if let Some(d) = o.description %}<span class="opt-desc">{{ d }}</span><br>{% endif %}
+                {% if let Some(s) = o.seller %}<span class="opt-meta">{{ s }}</span>{% endif %}
+                {% if let Some(href) = o.link %}<br><a class="opt-link" href="{{ href }}" target="_blank" rel="noopener noreferrer">Open the listing</a>{% endif %}
+              </span>
+              <span class="price money">{% if let Some(p) = o.price %}{{ p }}{% endif %}</span>
+              <span id="opt-{{ o.id }}-why"><span class="pill fit--{{ o.fit_class }}">{{ o.fit_text }}</span>{% if let Some(note) = o.fit_note %}<span class="fit-note">{{ note }}</span>{% endif %}{% if let Some(why) = o.rejected_reason %}<span class="fit-note"><span class="pill pill--rejected">Rejected</span> {{ why }}</span>{% endif %}</span>
+            </label>
+            {% endfor %}
+            <label class="opt">
+              <input type="radio" name="option_id" value=""{% if n.none_checked %} checked{% endif %}>
+              <span class="opt-desc">No part chosen yet</span>
+            </label>
+          </div>
+        </fieldset>
+        <label class="field"><span>Reason for the choice</span><textarea name="reason"{% if n.invalid("reason") %} aria-invalid="true"{% endif %}>{{ n.reason_value }}</textarea></label>
+        <div class="form-actions"><button class="btn btn--primary" type="submit">Save decision</button></div>
+      </form>
+      {% else if n.options.is_empty() && n.purchase.is_none() %}
+      <p class="opt-meta">No options researched.</p>
+      {% endif %}
+
+      <div class="secondary">
+        <details class="drawer" id="need-{{ n.id }}-supplier"{% if n.error_in("supplier").is_some() %} open{% endif %}>
+          <summary>Supplier and approach</summary>
+          <form class="form" method="post" action="/vehicles/{{ n.vid }}/needs/{{ n.id }}/supplier">
+            {% if let Some(e) = n.error_in("supplier") %}<p class="error" role="alert"><b>Not saved.</b> {{ e }}</p>{% endif %}
+            <input type="hidden" name="back" value="{{ n.back }}">
+            <div class="fields">
+              <label class="field"><span>Supplier</span>
+                <select name="supplied_by">
+                  <option value=""{% if n.supplier_is("") %} selected{% endif %}>Not decided</option>
+                  <option value="self"{% if n.supplier_is("self") %} selected{% endif %}>Self</option>
+                  <option value="shop"{% if n.supplier_is("shop") %} selected{% endif %}>Shop</option>
+                </select>
+              </label>
+              <label class="field"><span>Approach</span>
+                <select name="approach">
+                  <option value=""{% if n.approach_is("") %} selected{% endif %}>Not decided</option>
+                  <option value="replacement"{% if n.approach_is("replacement") %} selected{% endif %}>Replacement</option>
+                  <option value="upgrade"{% if n.approach_is("upgrade") %} selected{% endif %}>Upgrade</option>
+                </select>
+              </label>
+            </div>
+            <div class="form-actions"><button class="btn btn--primary" type="submit">Save</button></div>
+          </form>
+        </details>
+        {% if n.can_order %}
+        <details class="drawer"{% if n.error_in("order").is_some() %} open{% endif %}>
+          <summary>Mark ordered</summary>
+          {% include "order_form.html" %}
+        </details>
+        {% endif %}
+        {% if n.can_receive %}
+        <form method="post" action="/vehicles/{{ n.vid }}/needs/{{ n.id }}/received">
+          <input type="hidden" name="back" value="{{ n.back }}">
+          <button class="btn" type="submit" aria-label="Mark {{ n.name }} received">Mark received</button>
+        </form>
+        {% endif %}
+        {% if n.can_unreceive %}
+        <form method="post" action="/vehicles/{{ n.vid }}/needs/{{ n.id }}/received/undo">
+          <input type="hidden" name="back" value="{{ n.back }}">
+          <button class="btn btn--quiet" type="submit">Not received after all</button>
+        </form>
+        {% endif %}
+        {% if n.can_return %}
+        <details class="drawer"{% if n.error_in("return").is_some() %} open{% endif %}>
+          <summary>Wrong part, returning it</summary>
+          {% include "return_form.html" %}
+        </details>
+        {% endif %}
+      </div>
+    </div>
+  </details>
+</li>

@@ -41,6 +41,7 @@ macro_rules! tool_input {
     };
 }
 
+mod checklist;
 mod incidents;
 mod parts;
 mod planning;
@@ -70,6 +71,7 @@ impl GloveboxMcp {
             + Self::parts_router()
             + Self::incidents_router()
             + Self::planning_router()
+            + Self::checklist_router()
             + Self::schedule_router()
             + Self::recalls_router()
             + Self::reads_router()
@@ -92,7 +94,7 @@ impl ServerHandler for GloveboxMcp {
             .with_instructions(
                 "glovebox MCP: car maintenance tracking, driven entirely through these tools. \
                  Start with `list_vehicles` for ids (`add_vehicle` for a new car, \
-                 `list_model_templates` to give it an inherited schedule). Three loops cover \
+                 `list_model_templates` to give it an inherited schedule). Four loops cover \
                  almost everything. (1) FILE AN INVOICE: `record_service` once per invoice, with \
                  `invoice_ref`, `line_items` (each with a `work_kind`), `parts`, and the ids of \
                  anything the work closes: `schedule_item_ids` from `whats_coming`, \
@@ -110,18 +112,28 @@ impl ServerHandler for GloveboxMcp {
                  recalls, unresolved incidents, the 12-month forecast and warranty status. Tune \
                  the schedule with `list_schedule`, `update_schedule_item` (any item, inherited \
                  ones included; history carries over), `add_schedule_item` for a job the schedule \
-                 lacks, and `dismiss_schedule_item` / `restore_schedule_item`. Also: \
-                 `log_mileage` whenever the user mentions an odometer reading (`list_mileage` / \
-                 `delete_mileage` fix a typo, `delete_vehicle` undoes a mistaken `add_vehicle`), \
-                 `record_part` and `list_parts` / `correct_part` / `delete_part` for parts, \
-                 `save_note` for facts worth keeping, `file_research_finding` for research worth \
-                 keeping (read back with `search_records`), `search_records` and `cost_summary` \
-                 to look things up, `check_recalls` (once per conversation; a failed lookup still \
-                 lists the known recalls) and `set_recall_status` for recalls. Services, parts, \
-                 incidents and planned work can each be listed, corrected and deleted; a correct \
-                 or update tool leaves absent fields alone and clears a field sent as null, and \
-                 an argument a tool does not define is an error. All money is integer cents; all \
-                 dates are YYYY-MM-DD, and a malformed date is an error naming the field.",
+                 lacks, and `dismiss_schedule_item` / `restore_schedule_item`. (4) PLAN A JOB: \
+                 `plan_appointment` for a shop trip, `plan_work` with its `appointment_id` for \
+                 each job, `add_need` for each thing a job needs, `add_need_option` for every \
+                 option researched with its fitment verdict and evidence, and `get_checklist` to \
+                 read what is left. Ask the owner for the supplier and the choice, then record \
+                 their answer and reason with `update_need`; never decide for them. Then \
+                 `mark_need_ordered` (or `link_part_to_need` for a part already recorded), \
+                 `mark_need_received`, and `return_part` for a wrong part; `add_todo` and \
+                 `update_todo` for plain to-dos; `past_decisions` for what was chosen before. \
+                 When the invoice arrives, pass `appointment_id` to `record_service` and ask \
+                 about every entry in its `unfitted_needs`. Also: `log_mileage` whenever the user \
+                 mentions an odometer reading (`list_mileage` / `delete_mileage` fix a typo, \
+                 `delete_vehicle` undoes a mistaken `add_vehicle`), `record_part` and \
+                 `list_parts` / `correct_part` / `delete_part` for parts, `save_note` for facts \
+                 worth keeping, `file_research_finding` for research worth keeping (read back \
+                 with `search_records`), `search_records` and `cost_summary` to look things up, \
+                 `check_recalls` (once per conversation; a failed lookup still lists the known \
+                 recalls) and `set_recall_status` for recalls. Services, parts, incidents and \
+                 planned work can each be listed, corrected and deleted; a correct or update tool \
+                 leaves absent fields alone and clears a field sent as null, and an argument a \
+                 tool does not define is an error. All money is integer cents; all dates are \
+                 YYYY-MM-DD, and a malformed date is an error naming the field.",
             )
     }
 

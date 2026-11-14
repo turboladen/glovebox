@@ -1,0 +1,891 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>60k service + loose ends – Glovebox</title>
+<style>
+  /* One typeface in two weights and four sizes. Black bars and white count
+     windows carry the structure; color appears only as a signal. */
+  :root {
+    color-scheme: light dark;
+    --page: #D6D8D6;
+    --sheet: #F8F8F6;
+    --bar: #161616;
+    --on-bar: #F8F8F6;
+    --job-bar: #B4B8B6;
+    --ink: #161616;
+    --ink-2: #565B5C;
+    --rule: #C6C9C7;
+    --inset: #E9EAE8;
+    --amber: #F2A900;
+    --on-amber: #161616;
+    --green: #1F7A4D;
+    --red: #C4241B;
+    --on-signal: #FFFFFF;
+
+    --face: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    --s-small: 0.875rem;
+    --s-body: 1rem;
+    --s-part: 1.1875rem;
+    --s-title: 2.125rem;
+
+    --need-col: 12rem;
+    --pad: 1rem;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --page: #0E0F0F;
+      --sheet: #1C1E1F;
+      --bar: #000000;
+      --on-bar: #F2F2EF;
+      --job-bar: #3B3F41;
+      --ink: #F2F2EF;
+      --ink-2: #A4A9AA;
+      --rule: #34383A;
+      --inset: #141516;
+      --amber: #F2A900;
+      --green: #2E9E68;
+      --red: #E0453A;
+    }
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  html { font-size: 100%; -webkit-text-size-adjust: 100%; }
+
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--ink);
+    font: 400 var(--s-body)/1.45 var(--face);
+    font-variant-numeric: tabular-nums;
+  }
+
+  h1, h2, h3, h4, p, ul, ol, dl, dd, fieldset { margin: 0; padding: 0; }
+  h1, h2, h3, h4, b { font-weight: 700; }
+  h2, h3, h4 { font-size: var(--s-body); }
+  ul, ol { list-style: none; }
+  fieldset { border: 0; min-width: 0; }
+  button, input, select, textarea { font: inherit; color: inherit; }
+
+  a { color: inherit; text-underline-offset: 0.2em; }
+  :focus-visible { outline: 3px solid var(--amber); outline-offset: 2px; }
+
+  .page { max-width: 72rem; margin: 0 auto; padding-inline: clamp(0.75rem, 3vw, 2.5rem); }
+
+  /* Header */
+
+  .chrome { background: var(--bar); color: var(--on-bar); }
+  .chrome .page { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 1rem; padding-block: 0.75rem; }
+  .wordmark { font-weight: 700; text-decoration: none; }
+  .chrome nav { margin-inline-start: auto; }
+  .today { color: var(--on-bar); }
+
+  /* Tags: every value that comes from a fixed list. A solid tag is a signal;
+     an outlined tag states a fact that needs no attention. */
+
+  .pill, .env {
+    display: inline-block;
+    width: fit-content;
+    padding: 0.1rem 0.45rem;
+    border: 1px solid var(--ink-2);
+    border-radius: 2px;
+    font-size: var(--s-small);
+    line-height: 1.35;
+    white-space: nowrap;
+  }
+  .env, .pill--undecided, .pill--to_order, .fit--unconfirmed {
+    background: var(--amber); border-color: var(--amber); color: var(--on-amber); font-weight: 700;
+  }
+  .pill--received, .pill--installed, .pill--done {
+    background: var(--green); border-color: var(--green); color: var(--on-signal); font-weight: 700;
+  }
+  .fit--does_not_fit, .pill--rejected {
+    background: var(--red); border-color: var(--red); color: var(--on-signal); font-weight: 700;
+  }
+  .pill--ordered { background: var(--ink); border-color: var(--ink); color: var(--sheet); font-weight: 700; }
+  .pill--none { border-style: dashed; color: var(--ink-2); }
+
+  .tag { color: var(--ink-2); font-size: var(--s-small); white-space: nowrap; }
+
+  /* Undo banner */
+
+  .banner { background: var(--sheet); border-bottom: 1px solid var(--rule); }
+  .banner .page { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; padding-block: 0.5rem; }
+
+  /* Appointment */
+
+  .appt { padding-block: 2.25rem 0.75rem; }
+  .appt h1 { font-size: var(--s-title); line-height: 1.1; letter-spacing: -0.015em; }
+  .appt p { margin-top: 0.5rem; }
+  .appt .pill { margin-inline-start: 0.5rem; vertical-align: 0.1em; }
+
+  /* Sections and bars */
+
+  .section { display: grid; gap: 0.75rem; padding-block: 1.5rem 1rem; }
+  .section > * { min-width: 0; }
+  .section > h2 { font-size: var(--s-part); }
+
+  .box { background: var(--sheet); }
+  .box-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.25rem 0.625rem;
+    padding: 0.5rem var(--pad);
+    background: var(--bar);
+    color: var(--on-bar);
+  }
+  /* The count sits in a window cut into the bar. */
+  .box-head .count {
+    min-width: 1.75rem;
+    padding: 0 0.4rem;
+    border-radius: 2px;
+    background: var(--on-bar);
+    color: var(--bar);
+    font-weight: 700;
+    text-align: center;
+  }
+  .tone-red > .box-head .count, .tone-amber > .box-head .count { background: var(--amber); color: var(--on-amber); }
+  .tone-red > .box-head .count { background: var(--red); color: var(--on-signal); }
+
+  details.box > summary { list-style: none; cursor: pointer; }
+  details.box > summary::-webkit-details-marker { display: none; }
+  details.box > summary .box-head::after { content: "Show"; margin-inline-start: auto; font-weight: 400; text-decoration: underline; text-underline-offset: 0.2em; }
+  details.box[open] > summary .box-head::after { content: "Hide"; }
+
+  .job > .box-head { background: var(--job-bar); color: var(--ink); }
+  .job > .box-head .count { margin-inline-start: auto; min-width: 0; padding: 0; background: none; color: inherit; font-weight: 400; }
+  .job-head .pill { border-color: var(--ink); }
+  .job-head .pill--done { border-color: var(--green); }
+
+  /* Next-step rows */
+
+  .step {
+    display: grid;
+    grid-template-columns: var(--need-col) minmax(0, 1fr) auto;
+    column-gap: 1rem;
+    row-gap: 0.5rem;
+    align-items: center;
+    padding: 0.625rem var(--pad);
+  }
+  .step + .step { border-top: 1px solid var(--rule); }
+  .step-need { font-weight: 700; }
+  .step-text { overflow-wrap: anywhere; }
+  .step-text::first-letter { text-transform: uppercase; }
+  .step-text .tag, .step-text .pill { margin-inline-start: 0.625rem; }
+  .step-actions { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; justify-content: flex-end; align-items: center; }
+  .step-actions > form { display: contents; }
+  .step > .drawer[open] { grid-column: 2 / -1; }
+  .step > .drawer:not([open]) { justify-self: end; }
+  .step--todo { grid-template-columns: 1.375rem minmax(0, 1fr) auto; }
+  .step > .drawer--aside, .step > .drawer--aside:not([open]),
+  .step > .drawer--add, .step > .drawer--add:not([open]) { grid-column: 2 / -1; justify-self: start; }
+  .step > .drawer--aside { margin-top: -0.375rem; }
+
+  /* Controls: a solid button commits something; underlined text does the rest. */
+
+  .btn, .drawer > summary {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2rem;
+    padding: 0.3rem 0.75rem;
+    border: 0;
+    border-radius: 2px;
+    background: var(--ink);
+    color: var(--sheet);
+    font-size: var(--s-small);
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+    text-decoration: none;
+    list-style: none;
+  }
+  .drawer > summary::-webkit-details-marker { display: none; }
+  .btn--quiet, .drawer--aside > summary, .drawer--add > summary, .secondary .drawer > summary {
+    min-height: 0;
+    padding: 0;
+    background: none;
+    color: var(--ink);
+    font-weight: 400;
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
+  }
+  .drawer[open] > summary { background: none; color: var(--ink); padding-inline: 0; }
+
+  .tick {
+    display: block;
+    position: relative;
+    width: 1.375rem;
+    height: 1.375rem;
+    padding: 0;
+    border: 2px solid var(--ink);
+    border-radius: 2px;
+    background: var(--sheet);
+    cursor: pointer;
+  }
+  .tick[aria-pressed="true"] { background: var(--green); border-color: var(--green); }
+  .tick[aria-pressed="true"]::after {
+    content: "";
+    position: absolute;
+    left: 0.36rem;
+    top: 0.06rem;
+    width: 0.35rem;
+    height: 0.7rem;
+    border: solid var(--on-signal);
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+  }
+
+  .form { display: grid; gap: 0.875rem; margin-top: 0.5rem; padding: 0.875rem; background: var(--inset); }
+  .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: 0.75rem 1rem; }
+  .field { display: grid; gap: 0.2rem; align-content: start; }
+  .field > span, .need-cols, .form-note, .opt-meta, .fit-note { font-size: var(--s-small); color: var(--ink-2); }
+  .form-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1rem; }
+  .form-note { max-width: 48ch; }
+
+  input[type="text"], input[type="date"], select, textarea {
+    width: 100%;
+    min-height: 2.25rem;
+    padding: 0.35rem 0.6rem;
+    border: 1px solid var(--ink-2);
+    border-radius: 2px;
+    background: var(--sheet);
+  }
+  textarea { min-height: 4rem; resize: vertical; max-width: 60ch; }
+  input[type="radio"], input[type="checkbox"] { accent-color: var(--ink); width: 1.05rem; height: 1.05rem; margin: 0; }
+  .check { display: inline-flex; align-items: center; gap: 0.5rem; }
+
+  [aria-invalid="true"] { border: 2px solid var(--red) !important; }
+  .error { padding: 0.4rem 0.75rem; background: var(--red); color: var(--on-signal); overflow-wrap: anywhere; }
+
+  /* Jobs */
+
+  .need-cols, .need-row {
+    display: grid;
+    grid-template-columns: var(--need-col) minmax(0, 1fr) minmax(0, 17rem) 1.25rem;
+    column-gap: 1.5rem;
+    padding-inline: var(--pad);
+  }
+  .need-cols { padding-block: 0.3rem; border-bottom: 1px solid var(--rule); }
+
+  .needs > li + li { border-top: 1px solid var(--rule); }
+  .need > summary { list-style: none; cursor: pointer; }
+  .need > summary::-webkit-details-marker { display: none; }
+  .need[open] { box-shadow: inset 4px 0 0 var(--ink); }
+
+  .need-row { row-gap: 0.75rem; padding-block: 0.875rem; }
+  .need-row .cell > * { display: block; }
+  .need-row .cell > .pill, .need-stage { margin-top: 0.35rem; }
+  .need-name { font-weight: 700; }
+
+  .pn { font-size: var(--s-part); font-weight: 700; line-height: 1.3; overflow-wrap: anywhere; }
+  .pn .mfr { font-size: var(--s-body); font-weight: 400; margin-inline-end: 0.45rem; }
+  .money { font-weight: 700; color: var(--ink); white-space: nowrap; }
+  .none { color: var(--ink-2); }
+  .need-note { font-size: var(--s-small); font-weight: 700; }
+  .purchase { margin-top: 0.35rem; font-size: var(--s-small); }
+
+  .facts { display: grid; gap: 0.4rem; align-content: start; }
+  .kinds { display: flex; flex-wrap: wrap; gap: 0.375rem; }
+
+  .marker { position: relative; width: 1.25rem; height: 1.25rem; margin-top: 0.1rem; }
+  .marker::before, .marker::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 0.75rem;
+    height: 2px;
+    background: var(--ink);
+    transform: translate(-50%, -50%);
+  }
+  .marker::after { transform: translate(-50%, -50%) rotate(90deg); }
+  .need[open] .marker::after { display: none; }
+
+  .need-body {
+    display: grid;
+    gap: 0.875rem;
+    padding: 0 var(--pad) 1.25rem calc(var(--pad) + var(--need-col) + 1.5rem);
+  }
+  .need-body .form { margin-top: 0; }
+  legend { padding: 0; }
+
+  .opts { margin-top: 0.375rem; background: var(--sheet); }
+  .opt {
+    display: grid;
+    grid-template-columns: 1.5rem minmax(0, 1fr) 6rem minmax(0, 15rem);
+    column-gap: 1rem;
+    row-gap: 0.25rem;
+    align-items: baseline;
+    padding: 0.625rem 0.75rem;
+    cursor: pointer;
+  }
+  .opt + .opt { border-top: 1px solid var(--rule); }
+  .opt:has(input:checked) { box-shadow: inset 4px 0 0 var(--ink); }
+  .opt input { align-self: start; margin-top: 0.3rem; }
+  .opt .price { text-align: right; }
+  .opt--blocked { cursor: not-allowed; }
+  .opt--blocked .pn, .opt--blocked .opt-desc, .opt--blocked .money { color: var(--ink-2); }
+  .opt--does_not_fit .pn { text-decoration: line-through; }
+  .opt .fit-note { display: block; margin-top: 0.3rem; }
+
+  .secondary { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; align-items: start; }
+  .secondary > .drawer[open] { flex-basis: 100%; }
+
+  /* Narrow widths */
+
+  @media (max-width: 60rem) {
+    :root { --need-col: 10rem; }
+    .need-cols { display: none; }
+    .need-row { grid-template-columns: var(--need-col) minmax(0, 1fr) 1.25rem; }
+    .need-row .facts { grid-column: 2 / 3; }
+    .need-row .marker { grid-column: 3; grid-row: 1; }
+  }
+
+  @media (max-width: 46rem) {
+    .step { grid-template-columns: minmax(0, 1fr); }
+    .step--todo { grid-template-columns: 1.375rem minmax(0, 1fr); }
+    .step-actions, .step > .drawer:not([open]) { justify-self: start; justify-content: flex-start; }
+    .step > .drawer, .step > .drawer[open], .step > .drawer--aside, .step > .drawer--add { grid-column: 1 / -1; }
+    .need-row { grid-template-columns: minmax(0, 1fr) 1.25rem; }
+    .need-row > * { grid-column: 1; }
+    .need-row .facts { grid-column: 1; }
+    .need-row .marker { grid-column: 2; grid-row: 1; }
+    .need-body { padding-inline-start: var(--pad); }
+    .opt { grid-template-columns: 1.5rem minmax(0, 1fr); }
+    .opt > :nth-child(n+3) { grid-column: 2; }
+    .opt .price { text-align: left; }
+  }
+</style>
+</head>
+<body>
+
+<header class="chrome">
+  <div class="page">
+    <a class="wordmark" href="/">Glovebox</a>
+    <span class="env" title="Environment: test database">test</span>
+    <nav aria-label="Site"><a href="/">Garage</a></nav>
+    <time class="today" datetime="2026-11-13">Fri, Nov 13, 2026</time>
+  </div>
+</header>
+
+<div class="banner" role="status">
+  <div class="page">
+    <p>Ticked “Bring the locking wheel nut key”.</p>
+    <form method="post" action="/todos/3/untick">
+      <input type="hidden" name="back" value="/appointments/1">
+      <button class="btn" type="submit">Undo</button>
+    </form>
+  </div>
+</div>
+
+<main>
+  <section class="appt page" aria-labelledby="appt-title">
+    <h1 id="appt-title">60k service + loose ends</h1>
+    <p>Demo GTI at Demo Auto Works on <time datetime="2026-11-27">Fri, Nov 27, 2026</time><span class="pill pill--planned">Planning</span></p>
+    <p><b>5</b> needs open, <b>2</b> to-dos open, <b>3</b> jobs</p>
+  </section>
+
+  <section class="section page" aria-labelledby="steps-title">
+    <h2 id="steps-title">Next steps</h2>
+
+    <section class="box tone-red" aria-labelledby="g-check">
+      <h3 class="box-head" id="g-check">Check <span class="count">1</span></h3>
+      <ul class="rows">
+        <li class="step">
+          <p class="step-need">Front pads</p>
+          <p class="step-text">Fitment of the chosen option is not confirmed.<span class="tag">Brakes</span></p>
+          <div class="step-actions"><a class="btn" href="#need-3">Open</a></div>
+        </li>
+      </ul>
+    </section>
+
+    <section class="box tone-amber" aria-labelledby="g-decide">
+      <h3 class="box-head" id="g-decide">Decide <span class="count">2</span></h3>
+      <ol class="rows">
+        <li class="step">
+          <p class="step-need">Rear pads</p>
+          <p class="step-text">no part chosen<span class="tag">Brakes</span></p>
+          <div class="step-actions"><a class="btn" href="#need-2-decide">Choose a part</a></div>
+        </li>
+        <li class="step">
+          <p class="step-need">Wiper blades</p>
+          <p class="step-text">no part chosen<span class="tag">Cabin filter and wipers</span></p>
+          <div class="step-actions"><a class="btn" href="#need-8-decide">Choose a part</a></div>
+        </li>
+      </ol>
+    </section>
+
+    <section class="box tone-amber" aria-labelledby="g-order">
+      <h3 class="box-head" id="g-order">Order <span class="count">2</span></h3>
+      <ol class="rows">
+        <li class="step">
+          <p class="step-need">Rear rotors</p>
+          <p class="step-text">order Volkswagen 5Q0615601E from FCP Euro<span class="tag">Brakes</span></p>
+          <details class="drawer">
+            <summary>Mark ordered</summary>
+            <form class="form" method="post" action="/needs/1/order">
+              <div class="fields">
+                <label class="field"><span>Seller</span><input type="text" name="seller" value="FCP Euro" autocomplete="off"></label>
+                <label class="field"><span>Order date</span><input type="date" name="purchase_date" value="2026-11-13"></label>
+                <label class="field"><span>Price</span><input type="text" name="price" value="$138.00" placeholder="$0.00" inputmode="decimal" autocomplete="off"></label>
+                <label class="field"><span>Order number</span><input type="text" name="order_ref" autocomplete="off"></label>
+              </div>
+              <div class="form-actions">
+                <button class="btn btn--primary" type="submit">Mark ordered</button>
+                <p class="form-note">This records a purchase and cannot be undone here. Correct a mistaken order through Claude.</p>
+              </div>
+            </form>
+          </details>
+        </li>
+        <li class="step step--failed">
+          <p class="step-need">Front pads</p>
+          <p class="step-text">order Akebono ACT1633 from FCP Euro<span class="tag">Brakes</span></p>
+          <details class="drawer" open>
+            <summary>Mark ordered</summary>
+            <form class="form" method="post" action="/needs/3/order">
+              <p class="error" id="need-3-error" role="alert"><b>Not saved.</b> Price: "about 75" is not a dollar amount such as 935 or $1,234.50</p>
+              <div class="fields">
+                <label class="field"><span>Seller</span><input type="text" name="seller" value="FCP Euro" autocomplete="off"></label>
+                <label class="field"><span>Order date</span><input type="date" name="purchase_date" value="2026-11-13"></label>
+                <label class="field"><span>Price</span><input type="text" name="price" value="about 75" inputmode="decimal" autocomplete="off" aria-invalid="true" aria-describedby="need-3-error"></label>
+                <label class="field"><span>Order number</span><input type="text" name="order_ref" value="FCP-10511" autocomplete="off"></label>
+              </div>
+              <div class="form-actions">
+                <button class="btn btn--primary" type="submit">Mark ordered</button>
+                <p class="form-note">This records a purchase and cannot be undone here. Correct a mistaken order through Claude.</p>
+              </div>
+            </form>
+          </details>
+        </li>
+      </ol>
+    </section>
+
+    <section class="box tone-steel" aria-labelledby="g-arriving">
+      <h3 class="box-head" id="g-arriving">Arriving <span class="count">1</span></h3>
+      <ol class="rows">
+        <li class="step">
+          <p class="step-need">Cabin air filter</p>
+          <p class="step-text">ordered from FCP Euro on 2026-11-13<span class="tag">Cabin filter and wipers</span></p>
+          <div class="step-actions">
+            <form method="post" action="/needs/7/receive">
+              <button class="btn" type="submit" aria-label="Mark Cabin air filter received">Mark received</button>
+            </form>
+          </div>
+          <details class="drawer drawer--aside">
+            <summary>Wrong part, returning it</summary>
+            <form class="form" method="post" action="/needs/7/return">
+              <label class="field"><span>What was wrong</span><textarea name="reason" required></textarea></label>
+              <label class="check"><input type="checkbox" name="option_was_wrong" value="true"> The chosen option was the mistake, so reject it</label>
+              <div class="form-actions"><button class="btn btn--primary" type="submit">Record the return</button></div>
+            </form>
+          </details>
+        </li>
+      </ol>
+    </section>
+
+    <section class="box tone-stone" aria-labelledby="g-todos">
+      <h3 class="box-head" id="g-todos">To-dos <span class="count">2</span></h3>
+      <div>
+        <ol class="rows">
+          <li class="step step--todo">
+            <form class="tick-form" method="post" action="/todos/1/tick">
+              <button class="tick" type="submit" aria-pressed="false" aria-label="Tick: Return Wiper blade set, 24 in. and 19 in. to Amazon"></button>
+            </form>
+            <p class="step-text">Return Wiper blade set, 24 in. and 19 in. to Amazon</p>
+            <div class="step-actions">
+              <form method="post" action="/todos/1/delete">
+                <button class="btn btn--quiet" type="submit" aria-label="Delete to-do: Return Wiper blade set, 24 in. and 19 in. to Amazon">Delete</button>
+              </form>
+            </div>
+          </li>
+          <li class="step step--todo">
+            <form class="tick-form" method="post" action="/todos/2/tick">
+              <button class="tick" type="submit" aria-pressed="false" aria-label="Tick: Ask the shop about the clunk over bumps"></button>
+            </form>
+            <p class="step-text">Ask the shop about the clunk over bumps</p>
+            <div class="step-actions">
+              <form method="post" action="/todos/2/delete">
+                <button class="btn btn--quiet" type="submit" aria-label="Delete to-do: Ask the shop about the clunk over bumps">Delete</button>
+              </form>
+            </div>
+          </li>
+          <li class="step step--todo">
+            <span aria-hidden="true"></span>
+            <details class="drawer drawer--add">
+              <summary>Add a to-do</summary>
+              <form class="form" method="post" action="/appointments/1/todos">
+                <label class="field"><span>To-do</span><input type="text" name="title" required autocomplete="off"></label>
+                <div class="form-actions"><button class="btn btn--primary" type="submit">Add to-do</button></div>
+              </form>
+            </details>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <details class="box tone-green">
+      <summary><h3 class="box-head">Done <span class="count">4</span></h3></summary>
+      <ol class="rows">
+        <li class="step">
+          <p class="step-need">Front rotors</p>
+          <p class="step-text">received on 2026-11-13<span class="pill pill--received">Received</span><span class="tag">Brakes</span></p>
+          <details class="drawer drawer--aside">
+            <summary>Wrong part, returning it</summary>
+            <form class="form" method="post" action="/needs/4/return">
+              <label class="field"><span>What was wrong</span><textarea name="reason" required></textarea></label>
+              <label class="check"><input type="checkbox" name="option_was_wrong" value="true"> The chosen option was the mistake, so reject it</label>
+              <div class="form-actions"><button class="btn btn--primary" type="submit">Record the return</button></div>
+            </form>
+          </details>
+        </li>
+        <li class="step">
+          <p class="step-need">Brake fluid</p>
+          <p class="step-text">the shop supplies it<span class="pill pill--shop_supplies">Shop supplies</span><span class="tag">Brakes</span></p>
+        </li>
+        <li class="step">
+          <p class="step-need">Oil filter</p>
+          <p class="step-text">installed<span class="pill pill--installed">Installed</span><span class="tag">Oil change</span></p>
+        </li>
+        <li class="step step--todo">
+          <form class="tick-form" method="post" action="/todos/3/untick">
+            <button class="tick" type="submit" aria-pressed="true" aria-label="Un-tick: Bring the locking wheel nut key"></button>
+          </form>
+          <p class="step-text">Bring the locking wheel nut key</p>
+        </li>
+      </ol>
+    </details>
+  </section>
+
+  <section class="section page" aria-labelledby="jobs-title">
+    <h2 id="jobs-title">By job</h2>
+
+    <article class="box job tone-steel" aria-labelledby="job-1">
+      <header class="box-head job-head">
+        <h3 id="job-1">Brakes</h3>
+        <span class="pill pill--planned">Planned</span>
+        <span class="count">3 needs open</span>
+      </header>
+      <div class="need-cols" aria-hidden="true"><span>Need</span><span>Part</span><span>Decision</span><span></span></div>
+      <ul class="needs">
+
+        <li>
+          <details class="need" id="need-1" open>
+            <summary class="need-row">
+              <span class="cell">
+                <span class="need-name">Rear rotors</span>
+                <span class="need-stage"><span class="pill pill--to_order">To order</span></span>
+              </span>
+              <span class="cell">
+                <span class="pn"><span class="mfr">Volkswagen</span>5Q0615601E</span>
+                <span class="opt-desc">Rear rotor, 310 x 22 mm</span>
+                <span class="opt-meta">FCP Euro, <span class="money">$138.00</span></span>
+                <span class="pill fit--confirmed">Fit confirmed</span>
+              </span>
+              <span class="facts">
+                <span class="kinds"><span class="pill pill--kind">Self</span><span class="pill pill--kind">Replacement</span></span>
+                <span class="reason">Coated hats resist rust.</span>
+              </span>
+              <span class="marker" aria-hidden="true"></span>
+            </summary>
+
+            <div class="need-body">
+              <form class="form" method="post" action="/needs/1/decide" id="need-1-decide">
+                <fieldset>
+                  <legend><h4>Options</h4></legend>
+                  <div class="opts">
+                    <label class="opt">
+                      <input type="radio" name="option_id" value="1" checked>
+                      <span>
+                        <span class="pn"><span class="mfr">Volkswagen</span>5Q0615601E</span><br>
+                        <span class="opt-desc">Rear rotor, 310 x 22 mm</span><br>
+                        <span class="opt-meta">FCP Euro</span>
+                      </span>
+                      <span class="price money">$138.00</span>
+                      <span><span class="pill fit--confirmed">Fit confirmed</span></span>
+                    </label>
+                    <label class="opt opt--blocked opt--does_not_fit">
+                      <input type="radio" name="option_id" value="2" disabled aria-describedby="opt-2-why">
+                      <span>
+                        <span class="pn"><span class="mfr">Zimmermann</span>600.3241.20</span><br>
+                        <span class="opt-desc">Rear rotor, 272 x 10 mm</span><br>
+                        <span class="opt-meta">FCP Euro</span>
+                      </span>
+                      <span class="price money">$112.00</span>
+                      <span id="opt-2-why"><span class="pill fit--does_not_fit">Does not fit</span><span class="fit-note">272 x 10 mm, for cars without the Performance Pack</span></span>
+                    </label>
+                    <label class="opt opt--blocked opt--rejected">
+                      <input type="radio" name="option_id" value="3" disabled aria-describedby="opt-3-why">
+                      <span>
+                        <span class="pn"><span class="mfr">Pagid</span>55155</span><br>
+                        <span class="opt-desc">Uncoated rear rotor, 310 x 22 mm</span><br>
+                        <span class="opt-meta">FCP Euro</span>
+                      </span>
+                      <span class="price money">$79.00</span>
+                      <span id="opt-3-why"><span class="pill fit--confirmed">Fit confirmed</span><span class="fit-note"><span class="pill pill--rejected">Rejected</span> Uncoated hats rust within a season.</span></span>
+                    </label>
+                  </div>
+                </fieldset>
+                <label class="field"><span>Reason for the choice</span><textarea name="reason">Coated hats resist rust.</textarea></label>
+                <div class="form-actions"><button class="btn btn--primary" type="submit">Save decision</button></div>
+              </form>
+
+              <div class="secondary">
+                <details class="drawer">
+                  <summary>Supplier and approach</summary>
+                  <form class="form" method="post" action="/needs/1/supply">
+                    <div class="fields">
+                      <label class="field"><span>Supplier</span>
+                        <select name="supplied_by">
+                          <option value="">Not decided</option>
+                          <option value="self" selected>Self</option>
+                          <option value="shop">Shop</option>
+                        </select>
+                      </label>
+                      <label class="field"><span>Approach</span>
+                        <select name="approach">
+                          <option value="">Not decided</option>
+                          <option value="replacement" selected>Replacement</option>
+                          <option value="upgrade">Upgrade</option>
+                        </select>
+                      </label>
+                    </div>
+                    <div class="form-actions"><button class="btn btn--primary" type="submit">Save</button></div>
+                  </form>
+                </details>
+                <details class="drawer">
+                  <summary>Mark ordered</summary>
+                  <form class="form" method="post" action="/needs/1/order">
+                    <div class="fields">
+                      <label class="field"><span>Seller</span><input type="text" name="seller" value="FCP Euro" autocomplete="off"></label>
+                      <label class="field"><span>Order date</span><input type="date" name="purchase_date" value="2026-11-13"></label>
+                      <label class="field"><span>Price</span><input type="text" name="price" value="$138.00" placeholder="$0.00" inputmode="decimal" autocomplete="off"></label>
+                      <label class="field"><span>Order number</span><input type="text" name="order_ref" autocomplete="off"></label>
+                    </div>
+                    <div class="form-actions">
+                      <button class="btn btn--primary" type="submit">Mark ordered</button>
+                      <p class="form-note">This records a purchase and cannot be undone here. Correct a mistaken order through Claude.</p>
+                    </div>
+                  </form>
+                </details>
+              </div>
+            </div>
+          </details>
+        </li>
+
+        <li>
+          <details class="need" id="need-2">
+            <summary class="need-row">
+              <span class="cell">
+                <span class="need-name">Rear pads</span>
+                <span class="need-stage"><span class="pill pill--undecided">Undecided</span></span>
+              </span>
+              <span class="cell">
+                <span class="none">No part chosen</span>
+                <span class="opt-meta">1 option researched</span>
+              </span>
+              <span class="facts">
+                <span class="kinds"><span class="pill pill--none">Supplier not decided</span><span class="pill pill--none">Approach not decided</span></span>
+              </span>
+              <span class="marker" aria-hidden="true"></span>
+            </summary>
+            <div class="need-body">
+              <form class="form" method="post" action="/needs/2/decide" id="need-2-decide">
+                <fieldset>
+                  <legend><h4>Options</h4></legend>
+                  <div class="opts">
+                    <label class="opt">
+                      <input type="radio" name="option_id" value="4">
+                      <span>
+                        <span class="pn"><span class="mfr">Akebono</span>ACT1760</span><br>
+                        <span class="opt-desc">Ceramic rear pads</span><br>
+                        <span class="opt-meta">FCP Euro</span>
+                      </span>
+                      <span class="price money">$54.00</span>
+                      <span><span class="pill fit--unconfirmed">Fit unconfirmed</span></span>
+                    </label>
+                  </div>
+                </fieldset>
+                <label class="field"><span>Reason for the choice</span><textarea name="reason"></textarea></label>
+                <div class="form-actions"><button class="btn btn--primary" type="submit">Save decision</button></div>
+              </form>
+            </div>
+          </details>
+        </li>
+
+        <li>
+          <details class="need" id="need-3">
+            <summary class="need-row">
+              <span class="cell">
+                <span class="need-name">Front pads</span>
+                <span class="need-stage"><span class="pill pill--to_order">To order</span></span>
+              </span>
+              <span class="cell">
+                <span class="pn"><span class="mfr">Akebono</span>ACT1633</span>
+                <span class="opt-desc">Ceramic front pads</span>
+                <span class="opt-meta">FCP Euro, <span class="money">$74.99</span></span>
+                <span class="pill fit--unconfirmed">Fit unconfirmed</span>
+                <span class="need-note">Fitment of the chosen option is not confirmed.</span>
+              </span>
+              <span class="facts">
+                <span class="kinds"><span class="pill pill--kind">Self</span><span class="pill pill--kind">Replacement</span></span>
+                <span class="reason">Quiet and low dust.</span>
+              </span>
+              <span class="marker" aria-hidden="true"></span>
+            </summary>
+            <div class="need-body"><p class="opt-meta">No other options.</p></div>
+          </details>
+        </li>
+
+        <li>
+          <details class="need" id="need-4">
+            <summary class="need-row">
+              <span class="cell">
+                <span class="need-name">Front rotors</span>
+                <span class="need-stage"><span class="pill pill--received">Received</span></span>
+              </span>
+              <span class="cell">
+                <span class="pn"><span class="mfr">Zimmermann</span>100.3367.20</span>
+                <span class="opt-desc">Coated front rotor, 312 mm</span>
+                <span class="pill fit--confirmed">Fit confirmed</span>
+                <span class="purchase">Bought from FCP Euro on 2026-11-13 for $162.00, order FCP-10458</span>
+              </span>
+              <span class="facts">
+                <span class="kinds"><span class="pill pill--kind">Self</span><span class="pill pill--kind">Replacement</span></span>
+                <span class="reason">Matches the original part.</span>
+              </span>
+              <span class="marker" aria-hidden="true"></span>
+            </summary>
+            <div class="need-body"><p class="opt-meta">No other options.</p></div>
+          </details>
+        </li>
+
+        <li>
+          <details class="need" id="need-5">
+            <summary class="need-row">
+              <span class="cell">
+                <span class="need-name">Brake fluid</span>
+                <span class="need-stage"><span class="pill pill--shop_supplies">Shop supplies</span></span>
+              </span>
+              <span class="cell"><span class="none">No part chosen</span></span>
+              <span class="facts">
+                <span class="kinds"><span class="pill pill--kind">Shop</span><span class="pill pill--none">Approach not decided</span></span>
+              </span>
+              <span class="marker" aria-hidden="true"></span>
+            </summary>
+            <div class="need-body"><p class="opt-meta">No options researched.</p></div>
+          </details>
+        </li>
+      </ul>
+    </article>
+
+    <article class="box job tone-green" aria-labelledby="job-2">
+      <header class="box-head job-head">
+        <h3 id="job-2">Oil change</h3>
+        <span class="pill pill--done">Done</span>
+        <span class="count">0 needs open</span>
+      </header>
+      <div class="need-cols" aria-hidden="true"><span>Need</span><span>Part</span><span>Decision</span><span></span></div>
+      <ul class="needs">
+        <li>
+          <details class="need" id="need-6">
+            <summary class="need-row">
+              <span class="cell">
+                <span class="need-name">Oil filter</span>
+                <span class="need-stage"><span class="pill pill--installed">Installed</span></span>
+              </span>
+              <span class="cell">
+                <span class="pn"><span class="mfr">Mann</span>HU 7008 z</span>
+                <span class="opt-desc">Oil filter cartridge</span>
+                <span class="pill fit--confirmed">Fit confirmed</span>
+                <span class="purchase">Bought from FCP Euro on 2026-11-13 for $12.99, order FCP-10459</span>
+              </span>
+              <span class="facts">
+                <span class="kinds"><span class="pill pill--kind">Self</span><span class="pill pill--kind">Replacement</span></span>
+                <span class="reason">Matches the original part.</span>
+              </span>
+              <span class="marker" aria-hidden="true"></span>
+            </summary>
+            <div class="need-body"><p class="opt-meta">No other options.</p></div>
+          </details>
+        </li>
+      </ul>
+    </article>
+
+    <article class="box job tone-steel" aria-labelledby="job-3">
+      <header class="box-head job-head">
+        <h3 id="job-3">Cabin filter and wipers</h3>
+        <span class="pill pill--planned">Planned</span>
+        <span class="count">2 needs open</span>
+      </header>
+      <div class="need-cols" aria-hidden="true"><span>Need</span><span>Part</span><span>Decision</span><span></span></div>
+      <ul class="needs">
+        <li>
+          <details class="need" id="need-7">
+            <summary class="need-row">
+              <span class="cell">
+                <span class="need-name">Cabin air filter</span>
+                <span class="need-stage"><span class="pill pill--ordered">Ordered</span></span>
+              </span>
+              <span class="cell">
+                <span class="pn"><span class="mfr">Mann</span>CUK 26 009</span>
+                <span class="opt-desc">Pollen cabin air filter</span>
+                <span class="pill fit--confirmed">Fit confirmed</span>
+                <span class="purchase">Bought from FCP Euro on 2026-11-13 for $21.50, order FCP-10460</span>
+              </span>
+              <span class="facts">
+                <span class="kinds"><span class="pill pill--kind">Self</span><span class="pill pill--kind">Replacement</span></span>
+                <span class="reason">Matches the original part.</span>
+              </span>
+              <span class="marker" aria-hidden="true"></span>
+            </summary>
+            <div class="need-body"><p class="opt-meta">No other options.</p></div>
+          </details>
+        </li>
+        <li>
+          <details class="need" id="need-8">
+            <summary class="need-row">
+              <span class="cell">
+                <span class="need-name">Wiper blades</span>
+                <span class="need-stage"><span class="pill pill--undecided">Undecided</span></span>
+              </span>
+              <span class="cell">
+                <span class="none">No part chosen</span>
+                <span class="opt-meta">1 option researched, 1 rejected</span>
+              </span>
+              <span class="facts">
+                <span class="kinds"><span class="pill pill--kind">Self</span><span class="pill pill--kind">Replacement</span></span>
+              </span>
+              <span class="marker" aria-hidden="true"></span>
+            </summary>
+            <div class="need-body">
+              <form class="form" method="post" action="/needs/8/decide" id="need-8-decide">
+                <fieldset>
+                  <legend><h4>Options</h4></legend>
+                  <div class="opts">
+                    <label class="opt opt--blocked opt--rejected">
+                      <input type="radio" name="option_id" value="9" disabled aria-describedby="opt-9-why">
+                      <span>
+                        <span class="pn"><span class="mfr">Bosch</span>3397118938</span><br>
+                        <span class="opt-desc">Wiper blade set, 24 in. and 19 in.</span><br>
+                        <span class="opt-meta">Amazon</span>
+                      </span>
+                      <span class="price money">$32.99</span>
+                      <span id="opt-9-why"><span class="pill fit--confirmed">Fit confirmed</span><span class="fit-note"><span class="pill pill--rejected">Rejected</span> The driver-side blade is 2 in. too long.</span></span>
+                    </label>
+                  </div>
+                </fieldset>
+              </form>
+            </div>
+          </details>
+        </li>
+      </ul>
+    </article>
+  </section>
+</main>
+
+</body>
+</html>

@@ -1,7 +1,20 @@
 # Copy the database to data/backups/ now. The server also does this itself
 # once a day and before every migration, keeping the newest 14.
 backup:
-    cargo run --quiet --release -p glovebox-mcp -- backup
+    cargo run --quiet --release -p glovebox-cli -- backup
+
+# Delete the named non-live environment's database files. `live` is refused.
+reset-env env:
+    cargo run --quiet --release -p glovebox-cli -- reset --env {{quote(env)}}
+
+# Fill the named non-live environment with made-up demo data. `live` is refused.
+seed env:
+    cargo run --quiet --release -p glovebox-cli -- seed --env {{quote(env)}}
+
+# Serve the web page on 127.0.0.1 and open it in the browser. Use `just web test`
+# for the made-up data from `just seed test`.
+web env="live":
+    GLOVEBOX_ENV={{quote(env)}} cargo run --quiet --release -p glovebox-web -- --open
 
 # --- CI ---
 # These recipes are what GitHub Actions runs, so `just ci` reproduces CI locally.

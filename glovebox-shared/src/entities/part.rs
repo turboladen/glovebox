@@ -31,10 +31,21 @@ pub struct Model {
     pub warranty_expires_miles: Option<i32>,
     /// Who bought the part: `self` or `shop`.
     pub supplied_by: String,
+    pub received_on: Option<String>,
+    pub returned_on: Option<String>,
+    pub return_reason: Option<String>,
+    pub order_ref: Option<String>,
+    pub returned_from_need_id: Option<i32>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
+    #[sea_orm(
+        belongs_to = "super::job_need::Entity",
+        from = "Column::ReturnedFromNeedId",
+        to = "super::job_need::Column::Id"
+    )]
+    ReturnedFromNeed,
     #[sea_orm(
         belongs_to = "super::vehicle::Entity",
         from = "Column::VehicleId",

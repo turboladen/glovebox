@@ -54,6 +54,10 @@ pub struct NewServiceRecord {
     /// Same-vehicle recalls (research findings with category `recall`) this
     /// service performed.
     pub recall_finding_ids: Option<Vec<i32>>,
+    /// The appointment this invoice settles. It must belong to the same
+    /// vehicle and be neither cancelled nor closed. Naming it installs and
+    /// completes nothing; `work_item_ids` and `part_ids` do that.
+    pub appointment_id: Option<i32>,
 }
 
 #[derive(Default)]
@@ -83,4 +87,7 @@ pub struct UpdateServiceRecord {
     pub invoice_ref: Option<Option<String>>,
     /// When present, replaces the recalls this service performed.
     pub recall_finding_ids: Option<Vec<i32>>,
+    /// Set, change or clear the appointment this invoice settles. The same
+    /// rules as `NewServiceRecord::appointment_id` apply to a new value.
+    pub appointment_id: Option<Option<i32>>,
 }

@@ -26,6 +26,11 @@ mod corrections;
 
 pub use corrections::*;
 
+#[allow(clippy::option_option)]
+mod checklist;
+
+pub use checklist::*;
+
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EmptyParams {}
@@ -112,6 +117,13 @@ pub struct RecordServiceInput {
     /// recall then reads as done, with this service as the one that did it.
     /// Name a recall here when the invoice cites its campaign number.
     pub recall_finding_ids: Option<Vec<i32>>,
+    /// The appointment this invoice is for (from `list_appointments`). Pass it
+    /// when the invoice settles a planned appointment. Naming it installs and
+    /// completes nothing by itself: name the finished jobs in `work_item_ids`
+    /// and the parts the shop fitted in `part_ids` or `parts`. The result's
+    /// `unfitted_needs` lists every need on a completed job whose part is
+    /// linked but not installed; ask the owner about each one.
+    pub appointment_id: Option<i32>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -188,6 +200,7 @@ impl RecordServiceInput {
                 parts: self
                     .parts
                     .map(|ps| ps.into_iter().map(InlinePartInput::into_domain).collect()),
+                appointment_id: self.appointment_id,
             },
         )
     }
@@ -332,6 +345,12 @@ pub struct InlinePartInput {
     pub warranty_expires_on: Option<String>,
     /// Part warranty expiry odometer reading (whole miles).
     pub warranty_expires_miles: Option<i32>,
+    /// The seller's order or confirmation number.
+    pub order_ref: Option<String>,
+    /// The need this part fills (from `get_checklist`), for a part the shop
+    /// supplied that was not recorded beforehand. The part is linked to the
+    /// need in the same write. The need must have no part yet.
+    pub need_id: Option<i32>,
 }
 
 impl InlinePartInput {
@@ -348,6 +367,8 @@ impl InlinePartInput {
             notes: self.notes,
             warranty_expires_on: self.warranty_expires_on,
             warranty_expires_miles: self.warranty_expires_miles,
+            order_ref: self.order_ref,
+            need_id: self.need_id,
             ..Default::default()
         }
     }
@@ -373,8 +394,8 @@ pub struct RecordPartInput {
     /// Who supplied the part: `self` (the owner bought it, the default) or
     /// `shop` (the shop sourced it and billed for it).
     pub supplied_by: Option<String>,
-    /// Lifecycle status: `purchased`, `installed`, or `replaced`.
-    /// Defaults to `purchased`.
+    /// Lifecycle status: `purchased`, `installed` or `replaced`. Defaults to
+    /// `purchased`. A return is made on the need, not here.
     pub status: Option<String>,
     /// Where it goes on the car (free text), e.g. "Front brakes".
     pub location: Option<String>,
@@ -392,6 +413,8 @@ pub struct RecordPartInput {
     pub warranty_expires_on: Option<String>,
     /// Part warranty expiry odometer reading (whole miles).
     pub warranty_expires_miles: Option<i32>,
+    /// The seller's order or confirmation number.
+    pub order_ref: Option<String>,
 }
 
 impl RecordPartInput {
@@ -418,6 +441,8 @@ impl RecordPartInput {
                 warranty_expires_on: self.warranty_expires_on,
                 warranty_expires_miles: self.warranty_expires_miles,
                 supplied_by: self.supplied_by,
+                order_ref: self.order_ref,
+                need_id: None,
             },
         )
     }
@@ -453,6 +478,10 @@ pub struct PlanWorkInput {
     /// purchase mileage; until the car has one, an item with only this field
     /// reads `revisit_status: "ok"`.
     pub revisit_by_miles: Option<i32>,
+    /// The appointment this job goes on (from `list_appointments`). It must be
+    /// open. Leave it out for a job with no shop visit yet; it can be moved
+    /// later with `update_planned_work`.
+    pub appointment_id: Option<i32>,
 }
 
 impl PlanWorkInput {
@@ -468,6 +497,7 @@ impl PlanWorkInput {
                 est_cost_cents: self.est_cost_cents,
                 revisit_by_date: self.revisit_by_date,
                 revisit_by_miles: self.revisit_by_miles,
+                appointment_id: self.appointment_id,
             },
         )
     }

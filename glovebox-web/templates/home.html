@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Glovebox{% endblock %}
+{% block banner %}{% if let Some(b) = banner %}{% include "banner.html" %}{% endif %}{% endblock %}
+{% block content %}
+{% if let Some(e) = top_error %}<div class="page notice"><p class="error" role="alert"><b>Not saved.</b> {{ e }}</p></div>{% endif %}
+<div class="plain page">
+<h1>Open work</h1>
+{% if vehicles.is_empty() %}
+<p>No vehicles yet.</p>
+{% endif %}
+{% for hv in vehicles %}
+{% let v = hv.home %}
+<section class="vehicle">
+  <h2>{{ v.vehicle.name }}</h2>
+
+  <h3>Appointments</h3>
+  {% if v.appointments.is_empty() %}
+  <p>No open appointments.</p>
+  {% else %}
+  <ul>
+    {% for a in v.appointments %}
+    <li>
+      <a href="/vehicles/{{ v.vehicle.id }}/appointments/{{ a.id }}"><strong>{{ a.purpose }}</strong></a>
+      <span class="when">{{ a.when }}</span>
+      {% if let Some(shop) = a.shop_name %}<span class="shop">{{ shop }}</span>{% endif %}
+      <br><span class="counts">{{ a.counts }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  <h3>Not scheduled yet</h3>
+  {% if v.unscheduled_jobs.is_empty() %}
+  <p>No jobs waiting for an appointment.</p>
+  {% else %}
+  <ul>
+    {% for j in v.unscheduled_jobs %}
+    <li><a href="/vehicles/{{ v.vehicle.id }}/jobs/{{ j.id }}"><strong>{{ j.title }}</strong></a> <span class="counts">{{ j.counts }}</span></li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  <h3>To-dos with no appointment</h3>
+  {% if hv.todos.is_empty() %}
+  <p>No open to-dos.</p>
+  {% endif %}
+  <ol class="rows">
+    {% for t in hv.todos %}{% include "todo_row.html" %}{% endfor %}
+    <li class="step step--todo">
+      <span aria-hidden="true"></span>
+      <details class="drawer drawer--add"{% if hv.todo_form.error.is_some() %} open{% endif %}>
+        <summary>Add a to-do</summary>
+        <form class="form" method="post" action="/vehicles/{{ v.vehicle.id }}/todos">
+          {% if let Some(e) = hv.todo_form.error %}<p class="error" role="alert"><b>Not saved.</b> {{ e }}</p>{% endif %}
+          <input type="hidden" name="back" value="/">
+          <label class="field"><span>To-do</span><input type="text" name="title" value="{{ hv.todo_form.title }}" required autocomplete="off"{% if hv.todo_form.error.is_some() %} aria-invalid="true"{% endif %}></label>
+          <div class="form-actions"><button class="btn btn--primary" type="submit">Add to-do</button></div>
+        </form>
+      </details>
+    </li>
+  </ol>
+</section>
+{% endfor %}
+</div>
+{% endblock %}

@@ -8,6 +8,7 @@ use crate::{
     entities::incident,
     error::DomainResult,
     services::{
+        appointment::{self, AppointmentSummary},
         budget::{self, BudgetForecast},
         incident as incident_svc,
         recall::{self, RecallWithStatus},
@@ -34,6 +35,9 @@ pub struct Upcoming {
     pub recalls: Vec<RecallWithStatus>,
     /// Unresolved incidents, excluding notes.
     pub open_incidents: Vec<incident::Model>,
+    /// Appointments still being prepared, soonest first, each with its open
+    /// counts.
+    pub appointments: Vec<AppointmentSummary>,
 }
 
 fn urgency(status: Option<&str>) -> u8 {
@@ -79,6 +83,8 @@ pub async fn upcoming(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResul
         .filter(|i| i.category != "note")
         .collect();
 
+    let appointments = appointment::list(db, vehicle_id, false).await?;
+
     Ok(Upcoming {
         reminders,
         budget,
@@ -86,6 +92,7 @@ pub async fn upcoming(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResul
         planned_work_est_cost_cents,
         recalls,
         open_incidents,
+        appointments,
     })
 }
 
@@ -95,10 +102,13 @@ mod tests {
     use crate::{
         entities::model_template,
         error::DomainError,
-        inputs::{incident::NewIncident, mileage::NewMileageEntry, work_item::NewWorkItem},
+        inputs::{
+            appointment::NewAppointment, incident::NewIncident, mileage::NewMileageEntry,
+            need::NewNeed, todo::NewTodo, work_item::NewWorkItem,
+        },
         services::{
-            incident as incident_svc, mileage, nhtsa::RecallInfo, recall, research,
-            work_item as work_item_svc,
+            appointment, incident as incident_svc, mileage, need, nhtsa::RecallInfo, recall,
+            research, todo, work_item as work_item_svc,
         },
         test_support::{VehicleFixture, test_db},
     };
@@ -117,6 +127,7 @@ mod tests {
             est_cost_cents: None,
             revisit_by_date: None,
             revisit_by_miles: None,
+            appointment_id: None,
         }
     }
 
@@ -145,6 +156,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn whats_coming_lists_open_appointments_with_counts() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let open = appointment::create(
+            &db,
+            v,
+            NewAppointment {
+                purpose: "60k service".into(),
+                planned_date: Some("2026-12-01".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let cancelled = appointment::create(
+            &db,
+            v,
+            NewAppointment {
+                purpose: "Detailing".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        appointment::cancel(&db, v, cancelled.id).await.unwrap();
+        let job = work_item_svc::create(
+            &db,
+            v,
+            NewWorkItem {
+                appointment_id: Some(open.id),
+                ..work("Brakes")
+            },
+        )
+        .await
+        .unwrap();
+        need::add(
+            &db,
+            v,
+            job.id,
+            NewNeed {
+                name: "Rear pads".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        todo::add(
+            &db,
+            v,
+            NewTodo {
+                title: "Bring wheel locks".into(),
+                appointment_id: Some(open.id),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let got = upcoming(&db, v).await.unwrap();
+        assert_eq!(got.appointments.len(), 1);
+        let a = &got.appointments[0];
+        assert_eq!(a.appointment.id, open.id);
+        assert_eq!(a.appointment.purpose, "60k service");
+        assert_eq!(a.appointment.planned_date.as_deref(), Some("2026-12-01"));
+        assert_eq!((a.jobs, a.needs_open, a.todos_open), (1, 1, 1));
+        assert_eq!(
+            serde_json::to_value(&got).unwrap()["appointments"][0]["needs_open"],
+            1
+        );
+    }
+
+    #[tokio::test]
     async fn upcoming_merges_schedule_planned_work_recalls_and_open_incidents() {
         let db = test_db().await;
         let template_id = gti_template_id(&db).await;
@@ -154,7 +237,7 @@ mod tests {
             .purchase_mileage(40)
             .insert_id(&db)
             .await;
-        let today = crate::services::today().format("%Y-%m-%d").to_string();
+        let today = crate::services::today_label();
         mileage::create(
             &db,
             v,
@@ -254,12 +337,10 @@ mod tests {
     async fn planned_work_sorts_by_urgency_then_creation_order() {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
-        let far = (crate::services::today() + chrono::Duration::days(400))
-            .format("%Y-%m-%d")
-            .to_string();
-        let soon = (crate::services::today() + chrono::Duration::days(10))
-            .format("%Y-%m-%d")
-            .to_string();
+        let far =
+            crate::services::date_label(crate::services::today() + chrono::Duration::days(400));
+        let soon =
+            crate::services::date_label(crate::services::today() + chrono::Duration::days(10));
         for (title, date) in [
             ("no revisit", None),
             ("ok", Some(far)),

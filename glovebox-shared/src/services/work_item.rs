@@ -277,11 +277,19 @@ pub(crate) async fn load_completed_by(
 }
 
 /// Returns to `planned` every work item a service that is about to be
-/// deleted completed, on the caller's transaction.
+/// deleted completed, on the caller's transaction, and settles their
+/// appointments as `appointment::settle_reopened_jobs` describes.
 pub(crate) async fn reopen_completed_by(
     db: &impl ConnectionTrait,
     service_record_id: i32,
 ) -> DomainResult<()> {
+    let reopened: Vec<i32> = work_item::Entity::find()
+        .filter(work_item::Column::CompletedServiceId.eq(service_record_id))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|item| item.id)
+        .collect();
     work_item::Entity::update_many()
         .set(work_item::ActiveModel {
             status: Set("planned".to_string()),
@@ -289,10 +297,10 @@ pub(crate) async fn reopen_completed_by(
             updated_at: Set(super::now_stamp()),
             ..Default::default()
         })
-        .filter(work_item::Column::CompletedServiceId.eq(service_record_id))
+        .filter(work_item::Column::Id.is_in(reopened.clone()))
         .exec(db)
         .await?;
-    Ok(())
+    super::appointment::settle_reopened_jobs(db, &reopened).await
 }
 
 pub async fn get(
@@ -325,6 +333,9 @@ pub async fn create(
         input.incident_id,
     )
     .await?;
+    if let Some(id) = input.appointment_id {
+        crate::services::appointment::require_assignable(db, vehicle_id, id).await?;
+    }
 
     let model = work_item::ActiveModel {
         vehicle_id: Set(vehicle_id),
@@ -336,19 +347,24 @@ pub async fn create(
         est_cost_cents: Set(input.est_cost_cents),
         revisit_by_date: Set(input.revisit_by_date),
         revisit_by_miles: Set(input.revisit_by_miles),
+        appointment_id: Set(input.appointment_id),
         status: Set("planned".to_string()),
         ..Default::default()
     };
     Ok(model.insert(db).await?)
 }
 
-pub async fn update(
-    db: &impl ConnectionTrait,
+/// Changes a work item. Setting a done or dropped item back to `planned`
+/// settles its appointment as `appointment::settle_reopened_jobs` describes,
+/// in the same transaction.
+pub async fn update<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
     vehicle_id: i32,
     id: i32,
     input: UpdateWorkItem,
 ) -> DomainResult<work_item::Model> {
     let existing = get(db, vehicle_id, id).await?;
+    let reopens = existing.status != "planned" && input.status.as_deref() == Some("planned");
 
     if let Some(title) = &input.title
         && title.trim().is_empty()
@@ -371,6 +387,13 @@ pub async fn update(
         input.incident_id.flatten(),
     )
     .await?;
+    // Keeping the appointment a job is already on is not a new assignment, so
+    // it stays allowed after the appointment is closed or cancelled.
+    if let Some(Some(id)) = input.appointment_id
+        && existing.appointment_id != Some(id)
+    {
+        crate::services::appointment::require_assignable(db, vehicle_id, id).await?;
+    }
 
     let mut active: work_item::ActiveModel = existing.into();
 
@@ -398,6 +421,9 @@ pub async fn update(
     if let Some(v) = input.revisit_by_miles {
         active.revisit_by_miles = Set(v);
     }
+    if let Some(v) = input.appointment_id {
+        active.appointment_id = Set(v);
+    }
     if let Some(v) = input.status {
         // A completing service link is kept only while the item is done.
         if v != "done" {
@@ -407,7 +433,16 @@ pub async fn update(
     }
 
     active.updated_at = Set(super::now_stamp());
-    Ok(active.update(db).await?)
+    let txn = db.begin().await?;
+    let mut updated = active.update(&txn).await?;
+    if reopens {
+        super::appointment::settle_reopened_jobs(&txn, &[updated.id]).await?;
+        // Settling takes the job off a cancelled appointment, so the row is
+        // read again and the caller sees where the job ended up.
+        updated = get(&txn, vehicle_id, id).await?;
+    }
+    txn.commit().await?;
+    Ok(updated)
 }
 
 pub async fn delete(db: &impl ConnectionTrait, vehicle_id: i32, id: i32) -> DomainResult<()> {
@@ -495,6 +530,7 @@ mod tests {
             est_cost_cents: None,
             revisit_by_date: None,
             revisit_by_miles: None,
+            appointment_id: None,
         }
     }
 
@@ -514,6 +550,7 @@ mod tests {
             revisit_by_date: date.map(Into::into),
             revisit_by_miles: miles,
             completed_service_id: None,
+            appointment_id: None,
         }
     }
 
