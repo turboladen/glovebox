@@ -69,7 +69,7 @@ pub async fn run(
         Command::Seed { env } => {
             let name = env::test_name(&env)?;
             let path = data_dir.join(format!("glovebox-{name}.db"));
-            let conn = db::connect(&path.to_string_lossy()).await?;
+            let conn = db::connect_as(&path.to_string_lossy(), db::Program::Cli).await?;
             let summary = seed::demo(&conn).await?;
             conn.close().await?;
             Ok(format!(

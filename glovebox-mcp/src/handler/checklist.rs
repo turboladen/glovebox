@@ -136,9 +136,11 @@ impl GloveboxMcp {
         description = "What the owner decided before for a kind of part, on every vehicle: the \
                        needs whose name or options match `query` (\"brake pads\", \"rotor\"), \
                        newest decision first, each with the chosen option, the reason in the \
-                       owner's words, the rejected options with their reasons, and any part that \
-                       was ordered and returned. Call it before researching a part the owner may \
-                       have chosen before, and to answer \"what did I choose for X and why?\"."
+                       owner's words, the rejected options with their reasons (and, for an option \
+                       that was chosen before it was rejected, the reason it was chosen in \
+                       `chosen_reason` and the date in `chosen_on`), and any part that was \
+                       ordered and returned. Call it before researching a part the owner may have \
+                       chosen before, and to answer \"what did I choose for X and why?\"."
     )]
     async fn past_decisions(
         &self,
@@ -262,8 +264,9 @@ impl GloveboxMcp {
         description = "Record that the owner ordered a need's chosen option. It creates the part \
                        record from the option (name, manufacturer, part number, seller, price, \
                        link) with the owner as supplier, links it to the need and returns the \
-                       need as `ordered`. Fields left out take the option's values, or today for \
-                       the date; pass what the order actually was (`order_ref`, `cost_cents`, \
+                       need as `ordered`. Fields left out take the option's values, the option's \
+                       unit price times the need's quantity for the cost, or today for the date; \
+                       pass what the order actually was (`order_ref`, `cost_cents`, \
                        `purchase_date`, `seller`). The need needs a chosen option and a supplier \
                        other than `shop`. For a part that is already recorded, use \
                        `link_part_to_need` so it is not entered twice. A mistaken order is \
@@ -349,8 +352,13 @@ impl GloveboxMcp {
                        `undecided` with the chosen option rejected for the same reason when \
                        `option_was_wrong` is true, so set it when the option itself was the \
                        mistake (the wrong size or fitment) and leave it false for a damaged or \
-                       mis-shipped part. Setting a returned part back to `purchased` with \
-                       `correct_part` undoes a return made by mistake."
+                       mis-shipped part. The reason the owner gave for choosing a rejected option \
+                       stays on it as `chosen_reason`. To undo a return made by mistake, three \
+                       calls are needed: `correct_part` with status `purchased`, \
+                       `link_part_to_need` to link the part again, and `delete_todo` for the \
+                       \"Return ...\" to-do. When `option_was_wrong` was true, also clear the \
+                       rejection with `update_need_option` and choose the option again with \
+                       `update_need`."
     )]
     async fn return_part(
         &self,

@@ -42,6 +42,14 @@ impl Stage {
     }
 }
 
+/// Whether a need at `stage` on a job whose status is `job_status` counts as
+/// open: the stage is open and the job is still planned. Every count of open
+/// needs uses this.
+#[must_use]
+pub fn counts_as_open(job_status: &str, stage: Stage) -> bool {
+    job_status == "planned" && stage.is_open()
+}
+
 /// Derives a need's stage. The first matching row wins, so a linked part
 /// decides the stage whatever the supplier and chosen option say. `part` is
 /// the need's linked part, if any.
@@ -280,9 +288,37 @@ async fn clear_choice(db: &impl ConnectionTrait, need_id: i32, option_id: i32) -
     Ok(())
 }
 
+// Copies the reason and date of the need's choice onto the option when the
+// need has chosen `option_id`, so clearing the choice keeps the owner's
+// reasoning for past decisions.
+async fn keep_choice_on_option(
+    db: &impl ConnectionTrait,
+    need_id: i32,
+    option_id: i32,
+) -> DomainResult<()> {
+    let Some(need) = job_need::Entity::find_by_id(need_id)
+        .filter(job_need::Column::ChosenOptionId.eq(option_id))
+        .one(db)
+        .await?
+    else {
+        return Ok(());
+    };
+    need_option::Entity::update_many()
+        .col_expr(
+            need_option::Column::ChosenReason,
+            Expr::value(need.decision_reason),
+        )
+        .col_expr(need_option::Column::ChosenOn, Expr::value(need.decided_on))
+        .filter(need_option::Column::Id.eq(option_id))
+        .exec(db)
+        .await?;
+    Ok(())
+}
+
 /// Changes an option. Rejecting or marking `does_not_fit` the option its need
 /// has chosen clears that choice, its date and its reason in the same
-/// transaction.
+/// transaction, and keeps the reason and date on the option as
+/// `chosen_reason` and `chosen_on`.
 ///
 /// # Errors
 /// `NotFound` for an option that is not the vehicle's; `Invalid` as for
@@ -339,9 +375,11 @@ pub async fn update_option<C: ConnectionTrait + TransactionTrait>(
     // The option write and the choice clearing commit together, so a need
     // never keeps a choice that was just rejected.
     let txn = db.begin().await?;
-    let updated = active.update(&txn).await?;
+    let mut updated = active.update(&txn).await?;
     if now_unusable {
+        keep_choice_on_option(&txn, updated.need_id, updated.id).await?;
         clear_choice(&txn, updated.need_id, updated.id).await?;
+        updated = require_option(&txn, vehicle_id, option_id).await?;
     }
     txn.commit().await?;
     Ok(updated)
@@ -394,8 +432,10 @@ pub async fn update_with_choice<C: ConnectionTrait + TransactionTrait>(
 }
 
 /// Chooses an option for a need, or clears the choice when `option_id` is
-/// `None`, and records the reason in the same write. Choosing stamps
-/// `decided_on` with today's date; clearing removes it.
+/// `None`, and records the reason in the same write. Choosing a different
+/// option stamps `decided_on` with today's date, choosing the option already
+/// chosen keeps the date and replaces only the reason, and clearing removes
+/// the date.
 ///
 /// # Errors
 /// `NotFound` for a need that is not the vehicle's; `BadRequest` for an
@@ -437,10 +477,15 @@ pub async fn decide(
             )));
         }
     }
+    let decided_on = if option_id.is_some() && option_id == need.chosen_option_id {
+        need.decided_on.clone()
+    } else {
+        option_id.map(|_| super::today().format("%Y-%m-%d").to_string())
+    };
     let mut active: job_need::ActiveModel = need.into();
     active.chosen_option_id = Set(option_id);
     active.decision_reason = Set(reason);
-    active.decided_on = Set(option_id.map(|_| super::today().format("%Y-%m-%d").to_string()));
+    active.decided_on = Set(decided_on);
     active.updated_at = Set(super::now_stamp());
     Ok(active.update(db).await?)
 }
@@ -516,9 +561,20 @@ fn purchase(need: job_need::Model, part: part::Model) -> NeedPurchase {
     NeedPurchase { need, part, stage }
 }
 
+/// The price of buying `quantity` of the option for `need`: the option's
+/// unit price times the need's quantity, or `None` when the option has no
+/// price or the product does not fit in an `i32`.
+#[must_use]
+pub fn order_cost_cents(need: &job_need::Model, option: &need_option::Model) -> Option<i32> {
+    option
+        .price_cents
+        .and_then(|unit| unit.checked_mul(need.quantity))
+}
+
 /// Creates the part a need's chosen option describes, owned by the owner
 /// (`supplied_by` `self`), and links it to the need. A field in `details`
-/// wins over the option's value; the purchase date defaults to today.
+/// wins over the option's value; the cost defaults to [`order_cost_cents`]
+/// and the purchase date to today.
 ///
 /// # Errors
 /// `NotFound` for a need that is not the vehicle's; `BadRequest` when the
@@ -532,8 +588,20 @@ pub async fn mark_ordered<C: ConnectionTrait + TransactionTrait>(
 ) -> DomainResult<NeedPurchase> {
     super::validate_optional_date("purchase_date", details.purchase_date.as_deref())?;
     validate_price(details.cost_cents)?;
-    let need = require(db, vehicle_id, need_id).await?;
-    if need.part_id.is_some() {
+    let txn = db.begin().await?;
+    // The claim is the transaction's first statement and a write, so SQLite
+    // gives it the write lock (waiting out the busy timeout) before anything
+    // is read. A second order for the same need then sees the first one's
+    // part and claims nothing.
+    let claimed = job_need::Entity::update_many()
+        .col_expr(job_need::Column::UpdatedAt, Expr::value(super::now_stamp()))
+        .filter(job_need::Column::Id.eq(need_id))
+        .filter(job_need::Column::PartId.is_null())
+        .exec(&txn)
+        .await?
+        .rows_affected;
+    let need = require(&txn, vehicle_id, need_id).await?;
+    if claimed == 0 {
         return Err(DomainError::BadRequest(format!(
             "Need {need_id} already has a part linked"
         )));
@@ -544,7 +612,7 @@ pub async fn mark_ordered<C: ConnectionTrait + TransactionTrait>(
         )));
     }
     let option = match need.chosen_option_id {
-        Some(option_id) => need_option::Entity::find_by_id(option_id).one(db).await?,
+        Some(option_id) => need_option::Entity::find_by_id(option_id).one(&txn).await?,
         None => None,
     }
     .ok_or_else(|| {
@@ -555,7 +623,7 @@ pub async fn mark_ordered<C: ConnectionTrait + TransactionTrait>(
     let purchase_date = details
         .purchase_date
         .unwrap_or_else(|| super::today().format("%Y-%m-%d").to_string());
-    let txn = db.begin().await?;
+    let cost_cents = details.cost_cents.or(order_cost_cents(&need, &option));
     let created = super::part::create(
         &txn,
         vehicle_id,
@@ -565,7 +633,7 @@ pub async fn mark_ordered<C: ConnectionTrait + TransactionTrait>(
             part_number: option.part_number,
             seller: details.seller.or(option.seller),
             purchase_date: Some(purchase_date),
-            cost_cents: details.cost_cents.or(option.price_cents),
+            cost_cents,
             retailer_url: option.url,
             supplied_by: Some("self".to_string()),
             order_ref: details.order_ref,
@@ -1509,6 +1577,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mark_ordered_prices_the_whole_quantity() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let (n, o) = chosen_need(&db, vehicle_id, job_id, "Rotors", None, Some(6_900)).await;
+        update(
+            &db,
+            vehicle_id,
+            n.id,
+            UpdateNeed {
+                quantity: Some(2),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let n = require(&db, vehicle_id, n.id).await.unwrap();
+        assert_eq!(order_cost_cents(&n, &o), Some(13_800));
+
+        let bought = mark_ordered(&db, vehicle_id, n.id, OrderDetails::default())
+            .await
+            .unwrap();
+        assert_eq!(bought.part.cost_cents, Some(13_800));
+    }
+
+    #[tokio::test]
     async fn mark_ordered_without_a_choice_is_refused() {
         let db = test_db().await;
         let (vehicle_id, job_id) = seed_job(&db).await;
@@ -1528,6 +1621,72 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
         assert_eq!(row_count::<part::Entity>(&db).await, 1);
+    }
+
+    #[tokio::test]
+    async fn deciding_the_same_option_again_keeps_the_decision_date() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let (n, o) = chosen_need(&db, vehicle_id, job_id, "Pads", None, None).await;
+        crate::test_support::set_decided_on(&db, n.id, "2026-01-02").await;
+
+        let same = decide(&db, vehicle_id, n.id, Some(o.id), Some("quieter".into()))
+            .await
+            .unwrap();
+        assert_eq!(same.decided_on.as_deref(), Some("2026-01-02"));
+        assert_eq!(same.decision_reason.as_deref(), Some("quieter"));
+
+        let other = add_option(&db, vehicle_id, n.id, option("Other pads"))
+            .await
+            .unwrap();
+        let changed = decide(&db, vehicle_id, n.id, Some(other.id), None)
+            .await
+            .unwrap();
+        let today = crate::services::today().format("%Y-%m-%d").to_string();
+        assert_eq!(changed.decided_on.as_deref(), Some(today.as_str()));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_orders_for_one_need_create_one_part() {
+        // Each `connect` is its own one-connection pool, as the MCP server and
+        // the web page are. Two orders share each pool, as two page posts do,
+        // and the pools race on one file.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("glovebox.db");
+        let path = path.to_str().unwrap();
+        let first = crate::db::connect(path).await.unwrap();
+        let (vehicle_id, job_id) = seed_job(&first).await;
+        let (n, _) = chosen_need(
+            &first,
+            vehicle_id,
+            job_id,
+            "Rear rotors",
+            Some("FCP Euro"),
+            Some(13_800),
+        )
+        .await;
+        let mut pools = vec![first];
+        for _ in 1..3 {
+            pools.push(crate::db::connect(path).await.unwrap());
+        }
+
+        let mut orders = tokio::task::JoinSet::new();
+        for db in pools.iter().chain(pools.iter()).cloned() {
+            orders.spawn(async move {
+                mark_ordered(&db, vehicle_id, n.id, OrderDetails::default()).await
+            });
+        }
+        let results = orders.join_all().await;
+
+        assert_eq!(
+            results.iter().filter(|r| r.is_ok()).count(),
+            1,
+            "{results:?}"
+        );
+        for err in results.into_iter().filter_map(Result::err) {
+            assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
+        }
+        assert_eq!(row_count::<part::Entity>(&pools[0]).await, 1);
     }
 
     #[tokio::test]
@@ -1757,6 +1916,10 @@ mod tests {
             rejected.rejected_reason.as_deref(),
             Some("does not fit the GTI")
         );
+        // The reason the owner chose it survives on the rejected option.
+        let today = crate::services::today().format("%Y-%m-%d").to_string();
+        assert_eq!(rejected.chosen_reason.as_deref(), Some("fits"));
+        assert_eq!(rejected.chosen_on.as_deref(), Some(today.as_str()));
     }
 
     #[tokio::test]

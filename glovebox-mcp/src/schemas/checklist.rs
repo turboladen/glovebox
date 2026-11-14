@@ -204,9 +204,10 @@ pub struct UpdateNeedInput {
     #[schemars(with = "Option<String>")]
     pub approach: Option<Option<String>>,
     /// The option the owner chose (an id from `add_need_option` or
-    /// `get_checklist`). Choosing stamps the decision date and REPLACES the
-    /// stored reason with `decision_reason`, clearing it when that is left
-    /// out. An option whose fitment is `does_not_fit`, or that is rejected, is
+    /// `get_checklist`). Choosing a different option stamps the decision date;
+    /// choosing the option already chosen keeps the date. Either way the
+    /// stored reason is REPLACED with `decision_reason`, and cleared when that
+    /// is left out. An option whose fitment is `does_not_fit`, or that is rejected, is
     /// refused. Choose only what the owner chose.
     ///
     /// Send `null` to clear the choice, its reason and its date (do not send a
@@ -268,7 +269,7 @@ pub struct AddNeedOptionInput {
     pub part_number: Option<String>,
     /// Where it can be bought, e.g. "FCP Euro".
     pub seller: Option<String>,
-    /// Price, integer cents.
+    /// Price of one, integer cents.
     pub price_cents: Option<i32>,
     /// Listing URL.
     pub url: Option<String>,
@@ -330,7 +331,7 @@ pub struct UpdateNeedOptionInput {
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<String>")]
     pub seller: Option<Option<String>>,
-    /// Price, integer cents.
+    /// Price of one, integer cents.
     ///
     /// Send `null` to clear it; omit the key to leave it unchanged.
     #[serde(default, deserialize_with = "nullable")]
@@ -398,7 +399,8 @@ pub struct MarkNeedOrderedInput {
     pub seller: Option<String>,
     /// The order's date, `YYYY-MM-DD`. Defaults to today.
     pub purchase_date: Option<String>,
-    /// What was paid, integer cents, when it differs from the option's price.
+    /// What was paid for the whole quantity, integer cents, when it differs
+    /// from the option's price times the need's quantity.
     pub cost_cents: Option<i32>,
     /// The seller's order or confirmation number.
     pub order_ref: Option<String>,

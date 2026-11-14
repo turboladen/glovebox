@@ -1,7 +1,7 @@
 //! Appointments: a visit that groups jobs and to-dos. Every function scopes
 //! its ids to a vehicle, so another vehicle's id reads as a missing one.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use sea_orm::{sea_query::Expr, *};
 use serde::Serialize;
@@ -10,7 +10,7 @@ use crate::{
     entities::{appointment, job_need, part, todo, work_item},
     error::{DomainError, DomainResult},
     inputs::appointment::{NewAppointment, StatusChange, UpdateAppointment},
-    services::need::stage,
+    services::need::{counts_as_open, stage},
 };
 
 /// An appointment with the counts the owner reads at a glance. `needs_open`
@@ -292,11 +292,7 @@ async fn summaries(
         .await?;
 
     let mut job_appointment: HashMap<i32, i32> = HashMap::new();
-    let planned: HashSet<i32> = jobs
-        .iter()
-        .filter(|j| j.status == "planned")
-        .map(|j| j.id)
-        .collect();
+    let job_status: HashMap<i32, &str> = jobs.iter().map(|j| (j.id, j.status.as_str())).collect();
     let mut statuses: HashMap<i32, Vec<&str>> = HashMap::new();
     for job in &jobs {
         if let Some(appointment_id) = job.appointment_id {
@@ -310,8 +306,8 @@ async fn summaries(
     let mut needs_open: HashMap<i32, usize> = HashMap::new();
     for need in &needs {
         let current = stage(need, need.part_id.and_then(|id| parts.get(&id)));
-        if current.is_open()
-            && planned.contains(&need.work_item_id)
+        let on_job = job_status.get(&need.work_item_id).copied().unwrap_or("");
+        if counts_as_open(on_job, current)
             && let Some(appointment_id) = job_appointment.get(&need.work_item_id)
         {
             *needs_open.entry(*appointment_id).or_default() += 1;

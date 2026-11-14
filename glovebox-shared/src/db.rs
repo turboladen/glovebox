@@ -51,10 +51,46 @@ pub(crate) fn connect_options(file: Option<PathBuf>) -> ConnectOptions {
     options
 }
 
+/// A program that opens the database. It decides which rebuild step a refusal
+/// to open a newer database names.
+#[derive(Clone, Copy, Debug)]
+pub enum Program {
+    /// `glovebox-mcp`, which Claude Desktop launches.
+    McpServer,
+    /// `glovebox-web`, which `just web` builds and serves.
+    Web,
+    /// `glovebox`, which the `just` recipes build and run.
+    Cli,
+}
+
+impl Program {
+    fn rebuild_step(self) -> &'static str {
+        match self {
+            Program::McpServer => "run `just install`, then restart Claude Desktop",
+            Program::Web => "stop it and start it again with `just web`, which rebuilds it",
+            Program::Cli => "run it through its `just` recipe, which rebuilds it",
+        }
+    }
+}
+
+/// [`connect`] for one of the programs, so that a refusal to open a database
+/// newer than the program names the step that rebuilds it.
+///
+/// # Errors
+/// As for [`connect`].
+pub async fn connect_as(db_path: &str, program: Program) -> DomainResult<DatabaseConnection> {
+    open(db_path, Some(program)).await
+}
+
 /// Opens (creating it and its parent directory if needed) the database at
 /// `db_path` in WAL mode with foreign keys enforced, then applies all
-/// migrations.
+/// migrations. A database that records a migration this build does not know
+/// is refused with `Internal`.
 pub async fn connect(db_path: &str) -> DomainResult<DatabaseConnection> {
+    open(db_path, None).await
+}
+
+async fn open(db_path: &str, program: Option<Program>) -> DomainResult<DatabaseConnection> {
     let path = Path::new(db_path);
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         tokio::fs::create_dir_all(parent).await.map_err(|e| {
@@ -67,7 +103,7 @@ pub async fn connect(db_path: &str) -> DomainResult<DatabaseConnection> {
     let had_data = backup::has_data(path);
     let db = Database::connect(connect_options(Some(path.to_path_buf()))).await?;
     if had_data {
-        refuse_unknown_migrations(&db).await?;
+        refuse_unknown_migrations(&db, program).await?;
         backup_before_migrating(&db, path, chrono::Local::now()).await?;
     }
     Migrator::up(&db, None).await?;
@@ -77,7 +113,10 @@ pub async fn connect(db_path: &str) -> DomainResult<DatabaseConnection> {
 /// Fails when the database records a migration this binary does not contain,
 /// which means a newer build has already changed the file. Opening it with an
 /// older binary could corrupt data, so the caller must rebuild first.
-async fn refuse_unknown_migrations(db: &DatabaseConnection) -> DomainResult<()> {
+async fn refuse_unknown_migrations(
+    db: &DatabaseConnection,
+    program: Option<Program>,
+) -> DomainResult<()> {
     let known: Vec<String> = Migrator::migrations()
         .iter()
         .map(|m| m.name().to_owned())
@@ -102,9 +141,10 @@ async fn refuse_unknown_migrations(db: &DatabaseConnection) -> DomainResult<()> 
     for row in rows {
         let version: String = row.try_get_by_index(0)?;
         if !known.contains(&version) {
+            let step = program.map_or("rebuild it and start it again", Program::rebuild_step);
             return Err(DomainError::Internal(format!(
                 "the database has migration {version} that this binary does not know; the binary \
-                 is older than the database, so rebuild it (`just install`) and restart"
+                 is older than the database, so {step}"
             )));
         }
     }
@@ -567,13 +607,14 @@ mod tests {
     #[tokio::test]
     async fn migration_is_rerun_safe() {
         let db = crate::test_support::test_db().await;
-        // Forgetting the newest version makes `up` run the job-checklist
-        // migration again over the finished schema.
+        // Forgetting the two newest versions makes `up` run the job-checklist
+        // migrations again over the finished schema.
+        forget_newest_migration(&db).await;
         forget_newest_migration(&db).await;
         Migrator::up(&db, None).await.unwrap();
         assert_eq!(
             scalar(&db, "SELECT COUNT(*) FROM seaql_migrations").await,
-            3
+            4
         );
     }
 
@@ -594,5 +635,31 @@ mod tests {
         assert!(err.to_string().contains("rebuild"), "{err}");
         // The refusal happens before any backup is written.
         assert!(!dir.path().join("backups").exists());
+
+        // Each program names the step that rebuilds it.
+        let web = connect_as(path.to_str().unwrap(), Program::Web)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            web.contains("`just web`") && !web.contains("just install"),
+            "{web}"
+        );
+        let mcp = connect_as(path.to_str().unwrap(), Program::McpServer)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            mcp.contains("`just install`") && mcp.contains("Claude Desktop"),
+            "{mcp}"
+        );
+        let cli = connect_as(path.to_str().unwrap(), Program::Cli)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            cli.contains("`just`") && !cli.contains("just install"),
+            "{cli}"
+        );
     }
 }

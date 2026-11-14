@@ -30,6 +30,20 @@ where
     E::find().count(db).await.unwrap()
 }
 
+/// Sets the stored decision date of a need, so a test can tell an untouched
+/// date from one stamped today. Panics if the write fails.
+pub async fn set_decided_on(db: &DatabaseConnection, need_id: i32, date: &str) {
+    use sea_orm::{ColumnTrait, QueryFilter, sea_query::Expr};
+
+    use crate::entities::job_need;
+    job_need::Entity::update_many()
+        .col_expr(job_need::Column::DecidedOn, Expr::value(date))
+        .filter(job_need::Column::Id.eq(need_id))
+        .exec(db)
+        .await
+        .unwrap();
+}
+
 /// Test-only builder for a `vehicle` row. The single construction point for
 /// vehicle fixtures across the service test modules — a future
 /// ALTER TABLE-appended column touches only this constructor, not the ~25

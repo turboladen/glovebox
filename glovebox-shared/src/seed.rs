@@ -215,13 +215,26 @@ async fn build(db: &(impl ConnectionTrait + TransactionTrait)) -> DomainResult<(
     unscheduled(db, v).await
 }
 
-// Three candidates: one chosen, one that does not fit and one rejected.
+// A pair, with three candidates: one chosen, one that does not fit and one
+// rejected.
 async fn rear_rotors(
     db: &(impl ConnectionTrait + TransactionTrait),
     v: i32,
     brakes: i32,
 ) -> DomainResult<()> {
-    let rear_rotors = self_need(db, v, brakes, "Rear rotors").await?;
+    let rear_rotors = need::add(
+        db,
+        v,
+        brakes,
+        NewNeed {
+            name: "Rear rotors".into(),
+            quantity: Some(2),
+            supplied_by: Some("self".into()),
+            approach: Some("replacement".into()),
+        },
+    )
+    .await?
+    .id;
     let chosen = need::add_option(
         db,
         v,
@@ -570,6 +583,14 @@ mod tests {
         );
         assert_eq!(unscheduled.jobs.len(), 1);
         assert_eq!(unscheduled.jobs[0].needs.len(), 1);
+        // A need for two shows its count on the page.
+        let pair = list
+            .jobs
+            .iter()
+            .flat_map(|j| &j.needs)
+            .find(|n| n.need.name == "Rear rotors")
+            .unwrap();
+        assert_eq!(pair.need.quantity, 2);
     }
 
     #[tokio::test]

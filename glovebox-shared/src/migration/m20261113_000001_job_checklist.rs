@@ -79,7 +79,7 @@ fn index(name: &str, table: &str, cols: &[&str]) -> IndexCreateStatement {
 /// Adds `column` to `table` with the given SQL definition unless the table
 /// already has it. `SQLite` accepts a `REFERENCES` clause here only because the
 /// default is NULL.
-async fn add_column(
+pub(super) async fn add_column(
     manager: &SchemaManager<'_>,
     table: &str,
     column: &str,

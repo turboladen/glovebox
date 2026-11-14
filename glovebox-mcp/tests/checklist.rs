@@ -55,7 +55,7 @@ async fn add_option(t: &TestClient, vehicle_id: i64, need_id: i64, args: Value) 
     id(&t.call("add_need_option", args).await)
 }
 
-/// The names of the rows in one next-steps group of a checklist.
+// The names of the rows in one next-steps group of a checklist.
 fn names(checklist: &Value, group: &str) -> Vec<String> {
     checklist["next_steps"][group]
         .as_array()
@@ -215,6 +215,77 @@ async fn sixty_k_story() {
     let todos = names(&checklist, "todos");
     assert_eq!(todos.len(), 1, "got: {checklist}");
     assert!(todos[0].starts_with("Return "), "got: {todos:?}");
+}
+
+#[tokio::test]
+async fn the_calls_return_part_names_undo_a_return() {
+    let t = connect().await;
+    let v = add_vehicle(&t, "GTI").await;
+    let job = plan_job(&t, v, "Rear brakes", None).await;
+    let rotors = add_need(&t, v, job, "Rear rotors").await;
+    let option = add_option(&t, v, rotors, json!({ "description": "310 mm rotor" })).await;
+    t.call(
+        "update_need",
+        json!({
+            "vehicle_id": v, "need_id": rotors, "supplied_by": "self",
+            "chosen_option_id": option, "decision_reason": "Matches the brakes"
+        }),
+    )
+    .await;
+    let ordered = t
+        .call(
+            "mark_need_ordered",
+            json!({ "vehicle_id": v, "need_id": rotors }),
+        )
+        .await;
+    let part = ordered["part"]["id"].as_i64().unwrap();
+    let returned = t
+        .call(
+            "return_part",
+            json!({
+                "vehicle_id": v, "need_id": rotors, "reason": "Thought it was wrong",
+                "option_was_wrong": true
+            }),
+        )
+        .await;
+    let todo = returned["todo"]["id"].as_i64().unwrap();
+
+    t.call(
+        "correct_part",
+        json!({ "vehicle_id": v, "part_id": part, "status": "purchased" }),
+    )
+    .await;
+    t.call(
+        "link_part_to_need",
+        json!({ "vehicle_id": v, "need_id": rotors, "part_id": part }),
+    )
+    .await;
+    t.call("delete_todo", json!({ "vehicle_id": v, "todo_id": todo }))
+        .await;
+    t.call(
+        "update_need_option",
+        json!({ "vehicle_id": v, "option_id": option, "rejected_reason": null }),
+    )
+    .await;
+    t.call(
+        "update_need",
+        json!({
+            "vehicle_id": v, "need_id": rotors, "chosen_option_id": option,
+            "decision_reason": "Matches the brakes"
+        }),
+    )
+    .await;
+
+    let checklist = t.call("get_checklist", json!({ "vehicle_id": v })).await;
+    assert_eq!(
+        names(&checklist, "arriving"),
+        ["Rear rotors"],
+        "got: {checklist}"
+    );
+    assert!(names(&checklist, "todos").is_empty(), "got: {checklist}");
+    let row = &checklist["jobs"][0]["needs"][0];
+    assert_eq!(row["need"]["chosen_option_id"], option);
+    assert_eq!(row["chosen"]["rejected_reason"], Value::Null);
 }
 
 #[tokio::test]

@@ -16,7 +16,7 @@ use crate::{
     money::format_cents,
     services::{
         appointment::{self, AppointmentSummary},
-        need::{Stage, stage},
+        need::{self, Stage, stage},
         todo as todo_svc,
     },
 };
@@ -91,6 +91,18 @@ pub struct JobView {
     pub needs: Vec<NeedView>,
 }
 
+impl JobView {
+    /// How many of the job's needs still ask something of the owner, which is
+    /// none unless the job is planned.
+    #[must_use]
+    pub fn open_needs(&self) -> usize {
+        self.needs
+            .iter()
+            .filter(|n| need::counts_as_open(&self.job.status, n.stage))
+            .count()
+    }
+}
+
 /// A need with its stage, its decision and its purchase.
 #[derive(Debug, Serialize)]
 pub struct NeedView {
@@ -103,6 +115,26 @@ pub struct NeedView {
     /// The linked part's seller, date, price and order number, as present.
     pub purchase_summary: Option<String>,
     pub notes: Vec<String>,
+}
+
+impl NeedView {
+    /// A sentence counting the need's options and how many are rejected,
+    /// such as `3 options researched, 1 rejected`.
+    #[must_use]
+    pub fn options_note(&self) -> String {
+        let all: Vec<&need_option::Model> = self.chosen.iter().chain(&self.other_options).collect();
+        let n = all.len();
+        let noun = if n == 1 { "option" } else { "options" };
+        let rejected = all
+            .iter()
+            .filter(|o| o.rejected_reason.is_some() || o.rejected_on.is_some())
+            .count();
+        if rejected > 0 {
+            format!("{n} {noun} researched, {rejected} rejected")
+        } else {
+            format!("{n} {noun} researched")
+        }
+    }
 }
 
 /// A need matching a past-decisions search, with how it was decided.
@@ -360,7 +392,8 @@ fn need_view(
             "The linked part's number ({have}) differs from the chosen option's ({want})."
         ));
     }
-    if part.is_some() && chosen.is_none() {
+    // A shop-supplied need asks no decision of the owner.
+    if part.is_some() && chosen.is_none() && need.supplied_by.as_deref() != Some("shop") {
         notes.push("A part is linked and no decision is recorded.".to_string());
     }
     NeedView {
@@ -498,7 +531,12 @@ fn step_summary(view: &NeedView, job_done: bool) -> String {
                     .seller
                     .as_ref()
                     .map_or_else(String::new, |s| format!(" from {s}"));
-                format!(" {}{from}", option_label(c))
+                let count = if view.need.quantity > 1 {
+                    format!("{} \u{d7} ", view.need.quantity)
+                } else {
+                    String::new()
+                };
+                format!(" {count}{}{from}", option_label(c))
             });
             format!("{name}: order{what}")
         }
@@ -599,14 +637,7 @@ pub async fn home(db: &impl ConnectionTrait) -> DomainResult<Vec<VehicleHome>> {
             .map(|j| HomeJob {
                 id: j.job.id,
                 title: j.job.title.clone(),
-                counts: format!(
-                    "{} open",
-                    count_of(
-                        j.needs.iter().filter(|n| n.stage.is_open()).count(),
-                        "need",
-                        "needs"
-                    )
-                ),
+                counts: format!("{} open", count_of(j.open_needs(), "need", "needs")),
             })
             .collect();
         out.push(VehicleHome {
@@ -1127,6 +1158,101 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn order_summary_counts_a_need_for_more_than_one() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let a = appointment_id(&db, v).await;
+        let job = new_job(&db, v, "Brakes", Some(a)).await;
+        let n = to_order_need(&db, v, job, "Rear rotors", "Rear rotor").await;
+        need::update(
+            &db,
+            v,
+            n,
+            UpdateNeed {
+                quantity: Some(2),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let list = for_appointment(&db, v, a).await.unwrap();
+
+        assert_eq!(
+            rows(&list.next_steps.order),
+            [(
+                "Rear rotors",
+                "Rear rotors: order 2 \u{d7} Rear rotor from FCP Euro"
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_shop_part_with_no_decision_is_not_noted() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let job = new_job(&db, v, "Brakes", None).await;
+        let n = new_need(&db, v, job, "Brake fluid").await;
+        set_supplier(&db, v, n, "shop").await;
+        let fluid = part_svc::create(
+            &db,
+            v,
+            NewPart {
+                name: "DOT4".into(),
+                supplied_by: Some("shop".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        need::link_part(&db, v, n, fluid.id, None).await.unwrap();
+
+        let view = for_job(&db, v, job).await.unwrap();
+
+        assert!(view.needs[0].notes.is_empty(), "{:?}", view.needs[0].notes);
+    }
+
+    #[tokio::test]
+    async fn open_needs_counts_only_a_planned_jobs_open_needs() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let job = new_job(&db, v, "Brakes", None).await;
+        new_need(&db, v, job, "Pads").await;
+        to_order_need(&db, v, job, "Rotors", "Rotor").await;
+        let shop = new_need(&db, v, job, "Fluid").await;
+        set_supplier(&db, v, shop, "shop").await;
+
+        assert_eq!(for_job(&db, v, job).await.unwrap().open_needs(), 2);
+        set_job_status(&db, v, job, "done").await;
+        assert_eq!(for_job(&db, v, job).await.unwrap().open_needs(), 0);
+    }
+
+    #[tokio::test]
+    async fn options_note_counts_options_and_rejections() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let job = new_job(&db, v, "Brakes", None).await;
+        let n = new_need(&db, v, job, "Pads").await;
+        let note = || async { for_job(&db, v, job).await.unwrap().needs[0].options_note() };
+        assert_eq!(note().await, "0 options researched");
+        let first = new_option(&db, v, n, "Pads A", None).await;
+        assert_eq!(note().await, "1 option researched");
+        new_option(&db, v, n, "Pads B", None).await;
+        need::update_option(
+            &db,
+            v,
+            first,
+            UpdateOption {
+                rejected_reason: Some(Some("noisy".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(note().await, "2 options researched, 1 rejected");
+    }
+
+    #[tokio::test]
     async fn a_whitespace_manufacturer_leaves_no_leading_space_in_the_label() {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
@@ -1503,6 +1629,45 @@ mod tests {
             Some("wrong box")
         );
         assert_eq!(d.chosen.as_ref().unwrap().id, right);
+    }
+
+    #[tokio::test]
+    async fn past_decisions_keeps_the_reason_for_a_choice_that_proved_wrong() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let job = new_job(&db, v, "Brakes", None).await;
+        let n = new_need(&db, v, job, "Rear rotors").await;
+        let first = new_option(&db, v, n, "310 mm rotors", None).await;
+        set_supplier(&db, v, n, "self").await;
+        need::decide(&db, v, n, Some(first), Some("cheapest OE size".into()))
+            .await
+            .unwrap();
+        order(&db, v, n, "2026-11-06").await;
+        need::return_part(
+            &db,
+            v,
+            n,
+            ReturnInput {
+                reason: "car has the 340 mm brakes".into(),
+                option_was_wrong: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        let found = past_decisions(&db, "rear rotors").await.unwrap();
+        let d = &found[0];
+        assert!(d.chosen.is_none());
+        assert_eq!(d.rejected.len(), 1);
+        assert_eq!(
+            d.rejected[0].chosen_reason.as_deref(),
+            Some("cheapest OE size")
+        );
+        assert_eq!(
+            d.rejected[0].rejected_reason.as_deref(),
+            Some("car has the 340 mm brakes")
+        );
+        assert!(d.rejected[0].chosen_on.is_some());
     }
 
     #[tokio::test]
