@@ -209,14 +209,15 @@ pub struct UpdateNeedInput {
     /// out. An option whose fitment is `does_not_fit`, or that is rejected, is
     /// refused. Choose only what the owner chose.
     ///
-    /// Send `null` to clear the choice, its reason and its date; omit the key
-    /// to leave the choice unchanged.
+    /// Send `null` to clear the choice, its reason and its date (do not send a
+    /// `decision_reason` with it); omit the key to leave the choice unchanged.
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<i32>")]
     pub chosen_option_id: Option<Option<i32>>,
     /// Why the owner decided as they did, in their words. Sent with
     /// `chosen_option_id` it is stored with the choice; sent alone it edits
-    /// only the reason.
+    /// the reason of the choice already made. It is refused together with
+    /// `chosen_option_id: null`, because a reason needs a chosen option.
     ///
     /// Send `null` to clear it; omit the key to leave it unchanged (unless
     /// `chosen_option_id` is sent).
@@ -432,8 +433,8 @@ pub struct LinkPartToNeedInput {
     #[schemars(with = "Option<i32>")]
     pub part_id: Option<Option<i32>>,
     /// The day the part arrived, `YYYY-MM-DD`, when linking a part that is
-    /// already in hand. Ask the owner once and set it here. Ignored when
-    /// unlinking.
+    /// already in hand. Ask the owner once and set it here. Not allowed when
+    /// `part_id` is `null`.
     pub received_on: Option<String>,
 }
 

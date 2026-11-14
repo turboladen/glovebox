@@ -203,9 +203,9 @@ become opaque JSON-RPC internal errors with the detail kept in tracing.
 
 **Tests** (`glovebox-mcp/tests/`): `common/mod.rs` is the harness (an in-process client over an
 in-memory duplex stream and an in-memory database). One file per handler area (`vehicles`,
-`services`, `parts`, `incidents`, `planning`, `checklist`, `schedule`, `recalls`, `reads`), plus `stdio.rs`
-(the binary's stdout) and `rehearsal.rs` (a new owner's whole first session through tool calls
-only). Add coverage for a new tool to its area's file.
+`services`, `parts`, `incidents`, `planning`, `checklist`, `schedule`, `recalls`, `reads`), plus
+`stdio.rs` (the binary's stdout) and `rehearsal.rs` (a new owner's whole first session through
+tool calls only). Add coverage for a new tool to its area's file.
 
 ## Conventions
 

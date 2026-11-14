@@ -107,6 +107,31 @@ pub async fn update(
     Ok(active.update(db).await?)
 }
 
+/// Edits a to-do and, when `done` is present, ticks it (`true`) or un-ticks it
+/// (`false`), in one transaction. Ticking a to-do that is already done keeps
+/// its original `done_on`; otherwise it is stamped with today's date.
+///
+/// # Errors
+/// As for [`update`].
+pub async fn update_with_done<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    id: i32,
+    input: UpdateTodo,
+    done: Option<bool>,
+) -> DomainResult<todo::Model> {
+    let txn = db.begin().await?;
+    let edited = update(&txn, vehicle_id, id, input).await?;
+    let result = match done {
+        Some(true) if edited.done_on.is_some() => edited,
+        Some(true) => complete(&txn, vehicle_id, id, None).await?,
+        Some(false) => reopen(&txn, vehicle_id, id).await?,
+        None => edited,
+    };
+    txn.commit().await?;
+    Ok(result)
+}
+
 /// Marks a to-do done on `on` (`YYYY-MM-DD`), or today when `on` is absent.
 ///
 /// # Errors
@@ -230,6 +255,88 @@ mod tests {
         complete(&db, v, t.id, None).await.unwrap();
         assert!(list(&db, v, None, false).await.unwrap().is_empty());
         assert_eq!(list(&db, v, None, true).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn update_with_done_ticks_unticks_and_keeps_the_first_date() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let t = add(&db, v, new_todo("Wash", None)).await.unwrap();
+        complete(&db, v, t.id, Some("2026-11-10".into()))
+            .await
+            .unwrap();
+
+        let again = update_with_done(&db, v, t.id, UpdateTodo::default(), Some(true))
+            .await
+            .unwrap();
+        assert_eq!(again.done_on.as_deref(), Some("2026-11-10"));
+
+        let open = update_with_done(
+            &db,
+            v,
+            t.id,
+            UpdateTodo {
+                notes: Some(Some("two coats".into())),
+                ..Default::default()
+            },
+            Some(false),
+        )
+        .await
+        .unwrap();
+        assert_eq!(open.done_on, None);
+        assert_eq!(open.notes.as_deref(), Some("two coats"));
+
+        let ticked = update_with_done(&db, v, t.id, UpdateTodo::default(), Some(true))
+            .await
+            .unwrap();
+        assert_eq!(
+            ticked.done_on,
+            Some(crate::services::today().format("%Y-%m-%d").to_string())
+        );
+        let untouched = update_with_done(&db, v, t.id, UpdateTodo::default(), None)
+            .await
+            .unwrap();
+        assert_eq!(untouched.done_on, ticked.done_on);
+    }
+
+    #[tokio::test]
+    async fn a_refused_edit_leaves_the_tick_unapplied() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let t = add(&db, v, new_todo("Wash", None)).await.unwrap();
+        let err = update_with_done(
+            &db,
+            v,
+            t.id,
+            UpdateTodo {
+                title: Some(" ".into()),
+                ..Default::default()
+            },
+            Some(true),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Invalid { .. }));
+        assert_eq!(require(&db, v, t.id).await.unwrap().done_on, None);
+    }
+
+    #[tokio::test]
+    async fn update_with_done_reads_a_wrong_vehicle_todo_as_missing() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let other = VehicleFixture::new().name("Other").insert_id(&db).await;
+        let t = add(&db, v, new_todo("Wash", None)).await.unwrap();
+        let missing = update_with_done(&db, other, 99_999, UpdateTodo::default(), Some(true))
+            .await
+            .unwrap_err();
+        let wrong = update_with_done(&db, other, t.id, UpdateTodo::default(), Some(true))
+            .await
+            .unwrap_err();
+        assert!(matches!(wrong, DomainError::NotFound(_)));
+        assert_eq!(
+            wrong.to_string().replace(&t.id.to_string(), "N"),
+            missing.to_string().replace("99999", "N")
+        );
     }
 
     #[tokio::test]

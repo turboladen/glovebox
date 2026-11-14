@@ -8,9 +8,7 @@ use glovebox_shared::{
     services::{appointment, checklist, need, todo},
 };
 
-use super::{
-    GloveboxMcp, Parameters, deleted_result, domain_error, domain_result, tool_json_result,
-};
+use super::{GloveboxMcp, Parameters, deleted_result, domain_error, domain_result};
 use crate::schemas::{
     AddNeedInput, AddNeedOptionInput, AddTodoInput, DeleteAppointmentInput, DeleteNeedInput,
     DeleteNeedOptionInput, DeleteTodoInput, GetChecklistInput, LinkPartToNeedInput,
@@ -301,6 +299,10 @@ impl GloveboxMcp {
                 "part_id",
                 "is required: send a part id to link, or null to unlink",
             )),
+            Some(None) if p.received_on.is_some() => domain_error(DomainError::invalid(
+                "received_on",
+                "cannot be sent when unlinking (part_id: null)",
+            )),
             Some(None) => {
                 domain_result(need::unlink_part(&*self.db, p.vehicle_id, p.need_id).await)
             }
@@ -384,15 +386,7 @@ impl GloveboxMcp {
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "update_todo");
         let (vehicle_id, todo_id, done, input) = p.into_domain();
-        let edited = match todo::update(&*self.db, vehicle_id, todo_id, input).await {
-            Ok(edited) => edited,
-            Err(e) => return domain_error(e),
-        };
-        match done {
-            Some(true) => domain_result(todo::complete(&*self.db, vehicle_id, todo_id, None).await),
-            Some(false) => domain_result(todo::reopen(&*self.db, vehicle_id, todo_id).await),
-            None => tool_json_result(&edited),
-        }
+        domain_result(todo::update_with_done(&*self.db, vehicle_id, todo_id, input, done).await)
     }
 
     #[tool(

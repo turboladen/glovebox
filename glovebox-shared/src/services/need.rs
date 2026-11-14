@@ -390,7 +390,8 @@ pub async fn update_with_choice<C: ConnectionTrait + TransactionTrait>(
 ///
 /// # Errors
 /// `NotFound` for a need that is not the vehicle's; `BadRequest` for an
-/// option of another need, one marked `does_not_fit` or a rejected one.
+/// option of another need, one marked `does_not_fit` or a rejected one, and
+/// for a reason sent without an option.
 pub async fn decide(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -399,6 +400,13 @@ pub async fn decide(
     reason: Option<String>,
 ) -> DomainResult<job_need::Model> {
     let need = require(db, vehicle_id, need_id).await?;
+    if option_id.is_none() && reason.is_some() {
+        return Err(DomainError::BadRequest(
+            "No option is chosen, and a reason needs a chosen option; send the option too, or no \
+             reason"
+                .into(),
+        ));
+    }
     if let Some(option_id) = option_id {
         let option = need_option::Entity::find_by_id(option_id)
             .filter(need_option::Column::NeedId.eq(need_id))
@@ -1262,6 +1270,46 @@ mod tests {
             wrong.to_string().replace(&n.id.to_string(), "N"),
             missing.to_string().replace("99999", "N")
         );
+    }
+
+    #[tokio::test]
+    async fn a_reason_needs_a_chosen_option() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let n = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
+        let o = add_option(&db, vehicle_id, n.id, option("Pads"))
+            .await
+            .unwrap();
+        decide(&db, vehicle_id, n.id, Some(o.id), Some("good".into()))
+            .await
+            .unwrap();
+
+        let err = decide(&db, vehicle_id, n.id, None, Some("why".into()))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, DomainError::BadRequest(m) if m.contains("a reason needs a chosen option"))
+        );
+        let err = update_with_choice(
+            &db,
+            vehicle_id,
+            n.id,
+            UpdateNeed {
+                name: Some("Renamed".into()),
+                decision_reason: Some(Some("why".into())),
+                ..Default::default()
+            },
+            Some(None),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(&err, DomainError::BadRequest(m) if m.contains("a reason needs a chosen option"))
+        );
+        let after = require(&db, vehicle_id, n.id).await.unwrap();
+        assert_eq!(after.name, "Pads");
+        assert_eq!(after.chosen_option_id, Some(o.id));
+        assert_eq!(after.decision_reason.as_deref(), Some("good"));
     }
 
     #[tokio::test]

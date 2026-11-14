@@ -94,10 +94,11 @@ you link.
 4. Read the result. `unfitted_needs` lists every need on a job the invoice completed whose part is
    linked but not installed. Ask Steve about every entry: was it fitted? When it was fitted, call
    `correct_service` with a `part_ids` list holding every part the service installed plus this one
-   (the list replaces the old one). When it was not, leave it and say so. `lines_total_cents` is the sum of the lines; when it differs from the total, a
-   `note` gives both amounts, and a `fee` line for the tax or shop charges closes the gap (use
-   `correct_service` to add it). `message` is separate: it appears only for an already-recorded
-   invoice number. Then call `get_service` if you want to confirm the lines, parts and links.
+   (the list replaces the old one). When it was not, leave it and say so. `lines_total_cents` is
+   the sum of the lines; when it differs from the total, a `note` gives both amounts, and a `fee`
+   line for the tax or shop charges closes the gap (use `correct_service` to add it). `message` is
+   separate: it appears only for an already-recorded invoice number. Then call `get_service` if you
+   want to confirm the lines, parts and links.
 
 ## Capturing an advisory
 
@@ -159,9 +160,15 @@ need has a decision, every decision has a reason, and every part ordered has arr
    mistake. That records the return, sends the need back, and adds a to-do to take the part back.
 10. Keep plain to-dos ("ask KW to confirm the differential") with `add_todo`, optionally on the
     appointment, and tick them off with `update_todo`.
-11. When the trip is over or off, `update_appointment` with `status` set to `done` or `cancelled`
-    puts it away. Jobs still planned come off it and keep their needs, and the result lists them in
-    `unassigned_job_ids`; tell Steve which jobs went back to the unscheduled pool.
+11. When the trip happens, file the invoice with `record_service`, passing `appointment_id`,
+    `work_item_ids` for the jobs it finished and `part_ids` for the parts the shop fitted (see
+    "Filing an invoice"). The appointment reads `done` by itself once every job on it is done or
+    dropped. Do not set `status: "done"` before filing: closing an appointment takes every job that
+    is still planned off it, and `record_service` then refuses an appointment that is closed.
+    Use `update_appointment` with `status` set to `done` or `cancelled` only to put away a trip
+    that will produce no invoice. Its still-planned jobs go back to "not scheduled" with their
+    needs and research, and the result lists them in `unassigned_job_ids`; tell Steve which jobs
+    those are.
 
 ## Answering "what's coming"
 

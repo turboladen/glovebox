@@ -137,6 +137,14 @@ async fn sixty_k_story() {
         )
         .await;
     assert!(names(&checklist, "decide").contains(&"Rear rotors".to_owned()));
+    let rotor_row = &checklist["jobs"][0]["needs"][0]["need"];
+    assert_eq!(rotor_row["name"], "Rear rotors", "got: {checklist}");
+    assert_eq!(
+        rotor_row["supplied_by"],
+        Value::Null,
+        "the refused call applied nothing"
+    );
+    assert_eq!(rotor_row["chosen_option_id"], Value::Null);
 
     let chosen = t
         .call(
@@ -265,6 +273,15 @@ async fn existing_part_links_without_reentry() {
     assert_eq!(unlinked["part_id"], Value::Null);
     let parts = t.call("list_parts", json!({ "vehicle_id": v })).await;
     assert_eq!(parts.as_array().map(Vec::len), Some(1), "got: {parts}");
+
+    // A date has no meaning when unlinking.
+    let err = t
+        .call_err(
+            "link_part_to_need",
+            json!({ "vehicle_id": v, "need_id": need, "part_id": null, "received_on": "2026-11-02" }),
+        )
+        .await;
+    assert!(err.contains("received_on"), "got: {err}");
 
     // The key is required: leaving it out is not the same as unlinking.
     let err = t
@@ -569,6 +586,14 @@ async fn todos_tick_untick_move_and_delete() {
         )
         .await;
     assert!(ticked["done_on"].is_string(), "got: {ticked}");
+    // Ticking a to-do that is already done keeps its first date.
+    let again = t
+        .call(
+            "update_todo",
+            json!({ "vehicle_id": v, "todo_id": todo, "done": true }),
+        )
+        .await;
+    assert_eq!(again["done_on"], ticked["done_on"]);
     let unticked = t
         .call(
             "update_todo",
@@ -630,6 +655,15 @@ async fn options_and_needs_can_be_edited_and_deleted() {
         )
         .await;
     assert_eq!(cleared_choice["chosen_option_id"], Value::Null);
+
+    // A reason cannot be stored while the choice is being cleared.
+    let err = t
+        .call_err(
+            "update_need",
+            json!({ "vehicle_id": v, "need_id": need, "chosen_option_id": null, "decision_reason": "why" }),
+        )
+        .await;
+    assert!(err.contains("a reason needs a chosen option"), "got: {err}");
 
     assert_eq!(
         t.call(
@@ -774,6 +808,15 @@ async fn wrong_vehicle_ids_read_as_missing() {
     let part = id(&t
         .call("record_part", json!({ "vehicle_id": a, "name": "Pads" }))
         .await);
+    let their_service = id(&t
+        .call(
+            "record_service",
+            json!({ "vehicle_id": b, "service_date": "2026-11-01" }),
+        )
+        .await);
+    let their_todo = id(&t
+        .call("add_todo", json!({ "vehicle_id": b, "title": "Call" }))
+        .await);
     // A need on the other vehicle, to try a part that is not its own.
     let their_job = plan_job(&t, b, "Brakes", None).await;
     let their_need = add_need(&t, b, their_job, "Pads").await;
@@ -880,6 +923,26 @@ async fn wrong_vehicle_ids_read_as_missing() {
             "add_todo",
             json!({ "vehicle_id": b, "title": "x", "appointment_id": "ID" }),
             appt,
+        ),
+        (
+            "correct_service",
+            json!({ "vehicle_id": b, "service_id": their_service, "appointment_id": "ID" }),
+            appt,
+        ),
+        (
+            "update_planned_work",
+            json!({ "vehicle_id": b, "work_item_id": their_job, "appointment_id": "ID" }),
+            appt,
+        ),
+        (
+            "update_todo",
+            json!({ "vehicle_id": b, "todo_id": their_todo, "appointment_id": "ID" }),
+            appt,
+        ),
+        (
+            "record_service",
+            json!({ "vehicle_id": b, "service_date": "2026-11-10", "parts": [{ "name": "x", "need_id": "ID" }] }),
+            need,
         ),
     ];
     for (tool, args, real) in cases {
