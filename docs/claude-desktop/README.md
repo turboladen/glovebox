@@ -2,7 +2,8 @@
 
 `glovebox-mcp` is a local MCP server that Claude Desktop starts over stdio. It keeps the garage in
 a SQLite database and exposes tools for recording services, planning work, and answering "what
-does the car need?". Claude Desktop is the only interface to the data.
+does the car need?". Claude Desktop and the local web page described below are the interfaces to the
+data.
 
 ## Build and install
 
@@ -62,7 +63,19 @@ Claude Desktop. The page listens on `127.0.0.1` only and reads the same database
 Desktop server, so both programs can run at once.
 
 To try the page on made-up data, run `just seed test` and then `just web test`. The test
-environment uses `data/glovebox-test.db` on port 4828 and shows its name in the page header.
+environment uses `data/glovebox-test.db` on port 4828. Every page shows its environment's name in
+the header, `live` included, and the database file's name as well when `GLOVEBOX_DB_PATH` chose
+the file.
+
+## Upgrading
+
+A new version can change the database's structure, and a program older than the database refuses
+to open it. The Claude Desktop server only checks when it starts, so one that is already running
+keeps serving after the page has updated the file. Upgrade in this order:
+
+1. Stop the page if it is running.
+2. Run `just install`, then quit and reopen Claude Desktop, so the server it starts is the new one.
+3. Run `just web`, which builds the page from the same source before serving it.
 
 ## Environment
 

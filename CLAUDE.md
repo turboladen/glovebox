@@ -4,8 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What Is This
 
-Car maintenance tracker, used only through Claude Desktop. A Rust cargo workspace with four crates:
-`glovebox-shared` (the domain library: SeaORM 2.0 + SQLite), `glovebox-mcp` (an rmcp stdio
+Car maintenance tracker, used through Claude Desktop and a local web page. A Rust cargo workspace
+with four crates: `glovebox-shared` (the domain library: SeaORM 2.0 + SQLite), `glovebox-mcp` (an rmcp stdio
 server with domain-verb tools and read-only `glovebox://` resources), `glovebox-cli` (the
 `glovebox` command the owner runs by hand) and `glovebox-web` (a local page for working a job
 checklist). Claude Desktop launches the `glovebox-mcp` binary itself, so that server needs no
@@ -64,7 +64,7 @@ MCP server, and its `--open` flag opens the browser.
   `reset --env <name>` and `seed --env <name>`, with `run` callable in process from tests. The
   last two refuse `live` and build the file name themselves.
 - **`glovebox-web/`** (lib crate `glovebox_web` plus the `glovebox-web` binary) — an axum and askama
-  server that renders the checklist. `src/pages.rs` holds the two page handlers, `src/actions.rs`
+  server that renders the checklist. `src/pages.rs` holds the three page handlers (home, appointment and job), `src/actions.rs`
   the form posts, `src/view.rs` the view structs, `src/guard.rs` the request guard and the content
   security policy, and `templates/` the askama templates.
 - `scripts/check-layering.sh` (run by CI and `just ci`) keeps axum and rmcp out of `glovebox-shared`
@@ -75,7 +75,10 @@ MCP server, and its `--open` flag opens the browser.
 **`db.rs`**: `db::connect(path)` is the only place a SQLite connection is opened. It creates the
 parent directory, uses WAL mode with foreign keys enforced and a 5-second busy timeout (the MCP
 server and the web page open the same file at once), and runs `Migrator::up()`. It refuses to open
-a database that records a migration this binary does not contain, with a message to rebuild.
+a database that records a migration this binary does not contain, with a message to rebuild. Each
+binary opens through `db::connect_as` with its `db::Program`, so the message names that program's
+rebuild step. The check runs only at start, so the upgrade order in `docs/claude-desktop/README.md`
+matters.
 
 **`backup.rs`**: `db::connect` copies a database that already holds data to `backups/` beside it
 (`VACUUM INTO`, so the copy is consistent while another process writes) before any pending
@@ -113,9 +116,10 @@ with the `DomainResult<T>` alias.
 
 **Migrations** (`migration/`): one squashed schema migration (`m20261112_000001_initial_schema`),
 one seed migration (`m20261112_000002_seed_vw_mqb`: the VW MQB platform, the Golf GTI and
-Alltrack templates and their schedule items) and the job checklist migration
-(`m20261113_000001_job_checklist`: appointments, needs, options and to-dos, additive only). They
-run on startup.
+Alltrack templates and their schedule items), the job checklist migration
+(`m20261113_000001_job_checklist`: appointments, needs, options and to-dos, additive only) and
+`m20261113_000002_option_choice_history` (an option's `chosen_reason` and `chosen_on`). They run on
+startup.
 
 **Test harness** (`test_support.rs`): `test_db()` is an in-memory SQLite database with migrations
 applied. It is compiled under `#[cfg(any(test, feature = "test-support"))]`; `glovebox-mcp` uses it
@@ -191,7 +195,17 @@ lists needs, and a need lists researched options. A need's stage (`undecided`, `
 `shop_supplies`, `ordered`, `received`, `installed`) is derived by `need::stage` and never stored;
 the first matching row wins, so a linked part decides the stage. An appointment reads `done` when
 it has jobs and every one is done or dropped; only `cancelled` and a hand-closed date are stored,
-and closing or cancelling unassigns the jobs that are still planned. `update_need` and
+and closing or cancelling unassigns the jobs that are still planned. A closed or cancelled
+appointment therefore never holds a planned job: when a job on one returns to `planned` (its
+service is deleted, or its status is set back), a hand-closed appointment opens again and a
+cancelled one lets the job go to the unscheduled pool (`appointment::settle_reopened_jobs`).
+Deleting a service also unlinks every shop-supplied part it installed from its need. A need is
+open when `need::counts_as_open` says so (an open stage on a planned job); every open-needs count
+uses it. Rejecting or ruling out a chosen option keeps the need's reason and date on the option as
+`chosen_reason` and `chosen_on`, so `past_decisions` still reports them. Choosing the option a need
+already has keeps `decided_on`. `mark_ordered` claims the need with a conditional write as the
+first statement of its transaction, so two orders at once create one part, and its default cost
+is the option's unit price times the need's quantity (`need::order_cost_cents`). `update_need` and
 `update_appointment` apply an edit together with a choice or a status change in one transaction
 (`need::update_with_choice`, `appointment::update_with_status`), so a refused choice or status
 leaves the other fields unchanged. An option that is `does_not_fit` or rejected cannot be chosen,
@@ -237,11 +251,15 @@ A page is a view of the shared library, and a future page follows the same rules
 - **No script.** Every action is an HTML form post followed by a redirect back to the page, and a
   failed write renders the page again with the domain error beside the row. The content security
   policy allows no scripts and no external resources, so a script would not run.
-- **Every number and sentence comes from a tested shared function.** Templates arrange text that
-  `glovebox-shared` produced (stage, counts, warnings, errors) and never compute it.
+- **Every count and sentence about the records comes from a tested shared function** (stage,
+  step sentences, open counts, option notes, warnings, errors). `src/view.rs` picks labels and
+  nouns for those values, such as "2 needed" or "Price for 2", and decides which forms a row shows;
+  templates print what `view.rs` built.
 - **Local only.** The server binds `127.0.0.1` on `GLOVEBOX_WEB_PORT` (4827 for `live`, 4828
-  otherwise) and refuses a request whose Host or Origin is not local. A page served from a
-  non-live environment shows its name in the header.
+  otherwise) and refuses a request whose Host or Origin is not local. Every page shows the
+  environment's name in the header, `live` included, and the database file's name when
+  `GLOVEBOX_DB_PATH` chose the file. An option's link is shown only for an `http` or `https`
+  address.
 - **Tests** drive the router in process over an in-memory database with a fixed clock
   (`AppState::today`).
 - **Marking a need ordered has no undo**, because it creates a purchase record. A to-do tick and a
@@ -287,7 +305,7 @@ template.
 - **Currency**: Stored as integer cents (`i32`). Tool inputs and outputs are cents. Use integer
   division for formatting, not `as f64 / 100.0`.
 - **DB datetimes**: `String` at the SeaORM boundary (SQLite TEXT). Dates are `YYYY-MM-DD`.
-- **Migrations**: new migrations go after `m20261113_000001_job_checklist`; the `new-migration` skill
+- **Migrations**: new migrations go after `m20261113_000002_option_choice_history`; the `new-migration` skill
   has the templates. Use `Expr::cust()` for expressions inside builder queries; raw
   `execute_unprepared` only where no builder form exists (FTS5 DDL, cross-table copies).
 - **Migrations are not transactional on SQLite** (sea-orm-migration only wraps Postgres), so write
