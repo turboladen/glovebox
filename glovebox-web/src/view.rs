@@ -100,7 +100,7 @@ pub struct OptionCard {
 
 impl OptionCard {
     fn new(option: &need_option::Model, checked: bool) -> Self {
-        let rejected = option.rejected_reason.is_some() || option.rejected_on.is_some();
+        let rejected = need::is_rejected(option);
         let has_number = option.part_number.is_some();
         let fit_text = match option.fitment.as_str() {
             "confirmed" => "Fit confirmed",
@@ -230,12 +230,26 @@ impl NeedCard {
             .map(|e| e.message.as_str())
     }
 
-    /// The message of a failure of a form that has no place for one.
+    /// The message of a failure that no form on the card shows: the form has
+    /// no place for one, or the need has moved on and the card leaves that
+    /// form out (an order lost to another order, a return of a part that is
+    /// already gone).
     pub fn error_elsewhere(&self) -> Option<&str> {
         self.error
             .as_ref()
-            .filter(|e| !["order", "return", "decide", "supplier"].contains(&e.form))
+            .filter(|e| !self.shows_form(e.form))
             .map(|e| e.message.as_str())
+    }
+
+    // Returns true when the card renders `form`, which then shows its own error.
+    fn shows_form(&self, form: &str) -> bool {
+        match form {
+            "order" => self.can_order,
+            "return" => self.can_return,
+            "decide" => self.can_decide,
+            "supplier" => true,
+            _ => false,
+        }
     }
 
     /// Whether `input` is the field the failure names.
@@ -430,7 +444,10 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
         supplier_kind: need.supplied_by.as_deref().map(sentence_case),
         approach_kind: need.approach.as_deref().map(sentence_case),
         decision_reason: need.decision_reason.clone(),
+        // The return form also has a `reason` input, so only a failed
+        // decision brings back what was typed here.
         reason_value: typed("reason")
+            .filter(|_| failure.is_some_and(|f| f.form == "decide"))
             .map(str::to_owned)
             .or_else(|| need.decision_reason.clone())
             .unwrap_or_default(),
@@ -480,16 +497,19 @@ pub fn steps(list: &Checklist, jobs: &[JobCard], ctx: &CardContext<'_>) -> Steps
     let step = |group: &'static str, row: &StepRow| -> Option<StepCard> {
         let need = (*cards.get(&row.need_id)?).clone();
         let id = row.need_id;
+        // The link names the page's own path, because a failed write shows
+        // the page at the form's address, where a bare `?open=` would lead.
+        let back = ctx.back;
         let (decide_href, decide_label) = if need.chosen.is_some() {
             (
-                Some(format!("?open=need-{id}#need-{id}-supplier")),
+                Some(format!("{back}?open=need-{id}#need-{id}-supplier")),
                 "Set the supplier",
             )
         } else if need.options.is_empty() {
             (None, "")
         } else {
             (
-                Some(format!("?open=need-{id}#need-{id}-decide")),
+                Some(format!("{back}?open=need-{id}#need-{id}-decide")),
                 "Choose a part",
             )
         };

@@ -1038,8 +1038,9 @@ async fn open_query_opens_the_need_and_the_decide_link_uses_it() {
     let (_, closed) = w.get(&w.page_path()).await;
     assert!(
         closed.contains(&format!(
-            r##"href="?open=need-{0}#need-{0}-decide""##,
-            w.need
+            r#"href="{1}?open=need-{0}#need-{0}-decide""#,
+            w.need,
+            w.page_path()
         )),
         "{closed}"
     );
@@ -1216,4 +1217,116 @@ async fn todo_of_another_vehicle_is_404_like_a_missing_one() {
         .unwrap();
     assert_eq!(still.len(), 1);
     assert!(still[0].done_on.is_none());
+}
+
+// A failed write answers at the form's own address, so a link on the page it
+// shows must name the page's path.
+#[tokio::test]
+async fn the_links_on_a_page_shown_after_a_failed_write_lead_back_to_that_page() {
+    let w = World::new().await;
+    need::update(
+        &w.db,
+        w.vehicle,
+        w.need,
+        glovebox_shared::inputs::need::UpdateNeed {
+            supplied_by: Some(None),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    w.choose_good().await;
+    need::update_option(
+        &w.db,
+        w.vehicle,
+        w.good,
+        glovebox_shared::inputs::need::UpdateOption {
+            fitment: Some("unconfirmed".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let (status, _, body) = w
+        .post(
+            &w.need_path("return"),
+            &[("reason", "wrong size"), ("back", &w.page_path())],
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let page = w.page_path();
+    let need = w.need;
+    for link in [
+        format!(r#"href="{page}?open=need-{need}#need-{need}-supplier""#),
+        format!(r#"href="{page}?open=need-{need}#need-{need}""#),
+    ] {
+        assert!(body.contains(&link), "missing {link}: {body}");
+    }
+    assert!(!body.contains(r#"href="?"#), "{body}");
+}
+
+// The decision form and the return form both have a `reason` input.
+#[tokio::test]
+async fn a_failed_return_does_not_fill_the_decision_reason() {
+    let w = World::new().await;
+
+    let (status, _, body) = w
+        .post(
+            &w.need_path("return"),
+            &[("reason", "wrong size"), ("back", &w.page_path())],
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(!body.contains("wrong size"), "{body}");
+}
+
+// The need has moved on by the time the write arrives, so the page shown in
+// answer leaves the form out and the message needs another place.
+#[tokio::test]
+async fn a_failed_write_whose_form_is_gone_still_shows_its_error() {
+    let w = World::new().await;
+    let returned = w
+        .post(
+            &w.need_path("return"),
+            &[("reason", "wrong size"), ("back", &w.page_path())],
+        )
+        .await;
+    assert_eq!(returned.0, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(returned.2.contains("Not saved"), "{}", returned.2);
+    assert!(returned.2.contains("has no part linked"), "{}", returned.2);
+
+    w.choose_good().await;
+    w.order_it().await;
+    let ordered_twice = w
+        .post(
+            &w.need_path("ordered"),
+            &[("cost", "74.99"), ("back", &w.job_path())],
+        )
+        .await;
+    assert_eq!(ordered_twice.0, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        ordered_twice.2.contains("already has a part linked"),
+        "{}",
+        ordered_twice.2
+    );
+    assert_eq!(w.part_count().await, 1);
+}
+
+#[tokio::test]
+async fn a_failed_to_do_add_for_a_vehicle_the_home_page_does_not_list_shows_its_error() {
+    let w = World::new().await;
+
+    let (status, _, body) = w
+        .post(
+            "/vehicles/99999/todos",
+            &[("title", "Rotate the tires"), ("back", "/")],
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(body.contains("Not saved"), "{body}");
+    assert!(body.contains("Vehicle 99999 not found"), "{body}");
 }

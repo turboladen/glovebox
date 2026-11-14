@@ -131,6 +131,13 @@ fn validate_price(price_cents: Option<i32>) -> DomainResult<()> {
     Ok(())
 }
 
+/// Returns true when `option` has been rejected. A rejected option cannot be
+/// chosen, and it is kept as history.
+#[must_use]
+pub fn is_rejected(option: &need_option::Model) -> bool {
+    option.rejected_reason.is_some() || option.rejected_on.is_some()
+}
+
 /// Loads a need that belongs to `vehicle_id`, resolving need, work item and
 /// vehicle in one joined query.
 ///
@@ -332,7 +339,7 @@ async fn keep_choice_on_option(
 ///
 /// # Errors
 /// `NotFound` for an option that is not the vehicle's; `Invalid` as for
-/// [`add_option`].
+/// [`add_option`], and for a blank rejection reason.
 pub async fn update_option<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -347,6 +354,16 @@ pub async fn update_option<C: ConnectionTrait + TransactionTrait>(
         validate_price(price)?;
     }
     validate_optional_vocabulary("fitment", input.fitment.as_deref(), &VALID_FITMENTS)?;
+    // A caller may send "" where it means no reason. Storing that would reject
+    // the option and clear the need's choice, so only real text rejects.
+    if let Some(Some(reason)) = &input.rejected_reason
+        && reason.trim().is_empty()
+    {
+        return Err(DomainError::invalid(
+            "rejected_reason",
+            "must not be blank; send null to un-reject the option",
+        ));
+    }
     let mut active: need_option::ActiveModel = existing.clone().into();
     if let Some(value) = input.description {
         active.description = Set(value);
@@ -479,7 +496,7 @@ pub async fn decide(
                 "Option {option_id} does not fit; change its fitment first"
             )));
         }
-        if option.rejected_reason.is_some() {
+        if is_rejected(&option) {
             return Err(DomainError::BadRequest(format!(
                 "Option {option_id} is rejected; clear its rejection first"
             )));
@@ -776,7 +793,9 @@ pub async fn clear_received(
 /// the need loses the part (and, when `option_was_wrong`, its chosen option,
 /// which is rejected for the same reason; the flag has no effect when the
 /// need has no chosen option), and a to-do to take the part back
-/// goes on the job's appointment, or on the vehicle when the job has none.
+/// goes on the job's appointment while that appointment is open. The to-do
+/// goes on the vehicle when the job has no appointment or its appointment is
+/// closed or cancelled, because no list shows the to-dos of those.
 ///
 /// # Errors
 /// `NotFound` for a need that is not the vehicle's; `BadRequest` when the
@@ -797,9 +816,8 @@ pub async fn return_part<C: ConnectionTrait + TransactionTrait>(
             current.label()
         )));
     }
-    let appointment_id = super::work_item::get(db, vehicle_id, need.work_item_id)
-        .await?
-        .appointment_id;
+    let job = super::work_item::get(db, vehicle_id, need.work_item_id).await?;
+    let appointment_id = super::appointment::open_id(db, job.appointment_id).await?;
     let title = match found.seller.as_deref().and_then(super::trim_to_none) {
         Some(seller) => format!("Return {} to {seller}", found.name),
         None => format!("Return {}", found.name),
@@ -1872,6 +1890,82 @@ mod tests {
         .unwrap();
         assert_eq!(out.todo.title, "Return Pads");
         assert_eq!(out.todo.appointment_id, Some(appointment.id));
+    }
+
+    // The home page and `whats_coming` list no closed or cancelled
+    // appointment, so a to-do filed on one would never be seen.
+    #[tokio::test]
+    async fn return_from_a_closed_or_cancelled_appointment_puts_the_todo_on_the_vehicle() {
+        use crate::{inputs::appointment::NewAppointment, services::appointment};
+        for cancel in [false, true] {
+            let db = test_db().await;
+            let vehicle_id = VehicleFixture::new().insert_id(&db).await;
+            let visit = appointment::create(
+                &db,
+                vehicle_id,
+                NewAppointment {
+                    purpose: "Brakes".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            let job_id = add_job(&db, vehicle_id, "Rear brakes", Some(visit.id)).await;
+            let (n, _) = ordered_need(&db, vehicle_id, job_id).await;
+            // A done job stays on the appointment when it is put away.
+            crate::test_support::set_job_status(&db, vehicle_id, job_id, "done").await;
+            if cancel {
+                appointment::cancel(&db, vehicle_id, visit.id)
+                    .await
+                    .unwrap();
+            } else {
+                appointment::close(&db, vehicle_id, visit.id).await.unwrap();
+            }
+            let out = return_part(
+                &db,
+                vehicle_id,
+                n.id,
+                ReturnInput {
+                    reason: "not fitted".into(),
+                    option_was_wrong: false,
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(out.todo.appointment_id, None, "cancelled: {cancel}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_blank_rejection_reason_is_refused_and_keeps_the_choice() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let (n, o) = chosen_need(&db, vehicle_id, job_id, "Pads", None, None).await;
+        for blank in ["", "   "] {
+            let err = update_option(
+                &db,
+                vehicle_id,
+                o.id,
+                UpdateOption {
+                    rejected_reason: Some(Some(blank.into())),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                matches!(&err, DomainError::Invalid { field, .. } if field == "rejected_reason"),
+                "{blank:?}: {err:?}"
+            );
+        }
+        let after = require(&db, vehicle_id, n.id).await.unwrap();
+        assert_eq!(after.chosen_option_id, Some(o.id));
+        let option = need_option::Entity::find_by_id(o.id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!is_rejected(&option));
     }
 
     #[tokio::test]

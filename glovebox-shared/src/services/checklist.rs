@@ -135,10 +135,7 @@ impl NeedView {
         let all: Vec<&need_option::Model> = self.chosen.iter().chain(&self.other_options).collect();
         let n = all.len();
         let noun = if n == 1 { "option" } else { "options" };
-        let rejected = all
-            .iter()
-            .filter(|o| o.rejected_reason.is_some() || o.rejected_on.is_some())
-            .count();
+        let rejected = all.iter().filter(|o| need::is_rejected(o)).count();
         if rejected > 0 {
             format!("{n} {noun} researched, {rejected} rejected")
         } else {
@@ -155,6 +152,9 @@ pub struct PastDecision {
     pub job_title: String,
     pub need: job_need::Model,
     pub chosen: Option<need_option::Model>,
+    /// Holds the options that were ruled out: every rejected one and every
+    /// one marked `does_not_fit`. One that had been chosen first carries the
+    /// reason and date of that choice as `chosen_reason` and `chosen_on`.
     pub rejected: Vec<need_option::Model>,
     /// Parts bought for the need that went back.
     pub returned_parts: Vec<part::Model>,
@@ -175,7 +175,8 @@ pub async fn for_appointment(
         .order_by_asc(work_item::Column::Id)
         .all(db)
         .await?;
-    let todos = todo_svc::list_unchecked(db, vehicle_id, Some(Some(appointment_id)), true).await?;
+    let todos =
+        todo_svc::list_unchecked(db, &[vehicle_id], Some(Some(appointment_id)), true).await?;
     let views = job_views(db, jobs).await?;
     // The counts come from the rows the checklist shows, the same way
     // `appointment::summary` counts them.
@@ -196,8 +197,18 @@ pub async fn for_unscheduled(
     vehicle_id: i32,
 ) -> DomainResult<Checklist> {
     let todos = todo_svc::list(db, vehicle_id, Some(None), true).await?;
+    let views = unscheduled_jobs(db, &[vehicle_id]).await?;
+    Ok(assemble(None, views, todos))
+}
+
+// Loads the planned jobs of `vehicle_ids` that are on no appointment and have
+// needs, in id order.
+async fn unscheduled_jobs(
+    db: &impl ConnectionTrait,
+    vehicle_ids: &[i32],
+) -> DomainResult<Vec<JobView>> {
     let jobs = work_item::Entity::find()
-        .filter(work_item::Column::VehicleId.eq(vehicle_id))
+        .filter(work_item::Column::VehicleId.is_in(vehicle_ids.iter().copied()))
         .filter(work_item::Column::AppointmentId.is_null())
         .filter(work_item::Column::Status.eq("planned"))
         .order_by_asc(work_item::Column::Id)
@@ -205,7 +216,7 @@ pub async fn for_unscheduled(
         .await?;
     let mut views = job_views(db, jobs).await?;
     views.retain(|j| !j.needs.is_empty());
-    Ok(assemble(None, views, todos))
+    Ok(views)
 }
 
 /// One job with its needs.
@@ -313,9 +324,11 @@ pub async fn past_decisions(
             .iter()
             .find(|o| Some(o.id) == need.chosen_option_id)
             .cloned();
+        // An option marked `does_not_fit` is ruled out as surely as a rejected
+        // one, and it keeps the reason of a choice the same way.
         let rejected = all
             .into_iter()
-            .filter(|o| o.rejected_reason.is_some() || o.rejected_on.is_some())
+            .filter(|o| need::is_rejected(o) || o.fitment == "does_not_fit")
             .collect();
         out.push(PastDecision {
             vehicle_id: job.vehicle_id,
@@ -622,50 +635,59 @@ fn count_of(n: usize, singular: &str, plural: &str) -> String {
 /// # Errors
 /// `Db` when a query fails.
 pub async fn home(db: &impl ConnectionTrait) -> DomainResult<Vec<VehicleHome>> {
-    // Each vehicle reuses the per-vehicle list functions, so the queries run
-    // once per vehicle.
-    let mut out = Vec::new();
-    for vehicle in super::vehicle::list(db)
+    // Every vehicle's rows come from the same batched queries, through the
+    // functions the per-vehicle lists use, so the page and the tools agree.
+    let vehicles: Vec<vehicle::Model> = super::vehicle::list(db)
         .await?
         .into_iter()
         .filter(|v| v.archived_at.is_none())
-    {
-        let appointments = appointment::list(db, vehicle.id, false)
-            .await?
-            .into_iter()
-            .map(|s| HomeAppointment {
-                id: s.appointment.id,
-                purpose: s.appointment.purpose,
-                shop_name: s.appointment.shop_name,
-                when: s
-                    .appointment
-                    .planned_date
-                    .unwrap_or_else(|| "not booked".to_owned()),
-                counts: format!(
-                    "{} open \u{b7} {} open",
-                    count_of(s.needs_open, "need", "needs"),
-                    count_of(s.todos_open, "to-do", "to-dos")
-                ),
-            })
-            .collect();
-        let unscheduled = for_unscheduled(db, vehicle.id).await?;
-        let unscheduled_jobs = unscheduled
-            .jobs
-            .iter()
-            .map(|j| HomeJob {
-                id: j.job.id,
-                title: j.job.title.clone(),
-                counts: format!("{} open", count_of(j.open_needs(), "need", "needs")),
-            })
-            .collect();
-        out.push(VehicleHome {
-            vehicle,
-            appointments,
-            unscheduled_jobs,
-            todos: unscheduled.next_steps.todos,
+        .collect();
+    let ids: Vec<i32> = vehicles.iter().map(|v| v.id).collect();
+    let mut appointments = appointment::open_by_vehicle(db, &ids).await?;
+    let mut jobs: HashMap<i32, Vec<HomeJob>> = HashMap::new();
+    for view in unscheduled_jobs(db, &ids).await? {
+        let counts = format!("{} open", count_of(view.open_needs(), "need", "needs"));
+        jobs.entry(view.job.vehicle_id).or_default().push(HomeJob {
+            id: view.job.id,
+            title: view.job.title,
+            counts,
         });
     }
-    Ok(out)
+    let mut todos: HashMap<i32, Vec<todo::Model>> = HashMap::new();
+    for open in todo_svc::list_unchecked(db, &ids, Some(None), false).await? {
+        todos.entry(open.vehicle_id).or_default().push(open);
+    }
+    Ok(vehicles
+        .into_iter()
+        .map(|vehicle| VehicleHome {
+            appointments: appointments
+                .remove(&vehicle.id)
+                .unwrap_or_default()
+                .into_iter()
+                .map(home_appointment)
+                .collect(),
+            unscheduled_jobs: jobs.remove(&vehicle.id).unwrap_or_default(),
+            todos: todos.remove(&vehicle.id).unwrap_or_default(),
+            vehicle,
+        })
+        .collect())
+}
+
+fn home_appointment(s: AppointmentSummary) -> HomeAppointment {
+    HomeAppointment {
+        id: s.appointment.id,
+        purpose: s.appointment.purpose,
+        shop_name: s.appointment.shop_name,
+        when: s
+            .appointment
+            .planned_date
+            .unwrap_or_else(|| "not booked".to_owned()),
+        counts: format!(
+            "{} open \u{b7} {} open",
+            count_of(s.needs_open, "need", "needs"),
+            count_of(s.todos_open, "to-do", "to-dos")
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -1641,6 +1663,42 @@ mod tests {
         assert_eq!(
             d.rejected[0].rejected_reason.as_deref(),
             Some("car has the 340 mm brakes")
+        );
+        assert!(d.rejected[0].chosen_on.is_some());
+    }
+
+    #[tokio::test]
+    async fn past_decisions_keeps_the_reason_for_a_choice_that_was_ruled_out() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let job = add_job(&db, v, "Brakes", None).await;
+        let n = new_need(&db, v, job, "Rear rotors").await;
+        let first = new_option(&db, v, n, "272 mm rotors", None).await;
+        need::decide(&db, v, n, Some(first), Some("cheapest OE size".into()))
+            .await
+            .unwrap();
+        need::update_option(
+            &db,
+            v,
+            first,
+            UpdateOption {
+                fitment: Some("does_not_fit".into()),
+                fitment_note: Some(Some("The car has the 310 mm brakes.".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let found = past_decisions(&db, "rear rotors").await.unwrap();
+        let d = &found[0];
+        assert!(d.chosen.is_none());
+        assert_eq!(d.rejected.len(), 1, "{d:?}");
+        assert_eq!(d.rejected[0].id, first);
+        assert_eq!(d.rejected[0].fitment, "does_not_fit");
+        assert_eq!(
+            d.rejected[0].chosen_reason.as_deref(),
+            Some("cheapest OE size")
         );
         assert!(d.rejected[0].chosen_on.is_some());
     }

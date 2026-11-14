@@ -239,6 +239,20 @@ pub(crate) async fn require_assignable(
     Ok(found)
 }
 
+/// Returns `id` when it names an appointment that is neither closed by hand
+/// nor cancelled, and `None` otherwise. A record filed for the owner to act
+/// on goes on an appointment only while a list still shows that appointment.
+pub(crate) async fn open_id(
+    db: &impl ConnectionTrait,
+    id: Option<i32>,
+) -> DomainResult<Option<i32>> {
+    let Some(id) = id else {
+        return Ok(None);
+    };
+    let found = appointment::Entity::find_by_id(id).one(db).await?;
+    Ok(found.filter(|a| Ending::of(a).is_none()).map(|a| a.id))
+}
+
 /// Lists a vehicle's appointments with their counts, soonest planned date
 /// first and unbooked ones last. Without `include_closed`, appointments whose
 /// status is `done` or `cancelled` are left out, except a `done` one that
@@ -249,16 +263,36 @@ pub async fn list(
     include_closed: bool,
 ) -> DomainResult<Vec<AppointmentSummary>> {
     super::vehicle::require(db, vehicle_id).await?;
-    let mut out = summaries(db, vehicle_id, None).await?;
+    let mut out = summaries(db, &[vehicle_id], None).await?;
     if !include_closed {
-        // A derived `done` appointment with a to-do left still has work to
-        // show; a hand-closed or cancelled one has been put away on purpose.
-        out.retain(|s| {
-            s.status == "planning"
-                || (s.status == "done" && s.appointment.closed_on.is_none() && s.todos_open > 0)
-        });
+        out.retain(shows_as_open);
     }
     Ok(out)
+}
+
+/// Loads the appointments that [`list`] gives without closed ones, for every
+/// vehicle in `vehicle_ids` at once, keyed by vehicle and in list order.
+pub(crate) async fn open_by_vehicle(
+    db: &impl ConnectionTrait,
+    vehicle_ids: &[i32],
+) -> DomainResult<HashMap<i32, Vec<AppointmentSummary>>> {
+    let mut grouped: HashMap<i32, Vec<AppointmentSummary>> = HashMap::new();
+    for summary in summaries(db, vehicle_ids, None).await? {
+        if shows_as_open(&summary) {
+            grouped
+                .entry(summary.appointment.vehicle_id)
+                .or_default()
+                .push(summary);
+        }
+    }
+    Ok(grouped)
+}
+
+// A derived `done` appointment with a to-do left still has work to show; a
+// hand-closed or cancelled one has been put away on purpose.
+fn shows_as_open(s: &AppointmentSummary) -> bool {
+    s.status == "planning"
+        || (s.status == "done" && s.appointment.closed_on.is_none() && s.todos_open > 0)
 }
 
 /// One appointment of the vehicle with its counts, whatever its status.
@@ -271,7 +305,7 @@ pub async fn summary(
     id: i32,
 ) -> DomainResult<AppointmentSummary> {
     require(db, vehicle_id, id).await?;
-    summaries(db, vehicle_id, Some(id))
+    summaries(db, &[vehicle_id], Some(id))
         .await?
         .into_iter()
         .next()
@@ -296,15 +330,15 @@ pub(crate) fn summarize(
     }
 }
 
-// Builds the summaries for every appointment of the vehicle, or for the one
+// Builds the summaries for every appointment of the vehicles, or for the one
 // named by `only`, in list order, with every count loaded in batches.
 async fn summaries(
     db: &impl ConnectionTrait,
-    vehicle_id: i32,
+    vehicle_ids: &[i32],
     only: Option<i32>,
 ) -> DomainResult<Vec<AppointmentSummary>> {
-    let mut query =
-        appointment::Entity::find().filter(appointment::Column::VehicleId.eq(vehicle_id));
+    let mut query = appointment::Entity::find()
+        .filter(appointment::Column::VehicleId.is_in(vehicle_ids.iter().copied()));
     if let Some(id) = only {
         query = query.filter(appointment::Column::Id.eq(id));
     }
@@ -1163,7 +1197,9 @@ mod tests {
         cancel(&db, v, cancelled.id).await.unwrap();
 
         set_status(on_closed, "planned").await.unwrap();
-        set_status(on_cancelled, "planned").await.unwrap();
+        // The returned job says where it ended up, not where it was.
+        let returned = set_status(on_cancelled, "planned").await.unwrap();
+        assert_eq!(returned.appointment_id, None);
 
         let reopened = summary(&db, v, closed.id).await.unwrap();
         assert_eq!(reopened.status, "planning");
@@ -1174,6 +1210,48 @@ mod tests {
         );
         let unscheduled = job::get(&db, v, on_cancelled).await.unwrap();
         assert_eq!(unscheduled.appointment_id, None);
+    }
+
+    #[tokio::test]
+    async fn a_job_update_may_name_the_closed_appointment_it_is_already_on() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let closed = create(&db, v, appt("Brakes")).await.unwrap();
+        let other = create(&db, v, appt("Wipers")).await.unwrap();
+        let on_closed = add_job(&db, v, "Brake pads", Some(closed.id)).await;
+        let elsewhere = add_job(&db, v, "Wiper blades", Some(other.id)).await;
+        set_job_status(&db, v, on_closed, "done").await;
+        set_job_status(&db, v, elsewhere, "done").await;
+        close(&db, v, closed.id).await.unwrap();
+
+        let kept = job::update(
+            &db,
+            v,
+            on_closed,
+            UpdateWorkItem {
+                notes: Some(Some("Pads only".into())),
+                appointment_id: Some(Some(closed.id)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(kept.appointment_id, Some(closed.id));
+        assert_eq!(kept.notes.as_deref(), Some("Pads only"));
+
+        // Moving another job onto the closed appointment is a new assignment.
+        let err = job::update(
+            &db,
+            v,
+            elsewhere,
+            UpdateWorkItem {
+                appointment_id: Some(Some(closed.id)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
     }
 
     #[tokio::test]

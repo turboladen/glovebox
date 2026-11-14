@@ -387,7 +387,11 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         input.incident_id.flatten(),
     )
     .await?;
-    if let Some(Some(id)) = input.appointment_id {
+    // Keeping the appointment a job is already on is not a new assignment, so
+    // it stays allowed after the appointment is closed or cancelled.
+    if let Some(Some(id)) = input.appointment_id
+        && existing.appointment_id != Some(id)
+    {
         crate::services::appointment::require_assignable(db, vehicle_id, id).await?;
     }
 
@@ -430,9 +434,12 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
 
     active.updated_at = Set(super::now_stamp());
     let txn = db.begin().await?;
-    let updated = active.update(&txn).await?;
+    let mut updated = active.update(&txn).await?;
     if reopens {
         super::appointment::settle_reopened_jobs(&txn, &[updated.id]).await?;
+        // Settling takes the job off a cancelled appointment, so the row is
+        // read again and the caller sees where the job ended up.
+        updated = get(&txn, vehicle_id, id).await?;
     }
     txn.commit().await?;
     Ok(updated)

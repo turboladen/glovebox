@@ -199,10 +199,12 @@ and closing or cancelling unassigns the jobs that are still planned. A closed or
 appointment therefore never holds a planned job: when a job on one returns to `planned` (its
 service is deleted, or its status is set back), a hand-closed appointment opens again and a
 cancelled one lets the job go to the unscheduled pool (`appointment::settle_reopened_jobs`).
-Deleting a service also unlinks every shop-supplied part it installed from its need. A need is
+Deleting a service, or correcting its `part_ids`, also unlinks from its need every shop-supplied
+part the service stops installing. A need is
 open when `need::counts_as_open` says so (an open stage on a planned job); every open-needs count
 uses it. Rejecting or ruling out a chosen option keeps the need's reason and date on the option as
-`chosen_reason` and `chosen_on`, so `past_decisions` still reports them. Choosing the option a need
+`chosen_reason` and `chosen_on`, and `past_decisions` lists both kinds under `rejected`, so it
+still reports them. Choosing the option a need
 already has keeps `decided_on`. `mark_ordered` claims the need with a conditional write as the
 first statement of its transaction, so two orders at once create one part, and its default cost
 is the option's unit price times the need's quantity (`need::order_cost_cents`). `update_need` and
@@ -210,7 +212,8 @@ is the option's unit price times the need's quantity (`need::order_cost_cents`).
 (`need::update_with_choice`, `appointment::update_with_status`), so a refused choice or status
 leaves the other fields unchanged. An option that is `does_not_fit` or rejected cannot be chosen,
 and no tool chooses a supplier or an option for the owner. `return_part` is the only way a part
-becomes `returned`. Naming an appointment in `record_service` installs and completes nothing; the
+becomes `returned`, and its to-do goes on the job's appointment only while that appointment is
+open (no list shows the to-dos of a closed or cancelled one). Naming an appointment in `record_service` installs and completes nothing; the
 result's `unfitted_needs` lists the linked parts the invoice did not install. `need_id` is accepted
 on the inline parts of `record_service` only, and `get_checklist` takes at most one of
 `appointment_id` and `work_item_id`.
@@ -249,7 +252,8 @@ A page is a view of the shared library, and a future page follows the same rules
   services. It never names SeaORM, and the layering gate fails if a manifest, source or test file
   does.
 - **No script.** Every action is an HTML form post followed by a redirect back to the page, and a
-  failed write renders the page again with the domain error beside the row. The content security
+  failed write renders the page again with the domain error beside the row. That page is served
+  at the form's address, so every link on a page names the page's own path. The content security
   policy allows no scripts and no external resources, so a script would not run.
 - **Every count and sentence about the records comes from a tested shared function** (stage,
   step sentences, open counts, option notes, warnings, errors). `src/view.rs` picks labels and

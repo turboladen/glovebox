@@ -20,7 +20,7 @@
       <li class="step">
         <p class="step-need">{{ c.name }}</p>
         <p class="step-text">{{ c.note }}<span class="tag">{{ c.job_title }}</span></p>
-        <div class="step-actions"><a class="btn" href="?open=need-{{ c.need_id }}#need-{{ c.need_id }}">Open</a></div>
+        <div class="step-actions"><a class="btn" href="{{ back }}?open=need-{{ c.need_id }}#need-{{ c.need_id }}">Open</a></div>
       </li>
       {% endfor %}
     </ul>

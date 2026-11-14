@@ -136,11 +136,12 @@ impl GloveboxMcp {
         description = "What the owner decided before for a kind of part, on every vehicle: the \
                        needs whose name or options match `query` (\"brake pads\", \"rotor\"), \
                        newest decision first, each with the chosen option, the reason in the \
-                       owner's words, the rejected options with their reasons (and, for an option \
-                       that was chosen before it was rejected, the reason it was chosen in \
-                       `chosen_reason` and the date in `chosen_on`), and any part that was \
-                       ordered and returned. Call it before researching a part the owner may have \
-                       chosen before, and to answer \"what did I choose for X and why?\"."
+                       owner's words, the options ruled out in `rejected` (the rejected ones with \
+                       their reasons and the ones marked `does_not_fit`; one that was chosen \
+                       first keeps the reason it was chosen in `chosen_reason` and the date in \
+                       `chosen_on`), and any part that was ordered and returned. Call it before \
+                       researching a part the owner may have chosen before, and to answer \"what \
+                       did I choose for X and why?\"."
     )]
     async fn past_decisions(
         &self,
@@ -348,17 +349,17 @@ impl GloveboxMcp {
                        write it marks the part `returned` with the reason and today's date (kept \
                        in history, and left out of parts spending), unlinks it from the need, and \
                        adds a to-do \"Return <part> to <seller>\" on the job's appointment, or on \
-                       the vehicle when the job has none. The need goes back to `to_order`, or to \
-                       `undecided` with the chosen option rejected for the same reason when \
-                       `option_was_wrong` is true, so set it when the option itself was the \
-                       mistake (the wrong size or fitment) and leave it false for a damaged or \
-                       mis-shipped part. The reason the owner gave for choosing a rejected option \
-                       stays on it as `chosen_reason`. To undo a return made by mistake, three \
-                       calls are needed: `correct_part` with status `purchased`, \
-                       `link_part_to_need` to link the part again, and `delete_todo` for the \
-                       \"Return ...\" to-do. When `option_was_wrong` was true, also clear the \
-                       rejection with `update_need_option` and choose the option again with \
-                       `update_need`."
+                       the vehicle when the job has none or its appointment is closed or \
+                       cancelled. The need goes back to `to_order`, or to `undecided` with the \
+                       chosen option rejected for the same reason when `option_was_wrong` is \
+                       true, so set it when the option itself was the mistake (the wrong size or \
+                       fitment) and leave it false for a damaged or mis-shipped part. The reason \
+                       the owner gave for choosing a rejected option stays on it as \
+                       `chosen_reason`. To undo a return made by mistake, three calls are needed: \
+                       `correct_part` with status `purchased`, `link_part_to_need` to link the \
+                       part again, and `delete_todo` for the \"Return ...\" to-do. When \
+                       `option_was_wrong` was true, also clear the rejection with \
+                       `update_need_option` and choose the option again with `update_need`."
     )]
     async fn return_part(
         &self,

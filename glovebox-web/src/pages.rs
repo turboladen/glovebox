@@ -196,10 +196,16 @@ pub async fn home_response(state: &AppState, view: Page<'_>, status: StatusCode)
             home,
         });
     }
+    // A to-do add is shown in its vehicle's form, unless the page lists no
+    // such vehicle (one archived or deleted since the form was loaded).
+    let has_form = |vid: i32| vehicles.iter().any(|v| v.home.vehicle.id == vid);
+    let top_error = failure
+        .filter(|f| f.target != Target::TodoAdd || !has_form(f.vid))
+        .map(|f| f.message.clone());
     let page = HomePage {
         chrome: Chrome::of(state),
         banner: banner_found,
-        top_error: top_error(failure, |target| target == Target::TodoAdd),
+        top_error,
         vehicles,
     };
     html(status, page.render())

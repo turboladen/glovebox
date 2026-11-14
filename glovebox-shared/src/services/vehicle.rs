@@ -2,8 +2,8 @@ use sea_orm::*;
 
 use crate::{
     entities::{
-        incident, model_template, part, research_finding, research_report, service_record, vehicle,
-        work_item,
+        appointment, incident, model_template, part, research_finding, research_report,
+        service_record, todo, vehicle, work_item,
     },
     error::{DomainError, DomainResult},
     inputs::vehicle::{NewVehicle, UpdateVehicle},
@@ -289,9 +289,10 @@ pub async fn unarchive(db: &impl ConnectionTrait, id: i32) -> DomainResult<vehic
 }
 
 /// Deletes a vehicle that has no history yet, undoing a mistaken
-/// `create`. A vehicle with any service record, part, incident, work item or
-/// research finding is a `BadRequest` naming what it has. Its odometer
-/// readings, own schedule items and decoded attributes go with it.
+/// `create`. A vehicle with any service record, part, incident, work item,
+/// appointment, to-do or research finding is a `BadRequest` naming what it
+/// has. Its odometer readings, own schedule items and decoded attributes go
+/// with it.
 pub async fn delete_unused(db: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
     require(db, id).await?;
     let report_ids = research_report::Entity::find()
@@ -325,6 +326,20 @@ pub async fn delete_unused(db: &impl ConnectionTrait, id: i32) -> DomainResult<(
             "planned work",
             work_item::Entity::find()
                 .filter(work_item::Column::VehicleId.eq(id))
+                .count(db)
+                .await?,
+        ),
+        (
+            "appointments",
+            appointment::Entity::find()
+                .filter(appointment::Column::VehicleId.eq(id))
+                .count(db)
+                .await?,
+        ),
+        (
+            "to-dos",
+            todo::Entity::find()
+                .filter(todo::Column::VehicleId.eq(id))
                 .count(db)
                 .await?,
         ),
@@ -686,5 +701,50 @@ mod tests {
             "got: {err}"
         );
         require(&db, used.id).await.unwrap();
+    }
+
+    // The appointments and to-dos tables cascade from the vehicle, so a vehicle
+    // that holds either must be refused or the delete would take them with it.
+    #[tokio::test]
+    async fn delete_unused_refuses_a_vehicle_with_an_appointment_or_a_to_do() {
+        let db = test_db().await;
+        let planned = seed(&db, "Planned").await;
+        crate::services::appointment::create(
+            &db,
+            planned.id,
+            crate::inputs::appointment::NewAppointment {
+                purpose: "60k service".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let err = delete_unused(&db, planned.id).await.unwrap_err();
+        assert!(
+            matches!(&err, DomainError::BadRequest(m) if m.contains("appointments")),
+            "got: {err}"
+        );
+        assert_eq!(
+            crate::test_support::row_count::<appointment::Entity>(&db).await,
+            1
+        );
+
+        let reminded = seed(&db, "Reminded").await;
+        crate::services::todo::add(
+            &db,
+            reminded.id,
+            crate::inputs::todo::NewTodo {
+                title: "Find the wheel lock key".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let err = delete_unused(&db, reminded.id).await.unwrap_err();
+        assert!(
+            matches!(&err, DomainError::BadRequest(m) if m.contains("to-dos")),
+            "got: {err}"
+        );
+        assert_eq!(crate::test_support::row_count::<todo::Entity>(&db).await, 1);
     }
 }

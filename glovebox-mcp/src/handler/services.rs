@@ -146,11 +146,12 @@ impl GloveboxMcp {
                        (`appointment_id`). Send only the fields to change; null clears a field, \
                        and a field left out is untouched. `line_items`, `schedule_item_ids`, \
                        `part_ids` and `recall_finding_ids` REPLACE the existing lists with \
-                       exactly what is sent. Use this when the invoice was already recorded and \
-                       something on it is wrong; do not record the work a second time with \
-                       `record_service`, which creates a duplicate. To close an incident or a \
-                       to-do, use `record_service` for new work, or `update_incident` / \
-                       `update_planned_work` for existing records."
+                       exactly what is sent. A part taken off `part_ids` reads `purchased` again, \
+                       and one the shop supplied is unlinked from its need. Use this when the \
+                       invoice was already recorded and something on it is wrong; do not record \
+                       the work a second time with `record_service`, which creates a duplicate. \
+                       To close an incident or a to-do, use `record_service` for new work, or \
+                       `update_incident` / `update_planned_work` for existing records."
     )]
     async fn correct_service(
         &self,

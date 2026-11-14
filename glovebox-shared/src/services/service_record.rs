@@ -1017,19 +1017,21 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     // Handle part linking on update
     if let Some(new_part_ids) = input.part_ids {
         // Unlink previously linked parts
-        let old_parts = part::Entity::find()
+        let removed: Vec<part::Model> = part::Entity::find()
             .filter(part::Column::InstalledServiceId.eq(record.id))
             .all(&txn)
+            .await?
+            .into_iter()
+            .filter(|old_part| !new_part_ids.contains(&old_part.id))
+            .collect();
+        unlink_shop_parts_from_needs(&txn, &removed).await?;
+        for old_part in removed {
+            part_svc::uninstall(
+                &txn,
+                old_part,
+                part_svc::UninstallStatus::PurchasedIfInstalled,
+            )
             .await?;
-        for old_part in old_parts {
-            if !new_part_ids.contains(&old_part.id) {
-                part_svc::uninstall(
-                    &txn,
-                    old_part,
-                    part_svc::UninstallStatus::PurchasedIfInstalled,
-                )
-                .await?;
-            }
         }
         // Link new parts
         for &part_id in &new_part_ids {
@@ -1064,6 +1066,37 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     txn.commit().await?;
 
     Ok(updated)
+}
+
+/// Detaches from its need every part in `parts` that the shop supplied, when
+/// a service stops installing those parts. The owner never held such a part,
+/// so its need falls back to `shop_supplies` and a re-filed invoice can link a
+/// new part to it.
+async fn unlink_shop_parts_from_needs(
+    txn: &impl ConnectionTrait,
+    parts: &[part::Model],
+) -> DomainResult<()> {
+    let shop_part_ids: Vec<i32> = parts
+        .iter()
+        .filter(|p| p.supplied_by == "shop")
+        .map(|p| p.id)
+        .collect();
+    if shop_part_ids.is_empty() {
+        return Ok(());
+    }
+    job_need::Entity::update_many()
+        .col_expr(
+            job_need::Column::PartId,
+            sea_query::Expr::value(None::<i32>),
+        )
+        .col_expr(
+            job_need::Column::UpdatedAt,
+            sea_query::Expr::value(super::now_stamp()),
+        )
+        .filter(job_need::Column::PartId.is_in(shop_part_ids))
+        .exec(txn)
+        .await?;
+    Ok(())
 }
 
 /// Refuses an invoice number that another service on the vehicle already
@@ -1177,27 +1210,7 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .all(&txn)
         .await?;
     outcome.kept_part_ids = linked_parts.iter().map(|p| p.id).collect();
-    // The owner never held a part the shop supplied, so its need falls back to
-    // `shop_supplies` and a re-filed invoice can link a new part to it.
-    let shop_part_ids: Vec<i32> = linked_parts
-        .iter()
-        .filter(|p| p.supplied_by == "shop")
-        .map(|p| p.id)
-        .collect();
-    if !shop_part_ids.is_empty() {
-        job_need::Entity::update_many()
-            .col_expr(
-                job_need::Column::PartId,
-                sea_query::Expr::value(None::<i32>),
-            )
-            .col_expr(
-                job_need::Column::UpdatedAt,
-                sea_query::Expr::value(super::now_stamp()),
-            )
-            .filter(job_need::Column::PartId.is_in(shop_part_ids))
-            .exec(&txn)
-            .await?;
-    }
+    unlink_shop_parts_from_needs(&txn, &linked_parts).await?;
     for p in linked_parts {
         part_svc::uninstall(&txn, p, part_svc::UninstallStatus::Purchased).await?;
     }
@@ -3874,6 +3887,49 @@ mod tests {
                 .unwrap();
             assert_eq!(n.part_id, Some(again.part_ids[0]));
             assert_eq!(stage_of(&f, need_id).await, need::Stage::Installed);
+        }
+
+        // A correction that takes the shop's part off the invoice leaves the
+        // need as the delete does, and the owner's own part stays linked.
+        #[tokio::test]
+        async fn correcting_the_parts_unlinks_a_removed_shop_part_only() {
+            let f = fixture().await;
+            let job_id = add_job(&f, "Rear brakes").await;
+            let fluid = add_need(&f, job_id, "Brake fluid", Some("shop")).await;
+            let pads = add_need(&f, job_id, "Pads", None).await;
+            let own_part = link_new_part(&f, pads, true).await;
+            let created = create(
+                &f.db,
+                f.vehicle,
+                NewServiceRecord {
+                    part_ids: Some(vec![own_part]),
+                    parts: Some(vec![NewPart {
+                        name: "DOT4 fluid".into(),
+                        supplied_by: Some("shop".into()),
+                        need_id: Some(fluid),
+                        ..Default::default()
+                    }]),
+                    ..invoice(&f)
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(stage_of(&f, fluid).await, need::Stage::Installed);
+
+            update(
+                &f.db,
+                f.vehicle,
+                created.record.id,
+                UpdateServiceRecord {
+                    part_ids: Some(Vec::new()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(stage_of(&f, fluid).await, need::Stage::ShopSupplies);
+            assert_eq!(stage_of(&f, pads).await, need::Stage::Received);
         }
 
         #[tokio::test]
