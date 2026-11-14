@@ -7,10 +7,9 @@ use axum::{
     http::{Request, Response, StatusCode},
 };
 use chrono::NaiveDate;
-use glovebox_shared::test_support::test_db;
+use glovebox_shared::{db::DatabaseConnection, test_support::test_db};
 use glovebox_web::{AppState, router};
 use http_body_util::BodyExt;
-use sea_orm::DatabaseConnection;
 use tower::ServiceExt;
 
 /// The origin the tests pretend to be served from.

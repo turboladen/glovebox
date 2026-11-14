@@ -480,47 +480,42 @@ fn step_summary(view: &NeedView, job_done: bool) -> String {
     }
 }
 
-/// One vehicle's open work for the home page.
+/// Holds one vehicle's open work for the home page.
 #[derive(Debug, Serialize)]
 pub struct VehicleHome {
     pub vehicle: vehicle::Model,
-    /// The open appointments, soonest planned date first, unbooked ones last.
+    /// Lists the open appointments, soonest planned date first, unbooked ones last.
     pub appointments: Vec<HomeAppointment>,
-    /// The planned jobs that are on no appointment and have needs.
+    /// Lists the planned jobs that are on no appointment and have needs.
     pub unscheduled_jobs: Vec<HomeJob>,
-    /// The open to-dos that are on no appointment.
+    /// Lists the open to-dos that are on no appointment.
     pub todos: Vec<todo::Model>,
 }
 
-/// An open appointment with its counts written out as statements.
+/// Describes an open appointment, with its counts written out as statements.
 #[derive(Debug, Serialize)]
 pub struct HomeAppointment {
     pub id: i32,
     pub purpose: String,
     pub shop_name: Option<String>,
-    /// The planned date, or `not booked`.
+    /// Holds the planned date, or `not booked` when there is none.
     pub when: String,
-    /// For example `3 needs open · 2 to-dos open`.
+    /// Holds a statement such as `3 needs open · 2 to-dos open`.
     pub counts: String,
 }
 
-/// An unscheduled job with its open needs written out as a statement.
+/// Describes an unscheduled job, with its open needs written out as a statement.
 #[derive(Debug, Serialize)]
 pub struct HomeJob {
     pub id: i32,
     pub title: String,
-    /// For example `2 needs open`.
+    /// Holds a statement such as `2 needs open`.
     pub counts: String,
 }
 
-/// `1 need`, `2 needs`.
+/// Writes `n` followed by the singular or plural noun, such as `1 need` or `2 needs`.
 fn count_of(n: usize, singular: &str, plural: &str) -> String {
     format!("{n} {}", if n == 1 { singular } else { plural })
-}
-
-/// Whether a need still asks something of the owner before the visit.
-fn is_open(stage: Stage) -> bool {
-    matches!(stage, Stage::Undecided | Stage::ToOrder | Stage::Ordered)
 }
 
 /// What the home page shows for every vehicle that is not archived: its open
@@ -531,6 +526,8 @@ fn is_open(stage: Stage) -> bool {
 /// # Errors
 /// `Db` when a query fails.
 pub async fn home(db: &impl ConnectionTrait) -> DomainResult<Vec<VehicleHome>> {
+    // Each vehicle reuses the per-vehicle list functions, so the queries run
+    // once per vehicle.
     let mut out = Vec::new();
     for vehicle in super::vehicle::list(db)
         .await?
@@ -565,7 +562,7 @@ pub async fn home(db: &impl ConnectionTrait) -> DomainResult<Vec<VehicleHome>> {
                 counts: format!(
                     "{} open",
                     count_of(
-                        j.needs.iter().filter(|n| is_open(n.stage)).count(),
+                        j.needs.iter().filter(|n| n.stage.is_open()).count(),
                         "need",
                         "needs"
                     )

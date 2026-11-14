@@ -5,8 +5,11 @@ use std::{
     time::Duration,
 };
 
+/// The handle [`connect`] returns. Other crates hold it and pass it back to
+/// the shared services; they never run a query of their own.
+pub use sea_orm::DatabaseConnection;
 use sea_orm::{
-    ConnectOptions, ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement,
+    ConnectOptions, ConnectionTrait, Database, DatabaseBackend, Statement,
     sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode},
 };
 use sea_orm_migration::MigratorTrait;

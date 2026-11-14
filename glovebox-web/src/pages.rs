@@ -14,7 +14,7 @@ use crate::AppState;
 struct Chrome {
     /// The environment's name, or `None` for the live one.
     environment: Option<String>,
-    /// Today's date as `YYYY-MM-DD`.
+    /// Today's date as the shared layer writes it.
     today: String,
 }
 
@@ -23,7 +23,7 @@ impl Chrome {
         Self {
             environment: (state.env_name != glovebox_shared::env::LIVE)
                 .then(|| state.env_name.clone()),
-            today: (state.today)().format("%Y-%m-%d").to_string(),
+            today: glovebox_shared::services::date_label((state.today)()),
         }
     }
 }

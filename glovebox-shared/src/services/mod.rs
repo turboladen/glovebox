@@ -36,6 +36,12 @@ pub fn today() -> chrono::NaiveDate {
     chrono::Local::now().date_naive()
 }
 
+/// Writes `date` as `YYYY-MM-DD`, the form every page shows a date in.
+#[must_use]
+pub fn date_label(date: chrono::NaiveDate) -> String {
+    date.format("%Y-%m-%d").to_string()
+}
+
 /// The server's local date and time as `YYYY-MM-DD HH:MM:SS`, for an event
 /// time the owner left out ("when the reading was taken"). It is not a
 /// bookkeeping stamp; those use [`now_stamp`].
@@ -137,5 +143,14 @@ mod tests {
                 "{bad:?} must be refused"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod date_label_tests {
+    #[test]
+    fn date_label_pads_month_and_day() {
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 3, 7).unwrap();
+        assert_eq!(super::date_label(date), "2026-03-07");
     }
 }

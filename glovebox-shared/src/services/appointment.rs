@@ -310,7 +310,7 @@ async fn summaries(
     let mut needs_open: HashMap<i32, usize> = HashMap::new();
     for need in &needs {
         let current = stage(need, need.part_id.and_then(|id| parts.get(&id)));
-        if matches!(current, Stage::Undecided | Stage::ToOrder | Stage::Ordered)
+        if current.is_open()
             && planned.contains(&need.work_item_id)
             && let Some(appointment_id) = job_appointment.get(&need.work_item_id)
         {

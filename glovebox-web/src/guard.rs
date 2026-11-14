@@ -4,7 +4,7 @@
 use axum::{
     extract::Request,
     http::{
-        HeaderMap, HeaderValue, StatusCode,
+        HeaderMap, HeaderValue, Method, StatusCode,
         header::{CONTENT_SECURITY_POLICY, HOST, ORIGIN},
     },
     middleware::Next,
@@ -27,8 +27,10 @@ pub async fn content_security_policy(mut response: Response) -> Response {
 }
 
 /// Answers 403 to a request whose `Host` is not `127.0.0.1` or `localhost`
-/// with a port, and to a request that is not a GET or HEAD unless its
-/// `Origin` header is absent or names the same authority as its `Host`.
+/// with a port. A request that is not a GET or HEAD is also refused when its
+/// `Sec-Fetch-Site` header is present and is neither `same-origin` nor `none`,
+/// or when its `Origin` header is present and names another authority than
+/// its `Host`.
 pub async fn same_origin_only(req: Request, next: Next) -> Response {
     if !is_allowed(&req) {
         return (StatusCode::FORBIDDEN, "cross-site request refused\n").into_response();
@@ -44,8 +46,14 @@ fn is_allowed(req: &Request) -> bool {
     if !is_local_authority(host) {
         return false;
     }
-    if req.method().is_safe() {
+    if matches!(*req.method(), Method::GET | Method::HEAD) {
         return true;
+    }
+    // Browsers always send `Sec-Fetch-Site` and a page cannot forge it.
+    if let Some(site) = headers.get("sec-fetch-site")
+        && !matches!(site.as_bytes(), b"same-origin" | b"none")
+    {
+        return false;
     }
     match headers.get(ORIGIN) {
         None => true,

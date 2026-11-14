@@ -33,6 +33,15 @@ pub enum Stage {
     Installed,
 }
 
+impl Stage {
+    /// Whether the need still asks something of the owner before the visit:
+    /// it is undecided, waiting to be ordered, or ordered and not received.
+    #[must_use]
+    pub fn is_open(self) -> bool {
+        matches!(self, Stage::Undecided | Stage::ToOrder | Stage::Ordered)
+    }
+}
+
 /// Derives a need's stage. The first matching row wins, so a linked part
 /// decides the stage whatever the supplier and chosen option say. `part` is
 /// the need's linked part, if any.

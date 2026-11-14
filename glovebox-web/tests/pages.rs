@@ -206,3 +206,23 @@ async fn unknown_path_is_404_page() {
     assert!(body.contains("Page not found"), "{body}");
     assert!(body.contains(r#"href="/""#), "{body}");
 }
+
+#[tokio::test]
+async fn cross_site_fetch_metadata_post_is_403() {
+    for site in ["cross-site", "same-site"] {
+        let req = request("POST", "/")
+            .header("sec-fetch-site", site)
+            .body(Body::empty())
+            .unwrap();
+        let (status, _) = page(app(db().await, "live"), req).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{site}");
+    }
+    for site in ["same-origin", "none"] {
+        let req = request("POST", "/")
+            .header("sec-fetch-site", site)
+            .body(Body::empty())
+            .unwrap();
+        let (status, _) = page(app(db().await, "live"), req).await;
+        assert_ne!(status, StatusCode::FORBIDDEN, "{site}");
+    }
+}

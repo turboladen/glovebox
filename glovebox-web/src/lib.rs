@@ -6,7 +6,7 @@ mod pages;
 
 use axum::{Router, middleware, routing::get};
 use chrono::NaiveDate;
-use sea_orm::DatabaseConnection;
+use glovebox_shared::db::DatabaseConnection;
 
 /// What every handler reads: the database, the name of the environment the
 /// process serves, and the clock that says what day it is.
