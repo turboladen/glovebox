@@ -9,7 +9,7 @@ use crate::{
     error::{DomainError, DomainResult},
     inputs::{
         appointment::NewAppointment,
-        need::{NewNeed, NewOption, OrderDetails, ReturnInput, UpdateNeed, UpdateOption},
+        need::{NewNeed, NewOption, OrderDetails, ReturnInput, UpdateOption},
         service_record::NewServiceRecord,
         todo::NewTodo,
         vehicle::NewVehicle,
@@ -227,9 +227,9 @@ async fn rear_rotors(
         v,
         rear_rotors,
         option(
-            "Coated rear rotor, 272 mm",
-            "Zimmermann",
-            "100.3375.20",
+            "Rear rotor, 310 x 22 mm",
+            "Volkswagen",
+            "5Q0615601E",
             13_800,
         ),
     )
@@ -240,10 +240,13 @@ async fn rear_rotors(
         rear_rotors,
         NewOption {
             fitment: Some("does_not_fit".into()),
-            fitment_note: Some(
-                "The listing is for the 253 mm rear rotor; this car has 272 mm.".into(),
-            ),
-            ..option("Rear rotor, 253 mm", "Brembo", "08.B391.11", 11_200)
+            fitment_note: Some("272 x 10 mm, for cars without the Performance Pack".into()),
+            ..option(
+                "Rear rotor, 272 x 10 mm",
+                "Zimmermann",
+                "600.3241.20",
+                11_200,
+            )
         },
     )
     .await?;
@@ -251,7 +254,7 @@ async fn rear_rotors(
         db,
         v,
         rear_rotors,
-        option("Plain rear rotor, 272 mm", "Pagid", "55155", 7_900),
+        option("Uncoated rear rotor, 310 x 22 mm", "Pagid", "55155", 7_900),
     )
     .await?;
     need::update_option(
@@ -281,18 +284,17 @@ async fn brakes(db: &(impl ConnectionTrait + TransactionTrait), at: &Visit) -> D
     let brakes = job(db, v, a, "Brakes").await?;
     rear_rotors(db, v, brakes).await?;
 
-    let rear_pads = self_need(db, v, brakes, "Rear pads").await?;
-    need::update(
+    let rear_pads = need::add(
         db,
         v,
-        rear_pads,
-        UpdateNeed {
-            supplied_by: Some(None),
-            approach: Some(None),
+        brakes,
+        NewNeed {
+            name: "Rear pads".into(),
             ..Default::default()
         },
     )
-    .await?;
+    .await?
+    .id;
     need::add_option(
         db,
         v,
@@ -389,7 +391,7 @@ async fn small_jobs(
         db,
         v,
         cabin,
-        option("Pollen cabin air filter", "Mann", "CUK 2streng", 2_150),
+        option("Pollen cabin air filter", "Mann", "CUK 26 009", 2_150),
         "Matches the original part.",
     )
     .await?;
@@ -544,7 +546,22 @@ mod tests {
                 .any(|o| o.fitment == "does_not_fit" && o.fitment_note.is_some())
         );
         assert!(options.iter().any(|o| o.rejected_reason.is_some()));
-        assert!(list.todos.iter().any(|t| t.title.starts_with("Return ")));
+        assert!(
+            list.todos
+                .iter()
+                .any(|t| { t.title == "Return Wiper blade set, 24 in. and 19 in. to Amazon" })
+        );
+        let rotor = |part_number: &str| {
+            options
+                .iter()
+                .find(|o| o.part_number.as_deref() == Some(part_number))
+                .unwrap_or_else(|| panic!("no option {part_number}"))
+        };
+        assert_eq!(rotor("5Q0615601E").fitment, "confirmed");
+        assert_eq!(
+            rotor("600.3241.20").fitment_note.as_deref(),
+            Some("272 x 10 mm, for cars without the Performance Pack")
+        );
         assert!(list.todos.iter().any(|t| t.done_on.is_some()));
         assert!(
             list.todos

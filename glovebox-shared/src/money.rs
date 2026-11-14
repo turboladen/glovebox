@@ -3,8 +3,9 @@
 use crate::error::{DomainError, DomainResult};
 
 /// Parses an amount the owner typed, such as `935`, `$935.00` or `1,234.5`,
-/// into whole cents. Surrounding spaces, one leading `$` and thousands commas
-/// in the dollar part are accepted.
+/// into whole cents. Surrounding spaces, one leading `$`, a leading or trailing
+/// decimal point and thousands commas (groups of exactly three digits) in the
+/// dollar part are accepted.
 ///
 /// # Errors
 ///
@@ -19,16 +20,31 @@ pub fn parse_dollars(text: &str) -> DomainResult<i32> {
         return Err(DomainError::invalid("amount", "must not be blank"));
     }
     let (whole, fraction) = unsigned.split_once('.').unwrap_or((unsigned, ""));
-    let whole = whole.replace(',', "");
     let digits = |s: &str| s.bytes().all(|b| b.is_ascii_digit());
-    if whole.is_empty() || !digits(&whole) || !digits(fraction) {
+    let mut groups = whole.split(',');
+    let first = groups.next().unwrap_or_default();
+    let grouped_ok = first.len() <= 3 && digits(first) && groups.all(|g| g.len() == 3 && digits(g));
+    // A comma is a thousands separator only: one to three digits, then
+    // groups of exactly three. A lone decimal point is not an amount.
+    let has_digits = !whole.is_empty() || !fraction.is_empty();
+    let well_formed = if whole.contains(',') {
+        grouped_ok
+    } else {
+        digits(whole)
+    };
+    if !has_digits || !well_formed || !digits(fraction) {
         return Err(bad("is not a dollar amount such as 935 or $1,234.50"));
     }
+    let whole = whole.replace(',', "");
     if fraction.len() > 2 {
         return Err(bad("has more than two decimal places"));
     }
     let too_big = || bad("is too large");
-    let dollars: i64 = whole.parse().map_err(|_| too_big())?;
+    let dollars: i64 = if whole.is_empty() {
+        0
+    } else {
+        whole.parse().map_err(|_| too_big())?
+    };
     let tenths_and_hundredths: i64 = format!("{fraction:0<2}").parse().unwrap_or(0);
     let cents = dollars
         .checked_mul(100)
@@ -68,6 +84,9 @@ mod tests {
             ("$0.05", 5),
             ("12.", 1_200),
             ("21,474,836.47", i32::MAX),
+            (".50", 50),
+            ("$.5", 50),
+            ("999,999.99", 99_999_999),
         ] {
             assert_eq!(parse_dollars(text).unwrap(), cents, "{text:?}");
         }
@@ -82,8 +101,17 @@ mod tests {
             "12abc",
             "1.234",
             "1.2.3",
-            ".50",
             "1 000",
+            ".",
+            "$.",
+            "1,23",
+            "1,,234",
+            ",5",
+            "5,",
+            "84,99",
+            "1234,567",
+            "1,234,56",
+            "1.2,3",
             "$$5",
             "21,474,836.48",
             "99999999999999999999",
