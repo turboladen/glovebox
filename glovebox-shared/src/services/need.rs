@@ -82,6 +82,14 @@ fn validate_name(field: &str, value: &str) -> DomainResult<()> {
     Ok(())
 }
 
+// Trims optional text and stores blank text as NULL, so a blank field reads as
+// absent everywhere the option is shown.
+fn blank_to_none(value: Option<String>) -> Option<String> {
+    value
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
 fn validate_quantity(quantity: i32) -> DomainResult<()> {
     if quantity < 1 {
         return Err(DomainError::invalid("quantity", "must be at least 1"));
@@ -232,13 +240,13 @@ pub async fn add_option(
     let model = need_option::ActiveModel {
         need_id: Set(need_id),
         description: Set(input.description),
-        manufacturer: Set(input.manufacturer),
-        part_number: Set(input.part_number),
-        seller: Set(input.seller),
+        manufacturer: Set(blank_to_none(input.manufacturer)),
+        part_number: Set(blank_to_none(input.part_number)),
+        seller: Set(blank_to_none(input.seller)),
         price_cents: Set(input.price_cents),
-        url: Set(input.url),
+        url: Set(blank_to_none(input.url)),
         fitment: Set(input.fitment.unwrap_or_else(|| "unconfirmed".to_string())),
-        fitment_note: Set(input.fitment_note),
+        fitment_note: Set(blank_to_none(input.fitment_note)),
         ..Default::default()
     };
     Ok(model.insert(db).await?)
@@ -289,25 +297,25 @@ pub async fn update_option<C: ConnectionTrait + TransactionTrait>(
         active.description = Set(value);
     }
     if let Some(value) = input.manufacturer {
-        active.manufacturer = Set(value);
+        active.manufacturer = Set(blank_to_none(value));
     }
     if let Some(value) = input.part_number {
-        active.part_number = Set(value);
+        active.part_number = Set(blank_to_none(value));
     }
     if let Some(value) = input.seller {
-        active.seller = Set(value);
+        active.seller = Set(blank_to_none(value));
     }
     if let Some(value) = input.price_cents {
         active.price_cents = Set(value);
     }
     if let Some(value) = input.url {
-        active.url = Set(value);
+        active.url = Set(blank_to_none(value));
     }
     if let Some(value) = &input.fitment {
         active.fitment = Set(value.clone());
     }
     if let Some(value) = input.fitment_note {
-        active.fitment_note = Set(value);
+        active.fitment_note = Set(blank_to_none(value));
     }
     if let Some(reason) = &input.rejected_reason {
         active.rejected_on = Set(reason
@@ -1651,5 +1659,81 @@ mod tests {
             require(&db, vehicle_id, spare.id).await.unwrap().part_id,
             None
         );
+    }
+
+    #[tokio::test]
+    async fn options_store_blank_text_as_null_and_trim_the_rest() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let n = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
+        let blank = || Some("   ".to_string());
+        let added = add_option(
+            &db,
+            vehicle_id,
+            n.id,
+            NewOption {
+                description: "Pads".into(),
+                manufacturer: blank(),
+                part_number: Some("  5Q0615601E ".into()),
+                seller: blank(),
+                url: blank(),
+                fitment_note: Some(String::new()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(added.manufacturer, None);
+        assert_eq!(added.part_number.as_deref(), Some("5Q0615601E"));
+        assert_eq!(added.seller, None);
+        assert_eq!(added.url, None);
+        assert_eq!(added.fitment_note, None);
+
+        let updated = update_option(
+            &db,
+            vehicle_id,
+            added.id,
+            UpdateOption {
+                manufacturer: Some(Some(" Textar ".into())),
+                part_number: Some(blank()),
+                seller: Some(Some(" FCP Euro".into())),
+                url: Some(blank()),
+                fitment_note: Some(Some("\t".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.manufacturer.as_deref(), Some("Textar"));
+        assert_eq!(updated.part_number, None);
+        assert_eq!(updated.seller.as_deref(), Some("FCP Euro"));
+        assert_eq!(updated.url, None);
+        assert_eq!(updated.fitment_note, None);
+    }
+
+    #[tokio::test]
+    async fn a_blank_option_description_is_invalid_on_add_and_update() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let n = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
+        let err = add_option(&db, vehicle_id, n.id, option("  "))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, DomainError::Invalid { .. }));
+        let o = add_option(&db, vehicle_id, n.id, option("Pads"))
+            .await
+            .unwrap();
+        let err = update_option(
+            &db,
+            vehicle_id,
+            o.id,
+            UpdateOption {
+                description: Some(" ".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Invalid { .. }));
     }
 }

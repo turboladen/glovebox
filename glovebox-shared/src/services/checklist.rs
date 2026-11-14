@@ -867,6 +867,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_whitespace_manufacturer_leaves_no_leading_space_in_the_label() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let a = appointment_id(&db, v).await;
+        let job = new_job(&db, v, "Brakes", Some(a)).await;
+        to_order_need_with(
+            &db,
+            v,
+            job,
+            "Wiper blades",
+            NewOption {
+                description: "Aero blades".into(),
+                manufacturer: Some("   ".into()),
+                part_number: Some("A123".into()),
+                ..Default::default()
+            },
+        )
+        .await;
+        let list = for_appointment(&db, v, a).await.unwrap();
+        assert_eq!(list.next_steps.order[0].summary, "Wiper blades: order A123");
+    }
+
+    #[tokio::test]
     async fn done_group_sentences_are_exact() {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
