@@ -4,6 +4,7 @@ pub mod costs;
 pub mod incident;
 pub mod mileage;
 pub mod model_template;
+pub mod need;
 pub mod nhtsa;
 pub mod part;
 pub mod platform;

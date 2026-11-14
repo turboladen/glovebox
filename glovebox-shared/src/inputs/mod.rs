@@ -4,6 +4,7 @@
 pub mod incident;
 pub mod mileage;
 pub mod model_template;
+pub mod need;
 pub mod part;
 pub mod platform;
 pub mod schedule;
