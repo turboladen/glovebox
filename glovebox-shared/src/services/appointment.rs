@@ -239,6 +239,33 @@ pub(crate) async fn require_assignable(
     Ok(found)
 }
 
+/// [`require_assignable`] for a caller that is about to put a job on the
+/// appointment inside `txn`. It must be the transaction's first statement.
+pub(crate) async fn claim_assignable(
+    txn: &impl ConnectionTrait,
+    vehicle_id: i32,
+    id: i32,
+) -> DomainResult<appointment::Model> {
+    claim(txn, id).await?;
+    require_assignable(txn, vehicle_id, id).await
+}
+
+// Writes the appointment row without changing it. A write as a transaction's
+// first statement gives it SQLite's write lock (waiting out the busy timeout),
+// so everything the transaction reads afterwards is the committed state and no
+// other program can close, cancel or fill the appointment until it ends.
+async fn claim(txn: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
+    appointment::Entity::update_many()
+        .col_expr(
+            appointment::Column::UpdatedAt,
+            Expr::col(appointment::Column::UpdatedAt),
+        )
+        .filter(appointment::Column::Id.eq(id))
+        .exec(txn)
+        .await?;
+    Ok(())
+}
+
 /// Returns `id` when it names an appointment that is neither closed by hand
 /// nor cancelled, and `None` otherwise. A record filed for the owner to act
 /// on goes on an appointment only while a list still shows that appointment.
@@ -458,6 +485,7 @@ async fn put_away(
     id: i32,
     ending: Ending,
 ) -> DomainResult<ClosedAppointment> {
+    claim(db, id).await?;
     let existing = require(db, vehicle_id, id).await?;
     if let Some(current) = Ending::of(&existing) {
         return Err(DomainError::BadRequest(format!(
@@ -1297,5 +1325,53 @@ mod tests {
         set_job_status(&db, v, dropped, "dropped").await;
         let all = list(&db, v, true).await.unwrap();
         assert_eq!(all[0].needs_open, 1);
+    }
+
+    // The first connection is midway through putting a job on the
+    // appointment. A close on a second connection waits for it and then takes
+    // that job off, so the closed appointment holds no planned job.
+    #[tokio::test]
+    async fn close_waits_for_a_job_being_assigned_on_another_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("two.db");
+        let first = crate::db::connect(path.to_str().unwrap()).await.unwrap();
+        let second = crate::db::connect(path.to_str().unwrap()).await.unwrap();
+        let v = VehicleFixture::new().insert(&first).await.id;
+        let a = create(
+            &first,
+            v,
+            NewAppointment {
+                purpose: "Brakes".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+
+        let txn = first.begin().await.unwrap();
+        claim_assignable(&txn, v, a).await.unwrap();
+        let job = work_item::ActiveModel {
+            vehicle_id: Set(v),
+            title: Set("Pads".into()),
+            appointment_id: Set(Some(a)),
+            status: Set("planned".into()),
+            ..Default::default()
+        }
+        .insert(&txn)
+        .await
+        .unwrap()
+        .id;
+
+        let closing = tokio::spawn(async move { close(&second, v, a).await });
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(
+            !closing.is_finished(),
+            "the close ran ahead of the open write"
+        );
+        txn.commit().await.unwrap();
+
+        let closed = closing.await.unwrap().unwrap();
+        assert_eq!(closed.unassigned_job_ids, [job]);
     }
 }

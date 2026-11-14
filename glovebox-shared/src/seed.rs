@@ -74,7 +74,7 @@ fn option(description: &str, manufacturer: &str, part_number: &str, price_cents:
 }
 
 async fn job(
-    db: &impl ConnectionTrait,
+    db: &(impl ConnectionTrait + TransactionTrait),
     vehicle_id: i32,
     appointment_id: Option<i32>,
     title: &str,
@@ -459,7 +459,7 @@ async fn todos(db: &impl ConnectionTrait, at: &Visit) -> DomainResult<()> {
     Ok(())
 }
 
-async fn unscheduled(db: &impl ConnectionTrait, v: i32) -> DomainResult<()> {
+async fn unscheduled(db: &(impl ConnectionTrait + TransactionTrait), v: i32) -> DomainResult<()> {
     let washer = job(db, v, None, "Washer pump").await?;
     let pump = need::add(
         db,

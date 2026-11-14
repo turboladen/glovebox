@@ -15,9 +15,6 @@ use super::schema::*;
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
-/// Tables in dependency order; `down()` drops them in reverse.
-const TABLES: &[&str] = &["appointments", "job_needs", "need_options", "todos"];
-
 /// Adds `column` to `table` with the given SQL definition unless the table
 /// already has it. `SQLite` accepts a `REFERENCES` clause here only because the
 /// default is NULL.
@@ -270,19 +267,40 @@ impl MigrationTrait for Migration {
             .await
     }
 
-    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // SQLite cannot drop a column named in an FK clause, so `down` removes
-        // only the new tables; the added columns stay and are inert.
-        for table in TABLES.iter().rev() {
-            manager
-                .drop_table(
-                    Table::drop()
-                        .table(Alias::new(*table))
-                        .if_exists()
-                        .to_owned(),
-                )
-                .await?;
-        }
-        Ok(())
+    async fn down(&self, _manager: &SchemaManager) -> Result<(), DbErr> {
+        // Work items, services and parts keep foreign keys to the tables this
+        // migration creates, and SQLite cannot drop a column named in a
+        // foreign key. Dropping the tables alone would make every later write
+        // to those three fail with "no such table", so the rollback refuses.
+        Err(DbErr::Migration(
+            "the job checklist migration cannot be rolled back; restore a backup taken before it \
+             ran"
+            .to_string(),
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sea_orm_migration::MigratorTrait;
+
+    use crate::{
+        migration::Migrator,
+        test_support::{VehicleFixture, add_job, test_db},
+    };
+
+    // Rolling back past this migration is refused, and the database still
+    // takes writes to the tables that reference the checklist tables.
+    #[tokio::test]
+    async fn rollback_is_refused_and_leaves_the_tables_usable() {
+        let db = test_db().await;
+        let error = Migrator::down(&db, Some(2)).await.unwrap_err();
+        assert!(
+            error.to_string().contains("cannot be rolled back"),
+            "{error}"
+        );
+
+        let vehicle = VehicleFixture::new().insert(&db).await;
+        add_job(&db, vehicle.id, "Brakes", None).await;
     }
 }

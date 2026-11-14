@@ -315,8 +315,8 @@ pub async fn get(
         .ok_or_else(|| DomainError::NotFound(format!("Work item {id} not found")))
 }
 
-pub async fn create(
-    db: &impl ConnectionTrait,
+pub async fn create<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
     vehicle_id: i32,
     input: NewWorkItem,
 ) -> DomainResult<work_item::Model> {
@@ -324,6 +324,13 @@ pub async fn create(
         return Err(DomainError::invalid("title", "must not be blank"));
     }
     validate_revisit(input.revisit_by_date.as_deref(), input.revisit_by_miles)?;
+    let txn = db.begin().await?;
+    let db = &txn;
+    // The claim comes before any read, so the appointment cannot be closed or
+    // cancelled between this check and the insert.
+    if let Some(id) = input.appointment_id {
+        crate::services::appointment::claim_assignable(db, vehicle_id, id).await?;
+    }
     crate::services::vehicle::require(db, vehicle_id).await?;
     let schedule_item_id = require_links_owned(
         db,
@@ -333,10 +340,6 @@ pub async fn create(
         input.incident_id,
     )
     .await?;
-    if let Some(id) = input.appointment_id {
-        crate::services::appointment::require_assignable(db, vehicle_id, id).await?;
-    }
-
     let model = work_item::ActiveModel {
         vehicle_id: Set(vehicle_id),
         title: Set(input.title),
@@ -351,7 +354,9 @@ pub async fn create(
         status: Set("planned".to_string()),
         ..Default::default()
     };
-    Ok(model.insert(db).await?)
+    let created = model.insert(db).await?;
+    txn.commit().await?;
+    Ok(created)
 }
 
 /// Changes a work item. Setting a done or dropped item back to `planned`
@@ -363,6 +368,19 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     id: i32,
     input: UpdateWorkItem,
 ) -> DomainResult<work_item::Model> {
+    let txn = db.begin().await?;
+    let db = &txn;
+    // The write comes before any read, so SQLite gives this transaction the
+    // write lock first. The job and its appointment then cannot change between
+    // the checks below and the update.
+    work_item::Entity::update_many()
+        .col_expr(
+            work_item::Column::UpdatedAt,
+            sea_query::Expr::col(work_item::Column::UpdatedAt),
+        )
+        .filter(work_item::Column::Id.eq(id))
+        .exec(db)
+        .await?;
     let existing = get(db, vehicle_id, id).await?;
     let reopens = existing.status != "planned" && input.status.as_deref() == Some("planned");
 
@@ -433,13 +451,12 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     }
 
     active.updated_at = Set(super::now_stamp());
-    let txn = db.begin().await?;
-    let mut updated = active.update(&txn).await?;
+    let mut updated = active.update(db).await?;
     if reopens {
-        super::appointment::settle_reopened_jobs(&txn, &[updated.id]).await?;
+        super::appointment::settle_reopened_jobs(db, &[updated.id]).await?;
         // Settling takes the job off a cancelled appointment, so the row is
         // read again and the caller sees where the job ended up.
-        updated = get(&txn, vehicle_id, id).await?;
+        updated = get(db, vehicle_id, id).await?;
     }
     txn.commit().await?;
     Ok(updated)
