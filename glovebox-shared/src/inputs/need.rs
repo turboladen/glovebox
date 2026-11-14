@@ -51,3 +51,22 @@ pub struct UpdateOption {
     /// clearing it un-rejects the option.
     pub rejected_reason: Option<Option<String>>,
 }
+
+/// What the owner knows about an order when marking a need ordered. A field
+/// left out takes the chosen option's value, or today for the date.
+#[derive(Default)]
+pub struct OrderDetails {
+    pub seller: Option<String>,
+    /// The order's date, `YYYY-MM-DD`; defaults to today.
+    pub purchase_date: Option<String>,
+    pub cost_cents: Option<i32>,
+    pub order_ref: Option<String>,
+}
+
+/// Why a part is going back.
+pub struct ReturnInput {
+    pub reason: String,
+    /// True when the chosen option itself was the mistake, so the option is
+    /// rejected for the same reason and the need goes back to undecided.
+    pub option_was_wrong: bool,
+}

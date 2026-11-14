@@ -373,7 +373,7 @@ pub struct RecordPartInput {
     /// Who supplied the part: `self` (the owner bought it, the default) or
     /// `shop` (the shop sourced it and billed for it).
     pub supplied_by: Option<String>,
-    /// Lifecycle status: `purchased`, `installed`, or `replaced`.
+    /// Lifecycle status: `purchased`, `installed`, `replaced` or `returned`.
     /// Defaults to `purchased`.
     pub status: Option<String>,
     /// Where it goes on the car (free text), e.g. "Front brakes".
@@ -418,6 +418,7 @@ impl RecordPartInput {
                 warranty_expires_on: self.warranty_expires_on,
                 warranty_expires_miles: self.warranty_expires_miles,
                 supplied_by: self.supplied_by,
+                order_ref: None,
             },
         )
     }

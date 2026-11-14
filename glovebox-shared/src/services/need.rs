@@ -6,9 +6,12 @@ use sea_orm::{sea_query::Expr, *};
 use serde::Serialize;
 
 use crate::{
-    entities::{job_need, need_option, part, work_item},
+    entities::{job_need, need_option, part, todo, work_item},
     error::{DomainError, DomainResult},
-    inputs::need::{NewNeed, NewOption, UpdateNeed, UpdateOption},
+    inputs::{
+        need::{NewNeed, NewOption, OrderDetails, ReturnInput, UpdateNeed, UpdateOption},
+        part::NewPart,
+    },
 };
 
 /// Allowed values for `job_needs.supplied_by`.
@@ -389,12 +392,335 @@ pub async fn decide(
     Ok(active.update(db).await?)
 }
 
+/// A need with the part linked to it and the stage that results.
+#[derive(Serialize, Debug)]
+pub struct NeedPurchase {
+    pub need: job_need::Model,
+    pub part: part::Model,
+    pub stage: Stage,
+}
+
+/// What returning a part leaves behind: the need (unlinked, possibly with its
+/// choice cleared), the returned part, the to-do to take it back and the
+/// need's new stage.
+#[derive(Serialize, Debug)]
+pub struct ReturnOutcome {
+    pub need: job_need::Model,
+    pub returned_part: part::Model,
+    pub todo: todo::Model,
+    pub stage: Stage,
+}
+
+impl Stage {
+    fn label(self) -> &'static str {
+        match self {
+            Stage::Undecided => "undecided",
+            Stage::ToOrder => "to_order",
+            Stage::ShopSupplies => "shop_supplies",
+            Stage::Ordered => "ordered",
+            Stage::Received => "received",
+            Stage::Installed => "installed",
+        }
+    }
+}
+
+// Loads the part linked to `need`, or refuses when the need has none.
+async fn linked_part(
+    db: &impl ConnectionTrait,
+    need: &job_need::Model,
+) -> DomainResult<part::Model> {
+    let Some(part_id) = need.part_id else {
+        return Err(DomainError::BadRequest(format!(
+            "Need {} has no part linked",
+            need.id
+        )));
+    };
+    part::Entity::find_by_id(part_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| DomainError::Internal(format!("Need {} links a missing part", need.id)))
+}
+
+async fn set_need_part(
+    db: &impl ConnectionTrait,
+    need: job_need::Model,
+    part_id: Option<i32>,
+    supplied_by: Option<&str>,
+) -> DomainResult<job_need::Model> {
+    let mut active: job_need::ActiveModel = need.into();
+    active.part_id = Set(part_id);
+    if let Some(supplier) = supplied_by {
+        active.supplied_by = Set(Some(supplier.to_string()));
+    }
+    active.updated_at = Set(super::now_stamp());
+    Ok(active.update(db).await?)
+}
+
+fn purchase(need: job_need::Model, part: part::Model) -> NeedPurchase {
+    let stage = stage(&need, Some(&part));
+    NeedPurchase { need, part, stage }
+}
+
+/// Creates the part a need's chosen option describes, owned by the owner
+/// (`supplied_by` `self`), and links it to the need. A field in `details`
+/// wins over the option's value; the purchase date defaults to today.
+///
+/// # Errors
+/// `NotFound` for a need that is not the vehicle's; `BadRequest` when the
+/// need has no chosen option, already has a part or is supplied by the shop;
+/// `Invalid` for a malformed date or a negative cost.
+pub async fn mark_ordered<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    need_id: i32,
+    details: OrderDetails,
+) -> DomainResult<NeedPurchase> {
+    super::validate_optional_date("purchase_date", details.purchase_date.as_deref())?;
+    validate_price(details.cost_cents)?;
+    let need = require(db, vehicle_id, need_id).await?;
+    if need.part_id.is_some() {
+        return Err(DomainError::BadRequest(format!(
+            "Need {need_id} already has a part linked"
+        )));
+    }
+    if need.supplied_by.as_deref() == Some("shop") {
+        return Err(DomainError::BadRequest(format!(
+            "Need {need_id} is supplied by the shop, so there is nothing to order"
+        )));
+    }
+    let option = match need.chosen_option_id {
+        Some(option_id) => need_option::Entity::find_by_id(option_id).one(db).await?,
+        None => None,
+    }
+    .ok_or_else(|| {
+        DomainError::BadRequest(format!(
+            "Need {need_id} has no chosen option; choose one before ordering"
+        ))
+    })?;
+    let purchase_date = details
+        .purchase_date
+        .unwrap_or_else(|| super::today().format("%Y-%m-%d").to_string());
+    let txn = db.begin().await?;
+    let created = super::part::create(
+        &txn,
+        vehicle_id,
+        NewPart {
+            name: option.description,
+            manufacturer: option.manufacturer,
+            part_number: option.part_number,
+            seller: details.seller.or(option.seller),
+            purchase_date: Some(purchase_date),
+            cost_cents: details.cost_cents.or(option.price_cents),
+            retailer_url: option.url,
+            supplied_by: Some("self".to_string()),
+            order_ref: details.order_ref,
+            ..Default::default()
+        },
+    )
+    .await?;
+    let need = set_need_part(&txn, need, Some(created.id), Some("self")).await?;
+    txn.commit().await?;
+    Ok(purchase(need, created))
+}
+
+/// Links a part that is already recorded to a need, optionally stamping the
+/// date it arrived. A need with no supplier takes the part's.
+///
+/// # Errors
+/// `NotFound` for a need or part that is not the vehicle's; `BadRequest` for
+/// a returned part, a part linked to another need or a need that already has
+/// a part; `Invalid` for a malformed date.
+pub async fn link_part<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    need_id: i32,
+    part_id: i32,
+    received_on: Option<String>,
+) -> DomainResult<NeedPurchase> {
+    super::validate_optional_date("received_on", received_on.as_deref())?;
+    let need = require(db, vehicle_id, need_id).await?;
+    let found = super::part::get(db, vehicle_id, part_id).await?;
+    if found.status == "returned" {
+        return Err(DomainError::BadRequest(format!(
+            "Part {part_id} was returned and cannot be linked"
+        )));
+    }
+    if let Some(other) = job_need::Entity::find()
+        .filter(job_need::Column::PartId.eq(part_id))
+        .filter(job_need::Column::Id.ne(need_id))
+        .one(db)
+        .await?
+    {
+        return Err(DomainError::BadRequest(format!(
+            "Part {part_id} is already linked to need {}",
+            other.id
+        )));
+    }
+    if let Some(current) = need.part_id.filter(|current| *current != part_id) {
+        return Err(DomainError::BadRequest(format!(
+            "Need {need_id} already has part {current} linked; unlink it first"
+        )));
+    }
+    let supplier = need
+        .supplied_by
+        .is_none()
+        .then_some(found.supplied_by.clone());
+    let txn = db.begin().await?;
+    let found = match received_on {
+        Some(date) => {
+            let mut active: part::ActiveModel = found.into();
+            active.received_on = Set(Some(date));
+            active.updated_at = Set(super::now_stamp());
+            active.update(&txn).await?
+        }
+        None => found,
+    };
+    let need = set_need_part(&txn, need, Some(part_id), supplier.as_deref()).await?;
+    txn.commit().await?;
+    Ok(purchase(need, found))
+}
+
+/// Detaches a need's part without changing the part.
+///
+/// # Errors
+/// `NotFound` for a need that is not the vehicle's; `BadRequest` when it has
+/// no part.
+pub async fn unlink_part(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    need_id: i32,
+) -> DomainResult<job_need::Model> {
+    let need = require(db, vehicle_id, need_id).await?;
+    linked_part(db, &need).await?;
+    set_need_part(db, need, None, None).await
+}
+
+async fn set_received(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    need_id: i32,
+    on: Option<String>,
+) -> DomainResult<NeedPurchase> {
+    let need = require(db, vehicle_id, need_id).await?;
+    let found = linked_part(db, &need).await?;
+    let mut active: part::ActiveModel = found.into();
+    active.received_on = Set(on);
+    active.updated_at = Set(super::now_stamp());
+    let found = active.update(db).await?;
+    Ok(purchase(need, found))
+}
+
+/// Records the day a need's part arrived, today when `on` is `None`.
+///
+/// # Errors
+/// `NotFound` for a need that is not the vehicle's; `BadRequest` when it has
+/// no part; `Invalid` for a malformed date.
+pub async fn mark_received(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    need_id: i32,
+    on: Option<String>,
+) -> DomainResult<NeedPurchase> {
+    super::validate_optional_date("received_on", on.as_deref())?;
+    let on = on.unwrap_or_else(|| super::today().format("%Y-%m-%d").to_string());
+    set_received(db, vehicle_id, need_id, Some(on)).await
+}
+
+/// Clears the arrival date of a need's part, so the need reads `ordered`
+/// again.
+///
+/// # Errors
+/// `NotFound` for a need that is not the vehicle's; `BadRequest` when it has
+/// no part.
+pub async fn clear_received(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    need_id: i32,
+) -> DomainResult<NeedPurchase> {
+    set_received(db, vehicle_id, need_id, None).await
+}
+
+/// Sends back the part of an `ordered` or `received` need. In one
+/// transaction the part becomes `returned` with the reason and today's date,
+/// the need loses the part (and, when `option_was_wrong`, its chosen option,
+/// which is rejected for the same reason), and a to-do to take the part back
+/// goes on the job's appointment, or on the vehicle when the job has none.
+///
+/// # Errors
+/// `NotFound` for a need that is not the vehicle's; `BadRequest` when the
+/// need is not `ordered` or `received`; `Invalid` for a blank reason.
+pub async fn return_part<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    need_id: i32,
+    input: ReturnInput,
+) -> DomainResult<ReturnOutcome> {
+    validate_name("reason", &input.reason)?;
+    let need = require(db, vehicle_id, need_id).await?;
+    let found = linked_part(db, &need).await?;
+    let current = stage(&need, Some(&found));
+    if !matches!(current, Stage::Ordered | Stage::Received) {
+        return Err(DomainError::BadRequest(format!(
+            "Need {need_id} is {}; only an ordered or received part can be returned",
+            current.label()
+        )));
+    }
+    let appointment_id = work_item::Entity::find_by_id(need.work_item_id)
+        .one(db)
+        .await?
+        .and_then(|job| job.appointment_id);
+    let title = match found
+        .seller
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(seller) => format!("Return {} to {seller}", found.name),
+        None => format!("Return {}", found.name),
+    };
+    let chosen_option_id = need.chosen_option_id;
+
+    let txn = db.begin().await?;
+    let mut active: part::ActiveModel = found.into();
+    active.status = Set("returned".to_string());
+    active.returned_on = Set(Some(super::today().format("%Y-%m-%d").to_string()));
+    active.return_reason = Set(Some(input.reason.clone()));
+    active.returned_from_need_id = Set(Some(need_id));
+    active.updated_at = Set(super::now_stamp());
+    let returned_part = active.update(&txn).await?;
+    set_need_part(&txn, need, None, None).await?;
+    if let Some(option_id) = chosen_option_id.filter(|_| input.option_was_wrong) {
+        // The rejection goes through the option update so the need's whole
+        // choice clears the same way it does for any rejected option.
+        update_option(
+            &txn,
+            vehicle_id,
+            option_id,
+            UpdateOption {
+                rejected_reason: Some(Some(input.reason)),
+                ..Default::default()
+            },
+        )
+        .await?;
+    }
+    let todo = super::todo::insert(&txn, vehicle_id, appointment_id, title).await?;
+    let need = require(&txn, vehicle_id, need_id).await?;
+    txn.commit().await?;
+    let stage = stage(&need, None);
+    Ok(ReturnOutcome {
+        need,
+        returned_part,
+        todo,
+        stage,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
         inputs::work_item::NewWorkItem,
-        test_support::{VehicleFixture, test_db},
+        test_support::{VehicleFixture, row_count, test_db},
     };
 
     async fn seed_job(db: &DatabaseConnection) -> (i32, i32) {
@@ -839,6 +1165,493 @@ mod tests {
             need_option::Entity::find().count(&db).await.unwrap(),
             1,
             "the option must survive"
+        );
+    }
+
+    // A need with one option that has been chosen, plus the option.
+    async fn chosen_need(
+        db: &DatabaseConnection,
+        vehicle_id: i32,
+        job_id: i32,
+        name: &str,
+        seller: Option<&str>,
+        price: Option<i32>,
+    ) -> (job_need::Model, need_option::Model) {
+        let n = add(db, vehicle_id, job_id, need(name)).await.unwrap();
+        let o = add_option(
+            db,
+            vehicle_id,
+            n.id,
+            NewOption {
+                manufacturer: Some("Zimmermann".into()),
+                part_number: Some("100.3394.20".into()),
+                seller: seller.map(String::from),
+                price_cents: price,
+                url: Some("https://example.com/rotors".into()),
+                ..option(name)
+            },
+        )
+        .await
+        .unwrap();
+        decide(db, vehicle_id, n.id, Some(o.id), Some("fits".into()))
+            .await
+            .unwrap();
+        (require(db, vehicle_id, n.id).await.unwrap(), o)
+    }
+
+    async fn ordered_need(
+        db: &DatabaseConnection,
+        vehicle_id: i32,
+        job_id: i32,
+    ) -> (job_need::Model, need_option::Model) {
+        let (n, o) = chosen_need(
+            db,
+            vehicle_id,
+            job_id,
+            "Rear rotors",
+            Some("FCP Euro"),
+            Some(18_000),
+        )
+        .await;
+        mark_ordered(db, vehicle_id, n.id, OrderDetails::default())
+            .await
+            .unwrap();
+        (require(db, vehicle_id, n.id).await.unwrap(), o)
+    }
+
+    async fn new_part(db: &DatabaseConnection, vehicle_id: i32, name: &str) -> part::Model {
+        crate::services::part::create(
+            db,
+            vehicle_id,
+            crate::inputs::part::NewPart {
+                name: name.into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn mark_ordered_copies_the_option_and_lets_details_win() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let (n, o) = chosen_need(
+            &db,
+            vehicle_id,
+            job_id,
+            "Rear rotors",
+            Some("FCP Euro"),
+            Some(18_000),
+        )
+        .await;
+
+        let bought = mark_ordered(&db, vehicle_id, n.id, OrderDetails::default())
+            .await
+            .unwrap();
+        let today = crate::services::today().format("%Y-%m-%d").to_string();
+        assert_eq!(bought.part.name, o.description);
+        assert_eq!(bought.part.manufacturer.as_deref(), Some("Zimmermann"));
+        assert_eq!(bought.part.part_number.as_deref(), Some("100.3394.20"));
+        assert_eq!(bought.part.seller.as_deref(), Some("FCP Euro"));
+        assert_eq!(bought.part.cost_cents, Some(18_000));
+        assert_eq!(
+            bought.part.retailer_url.as_deref(),
+            Some("https://example.com/rotors")
+        );
+        assert_eq!(bought.part.purchase_date.as_deref(), Some(today.as_str()));
+        assert_eq!(bought.part.supplied_by, "self");
+        assert_eq!(bought.part.status, "purchased");
+        assert_eq!(bought.need.part_id, Some(bought.part.id));
+        assert_eq!(bought.need.supplied_by.as_deref(), Some("self"));
+        assert_eq!(bought.stage, Stage::Ordered);
+
+        let (n2, _) = chosen_need(
+            &db,
+            vehicle_id,
+            job_id,
+            "Pads",
+            Some("FCP Euro"),
+            Some(9_000),
+        )
+        .await;
+        let bought = mark_ordered(
+            &db,
+            vehicle_id,
+            n2.id,
+            OrderDetails {
+                seller: Some("Amazon".into()),
+                purchase_date: Some("2026-11-02".into()),
+                cost_cents: Some(8_500),
+                order_ref: Some("112-445".into()),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(bought.part.seller.as_deref(), Some("Amazon"));
+        assert_eq!(bought.part.purchase_date.as_deref(), Some("2026-11-02"));
+        assert_eq!(bought.part.cost_cents, Some(8_500));
+        assert_eq!(bought.part.order_ref.as_deref(), Some("112-445"));
+    }
+
+    #[tokio::test]
+    async fn mark_ordered_without_a_choice_is_refused() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let n = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
+        let err = mark_ordered(&db, vehicle_id, n.id, OrderDetails::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
+        assert_eq!(row_count::<part::Entity>(&db).await, 0);
+
+        let (n, _) = chosen_need(&db, vehicle_id, job_id, "Rotors", None, None).await;
+        mark_ordered(&db, vehicle_id, n.id, OrderDetails::default())
+            .await
+            .unwrap();
+        let err = mark_ordered(&db, vehicle_id, n.id, OrderDetails::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
+        assert_eq!(row_count::<part::Entity>(&db).await, 1);
+    }
+
+    #[tokio::test]
+    async fn mark_ordered_on_a_shop_need_is_refused() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let (n, _) = chosen_need(&db, vehicle_id, job_id, "Pads", None, None).await;
+        update(
+            &db,
+            vehicle_id,
+            n.id,
+            UpdateNeed {
+                supplied_by: Some(Some("shop".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let err = mark_ordered(&db, vehicle_id, n.id, OrderDetails::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
+        assert_eq!(row_count::<part::Entity>(&db).await, 0);
+    }
+
+    #[tokio::test]
+    async fn link_part_refuses_a_part_linked_elsewhere() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let a = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
+        let b = add(&db, vehicle_id, job_id, need("Rotors")).await.unwrap();
+        let p = new_part(&db, vehicle_id, "Pads").await;
+        link_part(&db, vehicle_id, a.id, p.id, None).await.unwrap();
+        let err = link_part(&db, vehicle_id, b.id, p.id, None)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!("Part {} is already linked to need {}", p.id, a.id)
+        );
+        assert_eq!(require(&db, vehicle_id, b.id).await.unwrap().part_id, None);
+    }
+
+    #[tokio::test]
+    async fn link_part_refuses_a_returned_part() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let n = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
+        let p = new_part(&db, vehicle_id, "Pads").await;
+        crate::services::part::update(
+            &db,
+            vehicle_id,
+            p.id,
+            crate::inputs::part::UpdatePart {
+                status: Some("returned".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let err = link_part(&db, vehicle_id, n.id, p.id, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn link_part_sets_received_when_a_date_is_given() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let n = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
+        let p = new_part(&db, vehicle_id, "Pads").await;
+        let linked = link_part(&db, vehicle_id, n.id, p.id, Some("2026-11-05".into()))
+            .await
+            .unwrap();
+        assert_eq!(linked.part.received_on.as_deref(), Some("2026-11-05"));
+        assert_eq!(linked.stage, Stage::Received);
+        assert_eq!(linked.need.supplied_by.as_deref(), Some("self"));
+
+        let m = add(&db, vehicle_id, job_id, need("Rotors")).await.unwrap();
+        let q = new_part(&db, vehicle_id, "Rotors").await;
+        let linked = link_part(&db, vehicle_id, m.id, q.id, None).await.unwrap();
+        assert_eq!(linked.part.received_on, None);
+        assert_eq!(linked.stage, Stage::Ordered);
+
+        let bad = add(&db, vehicle_id, job_id, need("Fluid")).await.unwrap();
+        let r = new_part(&db, vehicle_id, "Fluid").await;
+        let err = link_part(&db, vehicle_id, bad.id, r.id, Some("11/5".into()))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, DomainError::Invalid { .. }), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn received_then_cleared_round_trips() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let (n, _) = ordered_need(&db, vehicle_id, job_id).await;
+        let got = mark_received(&db, vehicle_id, n.id, Some("2026-11-07".into()))
+            .await
+            .unwrap();
+        assert_eq!(got.part.received_on.as_deref(), Some("2026-11-07"));
+        assert_eq!(got.stage, Stage::Received);
+        let cleared = clear_received(&db, vehicle_id, n.id).await.unwrap();
+        assert_eq!(cleared.part.received_on, None);
+        assert_eq!(cleared.stage, Stage::Ordered);
+        let today = crate::services::today().format("%Y-%m-%d").to_string();
+        let got = mark_received(&db, vehicle_id, n.id, None).await.unwrap();
+        assert_eq!(got.part.received_on.as_deref(), Some(today.as_str()));
+
+        let bare = add(&db, vehicle_id, job_id, need("Fluid")).await.unwrap();
+        let err = mark_received(&db, vehicle_id, bare.id, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn unlink_part_keeps_the_part_and_frees_the_need() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let (n, _) = ordered_need(&db, vehicle_id, job_id).await;
+        let freed = unlink_part(&db, vehicle_id, n.id).await.unwrap();
+        assert_eq!(freed.part_id, None);
+        assert_eq!(row_count::<part::Entity>(&db).await, 1);
+        let err = unlink_part(&db, vehicle_id, n.id).await.unwrap_err();
+        assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn return_part_marks_returned_unlinks_and_adds_a_todo() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let (n, o) = ordered_need(&db, vehicle_id, job_id).await;
+        let out = return_part(
+            &db,
+            vehicle_id,
+            n.id,
+            ReturnInput {
+                reason: "wrong diameter".into(),
+                option_was_wrong: false,
+            },
+        )
+        .await
+        .unwrap();
+        let today = crate::services::today().format("%Y-%m-%d").to_string();
+        assert_eq!(out.returned_part.status, "returned");
+        assert_eq!(
+            out.returned_part.return_reason.as_deref(),
+            Some("wrong diameter")
+        );
+        assert_eq!(
+            out.returned_part.returned_on.as_deref(),
+            Some(today.as_str())
+        );
+        assert_eq!(out.returned_part.returned_from_need_id, Some(n.id));
+        assert_eq!(out.need.part_id, None);
+        assert_eq!(out.need.chosen_option_id, Some(o.id));
+        assert_eq!(out.stage, Stage::ToOrder);
+        assert_eq!(out.todo.title, "Return Rear rotors to FCP Euro");
+        assert_eq!(out.todo.vehicle_id, vehicle_id);
+        assert_eq!(out.todo.appointment_id, None);
+        let stored = require(&db, vehicle_id, n.id).await.unwrap();
+        assert_eq!(stored.part_id, None);
+    }
+
+    #[tokio::test]
+    async fn return_puts_the_todo_on_the_jobs_appointment_and_names_no_missing_seller() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let appointment = crate::entities::appointment::ActiveModel {
+            vehicle_id: Set(vehicle_id),
+            purpose: Set("Brakes".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        work_item::ActiveModel {
+            id: Unchanged(job_id),
+            appointment_id: Set(Some(appointment.id)),
+            ..Default::default()
+        }
+        .update(&db)
+        .await
+        .unwrap();
+        let (n, _) = chosen_need(&db, vehicle_id, job_id, "Pads", None, None).await;
+        mark_ordered(&db, vehicle_id, n.id, OrderDetails::default())
+            .await
+            .unwrap();
+        let out = return_part(
+            &db,
+            vehicle_id,
+            n.id,
+            ReturnInput {
+                reason: "defective".into(),
+                option_was_wrong: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.todo.title, "Return Pads");
+        assert_eq!(out.todo.appointment_id, Some(appointment.id));
+    }
+
+    #[tokio::test]
+    async fn return_with_wrong_option_rejects_it_and_goes_undecided() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let (n, o) = ordered_need(&db, vehicle_id, job_id).await;
+        let out = return_part(
+            &db,
+            vehicle_id,
+            n.id,
+            ReturnInput {
+                reason: "does not fit the GTI".into(),
+                option_was_wrong: true,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.stage, Stage::Undecided);
+        assert_choice_cleared(&db, vehicle_id, n.id).await;
+        let rejected = need_option::Entity::find_by_id(o.id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            rejected.rejected_reason.as_deref(),
+            Some("does not fit the GTI")
+        );
+    }
+
+    #[tokio::test]
+    async fn return_before_ordering_is_refused() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let (n, _) = chosen_need(&db, vehicle_id, job_id, "Pads", None, None).await;
+        let input = || ReturnInput {
+            reason: "x".into(),
+            option_was_wrong: false,
+        };
+        let err = return_part(&db, vehicle_id, n.id, input())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
+        let (m, _) = ordered_need(&db, vehicle_id, job_id).await;
+        let part_id = m.part_id.unwrap();
+        crate::services::part::update(
+            &db,
+            vehicle_id,
+            part_id,
+            crate::inputs::part::UpdatePart {
+                status: Some("installed".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let err = return_part(&db, vehicle_id, m.id, input())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
+        assert_eq!(row_count::<todo::Entity>(&db).await, 0);
+    }
+
+    #[tokio::test]
+    async fn deleting_a_linked_part_leaves_the_need_to_order() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let (n, _) = ordered_need(&db, vehicle_id, job_id).await;
+        crate::services::part::delete(&db, vehicle_id, n.part_id.unwrap())
+            .await
+            .unwrap();
+        let after = require(&db, vehicle_id, n.id).await.unwrap();
+        assert_eq!(after.part_id, None);
+        assert_eq!(stage(&after, None), Stage::ToOrder);
+    }
+
+    #[tokio::test]
+    async fn wrong_vehicle_ids_read_as_missing_when_buying_and_returning() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let other = VehicleFixture::new().insert_id(&db).await;
+        let (n, _) = ordered_need(&db, vehicle_id, job_id).await;
+        let spare = add(&db, vehicle_id, job_id, need("Fluid")).await.unwrap();
+        let mine = new_part(&db, vehicle_id, "Fluid").await;
+        let theirs = new_part(&db, other, "Fluid").await;
+        let missing_need = format!("Need {} not found", n.id);
+        let same = |err: DomainError| assert_eq!(err.to_string(), missing_need);
+        same(
+            mark_ordered(&db, other, n.id, OrderDetails::default())
+                .await
+                .unwrap_err(),
+        );
+        same(
+            link_part(&db, other, n.id, mine.id, None)
+                .await
+                .unwrap_err(),
+        );
+        same(unlink_part(&db, other, n.id).await.unwrap_err());
+        same(mark_received(&db, other, n.id, None).await.unwrap_err());
+        same(clear_received(&db, other, n.id).await.unwrap_err());
+        same(
+            return_part(
+                &db,
+                other,
+                n.id,
+                ReturnInput {
+                    reason: "x".into(),
+                    option_was_wrong: false,
+                },
+            )
+            .await
+            .unwrap_err(),
+        );
+        assert_eq!(
+            link_part(&db, other, 9999, mine.id, None)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "Need 9999 not found"
+        );
+
+        let nonexistent = link_part(&db, vehicle_id, spare.id, 9999, None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert_eq!(nonexistent, "Part 9999 not found");
+        let wrong = link_part(&db, vehicle_id, spare.id, theirs.id, None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert_eq!(wrong, format!("Part {} not found", theirs.id));
+        assert_eq!(
+            require(&db, vehicle_id, spare.id).await.unwrap().part_id,
+            None
         );
     }
 }

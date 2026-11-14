@@ -30,8 +30,8 @@ impl GloveboxMcp {
         name = "list_parts",
         description = "The vehicle's parts, newest first: what was bought, what is installed (and \
                        by which service), and what has been replaced. Filter with `status` \
-                       (`purchased`, `installed`, `replaced`). Use this to find the `part_id` for \
-                       `correct_part` or `delete_part`."
+                       (`purchased`, `installed`, `replaced`, `returned`). Use this to find the \
+                       `part_id` for `correct_part` or `delete_part`."
     )]
     async fn list_parts(
         &self,

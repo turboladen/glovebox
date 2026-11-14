@@ -21,6 +21,8 @@ pub struct NewPart {
     pub warranty_expires_miles: Option<i32>,
     /// `self` (default) or `shop`.
     pub supplied_by: Option<String>,
+    /// The seller's order or confirmation number.
+    pub order_ref: Option<String>,
 }
 
 #[derive(Default)]
@@ -47,6 +49,9 @@ pub struct UpdatePart {
     pub warranty_expires_miles: Option<Option<i32>>,
     /// Plain option: the column is non-nullable, so there is no "clear" case.
     pub supplied_by: Option<String>,
+    pub order_ref: Option<Option<String>>,
+    /// The date the part arrived, `YYYY-MM-DD`.
+    pub received_on: Option<Option<String>>,
 }
 
 /// Filter for listing parts within a vehicle.

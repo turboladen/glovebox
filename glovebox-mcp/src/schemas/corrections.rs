@@ -281,7 +281,7 @@ pub struct ListServicesInput {
 pub struct ListPartsInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
-    /// Only parts with this status: `purchased`, `installed` or `replaced`.
+    /// Only parts with this status: `purchased`, `installed`, `replaced` or `returned`.
     pub status: Option<String>,
 }
 
@@ -452,7 +452,7 @@ pub struct CorrectPartInput {
     pub part_id: i32,
     /// New part name.
     pub name: Option<String>,
-    /// `purchased`, `installed` or `replaced`.
+    /// `purchased`, `installed`, `replaced` or `returned`.
     pub status: Option<String>,
     /// `self` or `shop`.
     pub supplied_by: Option<String>,

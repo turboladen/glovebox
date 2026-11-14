@@ -81,6 +81,7 @@ pub async fn create(
         warranty_expires_on: Set(input.warranty_expires_on),
         warranty_expires_miles: Set(input.warranty_expires_miles),
         supplied_by: Set(supplied_by),
+        order_ref: Set(input.order_ref),
         ..Default::default()
     };
     Ok(model.insert(db).await?)
@@ -105,6 +106,7 @@ pub async fn update(
         ("purchase_date", &input.purchase_date),
         ("installed_date", &input.installed_date),
         ("replaced_date", &input.replaced_date),
+        ("received_on", &input.received_on),
         ("warranty_expires_on", &input.warranty_expires_on),
     ] {
         super::validate_optional_date(field, value.as_ref().and_then(|v| v.as_deref()))?;
@@ -175,6 +177,12 @@ pub async fn update(
     if let Some(v) = input.warranty_expires_miles {
         active.warranty_expires_miles = Set(v);
     }
+    if let Some(v) = input.order_ref {
+        active.order_ref = Set(v);
+    }
+    if let Some(v) = input.received_on {
+        active.received_on = Set(v);
+    }
 
     active.updated_at = Set(super::now_stamp());
     Ok(active.update(db).await?)
@@ -183,7 +191,7 @@ pub async fn update(
 /// Marks a vehicle's part as installed by `record` on the record's date.
 /// `odometer` is written to `installed_odometer` as given, so `NotSet`
 /// keeps the reading the part already has. A part of another vehicle reads
-/// as nonexistent.
+/// as nonexistent, and a `returned` part is refused with `BadRequest`.
 pub(crate) async fn install(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -191,7 +199,13 @@ pub(crate) async fn install(
     record: &service_record::Model,
     odometer: ActiveValue<Option<i32>>,
 ) -> DomainResult<()> {
-    let mut active: part::ActiveModel = get(db, vehicle_id, part_id).await?.into();
+    let existing = get(db, vehicle_id, part_id).await?;
+    if existing.status == "returned" {
+        return Err(DomainError::BadRequest(format!(
+            "Part {part_id} was returned and cannot be installed"
+        )));
+    }
+    let mut active: part::ActiveModel = existing.into();
     active.status = Set("installed".to_string());
     active.installed_service_id = Set(Some(record.id));
     active.installed_date = Set(Some(record.service_date.clone()));
@@ -305,6 +319,7 @@ mod tests {
             warranty_expires_on: None,
             warranty_expires_miles: None,
             supplied_by: None,
+            order_ref: None,
         }
     }
 
@@ -586,5 +601,75 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "supplied_by"));
+    }
+
+    #[tokio::test]
+    async fn a_returned_part_cannot_be_installed() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let sid = seed_service(&db, vid).await;
+        let record = service_record::Entity::find_by_id(sid)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        let p = create(
+            &db,
+            vid,
+            NewPart {
+                status: Some("returned".into()),
+                ..minimal_part("Rotors", None)
+            },
+        )
+        .await
+        .unwrap();
+        let err = install(&db, vid, p.id, &record, NotSet).await.unwrap_err();
+        assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
+        let after = get(&db, vid, p.id).await.unwrap();
+        assert_eq!(after.status, "returned");
+        assert_eq!(after.installed_service_id, None);
+    }
+
+    #[tokio::test]
+    async fn order_ref_and_received_on_round_trip() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let p = create(
+            &db,
+            vid,
+            NewPart {
+                order_ref: Some("A-1".into()),
+                ..minimal_part("Rotors", None)
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(p.order_ref.as_deref(), Some("A-1"));
+        let updated = update(
+            &db,
+            vid,
+            p.id,
+            UpdatePart {
+                received_on: Some(Some("2026-11-05".into())),
+                order_ref: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.received_on.as_deref(), Some("2026-11-05"));
+        assert_eq!(updated.order_ref, None);
+        let err = update(
+            &db,
+            vid,
+            p.id,
+            UpdatePart {
+                received_on: Some(Some("yesterday".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Invalid { .. }), "{err:?}");
     }
 }
