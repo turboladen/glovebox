@@ -49,12 +49,16 @@ fn safe_back(back: Option<&str>) -> String {
 
 /// The page a path names, when it is one the server renders.
 enum Page {
+    Home,
     Appointment(i32, i32),
     Job(i32, i32),
 }
 
 fn page_of(back: &str, vehicle: i32) -> Option<Page> {
     let path = back.split(['?', '#']).next()?;
+    if path == "/" {
+        return Some(Page::Home);
+    }
     let parts: Vec<&str> = path.split('/').collect();
     let [_, "vehicles", vid, kind, id] = parts.as_slice() else {
         return None;
@@ -150,6 +154,7 @@ impl Post<'_> {
         };
         let refused = refusal(&error, self.form);
         let failure = Failure {
+            vid: self.vid,
             target: self.target,
             form: self.form,
             message: refused.message.clone(),
@@ -161,6 +166,7 @@ impl Post<'_> {
             ..Default::default()
         };
         match page_of(&self.back, self.vid) {
+            Some(Page::Home) => pages::home_response(self.state, view, refused.status).await,
             Some(Page::Appointment(vid, id)) => {
                 pages::appointment_response(self.state, vid, id, view, refused.status).await
             }

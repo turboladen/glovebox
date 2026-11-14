@@ -28,7 +28,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let environment = glovebox_shared::env::resolve(|k| std::env::var(k).ok())?;
-    let db = glovebox_shared::db::connect(&environment.db_path).await?;
+    let db =
+        glovebox_shared::db::connect_as(&environment.db_path, glovebox_shared::db::Program::Web)
+            .await?;
     glovebox_shared::backup::spawn_daily(db.clone(), PathBuf::from(&environment.db_path));
 
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, environment.web_port))
@@ -42,6 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let state = AppState {
         db,
+        db_file: environment.overridden_file(),
         env_name: environment.name,
         today: glovebox_shared::services::today,
     };

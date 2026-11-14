@@ -279,6 +279,8 @@
   .need-row .cell > * { display: block; }
   .need-row .cell > .pill, .need-stage { margin-top: 0.35rem; }
   .need-name { font-weight: 700; }
+  .qty { display: block; font-size: var(--s-small); color: var(--ink-2); }
+  .opt-link { font-size: var(--s-small); }
 
   .pn { font-size: var(--s-part); font-weight: 700; line-height: 1.3; overflow-wrap: anywhere; }
   .pn .mfr { font-size: var(--s-body); font-weight: 400; margin-inline-end: 0.45rem; }
@@ -375,7 +377,7 @@
 <header class="chrome">
   <div class="page">
     <a class="wordmark" href="/">Glovebox</a>
-    {% if let Some(name) = chrome.environment %}<span class="env" title="This is the {{ name }} database">{{ name }}</span>{% endif %}
+    <span class="env" title="{{ chrome.environment_title }}">{{ chrome.environment }}</span>
     <nav aria-label="Site"><a href="/">Garage</a></nav>
     <time class="today" datetime="{{ chrome.today }}">{{ chrome.today }}</time>
   </div>

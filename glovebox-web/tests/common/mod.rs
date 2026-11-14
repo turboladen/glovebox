@@ -29,6 +29,18 @@ pub fn app(db: DatabaseConnection, env_name: &str) -> Router {
     router(AppState {
         db,
         env_name: env_name.to_owned(),
+        db_file: None,
+        today,
+    })
+}
+
+/// The application over `db`, serving `env_name` from a database file that
+/// `GLOVEBOX_DB_PATH` named.
+pub fn app_with_file(db: DatabaseConnection, env_name: &str, file: &str) -> Router {
+    router(AppState {
+        db,
+        env_name: env_name.to_owned(),
+        db_file: Some(file.to_owned()),
         today,
     })
 }

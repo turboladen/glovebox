@@ -9,7 +9,7 @@ use glovebox_shared::{
     money::format_cents,
     services::{
         checklist::{Checklist, JobView, NeedView, StepRow},
-        need::Stage,
+        need::{self, Stage},
     },
 };
 
@@ -17,6 +17,8 @@ use glovebox_shared::{
 /// message in the row it concerns and keep the form as it was.
 #[derive(Clone, Debug)]
 pub struct Failure {
+    /// The vehicle the write was for.
+    pub vid: i32,
     pub target: Target,
     /// The form that was submitted, such as `order` or `return`.
     pub form: &'static str,
@@ -84,6 +86,8 @@ pub struct OptionCard {
     pub description: Option<String>,
     pub seller: Option<String>,
     pub price: Option<String>,
+    /// The option's listing, when it is an `http` or `https` address.
+    pub link: Option<String>,
     pub fit_class: String,
     pub fit_text: &'static str,
     pub fit_note: Option<String>,
@@ -113,6 +117,11 @@ impl OptionCard {
             description: has_number.then(|| option.description.clone()),
             seller: option.seller.clone(),
             price: option.price_cents.map(format_cents),
+            link: option
+                .url
+                .as_deref()
+                .filter(|u| is_web_address(u))
+                .map(str::to_owned),
             fit_class: option.fitment.clone(),
             fit_text,
             fit_note: option.fitment_note.clone(),
@@ -127,12 +136,26 @@ impl OptionCard {
     }
 }
 
+// Only a web address becomes a link, so a stored `javascript:` or `data:`
+// value is never something the owner can click.
+fn is_web_address(url: &str) -> bool {
+    let lower = url.trim_start().to_ascii_lowercase();
+    lower.starts_with("https://") || lower.starts_with("http://")
+}
+
 /// What the "mark ordered" form holds.
 #[derive(Clone)]
 pub struct OrderValues {
     pub seller: String,
     pub date: String,
+    /// The price of the whole quantity: the option's price times the need's
+    /// quantity, unless the owner typed one.
     pub cost: String,
+    /// The price field's label, which names the quantity when it is above 1.
+    pub cost_label: String,
+    /// The count and the price of one, such as `2 × $74.99`, when the need
+    /// is for more than one and the option has a price.
+    pub unit_note: Option<String>,
     pub order_ref: String,
 }
 
@@ -145,6 +168,8 @@ pub struct NeedCard {
     pub vid: i32,
     pub id: i32,
     pub name: String,
+    /// How many are needed, such as `2 needed`, when that is more than one.
+    pub quantity: Option<String>,
     /// The page the forms return to.
     pub back: String,
     pub stage_class: &'static str,
@@ -306,17 +331,6 @@ fn kind_text(value: Option<&str>, unset: &str) -> (String, bool) {
     }
 }
 
-fn options_note(options: &[OptionCard]) -> String {
-    let n = options.len();
-    let noun = if n == 1 { "option" } else { "options" };
-    let rejected = options.iter().filter(|o| o.is_rejected()).count();
-    if rejected > 0 {
-        format!("{n} {noun} researched, {rejected} rejected")
-    } else {
-        format!("{n} {noun} researched")
-    }
-}
-
 /// What a need card is built from besides the need itself.
 #[derive(Clone, Copy)]
 pub struct CardContext<'a> {
@@ -352,6 +366,7 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
     let (approach_text, approach_set) = kind_text(need.approach.as_deref(), "Approach not decided");
 
     let stage = view.stage;
+    let several = need.quantity > 1;
     let order = OrderValues {
         seller: typed("seller")
             .map(str::to_owned)
@@ -360,8 +375,23 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
         date: typed("purchase_date").map_or_else(|| ctx.today.to_owned(), str::to_owned),
         cost: typed("cost")
             .map(str::to_owned)
-            .or_else(|| chosen.as_ref().and_then(|c| c.price.clone()))
+            .or_else(|| {
+                view.chosen
+                    .as_ref()
+                    .and_then(|c| need::order_cost_cents(need, c))
+                    .map(format_cents)
+            })
             .unwrap_or_default(),
+        cost_label: if several {
+            format!("Price for {}", need.quantity)
+        } else {
+            "Price".to_owned()
+        },
+        unit_note: chosen
+            .as_ref()
+            .and_then(|c| c.price.as_ref())
+            .filter(|_| several)
+            .map(|unit| format!("{} \u{d7} {unit}", need.quantity)),
         order_ref: typed("order_ref").unwrap_or_default().to_owned(),
     };
 
@@ -369,12 +399,13 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
         vid: ctx.vid,
         id: need.id,
         name: need.name.clone(),
+        quantity: several.then(|| format!("{} needed", need.quantity)),
         back: ctx.back.to_owned(),
         stage_class: stage_class(stage),
         stage_text: stage_text(stage),
         open: failure.is_some() || ctx.open == Some(need.id),
         none_checked: !options.iter().any(|o| o.checked),
-        options_note: options_note(&options),
+        options_note: view.options_note(),
         can_decide: view.part.is_none() && !options.is_empty(),
         chosen,
         options,
@@ -421,11 +452,7 @@ fn stage_class(stage: Stage) -> &'static str {
 /// Builds the card of a job from its view.
 pub fn job_card(job: &JobView, ctx: &CardContext<'_>) -> JobCard {
     let needs: Vec<NeedCard> = job.needs.iter().map(|n| need_card(n, ctx)).collect();
-    let open = if job.job.status == "planned" {
-        job.needs.iter().filter(|n| n.stage.is_open()).count()
-    } else {
-        0
-    };
+    let open = job.open_needs();
     JobCard {
         vid: ctx.vid,
         id: job.job.id,

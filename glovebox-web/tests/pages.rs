@@ -1,7 +1,7 @@
 mod common;
 
 use axum::{body::Body, http::StatusCode};
-use common::{app, db, get, page, request, send};
+use common::{app, app_with_file, db, get, page, request, send};
 use glovebox_shared::{
     inputs::{appointment::NewAppointment, need::NewNeed, todo::NewTodo, work_item::NewWorkItem},
     services::{appointment, need, todo, work_item},
@@ -118,12 +118,18 @@ async fn home_lists_open_appointments_and_unscheduled_jobs() {
 }
 
 #[tokio::test]
-async fn home_shows_env_name_only_when_not_live() {
+async fn every_page_names_its_environment_and_an_overriding_file() {
     let (_, test_body) = page(app(db().await, "test"), get("/")).await;
     let (_, live_body) = page(app(db().await, "live"), get("/")).await;
+    let (_, file_body) = page(app_with_file(db().await, "test", "glovebox.db"), get("/")).await;
 
-    assert!(test_body.contains(r#"class="env""#), "{test_body}");
-    assert!(!live_body.contains(r#"class="env""#), "{live_body}");
+    assert!(test_body.contains(r#"<span class="env""#), "{test_body}");
+    assert!(test_body.contains(">test</span>"), "{test_body}");
+    assert!(live_body.contains(">live</span>"), "{live_body}");
+    assert!(
+        file_body.contains(">test \u{b7} glovebox.db</span>"),
+        "{file_body}"
+    );
 }
 
 #[tokio::test]

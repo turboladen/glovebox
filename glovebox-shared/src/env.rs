@@ -23,6 +23,20 @@ impl Environment {
     pub fn is_live(&self) -> bool {
         self.name == LIVE
     }
+
+    /// The file name of the database when `GLOVEBOX_DB_PATH` named a path
+    /// other than the environment's own, so a page can show which file it
+    /// serves.
+    #[must_use]
+    pub fn overridden_file(&self) -> Option<String> {
+        if self.db_path == default_path(&self.name) {
+            return None;
+        }
+        Some(Path::new(&self.db_path).file_name().map_or_else(
+            || self.db_path.clone(),
+            |f| f.to_string_lossy().into_owned(),
+        ))
+    }
 }
 
 /// Reads `GLOVEBOX_ENV`, `GLOVEBOX_DB_PATH` and `GLOVEBOX_WEB_PORT` through
@@ -46,11 +60,7 @@ pub fn resolve(lookup: impl Fn(&str) -> Option<String>) -> DomainResult<Environm
             })?
             .to_owned(),
     };
-    let (default_path, default_port) = if name == LIVE {
-        ("data/glovebox.db".to_owned(), LIVE_PORT)
-    } else {
-        (format!("data/glovebox-{name}.db"), OTHER_PORT)
-    };
+    let default_port = if name == LIVE { LIVE_PORT } else { OTHER_PORT };
     let web_port = match lookup("GLOVEBOX_WEB_PORT") {
         None => default_port,
         Some(raw) => raw.trim().parse().map_err(|_| {
@@ -58,10 +68,19 @@ pub fn resolve(lookup: impl Fn(&str) -> Option<String>) -> DomainResult<Environm
         })?,
     };
     Ok(Environment {
+        db_path: lookup("GLOVEBOX_DB_PATH").unwrap_or_else(|| default_path(&name)),
         name,
-        db_path: lookup("GLOVEBOX_DB_PATH").unwrap_or(default_path),
         web_port,
     })
+}
+
+// The database file an environment uses when `GLOVEBOX_DB_PATH` is unset.
+fn default_path(name: &str) -> String {
+    if name == LIVE {
+        "data/glovebox.db".to_owned()
+    } else {
+        format!("data/glovebox-{name}.db")
+    }
 }
 
 /// Validates the name of a non-live environment: 1 to 32 characters from
@@ -162,6 +181,19 @@ mod tests {
         assert_eq!(env.name, "test");
         assert_eq!(env.db_path, "/abs/x.db");
         assert_eq!(env.web_port, 4828);
+    }
+
+    #[test]
+    fn an_overridden_path_names_its_file() {
+        assert_eq!(resolve(none).unwrap().overridden_file(), None);
+        let named = resolve(with(&[("GLOVEBOX_ENV", "test")])).unwrap();
+        assert_eq!(named.overridden_file(), None);
+        let env = resolve(with(&[
+            ("GLOVEBOX_ENV", "test"),
+            ("GLOVEBOX_DB_PATH", "/abs/glovebox.db"),
+        ]))
+        .unwrap();
+        assert_eq!(env.overridden_file().as_deref(), Some("glovebox.db"));
     }
 
     #[test]

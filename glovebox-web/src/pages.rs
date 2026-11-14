@@ -19,24 +19,35 @@ use serde::Deserialize;
 use crate::{
     AppState,
     view::{
-        Banner, CardContext, Count, Failure, JobCard, Steps, Target, TodoForm, job_card,
+        Banner, CardContext, Count, Failure, JobCard, Steps, Target, TodoCard, TodoForm, job_card,
         sentence_case, steps,
     },
 };
 
 /// What `base.html` shows on every page.
 struct Chrome {
-    /// The environment's name, or `None` for the live one.
-    environment: Option<String>,
+    /// The environment's name, followed by the database file's name when
+    /// `GLOVEBOX_DB_PATH` chose the file.
+    environment: String,
+    /// The environment tag's tooltip.
+    environment_title: String,
     /// Today's date as the shared layer writes it.
     today: String,
 }
 
 impl Chrome {
     fn of(state: &AppState) -> Self {
+        let name = &state.env_name;
+        let (environment, environment_title) = match &state.db_file {
+            Some(file) => (
+                format!("{name} \u{b7} {file}"),
+                format!("This is the {name} environment, served from {file}"),
+            ),
+            None => (name.clone(), format!("This is the {name} database")),
+        };
         Self {
-            environment: (state.env_name != glovebox_shared::env::LIVE)
-                .then(|| state.env_name.clone()),
+            environment,
+            environment_title,
             today: today_label(state),
         }
     }
@@ -46,11 +57,20 @@ fn today_label(state: &AppState) -> String {
     glovebox_shared::services::date_label((state.today)())
 }
 
+/// One vehicle on the home page, with its to-dos as rows the owner can tick.
+struct HomeVehicle {
+    home: VehicleHome,
+    todos: Vec<TodoCard>,
+    todo_form: TodoForm,
+}
+
 #[derive(Template)]
 #[template(path = "home.html")]
 struct HomePage {
     chrome: Chrome,
-    vehicles: Vec<VehicleHome>,
+    banner: Option<Banner>,
+    top_error: Option<String>,
+    vehicles: Vec<HomeVehicle>,
 }
 
 #[derive(Template)]
@@ -138,17 +158,65 @@ fn not_found_page(state: &AppState) -> Response {
     html(StatusCode::NOT_FOUND, page.render())
 }
 
-pub async fn get_home(State(state): State<AppState>) -> Response {
-    match checklist::home(&state.db).await {
-        Ok(vehicles) => {
-            let page = HomePage {
-                chrome: Chrome::of(&state),
-                vehicles,
-            };
-            html(StatusCode::OK, page.render())
+pub async fn get_home(State(state): State<AppState>, Query(query): Query<PageQuery>) -> Response {
+    home_response(
+        &state,
+        Page {
+            done: query.done.as_deref(),
+            open: None,
+            failure: None,
+        },
+        StatusCode::OK,
+    )
+    .await
+}
+
+/// Renders the home page with `status`. A failed to-do add is shown in its
+/// vehicle's form, and any other failure at the top of the page.
+pub async fn home_response(state: &AppState, view: Page<'_>, status: StatusCode) -> Response {
+    let homes = match checklist::home(&state.db).await {
+        Ok(homes) => homes,
+        Err(e) => return internal(&e),
+    };
+    let failure = view.failure;
+    let mut banner_found = None;
+    let mut vehicles = Vec::with_capacity(homes.len());
+    for home in homes {
+        let vid = home.vehicle.id;
+        if banner_found.is_none() {
+            banner_found = banner(state, vid, "/", view.done).await;
         }
-        Err(e) => internal(&e),
+        let todos = home
+            .todos
+            .iter()
+            .map(|t| TodoCard {
+                vid,
+                id: t.id,
+                title: t.title.clone(),
+                back: "/".to_owned(),
+                done: false,
+            })
+            .collect();
+        let own = failure.filter(|f| f.target == Target::TodoAdd && f.vid == vid);
+        vehicles.push(HomeVehicle {
+            todo_form: TodoForm {
+                error: own.map(|f| f.message.clone()),
+                title: own
+                    .and_then(|f| f.values.get("title").cloned())
+                    .unwrap_or_default(),
+            },
+            todos,
+            home,
+        });
     }
+    let placed = failure.is_none_or(|f| f.target == Target::TodoAdd);
+    let page = HomePage {
+        chrome: Chrome::of(state),
+        banner: banner_found,
+        top_error: failure.filter(|_| !placed).map(|f| f.message.clone()),
+        vehicles,
+    };
+    html(status, page.render())
 }
 
 pub async fn not_found(State(state): State<AppState>) -> Response {

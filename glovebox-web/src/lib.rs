@@ -14,11 +14,15 @@ use chrono::NaiveDate;
 use glovebox_shared::db::DatabaseConnection;
 
 /// What every handler reads: the database, the name of the environment the
-/// process serves, and the clock that says what day it is.
+/// process serves and the file it serves from, and the clock that says what
+/// day it is.
 #[derive(Clone)]
 pub struct AppState {
     pub db: DatabaseConnection,
     pub env_name: String,
+    /// The database file's name when `GLOVEBOX_DB_PATH` chose a file other
+    /// than the environment's own.
+    pub db_file: Option<String>,
     pub today: fn() -> NaiveDate,
 }
 

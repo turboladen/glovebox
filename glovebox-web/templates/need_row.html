@@ -3,6 +3,7 @@
     <summary class="need-row">
       <span class="cell">
         <span class="need-name">{{ n.name }}</span>
+        {% if let Some(q) = n.quantity %}<span class="qty">{{ q }}</span>{% endif %}
         <span class="need-stage"><span class="pill pill--{{ n.stage_class }}">{{ n.stage_text }}</span></span>
       </span>
       <span class="cell">
@@ -44,6 +45,7 @@
                 <span class="pn">{% if let Some(m) = o.manufacturer %}<span class="mfr">{{ m }}</span>{% endif %}{{ o.title }}</span><br>
                 {% if let Some(d) = o.description %}<span class="opt-desc">{{ d }}</span><br>{% endif %}
                 {% if let Some(s) = o.seller %}<span class="opt-meta">{{ s }}</span>{% endif %}
+                {% if let Some(href) = o.link %}<br><a class="opt-link" href="{{ href }}" target="_blank" rel="noopener noreferrer">Open the listing</a>{% endif %}
               </span>
               <span class="price money">{% if let Some(p) = o.price %}{{ p }}{% endif %}</span>
               <span id="opt-{{ o.id }}-why"><span class="pill fit--{{ o.fit_class }}">{{ o.fit_text }}</span>{% if let Some(note) = o.fit_note %}<span class="fit-note">{{ note }}</span>{% endif %}{% if let Some(why) = o.rejected_reason %}<span class="fit-note"><span class="pill pill--rejected">Rejected</span> {{ why }}</span>{% endif %}</span>

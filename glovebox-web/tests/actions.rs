@@ -6,12 +6,12 @@ use glovebox_shared::{
     db::DatabaseConnection,
     inputs::{
         appointment::NewAppointment,
-        need::{NewNeed, NewOption, OrderDetails},
+        need::{NewNeed, NewOption, OrderDetails, UpdateNeed},
         part::PartFilter,
         work_item::NewWorkItem,
     },
     services::{appointment, need, part, todo, work_item},
-    test_support::VehicleFixture,
+    test_support::{self, VehicleFixture},
 };
 
 // Everything the tests share: one vehicle with a booked appointment, one job
@@ -401,6 +401,116 @@ async fn choosing_an_option_moves_the_need_from_decide_to_order() {
 }
 
 #[tokio::test]
+async fn a_need_for_two_shows_its_count_and_the_price_of_both() {
+    let w = World::new().await;
+    need::update(
+        &w.db,
+        w.vehicle,
+        w.need,
+        UpdateNeed {
+            quantity: Some(2),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    w.choose_good().await;
+
+    let (_, body) = w.get(&w.page_path()).await;
+
+    let order = group(&body, "order");
+    assert!(
+        order.contains("order 2 \u{d7} Akebono ACT1633 from FCP Euro"),
+        "{order}"
+    );
+    assert!(
+        body.contains(r#"<span class="qty">2 needed</span>"#),
+        "{body}"
+    );
+    assert!(body.contains(r#"value="$149.98""#), "{body}");
+    assert!(body.contains("Price for 2"), "{body}");
+    assert!(body.contains("2 \u{d7} $74.99"), "{body}");
+}
+
+#[tokio::test]
+async fn a_need_for_one_shows_no_count() {
+    let w = World::new().await;
+    w.choose_good().await;
+
+    let (_, body) = w.get(&w.page_path()).await;
+
+    assert!(!body.contains(r#"class="qty""#), "{body}");
+    assert!(body.contains(r#"value="$74.99""#), "{body}");
+    assert!(!body.contains("Price for"), "{body}");
+}
+
+#[tokio::test]
+async fn an_option_link_is_shown_only_for_a_web_address() {
+    let w = World::new().await;
+    for (description, url) in [
+        ("Linked pads", "https://example.com/pads?a=1&b=2"),
+        ("Scripted pads", "javascript:alert(1)"),
+    ] {
+        need::add_option(
+            &w.db,
+            w.vehicle,
+            w.need,
+            NewOption {
+                description: description.into(),
+                url: Some(url.into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    let (_, body) = w.get(&w.page_path()).await;
+
+    assert!(
+        body.contains(
+            r#"<a class="opt-link" href="https://example.com/pads?a=1&#38;b=2" target="_blank" rel="noopener noreferrer">"#
+        ),
+        "{body}"
+    );
+    assert!(!body.contains("javascript:"), "{body}");
+}
+
+#[tokio::test]
+async fn editing_only_the_reason_keeps_the_decision_date() {
+    let w = World::new().await;
+    let back = w.page_path();
+    let good = w.good.to_string();
+    let path = w.need_path("decision");
+    w.post(
+        &path,
+        &[("option_id", &good), ("reason", "Quiet."), ("back", &back)],
+    )
+    .await;
+    // A decision made earlier than today, so a moved date would show.
+    test_support::set_decided_on(&w.db, w.need, "2026-01-02").await;
+
+    let (status, _, _) = w
+        .post(
+            &path,
+            &[
+                ("option_id", &good),
+                ("reason", "Quiet and low dust."),
+                ("back", &back),
+            ],
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let stored = need::require(&w.db, w.vehicle, w.need).await.unwrap();
+    assert_eq!(stored.decided_on.as_deref(), Some("2026-01-02"));
+    assert_eq!(
+        stored.decision_reason.as_deref(),
+        Some("Quiet and low dust.")
+    );
+}
+
+#[tokio::test]
 async fn choosing_a_does_not_fit_option_is_refused() {
     let w = World::new().await;
     let bad = w.bad.to_string();
@@ -668,6 +778,56 @@ async fn todo_add_tick_undo_delete() {
         .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(body.contains("Not saved"), "{body}");
+}
+
+#[tokio::test]
+async fn home_todos_can_be_added_ticked_and_deleted() {
+    let w = World::new().await;
+    let add_path = format!("/vehicles/{}/todos", w.vehicle);
+    let (_, home) = w.get("/").await;
+    assert!(
+        home.contains(&format!(r#"action="{add_path}""#)),
+        "the home page has an add form: {home}"
+    );
+
+    let (status, location, _) = w
+        .post(
+            &add_path,
+            &[("title", "Return the HP Plus pads"), ("back", "/")],
+        )
+        .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(location.as_deref(), Some("/"));
+    let id = todo::list(&w.db, w.vehicle, Some(None), false)
+        .await
+        .unwrap()[0]
+        .id;
+    let todo_path = |action: &str| format!("/vehicles/{}/todos/{id}/{action}", w.vehicle);
+    let (_, home) = w.get("/").await;
+    assert!(home.contains(&todo_path("done")), "{home}");
+    assert!(home.contains(&todo_path("delete")), "{home}");
+
+    let (status, location, _) = w.post(&todo_path("done"), &[("back", "/")]).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let expected = format!("/?done=todo-{id}");
+    assert_eq!(location.as_deref(), Some(expected.as_str()));
+    let (_, ticked) = w.get(&expected).await;
+    assert!(ticked.contains(r#"role="status""#), "{ticked}");
+    assert!(ticked.contains(&todo_path("done/undo")), "{ticked}");
+
+    w.post(&todo_path("done/undo"), &[("back", "/")]).await;
+    let (status, _, _) = w.post(&todo_path("delete"), &[("back", "/")]).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let (_, gone) = w.get("/").await;
+    assert!(!gone.contains("Return the HP Plus pads"), "{gone}");
+
+    let (status, _, body) = w.post(&add_path, &[("title", " "), ("back", "/")]).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(body.contains("Not saved"), "{body}");
+    assert!(
+        body.contains("Open work"),
+        "the home page is shown again: {body}"
+    );
 }
 
 #[tokio::test]
