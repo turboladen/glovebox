@@ -183,10 +183,9 @@ pub struct NeedCard {
     pub options_note: String,
     supplier: String,
     approach: String,
-    pub supplier_text: String,
-    pub approach_text: String,
-    pub supplier_set: bool,
-    pub approach_set: bool,
+    /// The stored supplier and approach as their tags read, when decided.
+    pub supplier_kind: Option<String>,
+    pub approach_kind: Option<String>,
     pub decision_reason: Option<String>,
     pub reason_value: String,
     pub purchase: Option<String>,
@@ -209,6 +208,18 @@ impl NeedCard {
 
     pub fn approach_is(&self, value: &str) -> bool {
         self.approach == value
+    }
+
+    pub fn supplier_text(&self) -> &str {
+        self.supplier_kind
+            .as_deref()
+            .unwrap_or("Supplier not decided")
+    }
+
+    pub fn approach_text(&self) -> &str {
+        self.approach_kind
+            .as_deref()
+            .unwrap_or("Approach not decided")
     }
 
     /// The message of a failure of `form`, when that is the form that failed.
@@ -248,6 +259,20 @@ pub struct TodoForm {
     pub title: String,
 }
 
+impl TodoForm {
+    /// The form as `failure` left it, when the failure is a to-do add, or
+    /// empty otherwise.
+    pub fn after(failure: Option<&Failure>) -> Self {
+        let own = failure.filter(|f| f.target == Target::TodoAdd);
+        Self {
+            error: own.map(|f| f.message.clone()),
+            title: own
+                .and_then(|f| f.value("title"))
+                .map_or_default(str::to_owned),
+        }
+    }
+}
+
 /// One need in a next-steps group.
 pub struct StepCard {
     pub need: NeedCard,
@@ -256,8 +281,6 @@ pub struct StepCard {
     /// The summary without the need's name.
     pub detail: String,
     pub job_title: String,
-    pub stage_class: &'static str,
-    pub stage_text: &'static str,
     /// The link target of a "decide" row's button, and its label.
     pub decide_href: Option<String>,
     pub decide_label: &'static str,
@@ -324,13 +347,6 @@ fn stage_text(stage: Stage) -> &'static str {
     }
 }
 
-fn kind_text(value: Option<&str>, unset: &str) -> (String, bool) {
-    match value {
-        Some(v) => (sentence_case(v), true),
-        None => (unset.to_owned(), false),
-    }
-}
-
 /// What a need card is built from besides the need itself.
 #[derive(Clone, Copy)]
 pub struct CardContext<'a> {
@@ -360,10 +376,6 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
         .map(|o| OptionCard::new(o, Some(o.id) == selected))
         .collect();
     let chosen = view.chosen.as_ref().map(|o| OptionCard::new(o, true));
-
-    let (supplier_text, supplier_set) =
-        kind_text(need.supplied_by.as_deref(), "Supplier not decided");
-    let (approach_text, approach_set) = kind_text(need.approach.as_deref(), "Approach not decided");
 
     let stage = view.stage;
     let several = need.quantity > 1;
@@ -401,7 +413,7 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
         name: need.name.clone(),
         quantity: several.then(|| format!("{} needed", need.quantity)),
         back: ctx.back.to_owned(),
-        stage_class: stage_class(stage),
+        stage_class: stage.label(),
         stage_text: stage_text(stage),
         open: failure.is_some() || ctx.open == Some(need.id),
         none_checked: !options.iter().any(|o| o.checked),
@@ -415,10 +427,8 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
         ),
         approach: typed("approach")
             .map_or_else(|| need.approach.clone().unwrap_or_default(), str::to_owned),
-        supplier_text,
-        approach_text,
-        supplier_set,
-        approach_set,
+        supplier_kind: need.supplied_by.as_deref().map(sentence_case),
+        approach_kind: need.approach.as_deref().map(sentence_case),
         decision_reason: need.decision_reason.clone(),
         reason_value: typed("reason")
             .map(str::to_owned)
@@ -443,10 +453,6 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
             field: f.field,
         }),
     }
-}
-
-fn stage_class(stage: Stage) -> &'static str {
-    stage.label()
 }
 
 /// Builds the card of a job from its view.
@@ -491,8 +497,6 @@ pub fn steps(list: &Checklist, jobs: &[JobCard], ctx: &CardContext<'_>) -> Steps
             group,
             detail: row.detail.clone(),
             job_title: row.job_title.clone(),
-            stage_class: need.stage_class,
-            stage_text: need.stage_text,
             decide_href,
             decide_label,
             need,

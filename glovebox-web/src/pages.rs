@@ -161,16 +161,7 @@ fn not_found_page(state: &AppState) -> Response {
 }
 
 pub async fn get_home(State(state): State<AppState>, Query(query): Query<PageQuery>) -> Response {
-    home_response(
-        &state,
-        Page {
-            done: query.done.as_deref(),
-            open: None,
-            failure: None,
-        },
-        StatusCode::OK,
-    )
-    .await
+    home_response(&state, Page::from_query(&query), StatusCode::OK).await
 }
 
 /// Renders the home page with `status`. A failed to-do add is shown in its
@@ -199,23 +190,16 @@ pub async fn home_response(state: &AppState, view: Page<'_>, status: StatusCode)
                 done: false,
             })
             .collect();
-        let own = failure.filter(|f| f.target == Target::TodoAdd && f.vid == vid);
         vehicles.push(HomeVehicle {
-            todo_form: TodoForm {
-                error: own.map(|f| f.message.clone()),
-                title: own
-                    .and_then(|f| f.values.get("title").cloned())
-                    .unwrap_or_default(),
-            },
+            todo_form: TodoForm::after(failure.filter(|f| f.vid == vid)),
             todos,
             home,
         });
     }
-    let placed = failure.is_none_or(|f| f.target == Target::TodoAdd);
     let page = HomePage {
         chrome: Chrome::of(state),
         banner: banner_found,
-        top_error: failure.filter(|_| !placed).map(|f| f.message.clone()),
+        top_error: top_error(failure, |target| target == Target::TodoAdd),
         vehicles,
     };
     html(status, page.render())
@@ -329,6 +313,24 @@ pub struct Page<'a> {
     pub failure: Option<&'a Failure>,
 }
 
+impl<'a> Page<'a> {
+    fn from_query(query: &'a PageQuery) -> Self {
+        Self {
+            done: query.done.as_deref(),
+            open: open_need(query),
+            failure: None,
+        }
+    }
+}
+
+// The failure's message for the top of the page, when `shown` says the page
+// has no row for its target.
+fn top_error(failure: Option<&Failure>, shown: impl Fn(Target) -> bool) -> Option<String> {
+    failure
+        .filter(|f| !shown(f.target))
+        .map(|f| f.message.clone())
+}
+
 /// The path of an appointment's page.
 pub fn appointment_path(vid: i32, id: i32) -> String {
     format!("/vehicles/{vid}/appointments/{id}")
@@ -344,18 +346,7 @@ pub async fn get_appointment(
     Path((vid, id)): Path<(i32, i32)>,
     Query(query): Query<PageQuery>,
 ) -> Response {
-    appointment_response(
-        &state,
-        vid,
-        id,
-        Page {
-            done: query.done.as_deref(),
-            open: open_need(&query),
-            failure: None,
-        },
-        StatusCode::OK,
-    )
-    .await
+    appointment_response(&state, vid, id, Page::from_query(&query), StatusCode::OK).await
 }
 
 /// Renders an appointment's page with `status`. `failure` is shown in the row
@@ -402,18 +393,11 @@ async fn appointment_page(
     let jobs: Vec<JobCard> = list.jobs.iter().map(|j| job_card(j, &ctx)).collect();
     let grouped = steps(&list, &jobs, &ctx);
 
-    let typed_title = failure
-        .filter(|f| f.target == Target::TodoAdd)
-        .and_then(|f| f.values.get("title").cloned())
-        .unwrap_or_default();
-    let todo_error = failure
-        .filter(|f| f.target == Target::TodoAdd)
-        .map(|f| f.message.clone());
-    let placed = match failure.map(|f| f.target) {
-        Some(Target::Need(need_id)) => jobs.iter().any(|j| j.needs.iter().any(|n| n.id == need_id)),
-        Some(Target::TodoAdd) | None => true,
-        Some(Target::Todo) => false,
-    };
+    let top_error = top_error(failure, |target| match target {
+        Target::Need(need_id) => jobs.iter().any(|j| j.needs.iter().any(|n| n.id == need_id)),
+        Target::TodoAdd => true,
+        Target::Todo => false,
+    });
 
     Ok(AppointmentPage {
         chrome: Chrome::of(state),
@@ -424,7 +408,7 @@ async fn appointment_page(
             list.jobs.iter().flat_map(|j| &j.needs),
             &list.todos,
         ),
-        top_error: failure.filter(|_| !placed).map(|f| f.message.clone()),
+        top_error,
         vid,
         appointment_id: id,
         vehicle: car.name,
@@ -437,10 +421,7 @@ async fn appointment_page(
         todos_open: Count::new(summary.todos_open, "to-do open", "to-dos open"),
         job_count: Count::new(summary.jobs, "job", "jobs"),
         steps: grouped,
-        todo_form: TodoForm {
-            error: todo_error,
-            title: typed_title,
-        },
+        todo_form: TodoForm::after(failure),
         jobs,
         back,
     })
@@ -451,18 +432,7 @@ pub async fn get_job(
     Path((vid, id)): Path<(i32, i32)>,
     Query(query): Query<PageQuery>,
 ) -> Response {
-    job_response(
-        &state,
-        vid,
-        id,
-        Page {
-            done: query.done.as_deref(),
-            open: open_need(&query),
-            failure: None,
-        },
-        StatusCode::OK,
-    )
-    .await
+    job_response(&state, vid, id, Page::from_query(&query), StatusCode::OK).await
 }
 
 /// Renders a job's page with `status`. `failure` is shown in the row it
@@ -508,15 +478,14 @@ async fn job_page(state: &AppState, vid: i32, id: i32, view: Page<'_>) -> Domain
         open,
     };
     let card = job_card(&view, &ctx);
-    let placed = match failure.map(|f| f.target) {
-        Some(Target::Need(need_id)) => card.needs.iter().any(|n| n.id == need_id),
-        Some(Target::TodoAdd | Target::Todo) => false,
-        None => true,
-    };
+    let top_error = top_error(failure, |target| match target {
+        Target::Need(need_id) => card.needs.iter().any(|n| n.id == need_id),
+        Target::TodoAdd | Target::Todo => false,
+    });
     Ok(JobPage {
         chrome: Chrome::of(state),
         banner: page_banner(vid, &back, done, &view.needs, &[]),
-        top_error: failure.filter(|_| !placed).map(|f| f.message.clone()),
+        top_error,
         vid,
         vehicle: car.name,
         appointment: linked,

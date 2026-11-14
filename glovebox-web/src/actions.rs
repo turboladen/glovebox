@@ -11,6 +11,7 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
 };
 use glovebox_shared::{
+    entities::{self, job_need},
     error::{DomainError, DomainResult},
     inputs::{
         need::{OrderDetails, ReturnInput, UpdateNeed},
@@ -139,12 +140,47 @@ struct Post<'a> {
     undo: Option<String>,
 }
 
-impl Post<'_> {
+impl<'a> Post<'a> {
+    // A post of `form` about `target` that returns to `back`, with no typed
+    // values and no undo.
+    fn new(
+        state: &'a AppState,
+        vid: i32,
+        back: Option<&str>,
+        target: Target,
+        form: &'static str,
+    ) -> Self {
+        Self {
+            state,
+            vid,
+            back: safe_back(back),
+            target,
+            form,
+            values: HashMap::new(),
+            undo: None,
+        }
+    }
+
+    // Keeps what the owner typed, to show again if the write fails.
+    fn typed(mut self, pairs: &[(&str, &str)]) -> Self {
+        self.values.extend(
+            pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned())),
+        );
+        self
+    }
+
+    // Offers an undo for `done` on the page the redirect lands on.
+    fn undo(mut self, done: String) -> Self {
+        self.undo = Some(done);
+        self
+    }
+
     // Redirects after a write, or shows the page again with the error.
-    async fn answer(self, result: DomainResult<()>) -> Response {
-        let error = match result {
-            Ok(()) => return self.redirect(),
-            Err(error) => error,
+    async fn answer<T>(self, result: DomainResult<T>) -> Response {
+        let Err(error) = result else {
+            return self.redirect();
         };
         let refused = refusal(&error, self.form);
         let failure = Failure {
@@ -183,11 +219,15 @@ impl Post<'_> {
     }
 }
 
-fn values(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-    pairs
-        .iter()
-        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-        .collect()
+// Reads an optional id typed into a form: blank is absent, and anything else
+// must be a number or the write is refused as `Invalid` on `field`.
+fn optional_id(text: &str, field: &str, message: &str) -> DomainResult<Option<i32>> {
+    trim_to_none(text)
+        .map(|text| {
+            text.parse::<i32>()
+                .map_err(|_| DomainError::invalid(field, message))
+        })
+        .transpose()
 }
 
 #[derive(Deserialize)]
@@ -204,21 +244,20 @@ pub async fn post_supplier(
     Path((vid, id)): Path<(i32, i32)>,
     Form(form): Form<SupplierForm>,
 ) -> Response {
-    let post = Post {
-        state: &state,
+    let post = Post::new(
+        &state,
         vid,
-        back: safe_back(form.back.as_deref()),
-        target: Target::Need(id),
-        form: "supplier",
-        values: values(&[
-            ("supplied_by", &form.supplied_by),
-            ("approach", &form.approach),
-        ]),
-        undo: None,
-    };
+        form.back.as_deref(),
+        Target::Need(id),
+        "supplier",
+    )
+    .typed(&[
+        ("supplied_by", &form.supplied_by),
+        ("approach", &form.approach),
+    ]);
     let result = need::update(
         &state.db,
-        post.vid,
+        vid,
         id,
         UpdateNeed {
             supplied_by: Some(trim_to_none(&form.supplied_by)),
@@ -226,8 +265,7 @@ pub async fn post_supplier(
             ..Default::default()
         },
     )
-    .await
-    .map(|_| ());
+    .await;
     post.answer(result).await
 }
 
@@ -245,33 +283,33 @@ pub async fn post_decision(
     Path((vid, id)): Path<(i32, i32)>,
     Form(form): Form<DecisionForm>,
 ) -> Response {
-    let post = Post {
-        state: &state,
+    let post = Post::new(
+        &state,
         vid,
-        back: safe_back(form.back.as_deref()),
-        target: Target::Need(id),
-        form: "decide",
-        values: values(&[("option_id", &form.option_id), ("reason", &form.reason)]),
-        undo: None,
-    };
+        form.back.as_deref(),
+        Target::Need(id),
+        "decide",
+    )
+    .typed(&[("option_id", &form.option_id), ("reason", &form.reason)]);
     let result = decide(&state, vid, id, &form).await;
     post.answer(result).await
 }
 
-async fn decide(state: &AppState, vid: i32, id: i32, form: &DecisionForm) -> DomainResult<()> {
-    let option_id = match trim_to_none(&form.option_id) {
-        None => None,
-        Some(text) => Some(
-            text.parse::<i32>()
-                .map_err(|_| DomainError::invalid("option", "choose one of the listed options"))?,
-        ),
-    };
+async fn decide(
+    state: &AppState,
+    vid: i32,
+    id: i32,
+    form: &DecisionForm,
+) -> DomainResult<job_need::Model> {
+    let option_id = optional_id(
+        &form.option_id,
+        "option",
+        "choose one of the listed options",
+    )?;
     // The form sends the stored reason along with an empty choice; clearing
     // the choice drops the reason.
     let reason = option_id.and(trim_to_none(&form.reason));
-    need::decide(&state.db, vid, id, option_id, reason)
-        .await
-        .map(|_| ())
+    need::decide(&state.db, vid, id, option_id, reason).await
 }
 
 #[derive(Deserialize)]
@@ -292,25 +330,22 @@ pub async fn post_ordered(
     Path((vid, id)): Path<(i32, i32)>,
     Form(form): Form<OrderedForm>,
 ) -> Response {
-    let post = Post {
-        state: &state,
-        vid,
-        back: safe_back(form.back.as_deref()),
-        target: Target::Need(id),
-        form: "order",
-        values: values(&[
-            ("seller", &form.seller),
-            ("purchase_date", &form.purchase_date),
-            ("cost", &form.cost),
-            ("order_ref", &form.order_ref),
-        ]),
-        undo: None,
-    };
+    let post = Post::new(&state, vid, form.back.as_deref(), Target::Need(id), "order").typed(&[
+        ("seller", &form.seller),
+        ("purchase_date", &form.purchase_date),
+        ("cost", &form.cost),
+        ("order_ref", &form.order_ref),
+    ]);
     let result = order(&state, vid, id, &form).await;
     post.answer(result).await
 }
 
-async fn order(state: &AppState, vid: i32, id: i32, form: &OrderedForm) -> DomainResult<()> {
+async fn order(
+    state: &AppState,
+    vid: i32,
+    id: i32,
+    form: &OrderedForm,
+) -> DomainResult<need::NeedPurchase> {
     let cost_cents = trim_to_none(&form.cost)
         .map(|text| money::parse_dollars(&text))
         .transpose()?;
@@ -326,7 +361,6 @@ async fn order(state: &AppState, vid: i32, id: i32, form: &OrderedForm) -> Domai
         },
     )
     .await
-    .map(|_| ())
 }
 
 #[derive(Deserialize)]
@@ -339,18 +373,15 @@ pub async fn post_received(
     Path((vid, id)): Path<(i32, i32)>,
     Form(form): Form<BackOnly>,
 ) -> Response {
-    let post = Post {
-        state: &state,
+    let post = Post::new(
+        &state,
         vid,
-        back: safe_back(form.back.as_deref()),
-        target: Target::Need(id),
-        form: "received",
-        values: HashMap::new(),
-        undo: Some(format!("need-{id}")),
-    };
-    let result = need::mark_received(&state.db, vid, id, None)
-        .await
-        .map(|_| ());
+        form.back.as_deref(),
+        Target::Need(id),
+        "received",
+    )
+    .undo(format!("need-{id}"));
+    let result = need::mark_received(&state.db, vid, id, None).await;
     post.answer(result).await
 }
 
@@ -359,16 +390,14 @@ pub async fn post_received_undo(
     Path((vid, id)): Path<(i32, i32)>,
     Form(form): Form<BackOnly>,
 ) -> Response {
-    let post = Post {
-        state: &state,
+    let post = Post::new(
+        &state,
         vid,
-        back: safe_back(form.back.as_deref()),
-        target: Target::Need(id),
-        form: "received_undo",
-        values: HashMap::new(),
-        undo: None,
-    };
-    let result = need::clear_received(&state.db, vid, id).await.map(|_| ());
+        form.back.as_deref(),
+        Target::Need(id),
+        "received_undo",
+    );
+    let result = need::clear_received(&state.db, vid, id).await;
     post.answer(result).await
 }
 
@@ -385,19 +414,17 @@ pub async fn post_return(
     Path((vid, id)): Path<(i32, i32)>,
     Form(form): Form<ReturnForm>,
 ) -> Response {
-    let mut typed = values(&[("reason", &form.reason)]);
-    if form.option_was_wrong.is_some() {
-        typed.insert("option_was_wrong".to_owned(), "true".to_owned());
-    }
-    let post = Post {
-        state: &state,
+    let mut post = Post::new(
+        &state,
         vid,
-        back: safe_back(form.back.as_deref()),
-        target: Target::Need(id),
-        form: "return",
-        values: typed,
-        undo: None,
-    };
+        form.back.as_deref(),
+        Target::Need(id),
+        "return",
+    )
+    .typed(&[("reason", &form.reason)]);
+    if form.option_was_wrong.is_some() {
+        post = post.typed(&[("option_was_wrong", "true")]);
+    }
     let result = need::return_part(
         &state.db,
         vid,
@@ -407,8 +434,7 @@ pub async fn post_return(
             option_was_wrong: form.option_was_wrong.is_some(),
         },
     )
-    .await
-    .map(|_| ());
+    .await;
     post.answer(result).await
 }
 
@@ -426,27 +452,22 @@ pub async fn post_todo(
     Path(vid): Path<i32>,
     Form(form): Form<TodoForm>,
 ) -> Response {
-    let post = Post {
-        state: &state,
-        vid,
-        back: safe_back(form.back.as_deref()),
-        target: Target::TodoAdd,
-        form: "todo",
-        values: values(&[("title", &form.title)]),
-        undo: None,
-    };
+    let post = Post::new(&state, vid, form.back.as_deref(), Target::TodoAdd, "todo")
+        .typed(&[("title", &form.title)]);
     let result = add_todo(&state, vid, &form).await;
     post.answer(result).await
 }
 
-async fn add_todo(state: &AppState, vid: i32, form: &TodoForm) -> DomainResult<()> {
-    let appointment_id = match trim_to_none(&form.appointment_id) {
-        None => None,
-        Some(text) => Some(
-            text.parse::<i32>()
-                .map_err(|_| DomainError::invalid("appointment", "is not an appointment number"))?,
-        ),
-    };
+async fn add_todo(
+    state: &AppState,
+    vid: i32,
+    form: &TodoForm,
+) -> DomainResult<entities::todo::Model> {
+    let appointment_id = optional_id(
+        &form.appointment_id,
+        "appointment",
+        "is not an appointment number",
+    )?;
     todo::add(
         &state.db,
         vid,
@@ -457,7 +478,6 @@ async fn add_todo(state: &AppState, vid: i32, form: &TodoForm) -> DomainResult<(
         },
     )
     .await
-    .map(|_| ())
 }
 
 pub async fn post_todo_done(
@@ -465,16 +485,9 @@ pub async fn post_todo_done(
     Path((vid, id)): Path<(i32, i32)>,
     Form(form): Form<BackOnly>,
 ) -> Response {
-    let post = Post {
-        state: &state,
-        vid,
-        back: safe_back(form.back.as_deref()),
-        target: Target::Todo,
-        form: "todo_done",
-        values: HashMap::new(),
-        undo: Some(format!("todo-{id}")),
-    };
-    let result = todo::complete(&state.db, vid, id, None).await.map(|_| ());
+    let post = Post::new(&state, vid, form.back.as_deref(), Target::Todo, "todo_done")
+        .undo(format!("todo-{id}"));
+    let result = todo::complete(&state.db, vid, id, None).await;
     post.answer(result).await
 }
 
@@ -483,16 +496,8 @@ pub async fn post_todo_undo(
     Path((vid, id)): Path<(i32, i32)>,
     Form(form): Form<BackOnly>,
 ) -> Response {
-    let post = Post {
-        state: &state,
-        vid,
-        back: safe_back(form.back.as_deref()),
-        target: Target::Todo,
-        form: "todo_undo",
-        values: HashMap::new(),
-        undo: None,
-    };
-    let result = todo::reopen(&state.db, vid, id).await.map(|_| ());
+    let post = Post::new(&state, vid, form.back.as_deref(), Target::Todo, "todo_undo");
+    let result = todo::reopen(&state.db, vid, id).await;
     post.answer(result).await
 }
 
@@ -501,15 +506,13 @@ pub async fn post_todo_delete(
     Path((vid, id)): Path<(i32, i32)>,
     Form(form): Form<BackOnly>,
 ) -> Response {
-    let post = Post {
-        state: &state,
+    let post = Post::new(
+        &state,
         vid,
-        back: safe_back(form.back.as_deref()),
-        target: Target::Todo,
-        form: "todo_delete",
-        values: HashMap::new(),
-        undo: None,
-    };
+        form.back.as_deref(),
+        Target::Todo,
+        "todo_delete",
+    );
     let result = todo::delete(&state.db, vid, id).await;
     post.answer(result).await
 }

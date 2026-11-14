@@ -21,8 +21,8 @@
       </span>
       <span class="facts">
         <span class="kinds">
-          <span class="pill {% if n.supplier_set %}pill--kind{% else %}pill--none{% endif %}">{{ n.supplier_text }}</span>
-          <span class="pill {% if n.approach_set %}pill--kind{% else %}pill--none{% endif %}">{{ n.approach_text }}</span>
+          <span class="pill {% if n.supplier_kind.is_some() %}pill--kind{% else %}pill--none{% endif %}">{{ n.supplier_text() }}</span>
+          <span class="pill {% if n.approach_kind.is_some() %}pill--kind{% else %}pill--none{% endif %}">{{ n.approach_text() }}</span>
         </span>
         {% if let Some(r) = n.decision_reason %}<span class="reason">{{ r }}</span>{% endif %}
       </span>

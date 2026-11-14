@@ -1,7 +1,7 @@
 {% let n = s.need %}
 <li class="step">
   <p class="step-need">{{ n.name }}</p>
-  <p class="step-text">{{ s.detail }}{% if s.is("done") %}<span class="pill pill--{{ s.stage_class }}">{{ s.stage_text }}</span>{% endif %}<span class="tag">{{ s.job_title }}</span></p>
+  <p class="step-text">{{ s.detail }}{% if s.is("done") %}<span class="pill pill--{{ s.need.stage_class }}">{{ s.need.stage_text }}</span>{% endif %}<span class="tag">{{ s.job_title }}</span></p>
   {% if let Some(e) = n.error_elsewhere() %}<p class="error" role="alert"><b>Not saved.</b> {{ e }}</p>{% endif %}
   {% if s.is("decide") %}
   {% if let Some(href) = s.decide_href %}
