@@ -110,6 +110,11 @@
 
   .tag { color: var(--ink-2); font-size: var(--s-small); white-space: nowrap; }
 
+  /* The standing reminder under the header */
+
+  .hint { background: var(--inset); border-bottom: 1px solid var(--rule); font-size: var(--s-small); color: var(--ink-2); }
+  .hint .page { display: block; padding-block: 0.4rem; }
+
   /* Undo banner */
 
   .banner { background: var(--sheet); border-bottom: 1px solid var(--rule); }
@@ -382,6 +387,7 @@
     <time class="today" datetime="{{ chrome.today }}">{{ chrome.today }}</time>
   </div>
 </header>
+<p class="hint"><span class="page">To add or change options, prices, part numbers or fitment, ask Claude. This page is for choosing, ordering, receiving and ticking things off.</span></p>
 {% block banner %}{% endblock %}
 <main>
 {% block content %}{% endblock %}
