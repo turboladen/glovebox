@@ -191,6 +191,7 @@ pub fn minimal_service(date: &str, description: &str) -> NewServiceRecord {
         noticed_incident_ids: None,
         recall_finding_ids: None,
         parts: None,
+        appointment_id: None,
     }
 }
 

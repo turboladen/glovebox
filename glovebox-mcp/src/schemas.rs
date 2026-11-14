@@ -188,6 +188,7 @@ impl RecordServiceInput {
                 parts: self
                     .parts
                     .map(|ps| ps.into_iter().map(InlinePartInput::into_domain).collect()),
+                appointment_id: None,
             },
         )
     }
@@ -419,6 +420,7 @@ impl RecordPartInput {
                 warranty_expires_miles: self.warranty_expires_miles,
                 supplied_by: self.supplied_by,
                 order_ref: None,
+                need_id: None,
             },
         )
     }

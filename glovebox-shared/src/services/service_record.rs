@@ -3,8 +3,8 @@ use serde::Serialize;
 
 use crate::{
     entities::{
-        incident, incident_service_link, mileage_log, part, service_recall_link, service_record,
-        service_record_line_item, service_schedule_link,
+        incident, incident_service_link, job_need, mileage_log, part, service_recall_link,
+        service_record, service_record_line_item, service_schedule_link,
     },
     error::{DomainError, DomainResult},
     inputs::{
@@ -12,8 +12,9 @@ use crate::{
         service_record::{NewLineItem, NewServiceRecord, UpdateServiceRecord},
     },
     services::{
+        appointment,
         incident::{self as incident_svc, ServiceRef},
-        part as part_svc,
+        need, part as part_svc,
         recall::{self, RecallRef},
         schedule,
         work_item::{self, WorkItemRef},
@@ -157,6 +158,20 @@ pub struct ServiceRecordWithLinks {
     /// coexist. Empty (and omitted from JSON) on every other path.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub possible_duplicates: Vec<PossibleDuplicate>,
+    /// Needs on the jobs this service completed whose part is linked but not
+    /// installed, so the caller can ask whether each was fitted. Filled only
+    /// by `create` and `update`; empty (and omitted from JSON) otherwise.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unfitted_needs: Vec<UnfittedNeed>,
+}
+
+/// A need on a completed job whose linked part is not installed.
+#[derive(Clone, Debug, Serialize)]
+pub struct UnfittedNeed {
+    pub need_id: i32,
+    pub name: String,
+    pub job_title: String,
+    pub part_id: i32,
 }
 
 /// A line item with the payer it resolves to.
@@ -329,8 +344,50 @@ impl ServiceRecordWithLinks {
             already_recorded: false,
             message: None,
             possible_duplicates: Vec::new(),
+            unfitted_needs: Vec::new(),
         }
     }
+}
+
+/// The needs on `jobs` whose linked part is not installed, in need order, with
+/// two batched queries.
+async fn unfitted_needs(
+    db: &impl ConnectionTrait,
+    jobs: &[WorkItemRef],
+) -> DomainResult<Vec<UnfittedNeed>> {
+    if jobs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let needs = job_need::Entity::find()
+        .filter(job_need::Column::WorkItemId.is_in(jobs.iter().map(|j| j.id)))
+        .filter(job_need::Column::PartId.is_not_null())
+        .order_by_asc(job_need::Column::Id)
+        .all(db)
+        .await?;
+    let parts: std::collections::HashMap<i32, part::Model> = part::Entity::find()
+        .filter(part::Column::Id.is_in(needs.iter().filter_map(|n| n.part_id)))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|p| (p.id, p))
+        .collect();
+    let titles: std::collections::HashMap<i32, &str> =
+        jobs.iter().map(|j| (j.id, j.title.as_str())).collect();
+    Ok(needs
+        .into_iter()
+        .filter_map(|n| {
+            let part_id = n.part_id?;
+            if parts.get(&part_id)?.status == "installed" {
+                return None;
+            }
+            Some(UnfittedNeed {
+                need_id: n.id,
+                name: n.name,
+                job_title: (*titles.get(&n.work_item_id)?).to_owned(),
+                part_id,
+            })
+        })
+        .collect())
 }
 
 /// Load a record's schedule link ids, installed parts, line items, incident
@@ -611,9 +668,10 @@ pub async fn get(
 }
 
 /// Marks existing parts as installed by `record` and creates the parts its
-/// invoice lists, already installed.
+/// invoice lists, already installed. A listed part that names a need is
+/// linked to it with the checks of `need::link_part`.
 async fn install_parts(
-    txn: &impl ConnectionTrait,
+    txn: &(impl ConnectionTrait + TransactionTrait),
     vehicle_id: i32,
     record: &service_record::Model,
     existing_ids: Vec<i32>,
@@ -630,7 +688,11 @@ async fn install_parts(
         new_part.installed_service_id = Some(record.id);
         new_part.installed_date = Some(record.service_date.clone());
         new_part.installed_odometer = record.mileage;
-        part_svc::create(txn, vehicle_id, new_part).await?;
+        let need_id = new_part.need_id;
+        let created = part_svc::create(txn, vehicle_id, new_part).await?;
+        if let Some(need_id) = need_id {
+            need::link_part(txn, vehicle_id, need_id, created.id, None).await?;
+        }
     }
     Ok(())
 }
@@ -699,6 +761,7 @@ async fn load_existing(
 /// unchanged with `already_recorded` set, and the incident and recall ids in
 /// this call are ignored in that case. A completed to-do that came from a
 /// recall links that recall to the record as well.
+#[allow(clippy::too_many_lines)]
 pub async fn create<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -737,6 +800,9 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     )?;
     let line_items_input = input.line_items.unwrap_or_default();
     validate_line_items(&line_items_input)?;
+    if let Some(appointment_id) = input.appointment_id {
+        appointment::require_assignable(db, vehicle_id, appointment_id).await?;
+    }
 
     let txn = db.begin().await?;
 
@@ -768,6 +834,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
         paid_by: Set(input.paid_by.unwrap_or_else(|| "self".into())),
         payer_note: Set(input.payer_note),
         invoice_ref: Set(invoice_ref),
+        appointment_id: Set(input.appointment_id),
         ..Default::default()
     };
     let record = record.insert(&txn).await?;
@@ -822,6 +889,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     }
 
     let mut created = load_service_links(&txn, record).await?;
+    created.unfitted_needs = unfitted_needs(&txn, &created.completed_work_items).await?;
 
     txn.commit().await?;
 
@@ -872,6 +940,13 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         .map(|r| normalize_invoice_ref(r.as_deref()));
     if let Some(Some(invoice_ref)) = &invoice_ref {
         require_invoice_ref_free(db, vehicle_id, id, invoice_ref).await?;
+    }
+    // Keeping the appointment a service already names is not a new
+    // assignment, so it stays allowed after the appointment closes.
+    if let Some(Some(appointment_id)) = input.appointment_id
+        && existing.appointment_id != Some(appointment_id)
+    {
+        appointment::require_assignable(db, vehicle_id, appointment_id).await?;
     }
 
     let txn = db.begin().await?;
@@ -931,6 +1006,9 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     if let Some(v) = input.payer_note {
         active.payer_note = Set(v);
     }
+    if let Some(v) = input.appointment_id {
+        active.appointment_id = Set(v);
+    }
 
     active.updated_at = Set(super::now_stamp());
 
@@ -987,7 +1065,8 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         insert_line_items(&txn, record.id, new_line_items).await?;
     }
 
-    let updated = load_service_links(&txn, record).await?;
+    let mut updated = load_service_links(&txn, record).await?;
+    updated.unfitted_needs = unfitted_needs(&txn, &updated.completed_work_items).await?;
 
     txn.commit().await?;
 
@@ -1299,6 +1378,7 @@ mod tests {
                 noticed_incident_ids: None,
                 recall_finding_ids: None,
                 parts: None,
+                appointment_id: None,
             },
         )
         .await
@@ -1379,6 +1459,7 @@ mod tests {
                 noticed_incident_ids: None,
                 recall_finding_ids: None,
                 parts: None,
+                appointment_id: None,
             },
         )
         .await
@@ -1461,6 +1542,7 @@ mod tests {
                 noticed_incident_ids: None,
                 recall_finding_ids: None,
                 parts: None,
+                appointment_id: None,
             },
         )
         .await
@@ -1736,6 +1818,7 @@ mod tests {
             noticed_incident_ids: None,
             recall_finding_ids: None,
             parts: None,
+            appointment_id: None,
         }
     }
 
@@ -3353,5 +3436,510 @@ mod tests {
             vec!["2024-03-01", "2023-01-05"]
         );
         assert_eq!(list_between(&db, v, None, None).await.unwrap().len(), 3);
+    }
+
+    // ─── invoices against appointments ───
+
+    mod appointments {
+        use super::*;
+        use crate::{
+            entities::{job_need, work_item},
+            error::DomainError,
+            inputs::{appointment::NewAppointment, need::NewNeed, work_item::NewWorkItem},
+            services::{appointment, need, part as part_svc, work_item as job},
+        };
+
+        struct Fixture {
+            db: DatabaseConnection,
+            vehicle: i32,
+            appointment: i32,
+        }
+
+        async fn fixture() -> Fixture {
+            let db = test_db().await;
+            let vehicle = seed_vehicle(&db).await;
+            let appointment = appointment::create(
+                &db,
+                vehicle,
+                NewAppointment {
+                    purpose: "Brakes".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .id;
+            Fixture {
+                db,
+                vehicle,
+                appointment,
+            }
+        }
+
+        async fn add_job(f: &Fixture, title: &str) -> i32 {
+            job::create(
+                &f.db,
+                f.vehicle,
+                NewWorkItem {
+                    title: title.into(),
+                    appointment_id: Some(f.appointment),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .id
+        }
+
+        async fn add_need(f: &Fixture, job_id: i32, name: &str, supplied_by: Option<&str>) -> i32 {
+            need::add(
+                &f.db,
+                f.vehicle,
+                job_id,
+                NewNeed {
+                    name: name.into(),
+                    supplied_by: supplied_by.map(String::from),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .id
+        }
+
+        // A recorded part linked to the need, as the owner's own purchase.
+        async fn link_new_part(f: &Fixture, need_id: i32, received: bool) -> i32 {
+            let part_id = seed_part(&f.db, f.vehicle, "Pads").await;
+            let received_on = received.then(|| "2026-11-01".to_string());
+            need::link_part(&f.db, f.vehicle, need_id, part_id, received_on)
+                .await
+                .unwrap();
+            part_id
+        }
+
+        async fn stage_of(f: &Fixture, need_id: i32) -> need::Stage {
+            let n = job_need::Entity::find_by_id(need_id)
+                .one(&f.db)
+                .await
+                .unwrap()
+                .unwrap();
+            let p = match n.part_id {
+                Some(id) => part::Entity::find_by_id(id).one(&f.db).await.unwrap(),
+                None => None,
+            };
+            need::stage(&n, p.as_ref())
+        }
+
+        async fn job_status(f: &Fixture, job_id: i32) -> String {
+            work_item::Entity::find_by_id(job_id)
+                .one(&f.db)
+                .await
+                .unwrap()
+                .unwrap()
+                .status
+        }
+
+        async fn appointment_status(f: &Fixture) -> &'static str {
+            appointment::summary(&f.db, f.vehicle, f.appointment)
+                .await
+                .unwrap()
+                .status
+        }
+
+        fn invoice(f: &Fixture) -> NewServiceRecord {
+            NewServiceRecord {
+                service_date: "2026-11-10".into(),
+                appointment_id: Some(f.appointment),
+                ..Default::default()
+            }
+        }
+
+        #[tokio::test]
+        async fn naming_an_appointment_installs_and_completes_nothing_by_itself() {
+            let f = fixture().await;
+            let job_id = add_job(&f, "Rear brakes").await;
+            let need_id = add_need(&f, job_id, "Pads", None).await;
+            let part_id = link_new_part(&f, need_id, false).await;
+
+            let created = create(&f.db, f.vehicle, invoice(&f)).await.unwrap();
+
+            assert_eq!(created.record.appointment_id, Some(f.appointment));
+            assert_eq!(job_status(&f, job_id).await, "planned");
+            let part = part_svc::get(&f.db, f.vehicle, part_id).await.unwrap();
+            assert_eq!(part.status, "purchased");
+            assert_eq!(stage_of(&f, need_id).await, need::Stage::Ordered);
+            assert!(created.unfitted_needs.is_empty());
+            assert!(created.completed_work_items.is_empty());
+        }
+
+        #[tokio::test]
+        async fn named_parts_install_and_their_needs_read_installed() {
+            let f = fixture().await;
+            let job_id = add_job(&f, "Rear brakes").await;
+            let need_id = add_need(&f, job_id, "Pads", None).await;
+            let part_id = link_new_part(&f, need_id, true).await;
+
+            let created = create(
+                &f.db,
+                f.vehicle,
+                NewServiceRecord {
+                    part_ids: Some(vec![part_id]),
+                    work_item_ids: Some(vec![job_id]),
+                    ..invoice(&f)
+                },
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(stage_of(&f, need_id).await, need::Stage::Installed);
+            assert_eq!(job_status(&f, job_id).await, "done");
+            assert!(created.unfitted_needs.is_empty());
+        }
+
+        #[tokio::test]
+        async fn inline_shop_part_fills_its_need() {
+            let f = fixture().await;
+            let job_id = add_job(&f, "Rear brakes").await;
+            let need_id = add_need(&f, job_id, "Pads", Some("shop")).await;
+
+            let created = create(
+                &f.db,
+                f.vehicle,
+                NewServiceRecord {
+                    work_item_ids: Some(vec![job_id]),
+                    parts: Some(vec![NewPart {
+                        name: "Shop pads".into(),
+                        supplied_by: Some("shop".into()),
+                        need_id: Some(need_id),
+                        ..Default::default()
+                    }]),
+                    ..invoice(&f)
+                },
+            )
+            .await
+            .unwrap();
+
+            let new_part_id = created.part_ids[0];
+            let n = job_need::Entity::find_by_id(need_id)
+                .one(&f.db)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(n.part_id, Some(new_part_id));
+            assert_eq!(stage_of(&f, need_id).await, need::Stage::Installed);
+            assert!(created.unfitted_needs.is_empty());
+        }
+
+        #[tokio::test]
+        async fn unfitted_needs_lists_linked_parts_not_named() {
+            let f = fixture().await;
+            let job_id = add_job(&f, "Rear brakes").await;
+            let fitted = add_need(&f, job_id, "Pads", None).await;
+            let fitted_part = link_new_part(&f, fitted, true).await;
+            let left_over = add_need(&f, job_id, "Sensor", None).await;
+            let left_over_part = link_new_part(&f, left_over, false).await;
+            // A need with no part and a need on a job this service does not
+            // complete are not listed.
+            add_need(&f, job_id, "Grease", None).await;
+            let other_job = add_job(&f, "Wipers").await;
+            let other_need = add_need(&f, other_job, "Blades", None).await;
+            link_new_part(&f, other_need, false).await;
+
+            let created = create(
+                &f.db,
+                f.vehicle,
+                NewServiceRecord {
+                    part_ids: Some(vec![fitted_part]),
+                    work_item_ids: Some(vec![job_id]),
+                    ..invoice(&f)
+                },
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(created.unfitted_needs.len(), 1);
+            let listed = &created.unfitted_needs[0];
+            assert_eq!(listed.need_id, left_over);
+            assert_eq!(listed.name, "Sensor");
+            assert_eq!(listed.job_title, "Rear brakes");
+            assert_eq!(listed.part_id, left_over_part);
+            let json = serde_json::to_value(&created).unwrap();
+            assert_eq!(json["unfitted_needs"].as_array().unwrap().len(), 1);
+
+            // Plain reads leave the list out; an update recomputes it.
+            let read = get(&f.db, f.vehicle, created.record.id).await.unwrap();
+            assert!(read.unfitted_needs.is_empty());
+            assert!(
+                serde_json::to_value(&read)
+                    .unwrap()
+                    .get("unfitted_needs")
+                    .is_none()
+            );
+            let updated = update(
+                &f.db,
+                f.vehicle,
+                created.record.id,
+                UpdateServiceRecord {
+                    part_ids: Some(vec![fitted_part, left_over_part]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            assert!(updated.unfitted_needs.is_empty());
+            let again = update(
+                &f.db,
+                f.vehicle,
+                created.record.id,
+                UpdateServiceRecord {
+                    part_ids: Some(vec![fitted_part]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(again.unfitted_needs.len(), 1);
+        }
+
+        #[tokio::test]
+        async fn appointment_reads_done_when_its_last_job_completes() {
+            let f = fixture().await;
+            let first = add_job(&f, "Rear brakes").await;
+            let second = add_job(&f, "Wipers").await;
+            assert_eq!(appointment_status(&f).await, "planning");
+
+            create(
+                &f.db,
+                f.vehicle,
+                NewServiceRecord {
+                    work_item_ids: Some(vec![first]),
+                    ..invoice(&f)
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(appointment_status(&f).await, "planning");
+
+            create(
+                &f.db,
+                f.vehicle,
+                NewServiceRecord {
+                    work_item_ids: Some(vec![second]),
+                    service_date: "2026-11-11".into(),
+                    ..invoice(&f)
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(appointment_status(&f).await, "done");
+        }
+
+        #[tokio::test]
+        async fn deleting_the_service_reopens_the_appointment_and_needs_fall_back() {
+            let f = fixture().await;
+            let job_id = add_job(&f, "Rear brakes").await;
+            let need_id = add_need(&f, job_id, "Pads", None).await;
+            let part_id = link_new_part(&f, need_id, true).await;
+            let created = create(
+                &f.db,
+                f.vehicle,
+                NewServiceRecord {
+                    part_ids: Some(vec![part_id]),
+                    work_item_ids: Some(vec![job_id]),
+                    ..invoice(&f)
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(appointment_status(&f).await, "done");
+            assert_eq!(stage_of(&f, need_id).await, need::Stage::Installed);
+
+            delete(&f.db, f.vehicle, created.record.id, None)
+                .await
+                .unwrap();
+
+            assert_eq!(appointment_status(&f).await, "planning");
+            assert_eq!(job_status(&f, job_id).await, "planned");
+            assert_eq!(stage_of(&f, need_id).await, need::Stage::Received);
+        }
+
+        #[tokio::test]
+        async fn appointment_from_another_vehicle_reads_as_missing() {
+            let f = fixture().await;
+            let other = VehicleFixture::new().name("Other").insert_id(&f.db).await;
+            let missing = create(
+                &f.db,
+                other,
+                NewServiceRecord {
+                    appointment_id: Some(99_999),
+                    ..invoice(&f)
+                },
+            )
+            .await
+            .unwrap_err();
+            let wrong = create(&f.db, other, invoice(&f)).await.unwrap_err();
+            assert!(matches!(wrong, DomainError::NotFound(_)));
+            assert_eq!(
+                wrong.to_string().replace(&f.appointment.to_string(), "N"),
+                missing.to_string().replace("99999", "N")
+            );
+            assert_eq!(row_count::<service_record::Entity>(&f.db).await, 0);
+
+            // The same guard covers a correction.
+            let own = create(
+                &f.db,
+                other,
+                NewServiceRecord {
+                    appointment_id: None,
+                    ..invoice(&f)
+                },
+            )
+            .await
+            .unwrap();
+            let err = update(
+                &f.db,
+                other,
+                own.record.id,
+                UpdateServiceRecord {
+                    appointment_id: Some(Some(f.appointment)),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(err, DomainError::NotFound(_)));
+        }
+
+        #[tokio::test]
+        async fn cancelled_or_closed_appointment_is_refused() {
+            let f = fixture().await;
+            appointment::close(&f.db, f.vehicle, f.appointment, true)
+                .await
+                .unwrap();
+            let err = create(&f.db, f.vehicle, invoice(&f)).await.unwrap_err();
+            assert!(matches!(err, DomainError::BadRequest(_)));
+            assert_eq!(row_count::<service_record::Entity>(&f.db).await, 0);
+        }
+
+        #[tokio::test]
+        async fn correcting_a_service_sets_changes_and_clears_its_appointment() {
+            let f = fixture().await;
+            let second = appointment::create(
+                &f.db,
+                f.vehicle,
+                NewAppointment {
+                    purpose: "Oil".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .id;
+            let created = create(
+                &f.db,
+                f.vehicle,
+                NewServiceRecord {
+                    appointment_id: None,
+                    ..invoice(&f)
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(created.record.appointment_id, None);
+            let set = |value| UpdateServiceRecord {
+                appointment_id: Some(value),
+                ..Default::default()
+            };
+            let id = created.record.id;
+            let r = update(&f.db, f.vehicle, id, set(Some(f.appointment)))
+                .await
+                .unwrap();
+            assert_eq!(r.record.appointment_id, Some(f.appointment));
+            let r = update(&f.db, f.vehicle, id, set(Some(second)))
+                .await
+                .unwrap();
+            assert_eq!(r.record.appointment_id, Some(second));
+            // An absent key leaves it alone.
+            let r = update(&f.db, f.vehicle, id, UpdateServiceRecord::default())
+                .await
+                .unwrap();
+            assert_eq!(r.record.appointment_id, Some(second));
+            let r = update(&f.db, f.vehicle, id, set(None)).await.unwrap();
+            assert_eq!(r.record.appointment_id, None);
+        }
+
+        #[tokio::test]
+        async fn inline_part_need_from_another_vehicle_reads_as_missing() {
+            let f = fixture().await;
+            let other = VehicleFixture::new().name("Other").insert_id(&f.db).await;
+            let job_id = add_job(&f, "Rear brakes").await;
+            let need_id = add_need(&f, job_id, "Pads", Some("shop")).await;
+            let inline = |need_id| NewServiceRecord {
+                appointment_id: None,
+                parts: Some(vec![NewPart {
+                    name: "Pads".into(),
+                    need_id: Some(need_id),
+                    ..Default::default()
+                }]),
+                ..invoice(&f)
+            };
+            let missing = create(&f.db, other, inline(99_999)).await.unwrap_err();
+            let wrong = create(&f.db, other, inline(need_id)).await.unwrap_err();
+            assert!(matches!(wrong, DomainError::NotFound(_)));
+            assert_eq!(
+                wrong.to_string().replace(&need_id.to_string(), "N"),
+                missing.to_string().replace("99999", "N")
+            );
+            assert_eq!(row_count::<service_record::Entity>(&f.db).await, 0);
+            assert_eq!(row_count::<part::Entity>(&f.db).await, 0);
+        }
+
+        #[tokio::test]
+        async fn one_bad_need_id_commits_nothing() {
+            let f = fixture().await;
+            let job_id = add_job(&f, "Rear brakes").await;
+            let good = add_need(&f, job_id, "Pads", Some("shop")).await;
+            let linked = add_need(&f, job_id, "Sensor", None).await;
+            link_new_part(&f, linked, false).await;
+            let parts_before = row_count::<part::Entity>(&f.db).await;
+
+            for bad in [99_999, linked] {
+                let err = create(
+                    &f.db,
+                    f.vehicle,
+                    NewServiceRecord {
+                        work_item_ids: Some(vec![job_id]),
+                        parts: Some(vec![
+                            NewPart {
+                                name: "Pads".into(),
+                                need_id: Some(good),
+                                ..Default::default()
+                            },
+                            NewPart {
+                                name: "Other".into(),
+                                need_id: Some(bad),
+                                ..Default::default()
+                            },
+                        ]),
+                        ..invoice(&f)
+                    },
+                )
+                .await
+                .unwrap_err();
+                assert!(matches!(
+                    err,
+                    DomainError::NotFound(_) | DomainError::BadRequest(_)
+                ));
+                assert_eq!(row_count::<service_record::Entity>(&f.db).await, 0);
+                assert_eq!(row_count::<part::Entity>(&f.db).await, parts_before);
+                assert_eq!(job_status(&f, job_id).await, "planned");
+                let n = job_need::Entity::find_by_id(good)
+                    .one(&f.db)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(n.part_id, None);
+            }
+        }
     }
 }

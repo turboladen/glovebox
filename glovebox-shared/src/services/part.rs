@@ -387,6 +387,7 @@ mod tests {
             warranty_expires_miles: None,
             supplied_by: None,
             order_ref: None,
+            need_id: None,
         }
     }
 
