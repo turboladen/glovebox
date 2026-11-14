@@ -65,8 +65,6 @@ pub async fn connect(db_path: &str) -> DomainResult<DatabaseConnection> {
     let db = Database::connect(connect_options(Some(path.to_path_buf()))).await?;
     if had_data {
         refuse_unknown_migrations(&db).await?;
-    }
-    if had_data {
         backup_before_migrating(&db, path, chrono::Local::now()).await?;
     }
     Migrator::up(&db, None).await?;
@@ -168,6 +166,7 @@ pub(crate) async fn connect_in_memory() -> DatabaseConnection {
 mod tests {
     use sea_orm::{
         ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, QueryFilter, Statement,
+        TransactionTrait,
     };
 
     use super::*;
@@ -477,14 +476,18 @@ mod tests {
         let path = dir.path().join("glovebox.db");
         let first = connect(path.to_str().unwrap()).await.unwrap();
         let second = raw(&path).await;
-        first.execute_unprepared("BEGIN IMMEDIATE").await.unwrap();
+        // The write lock is held on one pooled connection until `commit`.
+        let txn = TransactionTrait::begin(&first).await.unwrap();
+        txn.execute_unprepared("INSERT INTO platforms (name) VALUES ('holder')")
+            .await
+            .unwrap();
         let waiting = tokio::spawn(async move {
             second
                 .execute_unprepared("INSERT INTO platforms (name) VALUES ('busy-timeout-probe')")
                 .await
         });
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        first.execute_unprepared("COMMIT").await.unwrap();
+        txn.commit().await.unwrap();
         waiting
             .await
             .unwrap()

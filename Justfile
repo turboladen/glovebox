@@ -5,7 +5,7 @@ backup:
 
 # Delete the named non-live environment's database files. `live` is refused.
 reset-env env:
-    cargo run --quiet --release -p glovebox-cli -- reset --env {{env}}
+    cargo run --quiet --release -p glovebox-cli -- reset --env {{quote(env)}}
 
 # --- CI ---
 # These recipes are what GitHub Actions runs, so `just ci` reproduces CI locally.

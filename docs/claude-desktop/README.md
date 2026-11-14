@@ -53,8 +53,8 @@ glovebox conversation inside that project so the instructions apply.
 
 - **`GLOVEBOX_ENV`** names the environment. It defaults to `live`, which uses `data/glovebox.db`.
   Any other name, such as `test`, uses `data/glovebox-<name>.db`.
-- **`GLOVEBOX_DB_PATH`** sets the database path. It defaults to `data/glovebox.db` relative to the
-  directory the server starts in, so the snippet sets an absolute path.
+- **`GLOVEBOX_DB_PATH`** sets the database path. Without it the path follows `GLOVEBOX_ENV` and is
+  relative to the directory the server starts in, so the snippets set an absolute path.
 - **`RUST_LOG`** sets the log filter, such as `info` or `debug`. It defaults to `info`. Logs go to
   stderr, which Claude Desktop writes to `~/Library/Logs/Claude/mcp-server-glovebox.log`. Stdout
   carries only protocol frames.
@@ -63,8 +63,8 @@ glovebox conversation inside that project so the instructions apply.
 
 To try the server against a throwaway database, add a second server entry by hand to Claude
 Desktop's config, copying `claude_desktop_config.test.snippet.json`. It sets `GLOVEBOX_ENV` to
-`test` and an absolute `GLOVEBOX_DB_PATH` ending in `data/glovebox-test.db`. `just reset-env test`
-deletes that database; no recipe deletes the live one.
+`test` and an absolute `GLOVEBOX_DB_PATH` ending in `data/glovebox-test.db`.
+`just reset-env test` deletes that database; no recipe deletes the live one.
 
 ## Smoke test without Claude Desktop
 
