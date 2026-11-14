@@ -8,38 +8,62 @@
 <style>
   :root {
     color-scheme: light dark;
-    --bg: #EEF0EE;
-    --raised: #F8F9F8;
+    --bg: #E6E8E7;
+    --sheet: #FFFFFF;
+    --head: #DADDDC;
+    --inset: #F1F3F2;
     --ink: #17191B;
     --ink-2: #50565B;
-    --rule: #C3C7C8;
+    --rule: #D3D6D6;
+    --edge: #A9AEB0;
     --control: #7C8286;
     --tick-off: #B4B9BB;
     --attn: #8A4F00;
     --ok: #22663E;
     --bad: #AE2618;
 
-    --text: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    --figure: "DIN Alternate", Bahnschrift, "D-DIN", "DIN 2014", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --amber-bg: #FBE7C2; --amber-line: #B26A00;
+    --green-bg: #D5EBDD; --green-line: #22663E;
+    --red-bg: #F8D9D4;   --red-line: #AE2618;
+    --steel-bg: #D8E3EE; --steel-line: #3F6690;
+    --stone-bg: #E6E7E5; --stone-line: #7C8286;
 
-    --label: 10rem;
-    --gap: 2.5rem;
+    --text: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+
+    --need-col: 12rem;
+    --pad: 1rem;
   }
 
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #16181A;
-      --raised: #1E2124;
+      --bg: #121416;
+      --sheet: #1C1F22;
+      --head: #2A2E32;
+      --inset: #16191B;
       --ink: #ECEAE4;
       --ink-2: #A3A7AB;
-      --rule: #2E3236;
+      --rule: #30353A;
+      --edge: #4A5056;
       --control: #6E7479;
       --tick-off: #454A4F;
       --attn: #F0A43C;
       --ok: #74C69A;
       --bad: #FF8A7A;
+
+      --amber-bg: #4A3408; --amber-line: #F0A43C;
+      --green-bg: #143D27; --green-line: #74C69A;
+      --red-bg: #521A13;   --red-line: #FF8A7A;
+      --steel-bg: #1D3348; --steel-line: #7FAED8;
+      --stone-bg: #2C3034; --stone-line: #7E858A;
     }
   }
+
+  .tone-amber { --tone-bg: var(--amber-bg); --tone-line: var(--amber-line); }
+  .tone-green { --tone-bg: var(--green-bg); --tone-line: var(--green-line); }
+  .tone-red   { --tone-bg: var(--red-bg);   --tone-line: var(--red-line); }
+  .tone-steel { --tone-bg: var(--steel-bg); --tone-line: var(--steel-line); }
+  .tone-stone { --tone-bg: var(--stone-bg); --tone-line: var(--stone-line); }
 
   *, *::before, *::after { box-sizing: border-box; }
 
@@ -64,132 +88,182 @@
   :focus-visible { outline: 2px solid var(--attn); outline-offset: 2px; }
 
   .page {
-    max-width: 80rem;
+    max-width: 76rem;
     margin: 0 auto;
-    padding-inline: clamp(1rem, 3.5vw, 3rem);
+    padding-inline: clamp(0.75rem, 3vw, 2.5rem);
   }
 
   /* Header */
 
-  .chrome { border-bottom: 1px solid var(--rule); }
+  .chrome { background: var(--sheet); border-bottom: 2px solid var(--ink); }
   .chrome .page {
     display: flex;
     flex-wrap: wrap;
-    align-items: baseline;
-    column-gap: 1.25rem;
+    align-items: center;
+    column-gap: 1rem;
     row-gap: 0.25rem;
-    padding-block: 1rem;
+    padding-block: 0.75rem;
   }
   .wordmark {
-    font: 700 1.125rem/1 var(--figure);
-    letter-spacing: 0.02em;
+    font: 800 1rem/1 var(--text);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
     text-decoration: none;
   }
-  .env {
-    font-size: 0.8125rem;
-    line-height: 1;
-    color: var(--ink-2);
-    border: 1px solid var(--control);
-    border-radius: 2px;
-    padding: 0.2rem 0.4rem;
-  }
   .chrome nav { margin-inline-start: auto; font-size: 0.9375rem; }
-  .today { font: 700 0.9375rem/1 var(--figure); color: var(--ink-2); }
+  .today { font: 600 0.9375rem/1 var(--text); color: var(--ink-2); }
+
+  /* Pills: every value that comes from a fixed list */
+
+  .pill, .env {
+    display: inline-block;
+    width: fit-content;
+    padding: 0.05rem 0.5rem;
+    border: 1px solid var(--tone-line, var(--stone-line));
+    border-radius: 999px;
+    background: var(--tone-bg, var(--stone-bg));
+    color: var(--ink);
+    font: 600 0.8125rem/1.5 var(--text);
+    white-space: nowrap;
+    vertical-align: baseline;
+  }
+  .env { --tone-bg: var(--amber-bg); --tone-line: var(--amber-line); }
+  .pill--undecided, .pill--to_order, .fit--unconfirmed { --tone-bg: var(--amber-bg); --tone-line: var(--amber-line); }
+  .pill--ordered, .pill--planned { --tone-bg: var(--steel-bg); --tone-line: var(--steel-line); }
+  .pill--received, .pill--done, .fit--confirmed { --tone-bg: var(--green-bg); --tone-line: var(--green-line); }
+  .pill--installed { background: var(--green-line); border-color: var(--green-line); color: var(--sheet); }
+  .pill--shop_supplies { --tone-bg: var(--stone-bg); --tone-line: var(--stone-line); }
+  .fit--does_not_fit, .pill--rejected { --tone-bg: var(--red-bg); --tone-line: var(--red-line); }
+  .pill--kind { background: transparent; border-color: var(--edge); font-weight: 500; }
+  .pill--none { background: transparent; border-style: dashed; border-color: var(--edge); color: var(--ink-2); font-weight: 400; }
+
+  /* A tag names the job a row belongs to. It is free text, so it is square. */
+  .tag {
+    display: inline-block;
+    padding: 0 0.4rem;
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    color: var(--ink-2);
+    font: 400 0.8125rem/1.5 var(--text);
+    white-space: nowrap;
+  }
 
   /* Undo banner */
 
-  .banner { background: var(--raised); border-bottom: 1px solid var(--rule); }
+  .banner { background: var(--ink); color: var(--bg); }
   .banner .page {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: 0.5rem 1.25rem;
-    padding-block: 0.625rem;
+    padding-block: 0.5rem;
   }
   .banner p { font-size: 0.9375rem; }
+  .banner .btn { color: var(--bg); border-color: var(--bg); min-height: 1.875rem; padding-block: 0.2rem; }
+
+  /* Boxes: a white sheet with a tinted head band and a colored spine */
+
+  .box {
+    background: var(--sheet);
+    border: 1px solid var(--edge);
+    border-left: 6px solid var(--tone-line, var(--edge));
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .box-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.25rem 0.75rem;
+    padding: 0.5rem var(--pad);
+    background: var(--tone-bg, var(--head));
+    border-bottom: 1px solid var(--tone-line, var(--edge));
+    font: 700 1.0625rem/1.4 var(--text);
+  }
+  .box-head .count {
+    margin-inline-start: auto;
+    font: 600 0.875rem/1.4 var(--text);
+    color: var(--ink);
+  }
+  .box-head .count b { font-size: 1.0625rem; font-weight: 800; }
+
+  details.box > summary { list-style: none; cursor: pointer; }
+  details.box > summary::-webkit-details-marker { display: none; }
+  details.box > summary .box-head::after { content: "Show"; font: 400 0.875rem/1.4 var(--text); text-decoration: underline; text-underline-offset: 0.2em; }
+  details.box[open] > summary .box-head::after { content: "Hide"; }
+  details.box:not([open]) > summary .box-head { border-bottom: 0; }
 
   /* Appointment */
 
-  .appt { padding-block: 2.75rem 2.25rem; }
-  .appt h1 {
-    font: 700 clamp(2rem, 4.5vw, 3rem)/1.05 var(--figure);
-    letter-spacing: -0.005em;
-    max-width: 22ch;
+  .appt { padding-block: 1.5rem 0.5rem; }
+  .box.lead { border: 2px solid var(--ink); }
+  .box.lead > .box-head {
+    background: var(--ink);
+    color: var(--bg);
+    border-bottom: 0;
+    padding-block: 0.875rem;
+    font: 800 clamp(1.5rem, 3vw, 2rem)/1.15 var(--text);
+    letter-spacing: -0.01em;
   }
-  .appt-facts {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(10rem, max-content));
-    column-gap: var(--gap);
-    row-gap: 1rem;
-    margin-top: 1.75rem;
-  }
-  .appt-facts dt { font-size: 0.8125rem; color: var(--ink-2); }
-  .appt-facts dd { font-size: 1.0625rem; }
-  .appt-facts .figure { font: 700 1.0625rem/1.5 var(--figure); }
-  .appt-counts {
+  .appt-body {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.25rem var(--gap);
-    margin-top: 1.25rem;
-    padding-top: 1rem;
-    border-top: 1px solid var(--rule);
-    font-size: 1.0625rem;
+    align-items: stretch;
   }
-  .appt-counts b { font: 700 1.25rem/1 var(--figure); }
+  .appt-facts { display: flex; flex-wrap: wrap; flex: 1 1 auto; }
+  .appt-facts > div, .appt-counts > span {
+    padding: 0.625rem var(--pad);
+    border-right: 1px solid var(--rule);
+  }
+  .appt-facts dt, .appt-counts small {
+    display: block;
+    font: 600 0.6875rem/1.4 var(--text);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+  }
+  .appt-facts dd { font-size: 1.0625rem; font-weight: 600; }
+  .appt-counts { display: flex; flex-wrap: wrap; background: var(--inset); border-left: 1px solid var(--rule); }
+  .appt-counts > span:last-child { border-right: 0; }
+  .appt-counts b { display: block; font: 800 1.375rem/1.2 var(--text); }
+  .appt-counts .open b { color: var(--attn); }
 
-  /* Section and group bands */
+  /* Sections */
 
-  .section { padding-block: 0 3rem; }
+  .section { display: grid; gap: 0.875rem; padding-block: 1.25rem 1.5rem; }
+  .section > * { min-width: 0; }
   .section > h2 {
-    font: 600 1.375rem/1.2 var(--text);
-    padding-top: 0.875rem;
-    border-top: 1px solid var(--ink);
-    margin-bottom: 0.5rem;
+    font: 800 0.8125rem/1.4 var(--text);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+    padding-bottom: 0.25rem;
+    border-bottom: 2px solid var(--ink);
   }
-
-  .band {
-    display: grid;
-    grid-template-columns: var(--label) minmax(0, 1fr);
-    column-gap: var(--gap);
-    padding-block: 1.25rem 0.5rem;
-  }
-  .band + .band { border-top: 1px solid var(--rule); }
-  .band-label {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 0.75rem;
-    font: 600 1rem/1.5 var(--text);
-    padding-top: 0.625rem;
-  }
-  .count { font: 700 1rem/1 var(--figure); color: var(--ink-2); }
-  .count--attn { color: var(--attn); }
-
-  details.band > summary { list-style: none; cursor: pointer; }
-  details.band > summary::-webkit-details-marker { display: none; }
-  details.band > summary .band-label::after { content: "Show"; font: 400 0.875rem/1.5 var(--text); color: var(--ink-2); text-decoration: underline; text-underline-offset: 0.2em; }
-  details.band[open] > summary .band-label::after { content: "Hide"; }
-  details.band:not([open]) { padding-bottom: 1.25rem; }
 
   /* Next-step rows */
 
   .step {
     display: grid;
-    grid-template-columns: 2.75rem minmax(0, 1fr) auto;
+    grid-template-columns: var(--need-col) minmax(0, 1fr) auto;
     column-gap: 1rem;
-    row-gap: 0.75rem;
-    align-items: baseline;
-    padding-block: 0.625rem;
+    row-gap: 0.5rem;
+    align-items: center;
+    padding: 0.625rem var(--pad);
   }
   .step + .step { border-top: 1px solid var(--rule); }
+  .step:nth-child(even) { background: var(--inset); }
+  .step-need { font-weight: 700; }
   .step-text { overflow-wrap: anywhere; }
+  .step-text::first-letter { text-transform: uppercase; }
+  .step-text .tag, .step-text .pill { margin-inline-start: 0.5rem; }
   .step-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: flex-end; }
   .step-actions > form { display: contents; }
   .step > .drawer[open] { grid-column: 2 / -1; }
   .step > .drawer:not([open]) { justify-self: end; }
-  .step--todo .tick-form { align-self: center; }
+  .step--todo { grid-template-columns: 1.375rem minmax(0, 1fr) auto; }
   .step > .drawer--aside, .step > .drawer--aside:not([open]) { grid-column: 2 / -1; justify-self: start; margin-top: -0.25rem; }
-  .drawer.drawer--aside > summary { min-height: 0; padding: 0; border: 0; color: var(--ink-2); text-decoration: underline; text-underline-offset: 0.2em; font-weight: 400; }
+  .drawer.drawer--aside > summary { min-height: 0; padding: 0; border: 0; background: transparent; color: var(--ink-2); text-decoration: underline; text-underline-offset: 0.2em; font-weight: 400; }
   .drawer.drawer--aside > summary:hover, .drawer.drawer--aside[open] > summary { color: var(--ink); }
   .step > .drawer--add, .step > .drawer--add:not([open]) { grid-column: 2 / -1; justify-self: start; }
 
@@ -202,22 +276,15 @@
     height: 0.75rem;
     padding-bottom: 2px;
     border-bottom: 1px solid var(--tick-off);
-    vertical-align: baseline;
   }
   .scale i { display: block; width: 3px; height: 100%; background: var(--tick-off); }
   .scale[data-stage="undecided"] i:nth-child(-n+1),
-  .scale[data-stage="to_order"] i:nth-child(-n+2) { background: var(--attn); }
-  .scale[data-stage="ordered"] i:nth-child(-n+3) { background: var(--ink); }
+  .scale[data-stage="to_order"] i:nth-child(-n+2) { background: var(--amber-line); }
+  .scale[data-stage="ordered"] i:nth-child(-n+3) { background: var(--steel-line); }
   .scale[data-stage="received"] i:nth-child(-n+4),
-  .scale[data-stage="installed"] i { background: var(--ok); }
+  .scale[data-stage="installed"] i { background: var(--green-line); }
   .scale[data-stage="shop_supplies"] i { height: 2px; background: var(--ink-2); }
   .scale[data-stage="shop_supplies"] { border-bottom-color: transparent; }
-
-  .stage { font-size: 0.875rem; font-weight: 500; white-space: nowrap; }
-  .stage[data-stage="undecided"], .stage[data-stage="to_order"] { color: var(--attn); }
-  .stage[data-stage="ordered"] { color: var(--ink); }
-  .stage[data-stage="received"], .stage[data-stage="installed"] { color: var(--ok); }
-  .stage[data-stage="shop_supplies"] { color: var(--ink-2); }
 
   /* Controls */
 
@@ -227,18 +294,19 @@
     min-height: 2.25rem;
     padding: 0.4rem 0.8rem;
     border: 1px solid var(--control);
-    border-radius: 2px;
-    background: transparent;
+    border-radius: 3px;
+    background: var(--sheet);
     color: var(--ink);
-    font: 500 0.875rem/1.2 var(--text);
+    font: 600 0.875rem/1.2 var(--text);
     cursor: pointer;
     white-space: nowrap;
     text-decoration: none;
   }
   .btn:hover, .drawer > summary:hover { border-color: var(--ink); }
   .btn--primary { background: var(--ink); border-color: var(--ink); color: var(--bg); }
-  .btn--quiet { border-color: transparent; color: var(--ink-2); padding-inline: 0.4rem; text-decoration: underline; text-underline-offset: 0.2em; }
+  .btn--quiet { border-color: transparent; background: transparent; color: var(--ink-2); padding-inline: 0.4rem; text-decoration: underline; text-underline-offset: 0.2em; font-weight: 400; }
   .btn--quiet:hover { border-color: transparent; color: var(--ink); }
+  .banner .btn { background: transparent; }
 
   .drawer > summary { list-style: none; }
   .drawer > summary::-webkit-details-marker { display: none; }
@@ -249,14 +317,14 @@
     height: 1.375rem;
     padding: 0;
     border: 1.5px solid var(--ink-2);
-    border-radius: 2px;
-    background: transparent;
+    border-radius: 3px;
+    background: var(--sheet);
     cursor: pointer;
     position: relative;
     display: block;
   }
   .tick:hover { border-color: var(--ink); }
-  .tick[aria-pressed="true"] { background: var(--ink-2); border-color: var(--ink-2); }
+  .tick[aria-pressed="true"] { background: var(--green-line); border-color: var(--green-line); }
   .tick[aria-pressed="true"]::after {
     content: "";
     position: absolute;
@@ -264,15 +332,28 @@
     top: 0.12rem;
     width: 0.35rem;
     height: 0.7rem;
-    border: solid var(--bg);
+    border: solid var(--sheet);
     border-width: 0 2px 2px 0;
     transform: rotate(45deg);
   }
 
-  .form { display: grid; gap: 1rem; padding-block: 0.5rem 0.75rem; }
+  .form {
+    display: grid;
+    gap: 0.875rem;
+    margin-top: 0.5rem;
+    padding: 0.875rem;
+    border: 1px solid var(--edge);
+    border-radius: 3px;
+    background: var(--inset);
+  }
   .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: 0.75rem 1rem; }
   .field { display: grid; gap: 0.25rem; align-content: start; }
-  .field > span { font-size: 0.8125rem; color: var(--ink-2); }
+  .field > span, legend h4, .need-cols {
+    font: 600 0.6875rem/1.4 var(--text);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+  }
   .form-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1rem; }
   .form-note { font-size: 0.8125rem; color: var(--ink-2); max-width: 48ch; }
 
@@ -281,8 +362,8 @@
     min-height: 2.25rem;
     padding: 0.4rem 0.6rem;
     border: 1px solid var(--control);
-    border-radius: 2px;
-    background: var(--bg);
+    border-radius: 3px;
+    background: var(--sheet);
     color: var(--ink);
     font: 400 0.9375rem/1.4 var(--text);
     font-variant-numeric: tabular-nums;
@@ -292,51 +373,56 @@
   .check { display: inline-flex; align-items: center; gap: 0.5rem; font-size: 0.9375rem; }
 
   [aria-invalid="true"] { border-color: var(--bad) !important; border-width: 2px !important; }
-  .error { color: var(--bad); font-size: 0.9375rem; overflow-wrap: anywhere; }
-  .error b { font-weight: 600; }
+  .error {
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--red-line);
+    border-left-width: 6px;
+    border-radius: 3px;
+    background: var(--red-bg);
+    font-size: 0.9375rem;
+    overflow-wrap: anywhere;
+  }
+  .error b { font-weight: 700; }
 
   /* Jobs */
 
-  .job { padding-block: 1.25rem 0.75rem; }
-  .job + .job { border-top: 1px solid var(--rule); }
-  .job-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 1.25rem; margin-bottom: 0.5rem; }
-  .job-head h3 { font: 600 1.1875rem/1.3 var(--text); }
-  .job-head p { font-size: 0.9375rem; color: var(--ink-2); }
+  .job-head h3 { font: 700 1.125rem/1.4 var(--text); }
 
-  .need + .need, .needs > li + li { border-top: 1px solid var(--rule); }
+  .need-cols, .need-row {
+    display: grid;
+    grid-template-columns: var(--need-col) minmax(0, 1fr) minmax(0, 17rem) 1.25rem;
+    column-gap: 1.5rem;
+    padding-inline: var(--pad);
+  }
+  .need-cols { padding-block: 0.3rem; background: var(--inset); border-bottom: 1px solid var(--rule); }
+
+  .needs > li + li { border-top: 1px solid var(--edge); }
   .need > summary { list-style: none; cursor: pointer; }
   .need > summary::-webkit-details-marker { display: none; }
+  .need > summary:hover { background: var(--inset); }
+  .need[open] > summary { background: var(--inset); }
 
-  .need-row {
-    display: grid;
-    grid-template-columns: 12rem minmax(0, 1fr) minmax(0, 17rem) 1.25rem;
-    column-gap: 1.75rem;
-    row-gap: 0.75rem;
-    padding-block: 1rem;
-  }
-  .need-name { font-weight: 600; }
-  .need-row .cell > .need-stage { display: flex; align-items: baseline; gap: 0.6rem; margin-top: 0.25rem; }
+  .need-row { row-gap: 0.75rem; padding-block: 0.875rem; }
+  .need-row .cell > * { display: block; }
+  .need-row .cell > .pill { margin-top: 0.3rem; }
+  .need-name { font-weight: 700; font-size: 1.0625rem; }
+  .need-row .cell > .need-stage { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.3rem; }
+  .need-row .facts { padding-inline-start: 1.5rem; border-inline-start: 1px solid var(--rule); }
 
-  .pn { font: 700 1.25rem/1.25 var(--figure); letter-spacing: 0.01em; overflow-wrap: anywhere; }
-  .pn .mfr { font: 400 1rem/1.25 var(--text); margin-inline-end: 0.35rem; letter-spacing: 0; }
+  .pn { font: 600 1.0625rem/1.35 var(--mono); overflow-wrap: anywhere; }
+  .pn .mfr { font: 600 1rem/1.35 var(--text); margin-inline-end: 0.45rem; }
   .opt-desc { font-size: 0.9375rem; }
   .opt-meta { font-size: 0.875rem; color: var(--ink-2); }
-  .money { font-family: var(--figure); font-weight: 700; color: var(--ink); }
+  .money { font-weight: 700; color: var(--ink); white-space: nowrap; }
   .none { color: var(--ink-2); }
-
-  .fit { font-size: 0.875rem; font-weight: 500; }
-  .fit--confirmed { color: var(--ok); }
-  .fit--unconfirmed { color: var(--attn); }
-  .fit--does_not_fit { color: var(--bad); }
   .fit-note { font-size: 0.875rem; color: var(--ink-2); }
-  .rejected { font-weight: 600; color: var(--ink); }
+  .need-note { font-size: 0.875rem; color: var(--attn); font-weight: 600; }
 
-  .purchase { margin-top: 0.5rem; font-size: 0.875rem; }
+  .purchase { margin-top: 0.4rem; font-size: 0.875rem; }
   .purchase span { color: var(--ink-2); margin-inline-end: 0.35rem; }
 
-  .facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.2rem 0.75rem; font-size: 0.9375rem; align-content: start; }
-  .need-row .cell > * { display: block; }
-  .facts .dt { color: var(--ink-2); font-size: 0.875rem; padding-top: 0.06rem; }
+  .facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.3rem 0.75rem; font-size: 0.9375rem; align-content: start; align-items: baseline; }
+  .facts .dt { color: var(--ink-2); font-size: 0.8125rem; }
 
   .marker { position: relative; width: 1.25rem; height: 1.25rem; margin-top: 0.1rem; }
   .marker::before, .marker::after {
@@ -345,38 +431,39 @@
     left: 50%;
     top: 50%;
     width: 0.75rem;
-    height: 1.5px;
+    height: 2px;
     background: var(--ink-2);
     transform: translate(-50%, -50%);
   }
   .marker::after { transform: translate(-50%, -50%) rotate(90deg); }
   .need[open] .marker::after { display: none; }
-  .need > summary:hover .marker::before, .need > summary:hover .marker::after { background: var(--ink); }
 
   .need-body {
     display: grid;
-    gap: 1.5rem;
-    margin-inline-start: calc(12rem + 1.75rem);
-    padding: 0.25rem 0 1.5rem;
+    gap: 1rem;
+    padding: 0.25rem var(--pad) 1.25rem calc(var(--pad) + var(--need-col) + 1.5rem);
+    background: var(--inset);
   }
-  .need-body h4 { font: 600 0.9375rem/1.4 var(--text); margin-bottom: 0.25rem; }
+  .need-body .form { margin-top: 0; background: var(--sheet); }
 
-  .opts { border-top: 1px solid var(--rule); }
+  .opts { border: 1px solid var(--edge); border-radius: 3px; overflow: hidden; margin-top: 0.25rem; }
   .opt {
     display: grid;
     grid-template-columns: 1.5rem minmax(0, 1fr) 6rem minmax(0, 15rem);
     column-gap: 1rem;
     row-gap: 0.25rem;
     align-items: baseline;
-    padding-block: 0.75rem;
-    border-bottom: 1px solid var(--rule);
+    padding: 0.625rem 0.75rem;
     cursor: pointer;
   }
+  .opt + .opt { border-top: 1px solid var(--rule); }
+  .opt:has(input:checked) { background: var(--green-bg); box-shadow: inset 4px 0 0 var(--green-line); }
   .opt input { align-self: start; margin-top: 0.3rem; }
   .opt .price { text-align: right; }
-  .opt--blocked { cursor: not-allowed; }
+  .opt--blocked { cursor: not-allowed; background: var(--inset); }
   .opt--blocked .pn, .opt--blocked .opt-desc { color: var(--ink-2); }
   .opt--does_not_fit .pn { text-decoration: line-through; text-decoration-thickness: 1.5px; }
+  .opt .fit-note { display: block; margin-top: 0.25rem; }
 
   .secondary { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: start; }
   .secondary > .drawer[open] { flex-basis: 100%; }
@@ -384,27 +471,27 @@
   /* Narrow widths */
 
   @media (max-width: 60rem) {
-    .need-row { grid-template-columns: 10rem minmax(0, 1fr) 1.25rem; }
-    .need-row .facts { grid-column: 2 / 3; }
+    :root { --need-col: 10rem; }
+    .need-cols { display: none; }
+    .need-row { grid-template-columns: var(--need-col) minmax(0, 1fr) 1.25rem; }
+    .need-row .facts { grid-column: 2 / 3; padding-inline-start: 0; border-inline-start: 0; }
     .need-row .marker { grid-column: 3; grid-row: 1; }
-    .need-body { margin-inline-start: calc(10rem + 1.75rem); }
   }
 
   @media (max-width: 46rem) {
-    :root { --gap: 1.25rem; }
-    .band { grid-template-columns: minmax(0, 1fr); }
-    .band-label { justify-content: flex-start; padding-top: 0; margin-bottom: 0.25rem; }
-    .step { grid-template-columns: 2.75rem minmax(0, 1fr); }
-    .step-actions, .step > .drawer:not([open]) { grid-column: 2; justify-self: start; justify-content: flex-start; }
-    .step > .drawer[open] { grid-column: 1 / -1; }
+    .step { grid-template-columns: minmax(0, 1fr); }
+    .step--todo { grid-template-columns: 1.375rem minmax(0, 1fr); }
+    .step-actions, .step > .drawer:not([open]) { justify-self: start; justify-content: flex-start; }
+    .step > .drawer, .step > .drawer[open], .step > .drawer--aside, .step > .drawer--add { grid-column: 1 / -1; }
     .need-row { grid-template-columns: minmax(0, 1fr) 1.25rem; }
     .need-row > * { grid-column: 1; }
     .need-row .facts { grid-column: 1; }
     .need-row .marker { grid-column: 2; grid-row: 1; }
-    .need-body { margin-inline-start: 0; }
+    .need-body { padding-inline-start: var(--pad); }
     .opt { grid-template-columns: 1.5rem minmax(0, 1fr); }
     .opt > :nth-child(n+3) { grid-column: 2; }
     .opt .price { text-align: left; }
+    .appt-counts { flex-basis: 100%; border-left: 0; border-top: 1px solid var(--rule); }
   }
 
   @media (prefers-reduced-motion: no-preference) {
@@ -419,7 +506,7 @@
     <a class="wordmark" href="/">Glovebox</a>
     <span class="env" title="Environment: test database">test</span>
     <nav aria-label="Site"><a href="/">Garage</a></nav>
-    <time class="today" datetime="2026-11-13">2026-11-13</time>
+    <time class="today" datetime="2026-11-13">Fri, Nov 13, 2026</time>
   </div>
 </header>
 
@@ -435,51 +522,67 @@
 
 <main>
   <section class="appt page" aria-labelledby="appt-title">
-    <h1 id="appt-title">60k service + loose ends</h1>
-    <dl class="appt-facts">
-      <div><dt>Shop</dt><dd>Demo Auto Works</dd></div>
-      <div><dt>Date</dt><dd class="figure"><time datetime="2026-11-27">2026-11-27</time></dd></div>
-      <div><dt>Vehicle</dt><dd>Demo GTI</dd></div>
-    </dl>
-    <p class="appt-counts">
-      <span><b>5</b> needs open</span>
-      <span><b>2</b> to-dos open</span>
-      <span><b>3</b> jobs</span>
-    </p>
+    <div class="box lead">
+      <h1 class="box-head" id="appt-title">60k service + loose ends</h1>
+      <div class="appt-body">
+        <dl class="appt-facts">
+          <div><dt>Shop</dt><dd>Demo Auto Works</dd></div>
+          <div><dt>Date</dt><dd><time datetime="2026-11-27">Fri, Nov 27, 2026</time></dd></div>
+          <div><dt>Vehicle</dt><dd>Demo GTI</dd></div>
+          <div><dt>Status</dt><dd><span class="pill pill--planned">Planning</span></dd></div>
+        </dl>
+        <p class="appt-counts">
+          <span class="open"><b>5</b><small>needs open</small></span>
+          <span class="open"><b>2</b><small>to-dos open</small></span>
+          <span><b>3</b><small>jobs</small></span>
+        </p>
+      </div>
+    </div>
   </section>
 
   <section class="section page" aria-labelledby="steps-title">
     <h2 id="steps-title">Next steps</h2>
 
-    <section class="band" aria-labelledby="g-decide">
-      <h3 class="band-label" id="g-decide">Decide <span class="count count--attn">2</span></h3>
+    <section class="box tone-red" aria-labelledby="g-check">
+      <h3 class="box-head" id="g-check">Check <span class="count">1</span></h3>
+      <ul class="rows">
+        <li class="step">
+          <p class="step-need">Front pads</p>
+          <p class="step-text">Fitment of the chosen option is not confirmed.<span class="tag">Brakes</span></p>
+          <div class="step-actions"><a class="btn" href="#need-3">Open</a></div>
+        </li>
+      </ul>
+    </section>
+
+    <section class="box tone-amber" aria-labelledby="g-decide">
+      <h3 class="box-head" id="g-decide">Decide <span class="count">2</span></h3>
       <ol class="rows">
         <li class="step">
-          <span class="scale" data-stage="undecided" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
-          <p class="step-text">Rear pads: no part chosen</p>
+          <p class="step-need">Rear pads</p>
+          <p class="step-text">no part chosen<span class="tag">Brakes</span></p>
           <div class="step-actions"><a class="btn" href="#need-2-decide">Choose a part</a></div>
         </li>
         <li class="step">
-          <span class="scale" data-stage="undecided" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
-          <p class="step-text">Wiper blades: no part chosen</p>
+          <p class="step-need">Wiper blades</p>
+          <p class="step-text">no part chosen<span class="tag">Cabin filter and wipers</span></p>
           <div class="step-actions"><a class="btn" href="#need-8-decide">Choose a part</a></div>
         </li>
       </ol>
     </section>
 
-    <section class="band" aria-labelledby="g-order">
-      <h3 class="band-label" id="g-order">Order <span class="count count--attn">2</span></h3>
+    <section class="box tone-amber" aria-labelledby="g-order">
+      <h3 class="box-head" id="g-order">Order <span class="count">2</span></h3>
       <ol class="rows">
         <li class="step">
-          <span class="scale" data-stage="to_order" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
-          <p class="step-text">Rear rotors: order Volkswagen 5Q0615601E from FCP Euro</p>
+          <p class="step-need">Rear rotors</p>
+          <p class="step-text">order Volkswagen 5Q0615601E from FCP Euro<span class="tag">Brakes</span></p>
           <details class="drawer">
             <summary>Mark ordered</summary>
             <form class="form" method="post" action="/needs/1/order">
               <div class="fields">
                 <label class="field"><span>Seller</span><input type="text" name="seller" value="FCP Euro" autocomplete="off"></label>
                 <label class="field"><span>Order date</span><input type="date" name="purchase_date" value="2026-11-13"></label>
-                <label class="field"><span>Price</span><input type="text" name="price" value="138.00" inputmode="decimal" autocomplete="off"></label>
+                <label class="field"><span>Price</span><input type="text" name="price" value="$138.00" placeholder="$0.00" inputmode="decimal" autocomplete="off"></label>
                 <label class="field"><span>Order number</span><input type="text" name="order_ref" autocomplete="off"></label>
               </div>
               <div class="form-actions">
@@ -490,16 +593,16 @@
           </details>
         </li>
         <li class="step step--failed">
-          <span class="scale" data-stage="to_order" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
-          <p class="step-text">Front pads: order Akebono ACT1633 from FCP Euro</p>
+          <p class="step-need">Front pads</p>
+          <p class="step-text">order Akebono ACT1633 from FCP Euro<span class="tag">Brakes</span></p>
           <details class="drawer" open>
             <summary>Mark ordered</summary>
             <form class="form" method="post" action="/needs/3/order">
-              <p class="error" id="need-3-error" role="alert"><b>Not saved.</b> amount: "74,99" is not a dollar amount such as 935 or $1,234.50</p>
+              <p class="error" id="need-3-error" role="alert"><b>Not saved.</b> Price: "about 75" is not a dollar amount such as 935 or $1,234.50</p>
               <div class="fields">
                 <label class="field"><span>Seller</span><input type="text" name="seller" value="FCP Euro" autocomplete="off"></label>
                 <label class="field"><span>Order date</span><input type="date" name="purchase_date" value="2026-11-13"></label>
-                <label class="field"><span>Price</span><input type="text" name="price" value="74,99" inputmode="decimal" autocomplete="off" aria-invalid="true" aria-describedby="need-3-error"></label>
+                <label class="field"><span>Price</span><input type="text" name="price" value="about 75" inputmode="decimal" autocomplete="off" aria-invalid="true" aria-describedby="need-3-error"></label>
                 <label class="field"><span>Order number</span><input type="text" name="order_ref" value="FCP-10511" autocomplete="off"></label>
               </div>
               <div class="form-actions">
@@ -512,12 +615,12 @@
       </ol>
     </section>
 
-    <section class="band" aria-labelledby="g-arriving">
-      <h3 class="band-label" id="g-arriving">Arriving <span class="count">1</span></h3>
+    <section class="box tone-steel" aria-labelledby="g-arriving">
+      <h3 class="box-head" id="g-arriving">Arriving <span class="count">1</span></h3>
       <ol class="rows">
         <li class="step">
-          <span class="scale" data-stage="ordered" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
-          <p class="step-text">Cabin air filter: ordered from FCP Euro on 2026-11-13</p>
+          <p class="step-need">Cabin air filter</p>
+          <p class="step-text">ordered from FCP Euro on 2026-11-13<span class="tag">Cabin filter and wipers</span></p>
           <div class="step-actions">
             <form method="post" action="/needs/7/receive">
               <button class="btn" type="submit" aria-label="Mark Cabin air filter received">Mark received</button>
@@ -535,8 +638,8 @@
       </ol>
     </section>
 
-    <section class="band" aria-labelledby="g-todos">
-      <h3 class="band-label" id="g-todos">To-dos <span class="count">2</span></h3>
+    <section class="box tone-stone" aria-labelledby="g-todos">
+      <h3 class="box-head" id="g-todos">To-dos <span class="count">2</span></h3>
       <div>
         <ol class="rows">
           <li class="step step--todo">
@@ -575,12 +678,12 @@
       </div>
     </section>
 
-    <details class="band">
-      <summary><h3 class="band-label">Done <span class="count">4</span></h3></summary>
+    <details class="box tone-green">
+      <summary><h3 class="box-head">Done <span class="count">4</span></h3></summary>
       <ol class="rows">
         <li class="step">
-          <span class="scale" data-stage="received" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
-          <p class="step-text">Front rotors: received on 2026-11-13</p>
+          <p class="step-need">Front rotors</p>
+          <p class="step-text">received on 2026-11-13<span class="pill pill--received">Received</span><span class="tag">Brakes</span></p>
           <details class="drawer drawer--aside">
             <summary>Wrong part, returning it</summary>
             <form class="form" method="post" action="/needs/4/return">
@@ -591,12 +694,12 @@
           </details>
         </li>
         <li class="step">
-          <span class="scale" data-stage="shop_supplies" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
-          <p class="step-text">Brake fluid: the shop supplies it</p>
+          <p class="step-need">Brake fluid</p>
+          <p class="step-text">the shop supplies it<span class="pill pill--shop_supplies">Shop supplies</span><span class="tag">Brakes</span></p>
         </li>
         <li class="step">
-          <span class="scale" data-stage="installed" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
-          <p class="step-text">Oil filter: installed</p>
+          <p class="step-need">Oil filter</p>
+          <p class="step-text">installed<span class="pill pill--installed">Installed</span><span class="tag">Oil change</span></p>
         </li>
         <li class="step step--todo">
           <form class="tick-form" method="post" action="/todos/3/untick">
@@ -611,11 +714,13 @@
   <section class="section page" aria-labelledby="jobs-title">
     <h2 id="jobs-title">By job</h2>
 
-    <article class="job" aria-labelledby="job-1">
-      <header class="job-head">
+    <article class="box job tone-steel" aria-labelledby="job-1">
+      <header class="box-head job-head">
         <h3 id="job-1">Brakes</h3>
-        <p>Planned. 3 needs open.</p>
+        <span class="pill pill--planned">Planned</span>
+        <span class="count">3 needs open</span>
       </header>
+      <div class="need-cols" aria-hidden="true"><span>Need</span><span>Part</span><span>Decision</span><span></span></div>
       <ul class="needs">
 
         <li>
@@ -623,17 +728,17 @@
             <summary class="need-row">
               <span class="cell">
                 <span class="need-name">Rear rotors</span>
-                <span class="need-stage"><span class="scale" data-stage="to_order" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="stage" data-stage="to_order">To order</span></span>
+                <span class="need-stage"><span class="scale" data-stage="to_order" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="pill pill--to_order">To order</span></span>
               </span>
               <span class="cell">
                 <span class="pn"><span class="mfr">Volkswagen</span>5Q0615601E</span>
                 <span class="opt-desc">Rear rotor, 310 x 22 mm</span>
                 <span class="opt-meta">FCP Euro, <span class="money">$138.00</span></span>
-                <span class="fit fit--confirmed">Fit confirmed</span>
+                <span class="pill fit--confirmed">Fit confirmed</span>
               </span>
               <span class="facts">
-                <span class="dt">Supplier</span><span class="dd">Self</span>
-                <span class="dt">Approach</span><span class="dd">Replacement</span>
+                <span class="dt">Supplier</span><span class="dd"><span class="pill pill--kind">Self</span></span>
+                <span class="dt">Approach</span><span class="dd"><span class="pill pill--kind">Replacement</span></span>
                 <span class="dt">Reason</span><span class="dd">Coated hats resist rust.</span>
               </span>
               <span class="marker" aria-hidden="true"></span>
@@ -652,7 +757,7 @@
                         <span class="opt-meta">FCP Euro</span>
                       </span>
                       <span class="price money">$138.00</span>
-                      <span><span class="fit fit--confirmed">Fit confirmed</span></span>
+                      <span><span class="pill fit--confirmed">Fit confirmed</span></span>
                     </label>
                     <label class="opt opt--blocked opt--does_not_fit">
                       <input type="radio" name="option_id" value="2" disabled aria-describedby="opt-2-why">
@@ -662,7 +767,7 @@
                         <span class="opt-meta">FCP Euro</span>
                       </span>
                       <span class="price money">$112.00</span>
-                      <span id="opt-2-why"><span class="fit fit--does_not_fit">Does not fit</span><br><span class="fit-note">272 x 10 mm, for cars without the Performance Pack</span></span>
+                      <span id="opt-2-why"><span class="pill fit--does_not_fit">Does not fit</span><span class="fit-note">272 x 10 mm, for cars without the Performance Pack</span></span>
                     </label>
                     <label class="opt opt--blocked opt--rejected">
                       <input type="radio" name="option_id" value="3" disabled aria-describedby="opt-3-why">
@@ -672,7 +777,7 @@
                         <span class="opt-meta">FCP Euro</span>
                       </span>
                       <span class="price money">$79.00</span>
-                      <span id="opt-3-why"><span class="fit fit--confirmed">Fit confirmed</span><br><span class="fit-note"><b class="rejected">Rejected:</b> Uncoated hats rust within a season.</span></span>
+                      <span id="opt-3-why"><span class="pill fit--confirmed">Fit confirmed</span><span class="fit-note"><span class="pill pill--rejected">Rejected</span> Uncoated hats rust within a season.</span></span>
                     </label>
                   </div>
                 </fieldset>
@@ -709,7 +814,7 @@
                     <div class="fields">
                       <label class="field"><span>Seller</span><input type="text" name="seller" value="FCP Euro" autocomplete="off"></label>
                       <label class="field"><span>Order date</span><input type="date" name="purchase_date" value="2026-11-13"></label>
-                      <label class="field"><span>Price</span><input type="text" name="price" value="138.00" inputmode="decimal" autocomplete="off"></label>
+                      <label class="field"><span>Price</span><input type="text" name="price" value="$138.00" placeholder="$0.00" inputmode="decimal" autocomplete="off"></label>
                       <label class="field"><span>Order number</span><input type="text" name="order_ref" autocomplete="off"></label>
                     </div>
                     <div class="form-actions">
@@ -728,15 +833,15 @@
             <summary class="need-row">
               <span class="cell">
                 <span class="need-name">Rear pads</span>
-                <span class="need-stage"><span class="scale" data-stage="undecided" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="stage" data-stage="undecided">Undecided</span></span>
+                <span class="need-stage"><span class="scale" data-stage="undecided" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="pill pill--undecided">Undecided</span></span>
               </span>
               <span class="cell">
                 <span class="none">No part chosen</span>
                 <span class="opt-meta">1 option researched</span>
               </span>
               <span class="facts">
-                <span class="dt">Supplier</span><span class="dd none">Not decided</span>
-                <span class="dt">Approach</span><span class="dd none">Not decided</span>
+                <span class="dt">Supplier</span><span class="dd"><span class="pill pill--none">Not decided</span></span>
+                <span class="dt">Approach</span><span class="dd"><span class="pill pill--none">Not decided</span></span>
               </span>
               <span class="marker" aria-hidden="true"></span>
             </summary>
@@ -753,7 +858,7 @@
                         <span class="opt-meta">FCP Euro</span>
                       </span>
                       <span class="price money">$54.00</span>
-                      <span><span class="fit fit--unconfirmed">Fit unconfirmed</span></span>
+                      <span><span class="pill fit--unconfirmed">Fit unconfirmed</span></span>
                     </label>
                   </div>
                 </fieldset>
@@ -769,17 +874,18 @@
             <summary class="need-row">
               <span class="cell">
                 <span class="need-name">Front pads</span>
-                <span class="need-stage"><span class="scale" data-stage="to_order" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="stage" data-stage="to_order">To order</span></span>
+                <span class="need-stage"><span class="scale" data-stage="to_order" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="pill pill--to_order">To order</span></span>
               </span>
               <span class="cell">
                 <span class="pn"><span class="mfr">Akebono</span>ACT1633</span>
                 <span class="opt-desc">Ceramic front pads</span>
                 <span class="opt-meta">FCP Euro, <span class="money">$74.99</span></span>
-                <span class="fit fit--confirmed">Fit confirmed</span>
+                <span class="pill fit--unconfirmed">Fit unconfirmed</span>
+                <span class="need-note">Fitment of the chosen option is not confirmed.</span>
               </span>
               <span class="facts">
-                <span class="dt">Supplier</span><span class="dd">Self</span>
-                <span class="dt">Approach</span><span class="dd">Replacement</span>
+                <span class="dt">Supplier</span><span class="dd"><span class="pill pill--kind">Self</span></span>
+                <span class="dt">Approach</span><span class="dd"><span class="pill pill--kind">Replacement</span></span>
                 <span class="dt">Reason</span><span class="dd">Quiet and low dust.</span>
               </span>
               <span class="marker" aria-hidden="true"></span>
@@ -793,17 +899,17 @@
             <summary class="need-row">
               <span class="cell">
                 <span class="need-name">Front rotors</span>
-                <span class="need-stage"><span class="scale" data-stage="received" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="stage" data-stage="received">Received</span></span>
+                <span class="need-stage"><span class="scale" data-stage="received" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="pill pill--received">Received</span></span>
               </span>
               <span class="cell">
                 <span class="pn"><span class="mfr">Zimmermann</span>100.3367.20</span>
                 <span class="opt-desc">Coated front rotor, 312 mm</span>
-                <span class="fit fit--confirmed">Fit confirmed</span>
+                <span class="pill fit--confirmed">Fit confirmed</span>
                 <span class="purchase"><span>Bought</span>FCP Euro · 2026-11-13 · $162.00 · order FCP-10458</span>
               </span>
               <span class="facts">
-                <span class="dt">Supplier</span><span class="dd">Self</span>
-                <span class="dt">Approach</span><span class="dd">Replacement</span>
+                <span class="dt">Supplier</span><span class="dd"><span class="pill pill--kind">Self</span></span>
+                <span class="dt">Approach</span><span class="dd"><span class="pill pill--kind">Replacement</span></span>
                 <span class="dt">Reason</span><span class="dd">Matches the original part.</span>
               </span>
               <span class="marker" aria-hidden="true"></span>
@@ -817,12 +923,12 @@
             <summary class="need-row">
               <span class="cell">
                 <span class="need-name">Brake fluid</span>
-                <span class="need-stage"><span class="scale" data-stage="shop_supplies" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="stage" data-stage="shop_supplies">Shop supplies</span></span>
+                <span class="need-stage"><span class="scale" data-stage="shop_supplies" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="pill pill--shop_supplies">Shop supplies</span></span>
               </span>
               <span class="cell"><span class="none">No part chosen</span></span>
               <span class="facts">
-                <span class="dt">Supplier</span><span class="dd">Shop</span>
-                <span class="dt">Approach</span><span class="dd none">Not decided</span>
+                <span class="dt">Supplier</span><span class="dd"><span class="pill pill--kind">Shop</span></span>
+                <span class="dt">Approach</span><span class="dd"><span class="pill pill--none">Not decided</span></span>
               </span>
               <span class="marker" aria-hidden="true"></span>
             </summary>
@@ -832,28 +938,30 @@
       </ul>
     </article>
 
-    <article class="job" aria-labelledby="job-2">
-      <header class="job-head">
+    <article class="box job tone-green" aria-labelledby="job-2">
+      <header class="box-head job-head">
         <h3 id="job-2">Oil change</h3>
-        <p>Done. 0 needs open.</p>
+        <span class="pill pill--done">Done</span>
+        <span class="count">0 needs open</span>
       </header>
+      <div class="need-cols" aria-hidden="true"><span>Need</span><span>Part</span><span>Decision</span><span></span></div>
       <ul class="needs">
         <li>
           <details class="need" id="need-6">
             <summary class="need-row">
               <span class="cell">
                 <span class="need-name">Oil filter</span>
-                <span class="need-stage"><span class="scale" data-stage="installed" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="stage" data-stage="installed">Installed</span></span>
+                <span class="need-stage"><span class="scale" data-stage="installed" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="pill pill--installed">Installed</span></span>
               </span>
               <span class="cell">
                 <span class="pn"><span class="mfr">Mann</span>HU 7008 z</span>
                 <span class="opt-desc">Oil filter cartridge</span>
-                <span class="fit fit--confirmed">Fit confirmed</span>
+                <span class="pill fit--confirmed">Fit confirmed</span>
                 <span class="purchase"><span>Bought</span>FCP Euro · 2026-11-13 · $12.99 · order FCP-10459</span>
               </span>
               <span class="facts">
-                <span class="dt">Supplier</span><span class="dd">Self</span>
-                <span class="dt">Approach</span><span class="dd">Replacement</span>
+                <span class="dt">Supplier</span><span class="dd"><span class="pill pill--kind">Self</span></span>
+                <span class="dt">Approach</span><span class="dd"><span class="pill pill--kind">Replacement</span></span>
                 <span class="dt">Reason</span><span class="dd">Matches the original part.</span>
               </span>
               <span class="marker" aria-hidden="true"></span>
@@ -864,28 +972,30 @@
       </ul>
     </article>
 
-    <article class="job" aria-labelledby="job-3">
-      <header class="job-head">
+    <article class="box job tone-steel" aria-labelledby="job-3">
+      <header class="box-head job-head">
         <h3 id="job-3">Cabin filter and wipers</h3>
-        <p>Planned. 2 needs open.</p>
+        <span class="pill pill--planned">Planned</span>
+        <span class="count">2 needs open</span>
       </header>
+      <div class="need-cols" aria-hidden="true"><span>Need</span><span>Part</span><span>Decision</span><span></span></div>
       <ul class="needs">
         <li>
           <details class="need" id="need-7">
             <summary class="need-row">
               <span class="cell">
                 <span class="need-name">Cabin air filter</span>
-                <span class="need-stage"><span class="scale" data-stage="ordered" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="stage" data-stage="ordered">Ordered</span></span>
+                <span class="need-stage"><span class="scale" data-stage="ordered" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="pill pill--ordered">Ordered</span></span>
               </span>
               <span class="cell">
                 <span class="pn"><span class="mfr">Mann</span>CUK 26 009</span>
                 <span class="opt-desc">Pollen cabin air filter</span>
-                <span class="fit fit--confirmed">Fit confirmed</span>
+                <span class="pill fit--confirmed">Fit confirmed</span>
                 <span class="purchase"><span>Bought</span>FCP Euro · 2026-11-13 · $21.50 · order FCP-10460</span>
               </span>
               <span class="facts">
-                <span class="dt">Supplier</span><span class="dd">Self</span>
-                <span class="dt">Approach</span><span class="dd">Replacement</span>
+                <span class="dt">Supplier</span><span class="dd"><span class="pill pill--kind">Self</span></span>
+                <span class="dt">Approach</span><span class="dd"><span class="pill pill--kind">Replacement</span></span>
                 <span class="dt">Reason</span><span class="dd">Matches the original part.</span>
               </span>
               <span class="marker" aria-hidden="true"></span>
@@ -898,15 +1008,15 @@
             <summary class="need-row">
               <span class="cell">
                 <span class="need-name">Wiper blades</span>
-                <span class="need-stage"><span class="scale" data-stage="undecided" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="stage" data-stage="undecided">Undecided</span></span>
+                <span class="need-stage"><span class="scale" data-stage="undecided" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="pill pill--undecided">Undecided</span></span>
               </span>
               <span class="cell">
                 <span class="none">No part chosen</span>
                 <span class="opt-meta">1 option researched, 1 rejected</span>
               </span>
               <span class="facts">
-                <span class="dt">Supplier</span><span class="dd">Self</span>
-                <span class="dt">Approach</span><span class="dd">Replacement</span>
+                <span class="dt">Supplier</span><span class="dd"><span class="pill pill--kind">Self</span></span>
+                <span class="dt">Approach</span><span class="dd"><span class="pill pill--kind">Replacement</span></span>
               </span>
               <span class="marker" aria-hidden="true"></span>
             </summary>
@@ -923,7 +1033,7 @@
                         <span class="opt-meta">Amazon</span>
                       </span>
                       <span class="price money">$32.99</span>
-                      <span id="opt-9-why"><span class="fit fit--confirmed">Fit confirmed</span><br><span class="fit-note"><b class="rejected">Rejected:</b> The driver-side blade is 2 in. too long.</span></span>
+                      <span id="opt-9-why"><span class="pill fit--confirmed">Fit confirmed</span><span class="fit-note"><span class="pill pill--rejected">Rejected</span> The driver-side blade is 2 in. too long.</span></span>
                     </label>
                   </div>
                 </fieldset>
