@@ -51,11 +51,20 @@ glovebox conversation inside that project so the instructions apply.
 
 ## Environment
 
+- **`GLOVEBOX_ENV`** names the environment. It defaults to `live`, which uses `data/glovebox.db`.
+  Any other name, such as `test`, uses `data/glovebox-<name>.db`.
 - **`GLOVEBOX_DB_PATH`** sets the database path. It defaults to `data/glovebox.db` relative to the
   directory the server starts in, so the snippet sets an absolute path.
 - **`RUST_LOG`** sets the log filter, such as `info` or `debug`. It defaults to `info`. Logs go to
   stderr, which Claude Desktop writes to `~/Library/Logs/Claude/mcp-server-glovebox.log`. Stdout
   carries only protocol frames.
+
+## A test environment
+
+To try the server against a throwaway database, add a second server entry by hand to Claude
+Desktop's config, copying `claude_desktop_config.test.snippet.json`. It sets `GLOVEBOX_ENV` to
+`test` and an absolute `GLOVEBOX_DB_PATH` ending in `data/glovebox-test.db`. `just reset-env test`
+deletes that database; no recipe deletes the live one.
 
 ## Smoke test without Claude Desktop
 
@@ -70,7 +79,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol
 
 The server copies the database to `data/backups/` before any update that changes the database's
 structure, and otherwise once a day while it holds a car. It keeps the newest 14 copies, the newest
-copy of every month, and the largest copy. `just backup` makes a copy on demand and fails if there
+copy of every month, and the largest copy. `just backup` (the `glovebox backup` command) makes a copy on demand and fails if there
 is no database to copy.
 
 The copies are on the same disk as the database. They protect against a deleted or damaged

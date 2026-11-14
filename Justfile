@@ -1,7 +1,11 @@
 # Copy the database to data/backups/ now. The server also does this itself
 # once a day and before every migration, keeping the newest 14.
 backup:
-    cargo run --quiet --release -p glovebox-mcp -- backup
+    cargo run --quiet --release -p glovebox-cli -- backup
+
+# Delete the named non-live environment's database files. `live` is refused.
+reset-env env:
+    cargo run --quiet --release -p glovebox-cli -- reset --env {{env}}
 
 # --- CI ---
 # These recipes are what GitHub Actions runs, so `just ci` reproduces CI locally.

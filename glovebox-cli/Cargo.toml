@@ -1,0 +1,21 @@
+[package]
+name = "glovebox-cli"
+edition.workspace = true
+version.workspace = true
+
+[lib]
+name = "glovebox_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "glovebox"
+path = "src/main.rs"
+
+[dependencies]
+glovebox-shared = { path = "../glovebox-shared" }
+clap.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+glovebox-shared = { path = "../glovebox-shared", features = ["test-support"] }

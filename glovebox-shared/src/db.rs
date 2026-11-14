@@ -1,9 +1,12 @@
 //! The single place a `SQLite` connection is opened.
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use sea_orm::{
-    ConnectOptions, Database, DatabaseConnection,
+    ConnectOptions, ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement,
     sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode},
 };
 use sea_orm_migration::MigratorTrait;
@@ -32,7 +35,11 @@ pub(crate) fn connect_options(file: Option<PathBuf>) -> ConnectOptions {
                 .create_if_missing(true),
             None => opts,
         };
-        opts.journal_mode(SqliteJournalMode::Wal).foreign_keys(true)
+        // Two processes (the MCP server and the web server) share one file, so a
+        // writer waits for the lock instead of failing at once with "locked".
+        opts.journal_mode(SqliteJournalMode::Wal)
+            .foreign_keys(true)
+            .busy_timeout(Duration::from_secs(5))
     });
     if in_memory {
         options.max_connections(1).min_connections(1);
@@ -57,10 +64,50 @@ pub async fn connect(db_path: &str) -> DomainResult<DatabaseConnection> {
     let had_data = backup::has_data(path);
     let db = Database::connect(connect_options(Some(path.to_path_buf()))).await?;
     if had_data {
+        refuse_unknown_migrations(&db).await?;
+    }
+    if had_data {
         backup_before_migrating(&db, path, chrono::Local::now()).await?;
     }
     Migrator::up(&db, None).await?;
     Ok(db)
+}
+
+/// Fails when the database records a migration this binary does not contain,
+/// which means a newer build has already changed the file. Opening it with an
+/// older binary could corrupt data, so the caller must rebuild first.
+async fn refuse_unknown_migrations(db: &DatabaseConnection) -> DomainResult<()> {
+    let known: Vec<String> = Migrator::migrations()
+        .iter()
+        .map(|m| m.name().to_owned())
+        .collect();
+    // The table is read directly because the migrator's own listing fails on
+    // an unknown version with a message that does not say what to do.
+    let table = db
+        .query_one_raw(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'seaql_migrations'",
+        ))
+        .await?;
+    if table.is_none() {
+        return Ok(());
+    }
+    let rows = db
+        .query_all_raw(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "SELECT version FROM seaql_migrations",
+        ))
+        .await?;
+    for row in rows {
+        let version: String = row.try_get_by_index(0)?;
+        if !known.contains(&version) {
+            return Err(DomainError::Internal(format!(
+                "the database has migration {version} that this binary does not know; the binary \
+                 is older than the database, so rebuild it (`just install`) and restart"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Backs up an existing database file: always when a migration is about to
@@ -422,5 +469,44 @@ mod tests {
             scalar(&db, "SELECT COUNT(*) FROM maintenance_schedule_items").await,
             18
         );
+    }
+
+    #[tokio::test]
+    async fn two_connections_to_one_file_do_not_fail_with_locked() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("glovebox.db");
+        let first = connect(path.to_str().unwrap()).await.unwrap();
+        let second = raw(&path).await;
+        first.execute_unprepared("BEGIN IMMEDIATE").await.unwrap();
+        let waiting = tokio::spawn(async move {
+            second
+                .execute_unprepared("INSERT INTO platforms (name) VALUES ('busy-timeout-probe')")
+                .await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        first.execute_unprepared("COMMIT").await.unwrap();
+        waiting
+            .await
+            .unwrap()
+            .expect("the second write waits for the first");
+    }
+
+    #[tokio::test]
+    async fn connect_refuses_a_database_with_an_unknown_migration() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("glovebox.db");
+        populated(&path).await;
+        let db = raw(&path).await;
+        db.execute_unprepared(
+            "INSERT INTO seaql_migrations (version, applied_at) VALUES \
+             ('m29990101_000001_future', 1)",
+        )
+        .await
+        .unwrap();
+        db.close().await.unwrap();
+        let err = connect(path.to_str().unwrap()).await.unwrap_err();
+        assert!(err.to_string().contains("rebuild"), "{err}");
+        // The refusal happens before any backup is written.
+        assert!(!dir.path().join("backups").exists());
     }
 }

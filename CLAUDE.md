@@ -4,9 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What Is This
 
-Car maintenance tracker, used only through Claude Desktop. A Rust cargo workspace with two crates:
-`glovebox-shared` (the domain library: SeaORM 2.0 + SQLite) and `glovebox-mcp` (an rmcp stdio
-server with domain-verb tools and read-only `glovebox://` resources). Claude Desktop launches the
+Car maintenance tracker, used only through Claude Desktop. A Rust cargo workspace with three crates:
+`glovebox-shared` (the domain library: SeaORM 2.0 + SQLite), `glovebox-mcp` (an rmcp stdio
+server with domain-verb tools and read-only `glovebox://` resources) and `glovebox-cli` (the
+`glovebox` command the owner runs by hand). Claude Desktop launches the
 `glovebox-mcp` binary itself, so there is no server to keep running and no web UI. The question
 the app answers: given what has been done to the car, its mileage and its age, what maintenance is
 coming, when, how much will it cost, and what parts are worth buying and bringing to the shop.
@@ -25,7 +26,8 @@ cargo test -p glovebox-mcp --test rehearsal       # One MCP integration test fil
 just ci                   # Everything CI runs: nightly fmt-check, layering, build, test, clippy
 just fmt                  # cargo +nightly fmt — rustfmt.toml uses nightly-only options; plain `cargo fmt` passes locally but CI's format job will fail
 just check-layering       # Layering gate only (scripts/check-layering.sh)
-just backup               # Copy the database to data/backups/ now
+just backup               # Copy the current environment's database to data/backups/ now (glovebox backup)
+just reset-env test       # Delete the named non-live environment's database files (glovebox reset --env test)
 
 cargo clippy --workspace -- -D clippy::pedantic   # Rust lints (pedantic is the CI gate)
 
@@ -35,20 +37,25 @@ cargo clippy --workspace -- -D clippy::pedantic   # Rust lints (pedantic is the 
 
 ## Environment
 
-`GLOVEBOX_DB_PATH` (default `data/glovebox.db`) is the only variable the server reads. `RUST_LOG`
-sets the tracing filter (default `info`). The Claude Desktop config snippet sets an absolute
-`GLOVEBOX_DB_PATH`.
+`GLOVEBOX_ENV` names the environment (`live` by default). `live` uses `data/glovebox.db`, and any
+other name such as `test` uses `data/glovebox-<name>.db` (`glovebox_shared::env::resolve`).
+`GLOVEBOX_DB_PATH` overrides the path only, and `GLOVEBOX_WEB_PORT` overrides the web port (4827 for
+`live`, 4828 otherwise). `RUST_LOG` sets the tracing filter (default `info`). The Claude Desktop
+config snippets set an absolute `GLOVEBOX_DB_PATH`. No command deletes the live database;
+`glovebox reset` refuses `live`.
 
 ## Architecture
 
 ### Workspace layout
 
 - **`glovebox-shared/`** (lib crate `glovebox_shared`) — the transport-agnostic domain:
-  `src/{db.rs,entities,migration,services,inputs,error.rs,test_support.rs}`. All SQL, validation
+  `src/{db.rs,env.rs,entities,migration,services,inputs,error.rs,test_support.rs}`. All SQL, validation
   and business logic live here. It never depends on axum or rmcp.
 - **`glovebox-mcp/`** (lib crate `glovebox_mcp` plus the `glovebox-mcp` binary) — the thin MCP
   surface. Every tool body is argument struct → shared-service call → serialize, with one
   `DomainError → MCP` mapping helper. `src/main.rs` serves `GloveboxMcp` over stdio.
+- **`glovebox-cli/`** (lib crate `glovebox_cli` plus the `glovebox` binary) — `backup` and
+  `reset --env <name>`, with `run` callable in process from tests.
 - `scripts/check-layering.sh` (run by CI and `just ci`) keeps axum and rmcp out of `glovebox-shared`.
 
 ### Domain library (`glovebox-shared/src/`)
