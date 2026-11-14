@@ -370,9 +370,17 @@ mod tests {
             wrong.to_string().replace(&t.id.to_string(), "N"),
             missing.replace("99999", "N")
         );
-        assert!(complete(&db, v2, t.id, None).await.is_err());
-        assert!(reopen(&db, v2, t.id).await.is_err());
-        assert!(delete(&db, v2, t.id).await.is_err());
+        for err in [
+            complete(&db, v2, t.id, None).await.unwrap_err(),
+            reopen(&db, v2, t.id).await.unwrap_err(),
+            delete(&db, v2, t.id).await.unwrap_err(),
+        ] {
+            assert!(matches!(err, DomainError::NotFound(_)));
+            assert_eq!(
+                err.to_string().replace(&t.id.to_string(), "N"),
+                missing.replace("99999", "N")
+            );
+        }
         assert!(list(&db, v2, None, true).await.unwrap().is_empty());
     }
 }

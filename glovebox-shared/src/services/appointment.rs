@@ -1,7 +1,7 @@
 //! Appointments: a visit that groups jobs and to-dos. Every function scopes
 //! its ids to a vehicle, so another vehicle's id reads as a missing one.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use sea_orm::{sea_query::Expr, *};
 use serde::Serialize;
@@ -14,7 +14,7 @@ use crate::{
 };
 
 /// An appointment with the counts the owner reads at a glance. `needs_open`
-/// counts needs on its jobs that are undecided, waiting to be ordered or
+/// counts needs on its jobs (dropped jobs excluded) that are undecided, waiting to be ordered or
 /// ordered but not yet received; `todos_open` counts its unfinished to-dos.
 #[derive(Debug, Serialize)]
 pub struct AppointmentSummary {
@@ -176,17 +176,56 @@ pub(crate) async fn require_assignable(
 
 /// Lists a vehicle's appointments with their counts, soonest planned date
 /// first and unbooked ones last. Without `include_closed`, appointments whose
-/// status is `done` or `cancelled` are left out.
+/// status is `done` or `cancelled` are left out, except a `done` one that
+/// still has an open to-do and was not closed by hand.
 pub async fn list(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     include_closed: bool,
 ) -> DomainResult<Vec<AppointmentSummary>> {
     super::vehicle::require(db, vehicle_id).await?;
-    let appointments = appointment::Entity::find()
-        .filter(appointment::Column::VehicleId.eq(vehicle_id))
-        .all(db)
-        .await?;
+    let mut out = summaries(db, vehicle_id, None).await?;
+    if !include_closed {
+        // A derived `done` appointment with a to-do left still has work to
+        // show; a hand-closed or cancelled one has been put away on purpose.
+        out.retain(|s| {
+            s.status == "planning"
+                || (s.status == "done" && s.appointment.closed_on.is_none() && s.todos_open > 0)
+        });
+    }
+    Ok(out)
+}
+
+/// One appointment of the vehicle with its counts, whatever its status.
+///
+/// # Errors
+/// `NotFound` when it does not exist or belongs to another vehicle.
+pub async fn summary(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    id: i32,
+) -> DomainResult<AppointmentSummary> {
+    require(db, vehicle_id, id).await?;
+    summaries(db, vehicle_id, Some(id))
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| DomainError::NotFound(format!("Appointment {id} not found")))
+}
+
+// Builds the summaries for every appointment of the vehicle, or for the one
+// named by `only`, in list order, with every count loaded in batches.
+async fn summaries(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    only: Option<i32>,
+) -> DomainResult<Vec<AppointmentSummary>> {
+    let mut query =
+        appointment::Entity::find().filter(appointment::Column::VehicleId.eq(vehicle_id));
+    if let Some(id) = only {
+        query = query.filter(appointment::Column::Id.eq(id));
+    }
+    let appointments = query.all(db).await?;
     let ids: Vec<i32> = appointments.iter().map(|a| a.id).collect();
     let jobs = work_item::Entity::find()
         .filter(work_item::Column::AppointmentId.is_in(ids.clone()))
@@ -212,6 +251,11 @@ pub async fn list(
         .await?;
 
     let mut job_appointment: HashMap<i32, i32> = HashMap::new();
+    let dropped: HashSet<i32> = jobs
+        .iter()
+        .filter(|j| j.status == "dropped")
+        .map(|j| j.id)
+        .collect();
     let mut statuses: HashMap<i32, Vec<&str>> = HashMap::new();
     for job in &jobs {
         if let Some(appointment_id) = job.appointment_id {
@@ -226,6 +270,7 @@ pub async fn list(
     for need in &needs {
         let current = stage(need, need.part_id.and_then(|id| parts.get(&id)));
         if matches!(current, Stage::Undecided | Stage::ToOrder | Stage::Ordered)
+            && !dropped.contains(&need.work_item_id)
             && let Some(appointment_id) = job_appointment.get(&need.work_item_id)
         {
             *needs_open.entry(*appointment_id).or_default() += 1;
@@ -251,7 +296,6 @@ pub async fn list(
                 appointment: a,
             }
         })
-        .filter(|s| include_closed || s.status == "planning")
         .collect();
     out.sort_by(|a, b| {
         let key = |s: &AppointmentSummary| {
@@ -807,14 +851,113 @@ mod tests {
             wrong.to_string().replace(&a.id.to_string(), "N"),
             missing.replace("99999", "N")
         );
-        assert!(
+        let same_as_missing = |err: DomainError| {
+            assert!(matches!(err, DomainError::NotFound(_)));
+            assert_eq!(
+                err.to_string().replace(&a.id.to_string(), "N"),
+                missing.replace("99999", "N")
+            );
+        };
+        same_as_missing(
             update(&db, v2, a.id, UpdateAppointment::default())
                 .await
-                .is_err()
+                .unwrap_err(),
         );
-        assert!(close(&db, v2, a.id, false).await.is_err());
-        assert!(reopen(&db, v2, a.id).await.is_err());
-        assert!(delete(&db, v2, a.id).await.is_err());
+        same_as_missing(close(&db, v2, a.id, false).await.unwrap_err());
+        same_as_missing(reopen(&db, v2, a.id).await.unwrap_err());
+        same_as_missing(delete(&db, v2, a.id).await.unwrap_err());
         assert!(require(&db, v1, a.id).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn open_list_keeps_a_done_appointment_that_still_has_an_open_todo() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let a = create(&db, v, appt("Brakes")).await.unwrap();
+        let job_id = add_job(&db, v, Some(a.id)).await;
+        job::update(
+            &db,
+            v,
+            job_id,
+            UpdateWorkItem {
+                status: Some("done".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let t = todo_svc::add(
+            &db,
+            v,
+            NewTodo {
+                title: "Return the old pads".into(),
+                appointment_id: Some(a.id),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let open = list(&db, v, false).await.unwrap();
+        assert_eq!(open.len(), 1);
+        assert_eq!((open[0].status, open[0].todos_open), ("done", 1));
+
+        todo_svc::complete(&db, v, t.id, None).await.unwrap();
+        assert!(list(&db, v, false).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn open_list_drops_a_hand_closed_appointment_even_with_an_open_todo() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let a = create(&db, v, appt("Brakes")).await.unwrap();
+        todo_svc::add(
+            &db,
+            v,
+            NewTodo {
+                title: "Bring wheel locks".into(),
+                appointment_id: Some(a.id),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        close(&db, v, a.id, false).await.unwrap();
+        assert!(list(&db, v, false).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn needs_on_a_dropped_job_are_not_open() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let a = create(&db, v, appt("Brakes")).await.unwrap();
+        let kept = add_job(&db, v, Some(a.id)).await;
+        let dropped = add_job(&db, v, Some(a.id)).await;
+        for job_id in [kept, dropped] {
+            need::add(
+                &db,
+                v,
+                job_id,
+                NewNeed {
+                    name: "Pads".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        }
+        job::update(
+            &db,
+            v,
+            dropped,
+            UpdateWorkItem {
+                status: Some("dropped".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let all = list(&db, v, true).await.unwrap();
+        assert_eq!(all[0].needs_open, 1);
     }
 }
