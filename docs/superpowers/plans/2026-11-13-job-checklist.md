@@ -4,7 +4,7 @@
 
 **Goal:** A job lists what it needs, each need is taken from decision to purchase to installation, appointments group jobs, and the owner works the list on a local web page as well as through Claude Desktop.
 
-**Architecture:** All tables, rules and view models go in `glovebox-shared`. `glovebox-mcp` gains thin tools over them. A new `glovebox-web` crate (axum + askama, server-rendered, no JavaScript) renders the same view models and posts plain forms. Both binaries open one SQLite file chosen by `GLOVEBOX_ENV`.
+**Architecture:** All tables, rules and view models go in `glovebox-shared`. A small `glovebox-cli` crate provides the `glovebox` command for everything run by hand. `glovebox-mcp` gains thin tools over them. A new `glovebox-web` crate (axum + askama, server-rendered, no JavaScript) renders the same view models and posts plain forms. Both binaries open one SQLite file chosen by `GLOVEBOX_ENV`.
 
 **Tech Stack:** Rust 2024, SeaORM 2.0 + SQLite (WAL), rmcp 3.9 (stdio), axum 0.8, askama 0.16, tower (tests).
 
@@ -23,6 +23,7 @@
 - Never stage `.beads/issues.jsonl`. Run `just ci` before every commit; `just fmt` uses nightly.
 - Vocabulary (exact strings): supplier `self` | `shop`; approach `replacement` | `upgrade`; fitment `confirmed` | `unconfirmed` | `does_not_fit`; need stages `undecided`, `to_order`, `shop_supplies`, `ordered`, `received`, `installed`; appointment status `planning` | `done` | `cancelled`; part statuses gain `returned`.
 - Ports: 4827 for `live`, 4828 for any other environment.
+- No command, flag or recipe deletes or overwrites the live database. Implementers work in the worktree `/Users/sloveless/Development/projects/glovebox-job-checklist`, never in the main checkout, and never pass a path under the main checkout's `data/` to anything.
 
 ## Review Focus
 
@@ -46,33 +47,49 @@ glovebox-shared/src/
 glovebox-mcp/src/handler/checklist.rs      # appointment, need, option, purchase, todo tools
 glovebox-mcp/src/schemas/checklist.rs
 glovebox-mcp/tests/checklist.rs
+glovebox-cli/                  # the `glovebox` command: backup, reset --env, seed --env (Tasks 1, 9)
 glovebox-web/
   Cargo.toml  src/{main,lib,guard,pages}.rs  templates/*.html  tests/{common/mod,pages,actions}.rs
 ```
 
 ---
 
-### Task 1: Environments, busy timeout and the stale-binary guard
+### Task 1: Environments, the `glovebox` command, busy timeout and the stale-binary guard
 
-**Files:** Create `glovebox-shared/src/env.rs`. Modify `glovebox-shared/src/{lib.rs,db.rs}`, `glovebox-mcp/src/main.rs`, `justfile`, `docs/claude-desktop/README.md` (add a test-server config snippet file `claude_desktop_config.test.snippet.json`).
+**Files:** Create `glovebox-shared/src/env.rs`, `glovebox-cli/{Cargo.toml,src/main.rs,src/lib.rs,tests/cli.rs}`. Modify root `Cargo.toml` (member `glovebox-cli`; workspace dep `clap = { version = "4", features = ["derive"] }`), `glovebox-shared/src/{lib.rs,db.rs}`, `glovebox-mcp/src/main.rs`, `Justfile`, `docs/claude-desktop/README.md` (plus a new `claude_desktop_config.test.snippet.json`).
+
+**Why a command-line program:** everything the owner runs by hand goes through one Rust binary, `glovebox`, whose rules are enforced in tested code. Justfile recipes for these are single calls with no shell logic. The servers only serve.
 
 **Interfaces — Produces:**
 ```rust
 // glovebox_shared::env
+pub const LIVE: &str = "live";
 pub struct Environment { pub name: String, pub db_path: String, pub web_port: u16 }
 impl Environment { pub fn is_live(&self) -> bool }
 /// `lookup` returns an environment variable's value; production passes `|k| std::env::var(k).ok()`.
 pub fn resolve(lookup: impl Fn(&str) -> Option<String>) -> DomainResult<Environment>
-```
-Rules: `GLOVEBOX_ENV` absent or `live` → name `live`, `data/glovebox.db`, port 4827. Any other name matching `[a-z0-9-]{1,32}` → `data/glovebox-<name>.db`, port 4828; anything else is `Invalid { field: "GLOVEBOX_ENV" }`. `GLOVEBOX_DB_PATH` overrides the path only. `GLOVEBOX_WEB_PORT` overrides the port.
+/// Validates a non-live name (`[a-z0-9-]{1,32}`, not `live`).
+pub fn test_name(name: &str) -> DomainResult<&str>
+/// Deletes `<data_dir>/glovebox-<name>.db` and its `-wal` and `-shm` files and returns the paths removed.
+/// It builds the file name itself from a validated non-live name, so it cannot name `glovebox.db`.
+pub fn reset(data_dir: &Path, name: &str) -> DomainResult<Vec<PathBuf>>
 
-- [ ] **Step 1: Write failing tests in `env.rs`**: `default_is_live_database_and_port`, `named_env_uses_suffixed_file_and_other_port` (`test` → `data/glovebox-test.db`, 4828), `explicit_db_path_wins_and_keeps_env_name`, `bad_env_name_is_invalid` (`"../x"`, `"Test"`, `""`).
-- [ ] **Step 2: Run** `cargo test -p glovebox-shared env::` — expect compile failure, then FAIL.
-- [ ] **Step 3: Implement `resolve`.** Use it in `glovebox-mcp/src/main.rs` in place of the inline `GLOVEBOX_DB_PATH` read, and log the environment name.
-- [ ] **Step 4: Busy timeout.** In `db::connect_options` add `.busy_timeout(Duration::from_secs(5))`. Test `two_connections_to_one_file_do_not_fail_with_locked`: open two `connect()`s on one temp file, begin a write transaction on the first, spawn a write on the second, commit the first after 200 ms, assert the second returns `Ok`.
-- [ ] **Step 5: Stale-binary guard.** Test `connect_refuses_a_database_with_an_unknown_migration`: connect a temp file, insert a row `('m29990101_000001_future', <now>)` into `seaql_migrations`, drop the connection, call `connect` again, assert `Err` whose message contains `rebuild`. If `Migrator::up` already errors, map that error to `DomainError::Internal("… was migrated by a newer glovebox; rebuild with `just install`")`; if it does not, compare applied names against `Migrator::migrations()` before calling `up`.
-- [ ] **Step 6: justfile.** `reset-db env="test"` deletes that environment's three files and exits non-zero with a message when `env` is `live` unless `confirm="yes"` is also passed. Keep `install` unchanged.
-- [ ] **Step 7:** `just ci`, commit `feat: select the database by GLOVEBOX_ENV and wait on a busy database`.
+// glovebox_cli (lib, so tests call it in process)
+/// Runs one command and returns the text to print. `data_dir` is where environment files live.
+pub async fn run(args: Cli, lookup: impl Fn(&str) -> Option<String>, data_dir: &Path) -> DomainResult<String>
+```
+`resolve` rules: `GLOVEBOX_ENV` absent or `live` → name `live`, `data/glovebox.db`, port 4827. Any other valid name → `data/glovebox-<name>.db`, port 4828; an invalid name is `Invalid { field: "GLOVEBOX_ENV" }`. `GLOVEBOX_DB_PATH` overrides the path only. `GLOVEBOX_WEB_PORT` overrides the port.
+
+Commands (clap derive): `glovebox backup` (the resolved environment's database; prints the absolute source and copy paths; error when there is nothing to copy) and `glovebox reset --env <name>` (calls `env::reset`; `--env` is required and has no default; `live` is always an error; `GLOVEBOX_DB_PATH` is ignored by this command). There is no command, flag or recipe that deletes the live database.
+
+- [ ] **Step 1: Failing tests in `env.rs`:** `default_is_live_database_and_port`; `named_env_uses_suffixed_file_and_other_port` (`test` → `data/glovebox-test.db`, 4828); `explicit_db_path_wins_and_keeps_env_name`; `bad_env_name_is_invalid` (`"../x"`, `"Test"`, `""`, 33 characters); `reset_deletes_only_the_named_environments_files` (temp dir holding `glovebox.db`, `glovebox.db-wal`, `glovebox-test.db`, `glovebox-test.db-wal`, `glovebox-test.db-shm`, `glovebox-other.db` and `backups/`: after `reset(dir, "test")` only the three `glovebox-test` files are gone); `reset_refuses_live_and_bad_names` (`"live"`, `""`, `"../glovebox"`, `"x/../y"`: each is `Invalid`, and every file is still present); `reset_of_a_missing_environment_removes_nothing_and_succeeds`.
+- [ ] **Step 2:** Run `cargo test -p glovebox-shared env::` — expect compile failure, then FAIL.
+- [ ] **Step 3: Implement `env.rs`.** Use `resolve` in `glovebox-mcp/src/main.rs` in place of the inline `GLOVEBOX_DB_PATH` read, and log the environment name.
+- [ ] **Step 4: The `glovebox` program.** Failing tests in `glovebox-cli/tests/cli.rs`, all calling `run` in process with a temp `data_dir` and a closure for the environment: `backup_copies_the_resolved_database` (create a populated temp database through `db::connect`, then assert a file appears under `backups/`); `backup_of_a_missing_database_is_an_error_and_creates_nothing`; `reset_requires_env_and_refuses_live` (parse `["glovebox","reset"]` → clap error; `--env live` → `Invalid`; live files untouched); `reset_ignores_db_path_override` (lookup returns `GLOVEBOX_DB_PATH=<dir>/glovebox.db`; `reset --env test` leaves `glovebox.db` in place). Implement. Then remove the `backup` subcommand from `glovebox-mcp/src/main.rs` so the server only serves, keeping the `backup::spawn_daily` call.
+- [ ] **Step 5: Busy timeout.** In `db::connect_options` add `.busy_timeout(Duration::from_secs(5))`. Test `two_connections_to_one_file_do_not_fail_with_locked`: open two connections on one temp file, begin a write transaction on the first, spawn a write on the second, commit the first after 200 ms, assert the second returns `Ok`.
+- [ ] **Step 6: Stale-binary guard.** Test `connect_refuses_a_database_with_an_unknown_migration`: connect a temp file, insert a row `('m29990101_000001_future', <now>)` into `seaql_migrations`, close, call `connect` again, assert `Err` whose message contains `rebuild`. The check runs before the backup and before `Migrator::up`.
+- [ ] **Step 7: Justfile.** `backup` becomes `cargo run --quiet --release -p glovebox-cli -- backup`. Add `reset-env env` → `cargo run --quiet --release -p glovebox-cli -- reset --env {{env}}` (the parameter has no default). Recipes contain no shell conditionals, no backticks and no `$(...)`. **Never run `just reset-env` or `glovebox reset` to try it out; the tests are the evidence.**
+- [ ] **Step 8:** `just ci`, commit `feat: select the database by GLOVEBOX_ENV and add the glovebox command`.
 
 ### Task 2: Schema and entities
 
@@ -270,7 +287,7 @@ Existing tools: `plan_work` and `update_planned_work` accept `appointment_id`; `
 
 ### Task 9: Seed data and money helpers
 
-**Files:** Create `glovebox-shared/src/{seed.rs,money.rs}`; modify `lib.rs` and `services/checklist.rs`. This task adds library functions only. Task 10 gives the seed its command.
+**Files:** Create `glovebox-shared/src/{seed.rs,money.rs}`; modify `lib.rs` and `services/checklist.rs`. Add a `seed` command to `glovebox-cli` (modify its `src/lib.rs`, `tests/cli.rs`) and a `seed env` recipe to the `Justfile`.
 
 **Interfaces — Produces:**
 ```rust
@@ -281,9 +298,10 @@ pub fn format_cents(cents: i32) -> String               // 8499 -> "$84.99", 935
 /// Fills an empty non-live database with made-up data. Errors if any vehicle exists.
 pub async fn demo<C: ConnectionTrait + TransactionTrait>(db: &C) -> DomainResult<SeedSummary>
 ```
+`glovebox seed --env <name>` (required, never `live`, `GLOVEBOX_DB_PATH` ignored) connects to `<data_dir>/glovebox-<name>.db` and runs `seed::demo`. `just seed env` is the one-line recipe for it.
 The seed creates one made-up vehicle on the GTI template, one appointment "60k service + loose ends" with three jobs, needs covering all six stages, one need with three options (one `does_not_fit`, one rejected), one returned part with its to-do, two more to-dos (one done), and one unscheduled job with a need. No real VIN, plate or name.
 
-- [ ] **Step 1: Failing tests:** `parse_dollars_table` (Review Focus 4 values), `format_cents_table`, `demo_seed_covers_every_stage` (collect stages from `checklist::for_appointment` and assert all six appear), `demo_seed_refuses_a_database_with_a_vehicle`.
+- [ ] **Step 1: Failing tests:** `parse_dollars_table` (Review Focus 4 values), `format_cents_table`, `demo_seed_covers_every_stage` (collect stages from `checklist::for_appointment` and assert all six appear), `demo_seed_refuses_a_database_with_a_vehicle`, and in `glovebox-cli/tests/cli.rs` `seed_fills_the_named_environment` and `seed_refuses_live`.
 - [ ] **Step 2–4:** FAIL, implement, PASS. Replace the ad hoc cents formatting in `checklist.rs` with `format_cents`. `just ci`, commit `feat: demo seed and money parsing for the web page`.
 
 ### Task 10: The web crate skeleton and home page
@@ -297,11 +315,11 @@ Model the crate on `/Users/sloveless/Development/projects/financier/crates/advis
 #[derive(Clone)] pub struct AppState { pub db: DatabaseConnection, pub env_name: String, pub today: fn() -> chrono::NaiveDate }
 pub fn router(state: AppState) -> axum::Router
 ```
-- `main.rs`: `glovebox-web` serves; `glovebox-web seed` runs `seed::demo` and refuses when `Environment::is_live()`. Binds `127.0.0.1:<port>` only. Tracing to stderr.
+- `main.rs`: `glovebox-web` only serves. It resolves the environment, starts `backup::spawn_daily`, and binds `127.0.0.1:<port>` only. Tracing to stderr.
 - `guard.rs`: middleware returning 403 unless `Host` is `127.0.0.1:<port>` or `localhost:<port>`, and for non-GET requests unless `Origin` (when present) is one of those; adds `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`.
 - `GET /`: per vehicle, open appointments (purpose, date or "not booked", counts as plain statements such as `3 needs open · 2 to-dos open`), the "Not scheduled yet" jobs from `checklist::for_unscheduled`, and vehicle to-dos with no appointment. The data comes from one new function `checklist::home(db) -> DomainResult<Vec<VehicleHome>>` in `glovebox-shared`, with its own test there.
 - `base.html` for this task is plain and unstyled beyond layout; Task 11 owns the look. The header shows the environment name whenever it is not `live`.
-- `justfile`: `web env="live"` builds release `glovebox-web`, opens `http://127.0.0.1:<port>/` and runs it with `GLOVEBOX_ENV={{env}}`; `seed env="test"` runs the seed subcommand and fails for `live`. `ci-backend` already covers the workspace.
+- `Justfile`: `web env="live"` runs `GLOVEBOX_ENV={{env}} cargo run --quiet --release -p glovebox-web`, and the binary itself prints its URL and opens the browser (`open` on macOS) once it is listening, so the recipe holds no shell logic. `ci-backend` already covers the workspace.
 - `check-layering.sh`: add a second check failing on `sea_orm::(Entity|ActiveModel|Query|Condition)|EntityTrait|ActiveModelTrait|\.filter\(.*Column::` under `glovebox-web/src`.
 
 - [ ] **Step 1: Failing tests** (`tests/pages.rs`, `tower::ServiceExt::oneshot` over `test_db()` with a fixed `today`): `home_lists_open_appointments_and_unscheduled_jobs`; `home_shows_env_name_only_when_not_live`; `foreign_host_is_403`; `cross_origin_post_is_403`; `every_response_carries_the_csp`; `unknown_path_is_404_page`; and in `glovebox-shared`, `home_view_groups_by_vehicle`.

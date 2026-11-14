@@ -290,10 +290,14 @@ The owner needs to try changes against a test database without touching live rec
 - `just web env=test` serves that environment. A non-live environment uses a different default
   port (4828) so it can run beside the live page, and every page shows the environment's name in
   the header so the two cannot be confused.
-- `just seed env=test` fills an environment with made-up data that exercises every stage: a
-  vehicle, an appointment, jobs, needs at each stage, an option that does not fit, a returned part
-  and to-dos. It refuses to run against `live`. `just reset-db` takes the same `env` and refuses
-  `live` unless asked a second time.
+- A small command-line program, `glovebox`, holds everything the owner runs by hand, so its rules
+  are enforced in tested code and the justfile recipes are single calls with no shell logic. The
+  two servers only serve. Its commands: `backup`; `seed --env <name>`, which fills an environment
+  with made-up data that exercises every stage (a vehicle, an appointment, jobs, needs at each
+  stage, an option that does not fit, a returned part and to-dos); and `reset --env <name>`, which
+  deletes that environment's database.
+- `seed` and `reset` require a name, refuse `live`, and build the file name themselves, so neither
+  can reach the live database. Nothing deletes or overwrites the live database.
 - `docs/claude-desktop/` gains a second config snippet for a test server entry
   (`GLOVEBOX_ENV=test`), which the owner adds by hand when wanted.
 
