@@ -6,30 +6,30 @@
 <meta name="color-scheme" content="light dark">
 <title>60k service + loose ends – Glovebox</title>
 <style>
+  /* One typeface in two weights and four sizes. Black bars and white count
+     windows carry the structure; color appears only as a signal. */
   :root {
     color-scheme: light dark;
-    --bg: #E6E8E7;
-    --sheet: #FFFFFF;
-    --head: #DADDDC;
-    --inset: #F1F3F2;
-    --ink: #17191B;
-    --ink-2: #50565B;
-    --rule: #D3D6D6;
-    --edge: #A9AEB0;
-    --control: #7C8286;
-    --tick-off: #B4B9BB;
-    --attn: #8A4F00;
-    --ok: #22663E;
-    --bad: #AE2618;
+    --page: #D6D8D6;
+    --sheet: #F8F8F6;
+    --bar: #161616;
+    --on-bar: #F8F8F6;
+    --job-bar: #B4B8B6;
+    --ink: #161616;
+    --ink-2: #565B5C;
+    --rule: #C6C9C7;
+    --inset: #E9EAE8;
+    --amber: #F2A900;
+    --on-amber: #161616;
+    --green: #1F7A4D;
+    --red: #C4241B;
+    --on-signal: #FFFFFF;
 
-    --amber-bg: #FBE7C2; --amber-line: #B26A00;
-    --green-bg: #D5EBDD; --green-line: #22663E;
-    --red-bg: #F8D9D4;   --red-line: #AE2618;
-    --steel-bg: #D8E3EE; --steel-line: #3F6690;
-    --stone-bg: #E6E7E5; --stone-line: #7C8286;
-
-    --text: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    --face: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    --s-small: 0.875rem;
+    --s-body: 1rem;
+    --s-part: 1.1875rem;
+    --s-title: 2.125rem;
 
     --need-col: 12rem;
     --pad: 1rem;
@@ -37,209 +37,129 @@
 
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #121416;
-      --sheet: #1C1F22;
-      --head: #2A2E32;
-      --inset: #16191B;
-      --ink: #ECEAE4;
-      --ink-2: #A3A7AB;
-      --rule: #30353A;
-      --edge: #4A5056;
-      --control: #6E7479;
-      --tick-off: #454A4F;
-      --attn: #F0A43C;
-      --ok: #74C69A;
-      --bad: #FF8A7A;
-
-      --amber-bg: #4A3408; --amber-line: #F0A43C;
-      --green-bg: #143D27; --green-line: #74C69A;
-      --red-bg: #521A13;   --red-line: #FF8A7A;
-      --steel-bg: #1D3348; --steel-line: #7FAED8;
-      --stone-bg: #2C3034; --stone-line: #7E858A;
+      --page: #0E0F0F;
+      --sheet: #1C1E1F;
+      --bar: #000000;
+      --on-bar: #F2F2EF;
+      --job-bar: #3B3F41;
+      --ink: #F2F2EF;
+      --ink-2: #A4A9AA;
+      --rule: #34383A;
+      --inset: #141516;
+      --amber: #F2A900;
+      --green: #2E9E68;
+      --red: #E0453A;
     }
   }
 
-  .tone-amber { --tone-bg: var(--amber-bg); --tone-line: var(--amber-line); }
-  .tone-green { --tone-bg: var(--green-bg); --tone-line: var(--green-line); }
-  .tone-red   { --tone-bg: var(--red-bg);   --tone-line: var(--red-line); }
-  .tone-steel { --tone-bg: var(--steel-bg); --tone-line: var(--steel-line); }
-  .tone-stone { --tone-bg: var(--stone-bg); --tone-line: var(--stone-line); }
-
   *, *::before, *::after { box-sizing: border-box; }
-
   html { font-size: 100%; -webkit-text-size-adjust: 100%; }
 
   body {
     margin: 0;
-    background: var(--bg);
+    background: var(--page);
     color: var(--ink);
-    font: 400 1rem/1.5 var(--text);
+    font: 400 var(--s-body)/1.45 var(--face);
     font-variant-numeric: tabular-nums;
-    -webkit-font-smoothing: antialiased;
   }
 
   h1, h2, h3, h4, p, ul, ol, dl, dd, fieldset { margin: 0; padding: 0; }
+  h1, h2, h3, h4, b { font-weight: 700; }
+  h2, h3, h4 { font-size: var(--s-body); }
   ul, ol { list-style: none; }
   fieldset { border: 0; min-width: 0; }
+  button, input, select, textarea { font: inherit; color: inherit; }
 
-  a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: 0.2em; }
-  a:hover { text-decoration-thickness: 2px; }
+  a { color: inherit; text-underline-offset: 0.2em; }
+  :focus-visible { outline: 3px solid var(--amber); outline-offset: 2px; }
 
-  :focus-visible { outline: 2px solid var(--attn); outline-offset: 2px; }
-
-  .page {
-    max-width: 76rem;
-    margin: 0 auto;
-    padding-inline: clamp(0.75rem, 3vw, 2.5rem);
-  }
+  .page { max-width: 72rem; margin: 0 auto; padding-inline: clamp(0.75rem, 3vw, 2.5rem); }
 
   /* Header */
 
-  .chrome { background: var(--sheet); border-bottom: 2px solid var(--ink); }
-  .chrome .page {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    column-gap: 1rem;
-    row-gap: 0.25rem;
-    padding-block: 0.75rem;
-  }
-  .wordmark {
-    font: 800 1rem/1 var(--text);
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    text-decoration: none;
-  }
-  .chrome nav { margin-inline-start: auto; font-size: 0.9375rem; }
-  .today { font: 600 0.9375rem/1 var(--text); color: var(--ink-2); }
+  .chrome { background: var(--bar); color: var(--on-bar); }
+  .chrome .page { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 1rem; padding-block: 0.75rem; }
+  .wordmark { font-weight: 700; text-decoration: none; }
+  .chrome nav { margin-inline-start: auto; }
+  .today { color: var(--on-bar); }
 
-  /* Pills: every value that comes from a fixed list */
+  /* Tags: every value that comes from a fixed list. A solid tag is a signal;
+     an outlined tag states a fact that needs no attention. */
 
   .pill, .env {
     display: inline-block;
     width: fit-content;
-    padding: 0.05rem 0.5rem;
-    border: 1px solid var(--tone-line, var(--stone-line));
-    border-radius: 999px;
-    background: var(--tone-bg, var(--stone-bg));
-    color: var(--ink);
-    font: 600 0.8125rem/1.5 var(--text);
+    padding: 0.1rem 0.45rem;
+    border: 1px solid var(--ink-2);
+    border-radius: 2px;
+    font-size: var(--s-small);
+    line-height: 1.35;
     white-space: nowrap;
-    vertical-align: baseline;
   }
-  .env { --tone-bg: var(--amber-bg); --tone-line: var(--amber-line); }
-  .pill--undecided, .pill--to_order, .fit--unconfirmed { --tone-bg: var(--amber-bg); --tone-line: var(--amber-line); }
-  .pill--ordered, .pill--planned { --tone-bg: var(--steel-bg); --tone-line: var(--steel-line); }
-  .pill--received, .pill--done, .fit--confirmed { --tone-bg: var(--green-bg); --tone-line: var(--green-line); }
-  .pill--installed { background: var(--green-line); border-color: var(--green-line); color: var(--sheet); }
-  .pill--shop_supplies { --tone-bg: var(--stone-bg); --tone-line: var(--stone-line); }
-  .fit--does_not_fit, .pill--rejected { --tone-bg: var(--red-bg); --tone-line: var(--red-line); }
-  .pill--kind { background: transparent; border-color: var(--edge); font-weight: 500; }
-  .pill--none { background: transparent; border-style: dashed; border-color: var(--edge); color: var(--ink-2); font-weight: 400; }
+  .env, .pill--undecided, .pill--to_order, .fit--unconfirmed {
+    background: var(--amber); border-color: var(--amber); color: var(--on-amber); font-weight: 700;
+  }
+  .pill--received, .pill--installed, .pill--done {
+    background: var(--green); border-color: var(--green); color: var(--on-signal); font-weight: 700;
+  }
+  .fit--does_not_fit, .pill--rejected {
+    background: var(--red); border-color: var(--red); color: var(--on-signal); font-weight: 700;
+  }
+  .pill--ordered { background: var(--ink); border-color: var(--ink); color: var(--sheet); font-weight: 700; }
+  .pill--none { border-style: dashed; color: var(--ink-2); }
 
-  /* A tag names the job a row belongs to. It is free text, so it is square. */
-  .tag {
-    display: inline-block;
-    padding: 0 0.4rem;
-    border: 1px solid var(--rule);
-    border-radius: 3px;
-    color: var(--ink-2);
-    font: 400 0.8125rem/1.5 var(--text);
-    white-space: nowrap;
-  }
+  .tag { color: var(--ink-2); font-size: var(--s-small); white-space: nowrap; }
 
   /* Undo banner */
 
-  .banner { background: var(--ink); color: var(--bg); }
-  .banner .page {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.5rem 1.25rem;
-    padding-block: 0.5rem;
-  }
-  .banner p { font-size: 0.9375rem; }
-  .banner .btn { color: var(--bg); border-color: var(--bg); min-height: 1.875rem; padding-block: 0.2rem; }
+  .banner { background: var(--sheet); border-bottom: 1px solid var(--rule); }
+  .banner .page { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; padding-block: 0.5rem; }
 
-  /* Boxes: a white sheet with a tinted head band and a colored spine */
+  /* Appointment */
 
-  .box {
-    background: var(--sheet);
-    border: 1px solid var(--edge);
-    border-left: 6px solid var(--tone-line, var(--edge));
-    border-radius: 4px;
-    overflow: hidden;
-  }
+  .appt { padding-block: 2.25rem 0.75rem; }
+  .appt h1 { font-size: var(--s-title); line-height: 1.1; letter-spacing: -0.015em; }
+  .appt p { margin-top: 0.5rem; }
+  .appt .pill { margin-inline-start: 0.5rem; vertical-align: 0.1em; }
+
+  /* Sections and bars */
+
+  .section { display: grid; gap: 0.75rem; padding-block: 1.5rem 1rem; }
+  .section > * { min-width: 0; }
+  .section > h2 { font-size: var(--s-part); }
+
+  .box { background: var(--sheet); }
   .box-head {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 0.25rem 0.75rem;
+    gap: 0.25rem 0.625rem;
     padding: 0.5rem var(--pad);
-    background: var(--tone-bg, var(--head));
-    border-bottom: 1px solid var(--tone-line, var(--edge));
-    font: 700 1.0625rem/1.4 var(--text);
+    background: var(--bar);
+    color: var(--on-bar);
   }
+  /* The count sits in a window cut into the bar. */
   .box-head .count {
-    margin-inline-start: auto;
-    font: 600 0.875rem/1.4 var(--text);
-    color: var(--ink);
+    min-width: 1.75rem;
+    padding: 0 0.4rem;
+    border-radius: 2px;
+    background: var(--on-bar);
+    color: var(--bar);
+    font-weight: 700;
+    text-align: center;
   }
-  .box-head .count b { font-size: 1.0625rem; font-weight: 800; }
+  .tone-red > .box-head .count, .tone-amber > .box-head .count { background: var(--amber); color: var(--on-amber); }
+  .tone-red > .box-head .count { background: var(--red); color: var(--on-signal); }
 
   details.box > summary { list-style: none; cursor: pointer; }
   details.box > summary::-webkit-details-marker { display: none; }
-  details.box > summary .box-head::after { content: "Show"; font: 400 0.875rem/1.4 var(--text); text-decoration: underline; text-underline-offset: 0.2em; }
+  details.box > summary .box-head::after { content: "Show"; margin-inline-start: auto; font-weight: 400; text-decoration: underline; text-underline-offset: 0.2em; }
   details.box[open] > summary .box-head::after { content: "Hide"; }
-  details.box:not([open]) > summary .box-head { border-bottom: 0; }
 
-  /* Appointment */
-
-  .appt { padding-block: 1.5rem 0.5rem; }
-  .box.lead { border: 2px solid var(--ink); }
-  .box.lead > .box-head {
-    background: var(--ink);
-    color: var(--bg);
-    border-bottom: 0;
-    padding-block: 0.875rem;
-    font: 800 clamp(1.5rem, 3vw, 2rem)/1.15 var(--text);
-    letter-spacing: -0.01em;
-  }
-  .appt-body {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: stretch;
-  }
-  .appt-facts { display: flex; flex-wrap: wrap; flex: 1 1 auto; }
-  .appt-facts > div, .appt-counts > span {
-    padding: 0.625rem var(--pad);
-    border-right: 1px solid var(--rule);
-  }
-  .appt-facts dt, .appt-counts small {
-    display: block;
-    font: 600 0.6875rem/1.4 var(--text);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--ink-2);
-  }
-  .appt-facts dd { font-size: 1.0625rem; font-weight: 600; }
-  .appt-counts { display: flex; flex-wrap: wrap; background: var(--inset); border-left: 1px solid var(--rule); }
-  .appt-counts > span:last-child { border-right: 0; }
-  .appt-counts b { display: block; font: 800 1.375rem/1.2 var(--text); }
-  .appt-counts .open b { color: var(--attn); }
-
-  /* Sections */
-
-  .section { display: grid; gap: 0.875rem; padding-block: 1.25rem 1.5rem; }
-  .section > * { min-width: 0; }
-  .section > h2 {
-    font: 800 0.8125rem/1.4 var(--text);
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: var(--ink-2);
-    padding-bottom: 0.25rem;
-    border-bottom: 2px solid var(--ink);
-  }
+  .job > .box-head { background: var(--job-bar); color: var(--ink); }
+  .job > .box-head .count { margin-inline-start: auto; min-width: 0; padding: 0; background: none; color: inherit; font-weight: 400; }
+  .job-head .pill { border-color: var(--ink); }
+  .job-head .pill--done { border-color: var(--green); }
 
   /* Next-step rows */
 
@@ -252,141 +172,96 @@
     padding: 0.625rem var(--pad);
   }
   .step + .step { border-top: 1px solid var(--rule); }
-  .step:nth-child(even) { background: var(--inset); }
   .step-need { font-weight: 700; }
   .step-text { overflow-wrap: anywhere; }
   .step-text::first-letter { text-transform: uppercase; }
-  .step-text .tag, .step-text .pill { margin-inline-start: 0.5rem; }
-  .step-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: flex-end; }
+  .step-text .tag, .step-text .pill { margin-inline-start: 0.625rem; }
+  .step-actions { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; justify-content: flex-end; align-items: center; }
   .step-actions > form { display: contents; }
   .step > .drawer[open] { grid-column: 2 / -1; }
   .step > .drawer:not([open]) { justify-self: end; }
   .step--todo { grid-template-columns: 1.375rem minmax(0, 1fr) auto; }
-  .step > .drawer--aside, .step > .drawer--aside:not([open]) { grid-column: 2 / -1; justify-self: start; margin-top: -0.25rem; }
-  .drawer.drawer--aside > summary { min-height: 0; padding: 0; border: 0; background: transparent; color: var(--ink-2); text-decoration: underline; text-underline-offset: 0.2em; font-weight: 400; }
-  .drawer.drawer--aside > summary:hover, .drawer.drawer--aside[open] > summary { color: var(--ink); }
+  .step > .drawer--aside, .step > .drawer--aside:not([open]),
   .step > .drawer--add, .step > .drawer--add:not([open]) { grid-column: 2 / -1; justify-self: start; }
+  .step > .drawer--aside { margin-top: -0.375rem; }
 
-  /* The stage scale: five ticks from undecided to installed */
-
-  .scale {
-    display: inline-flex;
-    align-items: flex-end;
-    gap: 3px;
-    height: 0.75rem;
-    padding-bottom: 2px;
-    border-bottom: 1px solid var(--tick-off);
-  }
-  .scale i { display: block; width: 3px; height: 100%; background: var(--tick-off); }
-  .scale[data-stage="undecided"] i:nth-child(-n+1),
-  .scale[data-stage="to_order"] i:nth-child(-n+2) { background: var(--amber-line); }
-  .scale[data-stage="ordered"] i:nth-child(-n+3) { background: var(--steel-line); }
-  .scale[data-stage="received"] i:nth-child(-n+4),
-  .scale[data-stage="installed"] i { background: var(--green-line); }
-  .scale[data-stage="shop_supplies"] i { height: 2px; background: var(--ink-2); }
-  .scale[data-stage="shop_supplies"] { border-bottom-color: transparent; }
-
-  /* Controls */
+  /* Controls: a solid button commits something; underlined text does the rest. */
 
   .btn, .drawer > summary {
     display: inline-flex;
     align-items: center;
-    min-height: 2.25rem;
-    padding: 0.4rem 0.8rem;
-    border: 1px solid var(--control);
-    border-radius: 3px;
-    background: var(--sheet);
-    color: var(--ink);
-    font: 600 0.875rem/1.2 var(--text);
+    min-height: 2rem;
+    padding: 0.3rem 0.75rem;
+    border: 0;
+    border-radius: 2px;
+    background: var(--ink);
+    color: var(--sheet);
+    font-size: var(--s-small);
+    font-weight: 700;
     cursor: pointer;
     white-space: nowrap;
     text-decoration: none;
+    list-style: none;
   }
-  .btn:hover, .drawer > summary:hover { border-color: var(--ink); }
-  .btn--primary { background: var(--ink); border-color: var(--ink); color: var(--bg); }
-  .btn--quiet { border-color: transparent; background: transparent; color: var(--ink-2); padding-inline: 0.4rem; text-decoration: underline; text-underline-offset: 0.2em; font-weight: 400; }
-  .btn--quiet:hover { border-color: transparent; color: var(--ink); }
-  .banner .btn { background: transparent; }
-
-  .drawer > summary { list-style: none; }
   .drawer > summary::-webkit-details-marker { display: none; }
-  .drawer[open] > summary { border-color: var(--ink); }
+  .btn--quiet, .drawer--aside > summary, .drawer--add > summary, .secondary .drawer > summary {
+    min-height: 0;
+    padding: 0;
+    background: none;
+    color: var(--ink);
+    font-weight: 400;
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
+  }
+  .drawer[open] > summary { background: none; color: var(--ink); padding-inline: 0; }
 
   .tick {
+    display: block;
+    position: relative;
     width: 1.375rem;
     height: 1.375rem;
     padding: 0;
-    border: 1.5px solid var(--ink-2);
-    border-radius: 3px;
+    border: 2px solid var(--ink);
+    border-radius: 2px;
     background: var(--sheet);
     cursor: pointer;
-    position: relative;
-    display: block;
   }
-  .tick:hover { border-color: var(--ink); }
-  .tick[aria-pressed="true"] { background: var(--green-line); border-color: var(--green-line); }
+  .tick[aria-pressed="true"] { background: var(--green); border-color: var(--green); }
   .tick[aria-pressed="true"]::after {
     content: "";
     position: absolute;
-    left: 0.4rem;
-    top: 0.12rem;
+    left: 0.36rem;
+    top: 0.06rem;
     width: 0.35rem;
     height: 0.7rem;
-    border: solid var(--sheet);
+    border: solid var(--on-signal);
     border-width: 0 2px 2px 0;
     transform: rotate(45deg);
   }
 
-  .form {
-    display: grid;
-    gap: 0.875rem;
-    margin-top: 0.5rem;
-    padding: 0.875rem;
-    border: 1px solid var(--edge);
-    border-radius: 3px;
-    background: var(--inset);
-  }
+  .form { display: grid; gap: 0.875rem; margin-top: 0.5rem; padding: 0.875rem; background: var(--inset); }
   .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: 0.75rem 1rem; }
-  .field { display: grid; gap: 0.25rem; align-content: start; }
-  .field > span, legend h4, .need-cols {
-    font: 600 0.6875rem/1.4 var(--text);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--ink-2);
-  }
+  .field { display: grid; gap: 0.2rem; align-content: start; }
+  .field > span, .need-cols, .form-note, .opt-meta, .fit-note { font-size: var(--s-small); color: var(--ink-2); }
   .form-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1rem; }
-  .form-note { font-size: 0.8125rem; color: var(--ink-2); max-width: 48ch; }
+  .form-note { max-width: 48ch; }
 
   input[type="text"], input[type="date"], select, textarea {
     width: 100%;
     min-height: 2.25rem;
-    padding: 0.4rem 0.6rem;
-    border: 1px solid var(--control);
-    border-radius: 3px;
+    padding: 0.35rem 0.6rem;
+    border: 1px solid var(--ink-2);
+    border-radius: 2px;
     background: var(--sheet);
-    color: var(--ink);
-    font: 400 0.9375rem/1.4 var(--text);
-    font-variant-numeric: tabular-nums;
   }
   textarea { min-height: 4rem; resize: vertical; max-width: 60ch; }
   input[type="radio"], input[type="checkbox"] { accent-color: var(--ink); width: 1.05rem; height: 1.05rem; margin: 0; }
-  .check { display: inline-flex; align-items: center; gap: 0.5rem; font-size: 0.9375rem; }
+  .check { display: inline-flex; align-items: center; gap: 0.5rem; }
 
-  [aria-invalid="true"] { border-color: var(--bad) !important; border-width: 2px !important; }
-  .error {
-    padding: 0.5rem 0.75rem;
-    border: 1px solid var(--red-line);
-    border-left-width: 6px;
-    border-radius: 3px;
-    background: var(--red-bg);
-    font-size: 0.9375rem;
-    overflow-wrap: anywhere;
-  }
-  .error b { font-weight: 700; }
+  [aria-invalid="true"] { border: 2px solid var(--red) !important; }
+  .error { padding: 0.4rem 0.75rem; background: var(--red); color: var(--on-signal); overflow-wrap: anywhere; }
 
   /* Jobs */
-
-  .job-head h3 { font: 700 1.125rem/1.4 var(--text); }
 
   .need-cols, .need-row {
     display: grid;
@@ -394,35 +269,27 @@
     column-gap: 1.5rem;
     padding-inline: var(--pad);
   }
-  .need-cols { padding-block: 0.3rem; background: var(--inset); border-bottom: 1px solid var(--rule); }
+  .need-cols { padding-block: 0.3rem; border-bottom: 1px solid var(--rule); }
 
-  .needs > li + li { border-top: 1px solid var(--edge); }
+  .needs > li + li { border-top: 1px solid var(--rule); }
   .need > summary { list-style: none; cursor: pointer; }
   .need > summary::-webkit-details-marker { display: none; }
-  .need > summary:hover { background: var(--inset); }
-  .need[open] > summary { background: var(--inset); }
+  .need[open] { box-shadow: inset 4px 0 0 var(--ink); }
 
   .need-row { row-gap: 0.75rem; padding-block: 0.875rem; }
   .need-row .cell > * { display: block; }
-  .need-row .cell > .pill { margin-top: 0.3rem; }
-  .need-name { font-weight: 700; font-size: 1.0625rem; }
-  .need-row .cell > .need-stage { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.3rem; }
-  .need-row .facts { padding-inline-start: 1.5rem; border-inline-start: 1px solid var(--rule); }
+  .need-row .cell > .pill, .need-stage { margin-top: 0.35rem; }
+  .need-name { font-weight: 700; }
 
-  .pn { font: 600 1.0625rem/1.35 var(--mono); overflow-wrap: anywhere; }
-  .pn .mfr { font: 600 1rem/1.35 var(--text); margin-inline-end: 0.45rem; }
-  .opt-desc { font-size: 0.9375rem; }
-  .opt-meta { font-size: 0.875rem; color: var(--ink-2); }
+  .pn { font-size: var(--s-part); font-weight: 700; line-height: 1.3; overflow-wrap: anywhere; }
+  .pn .mfr { font-size: var(--s-body); font-weight: 400; margin-inline-end: 0.45rem; }
   .money { font-weight: 700; color: var(--ink); white-space: nowrap; }
   .none { color: var(--ink-2); }
-  .fit-note { font-size: 0.875rem; color: var(--ink-2); }
-  .need-note { font-size: 0.875rem; color: var(--attn); font-weight: 600; }
+  .need-note { font-size: var(--s-small); font-weight: 700; }
+  .purchase { margin-top: 0.35rem; font-size: var(--s-small); }
 
-  .purchase { margin-top: 0.4rem; font-size: 0.875rem; }
-  .purchase span { color: var(--ink-2); margin-inline-end: 0.35rem; }
-
-  .facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.3rem 0.75rem; font-size: 0.9375rem; align-content: start; align-items: baseline; }
-  .facts .dt { color: var(--ink-2); font-size: 0.8125rem; }
+  .facts { display: grid; gap: 0.4rem; align-content: start; }
+  .kinds { display: flex; flex-wrap: wrap; gap: 0.375rem; }
 
   .marker { position: relative; width: 1.25rem; height: 1.25rem; margin-top: 0.1rem; }
   .marker::before, .marker::after {
@@ -432,7 +299,7 @@
     top: 50%;
     width: 0.75rem;
     height: 2px;
-    background: var(--ink-2);
+    background: var(--ink);
     transform: translate(-50%, -50%);
   }
   .marker::after { transform: translate(-50%, -50%) rotate(90deg); }
@@ -440,13 +307,13 @@
 
   .need-body {
     display: grid;
-    gap: 1rem;
-    padding: 0.25rem var(--pad) 1.25rem calc(var(--pad) + var(--need-col) + 1.5rem);
-    background: var(--inset);
+    gap: 0.875rem;
+    padding: 0 var(--pad) 1.25rem calc(var(--pad) + var(--need-col) + 1.5rem);
   }
-  .need-body .form { margin-top: 0; background: var(--sheet); }
+  .need-body .form { margin-top: 0; }
+  legend { padding: 0; }
 
-  .opts { border: 1px solid var(--edge); border-radius: 3px; overflow: hidden; margin-top: 0.25rem; }
+  .opts { margin-top: 0.375rem; background: var(--sheet); }
   .opt {
     display: grid;
     grid-template-columns: 1.5rem minmax(0, 1fr) 6rem minmax(0, 15rem);
@@ -457,15 +324,15 @@
     cursor: pointer;
   }
   .opt + .opt { border-top: 1px solid var(--rule); }
-  .opt:has(input:checked) { background: var(--green-bg); box-shadow: inset 4px 0 0 var(--green-line); }
+  .opt:has(input:checked) { box-shadow: inset 4px 0 0 var(--ink); }
   .opt input { align-self: start; margin-top: 0.3rem; }
   .opt .price { text-align: right; }
-  .opt--blocked { cursor: not-allowed; background: var(--inset); }
-  .opt--blocked .pn, .opt--blocked .opt-desc { color: var(--ink-2); }
-  .opt--does_not_fit .pn { text-decoration: line-through; text-decoration-thickness: 1.5px; }
-  .opt .fit-note { display: block; margin-top: 0.25rem; }
+  .opt--blocked { cursor: not-allowed; }
+  .opt--blocked .pn, .opt--blocked .opt-desc, .opt--blocked .money { color: var(--ink-2); }
+  .opt--does_not_fit .pn { text-decoration: line-through; }
+  .opt .fit-note { display: block; margin-top: 0.3rem; }
 
-  .secondary { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: start; }
+  .secondary { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; align-items: start; }
   .secondary > .drawer[open] { flex-basis: 100%; }
 
   /* Narrow widths */
@@ -474,7 +341,7 @@
     :root { --need-col: 10rem; }
     .need-cols { display: none; }
     .need-row { grid-template-columns: var(--need-col) minmax(0, 1fr) 1.25rem; }
-    .need-row .facts { grid-column: 2 / 3; padding-inline-start: 0; border-inline-start: 0; }
+    .need-row .facts { grid-column: 2 / 3; }
     .need-row .marker { grid-column: 3; grid-row: 1; }
   }
 
@@ -491,11 +358,6 @@
     .opt { grid-template-columns: 1.5rem minmax(0, 1fr); }
     .opt > :nth-child(n+3) { grid-column: 2; }
     .opt .price { text-align: left; }
-    .appt-counts { flex-basis: 100%; border-left: 0; border-top: 1px solid var(--rule); }
-  }
-
-  @media (prefers-reduced-motion: no-preference) {
-    .btn, .drawer > summary, .tick { transition: border-color 120ms ease; }
   }
 </style>
 </head>
@@ -522,22 +384,9 @@
 
 <main>
   <section class="appt page" aria-labelledby="appt-title">
-    <div class="box lead">
-      <h1 class="box-head" id="appt-title">60k service + loose ends</h1>
-      <div class="appt-body">
-        <dl class="appt-facts">
-          <div><dt>Shop</dt><dd>Demo Auto Works</dd></div>
-          <div><dt>Date</dt><dd><time datetime="2026-11-27">Fri, Nov 27, 2026</time></dd></div>
-          <div><dt>Vehicle</dt><dd>Demo GTI</dd></div>
-          <div><dt>Status</dt><dd><span class="pill pill--planned">Planning</span></dd></div>
-        </dl>
-        <p class="appt-counts">
-          <span class="open"><b>5</b><small>needs open</small></span>
-          <span class="open"><b>2</b><small>to-dos open</small></span>
-          <span><b>3</b><small>jobs</small></span>
-        </p>
-      </div>
-    </div>
+    <h1 id="appt-title">60k service + loose ends</h1>
+    <p>Demo GTI at Demo Auto Works on <time datetime="2026-11-27">Fri, Nov 27, 2026</time><span class="pill pill--planned">Planning</span></p>
+    <p><b>5</b> needs open, <b>2</b> to-dos open, <b>3</b> jobs</p>
   </section>
 
   <section class="section page" aria-labelledby="steps-title">
@@ -728,7 +577,7 @@
             <summary class="need-row">
               <span class="cell">
                 <span class="need-name">Rear rotors</span>
-                <span class="need-stage"><span class="scale" data-stage="to_order" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="pill pill--to_order">To order</span></span>
+                <span class="need-stage"><span class="pill pill--to_order">To order</span></span>
               </span>
               <span class="cell">
                 <span class="pn"><span class="mfr">Volkswagen</span>5Q0615601E</span>
@@ -737,9 +586,8 @@
                 <span class="pill fit--confirmed">Fit confirmed</span>
               </span>
               <span class="facts">
-                <span class="dt">Supplier</span><span class="dd"><span class="pill pill--kind">Self</span></span>
-                <span class="dt">Approach</span><span class="dd"><span class="pill pill--kind">Replacement</span></span>
-                <span class="dt">Reason</span><span class="dd">Coated hats resist rust.</span>
+                <span class="kinds"><span class="pill pill--kind">Self</span><span class="pill pill--kind">Replacement</span></span>
+                <span class="reason">Coated hats resist rust.</span>
               </span>
               <span class="marker" aria-hidden="true"></span>
             </summary>
@@ -833,15 +681,14 @@
             <summary class="need-row">
               <span class="cell">
                 <span class="need-name">Rear pads</span>
-                <span class="need-stage"><span class="scale" data-stage="undecided" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="pill pill--undecided">Undecided</span></span>
+                <span class="need-stage"><span class="pill pill--undecided">Undecided</span></span>
               </span>
               <span class="cell">
                 <span class="none">No part chosen</span>
                 <span class="opt-meta">1 option researched</span>
               </span>
               <span class="facts">
-                <span class="dt">Supplier</span><span class="dd"><span class="pill pill--none">Not decided</span></span>
-                <span class="dt">Approach</span><span class="dd"><span class="pill pill--none">Not decided</span></span>
+                <span class="kinds"><span class="pill pill--none">Supplier not decided</span><span class="pill pill--none">Approach not decided</span></span>
               </span>
               <span class="marker" aria-hidden="true"></span>
             </summary>
@@ -874,7 +721,7 @@
             <summary class="need-row">
               <span class="cell">
                 <span class="need-name">Front pads</span>
-                <span class="need-stage"><span class="scale" data-stage="to_order" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="pill pill--to_order">To order</span></span>
+                <span class="need-stage"><span class="pill pill--to_order">To order</span></span>
               </span>
               <span class="cell">
                 <span class="pn"><span class="mfr">Akebono</span>ACT1633</span>
@@ -884,9 +731,8 @@
                 <span class="need-note">Fitment of the chosen option is not confirmed.</span>
               </span>
               <span class="facts">
-                <span class="dt">Supplier</span><span class="dd"><span class="pill pill--kind">Self</span></span>
-                <span class="dt">Approach</span><span class="dd"><span class="pill pill--kind">Replacement</span></span>
-                <span class="dt">Reason</span><span class="dd">Quiet and low dust.</span>
+                <span class="kinds"><span class="pill pill--kind">Self</span><span class="pill pill--kind">Replacement</span></span>
+                <span class="reason">Quiet and low dust.</span>
               </span>
               <span class="marker" aria-hidden="true"></span>
             </summary>
@@ -899,18 +745,17 @@
             <summary class="need-row">
               <span class="cell">
                 <span class="need-name">Front rotors</span>
-                <span class="need-stage"><span class="scale" data-stage="received" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="pill pill--received">Received</span></span>
+                <span class="need-stage"><span class="pill pill--received">Received</span></span>
               </span>
               <span class="cell">
                 <span class="pn"><span class="mfr">Zimmermann</span>100.3367.20</span>
                 <span class="opt-desc">Coated front rotor, 312 mm</span>
                 <span class="pill fit--confirmed">Fit confirmed</span>
-                <span class="purchase"><span>Bought</span>FCP Euro · 2026-11-13 · $162.00 · order FCP-10458</span>
+                <span class="purchase">Bought from FCP Euro on 2026-11-13 for $162.00, order FCP-10458</span>
               </span>
               <span class="facts">
-                <span class="dt">Supplier</span><span class="dd"><span class="pill pill--kind">Self</span></span>
-                <span class="dt">Approach</span><span class="dd"><span class="pill pill--kind">Replacement</span></span>
-                <span class="dt">Reason</span><span class="dd">Matches the original part.</span>
+                <span class="kinds"><span class="pill pill--kind">Self</span><span class="pill pill--kind">Replacement</span></span>
+                <span class="reason">Matches the original part.</span>
               </span>
               <span class="marker" aria-hidden="true"></span>
             </summary>
@@ -923,12 +768,11 @@
             <summary class="need-row">
               <span class="cell">
                 <span class="need-name">Brake fluid</span>
-                <span class="need-stage"><span class="scale" data-stage="shop_supplies" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="pill pill--shop_supplies">Shop supplies</span></span>
+                <span class="need-stage"><span class="pill pill--shop_supplies">Shop supplies</span></span>
               </span>
               <span class="cell"><span class="none">No part chosen</span></span>
               <span class="facts">
-                <span class="dt">Supplier</span><span class="dd"><span class="pill pill--kind">Shop</span></span>
-                <span class="dt">Approach</span><span class="dd"><span class="pill pill--none">Not decided</span></span>
+                <span class="kinds"><span class="pill pill--kind">Shop</span><span class="pill pill--none">Approach not decided</span></span>
               </span>
               <span class="marker" aria-hidden="true"></span>
             </summary>
@@ -951,18 +795,17 @@
             <summary class="need-row">
               <span class="cell">
                 <span class="need-name">Oil filter</span>
-                <span class="need-stage"><span class="scale" data-stage="installed" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="pill pill--installed">Installed</span></span>
+                <span class="need-stage"><span class="pill pill--installed">Installed</span></span>
               </span>
               <span class="cell">
                 <span class="pn"><span class="mfr">Mann</span>HU 7008 z</span>
                 <span class="opt-desc">Oil filter cartridge</span>
                 <span class="pill fit--confirmed">Fit confirmed</span>
-                <span class="purchase"><span>Bought</span>FCP Euro · 2026-11-13 · $12.99 · order FCP-10459</span>
+                <span class="purchase">Bought from FCP Euro on 2026-11-13 for $12.99, order FCP-10459</span>
               </span>
               <span class="facts">
-                <span class="dt">Supplier</span><span class="dd"><span class="pill pill--kind">Self</span></span>
-                <span class="dt">Approach</span><span class="dd"><span class="pill pill--kind">Replacement</span></span>
-                <span class="dt">Reason</span><span class="dd">Matches the original part.</span>
+                <span class="kinds"><span class="pill pill--kind">Self</span><span class="pill pill--kind">Replacement</span></span>
+                <span class="reason">Matches the original part.</span>
               </span>
               <span class="marker" aria-hidden="true"></span>
             </summary>
@@ -985,18 +828,17 @@
             <summary class="need-row">
               <span class="cell">
                 <span class="need-name">Cabin air filter</span>
-                <span class="need-stage"><span class="scale" data-stage="ordered" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="pill pill--ordered">Ordered</span></span>
+                <span class="need-stage"><span class="pill pill--ordered">Ordered</span></span>
               </span>
               <span class="cell">
                 <span class="pn"><span class="mfr">Mann</span>CUK 26 009</span>
                 <span class="opt-desc">Pollen cabin air filter</span>
                 <span class="pill fit--confirmed">Fit confirmed</span>
-                <span class="purchase"><span>Bought</span>FCP Euro · 2026-11-13 · $21.50 · order FCP-10460</span>
+                <span class="purchase">Bought from FCP Euro on 2026-11-13 for $21.50, order FCP-10460</span>
               </span>
               <span class="facts">
-                <span class="dt">Supplier</span><span class="dd"><span class="pill pill--kind">Self</span></span>
-                <span class="dt">Approach</span><span class="dd"><span class="pill pill--kind">Replacement</span></span>
-                <span class="dt">Reason</span><span class="dd">Matches the original part.</span>
+                <span class="kinds"><span class="pill pill--kind">Self</span><span class="pill pill--kind">Replacement</span></span>
+                <span class="reason">Matches the original part.</span>
               </span>
               <span class="marker" aria-hidden="true"></span>
             </summary>
@@ -1008,15 +850,14 @@
             <summary class="need-row">
               <span class="cell">
                 <span class="need-name">Wiper blades</span>
-                <span class="need-stage"><span class="scale" data-stage="undecided" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="pill pill--undecided">Undecided</span></span>
+                <span class="need-stage"><span class="pill pill--undecided">Undecided</span></span>
               </span>
               <span class="cell">
                 <span class="none">No part chosen</span>
                 <span class="opt-meta">1 option researched, 1 rejected</span>
               </span>
               <span class="facts">
-                <span class="dt">Supplier</span><span class="dd"><span class="pill pill--kind">Self</span></span>
-                <span class="dt">Approach</span><span class="dd"><span class="pill pill--kind">Replacement</span></span>
+                <span class="kinds"><span class="pill pill--kind">Self</span><span class="pill pill--kind">Replacement</span></span>
               </span>
               <span class="marker" aria-hidden="true"></span>
             </summary>
