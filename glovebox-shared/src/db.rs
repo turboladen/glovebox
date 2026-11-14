@@ -495,6 +495,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn job_checklist_tables_exist_and_cascade() {
+        let db = crate::test_support::test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        db.execute_unprepared(&format!(
+            "INSERT INTO work_items (vehicle_id, title, status) VALUES ({v}, 'Brakes', 'planned')"
+        ))
+        .await
+        .unwrap();
+        let work_item = scalar(&db, "SELECT id FROM work_items").await;
+        db.execute_unprepared(&format!(
+            "INSERT INTO job_needs (work_item_id, name) VALUES ({work_item}, 'Pads')"
+        ))
+        .await
+        .unwrap();
+        let need = scalar(&db, "SELECT id FROM job_needs").await;
+        db.execute_unprepared(&format!(
+            "INSERT INTO need_options (need_id, description) VALUES ({need}, 'OEM pads')"
+        ))
+        .await
+        .unwrap();
+        assert_eq!(scalar(&db, "SELECT quantity FROM job_needs").await, 1);
+        assert_eq!(
+            scalar(
+                &db,
+                "SELECT COUNT(*) FROM need_options WHERE fitment = 'unconfirmed'"
+            )
+            .await,
+            1
+        );
+
+        db.execute_unprepared(&format!("DELETE FROM work_items WHERE id = {work_item}"))
+            .await
+            .unwrap();
+
+        assert_eq!(scalar(&db, "SELECT COUNT(*) FROM job_needs").await, 0);
+        assert_eq!(scalar(&db, "SELECT COUNT(*) FROM need_options").await, 0);
+    }
+
+    #[tokio::test]
+    async fn the_job_checklist_columns_and_tables_exist() {
+        let db = crate::test_support::test_db().await;
+        let tables = table_names(&db).await;
+        for t in ["appointments", "job_needs", "need_options", "todos"] {
+            assert!(tables.contains(&t.to_string()), "missing {t}");
+        }
+        for (table, column) in [
+            ("work_items", "appointment_id"),
+            ("service_records", "appointment_id"),
+            ("parts", "received_on"),
+            ("parts", "returned_on"),
+            ("parts", "return_reason"),
+            ("parts", "order_ref"),
+            ("parts", "returned_from_need_id"),
+        ] {
+            let n = scalar(
+                &db,
+                &format!(
+                    "SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = '{column}'"
+                ),
+            )
+            .await;
+            assert_eq!(n, 1, "missing {table}.{column}");
+        }
+    }
+
+    #[tokio::test]
+    async fn migration_is_rerun_safe() {
+        let db = crate::test_support::test_db().await;
+        // Forgetting the newest version makes `up` run the job-checklist
+        // migration again over the finished schema.
+        forget_newest_migration(&db).await;
+        Migrator::up(&db, None).await.unwrap();
+        assert_eq!(
+            scalar(&db, "SELECT COUNT(*) FROM seaql_migrations").await,
+            3
+        );
+    }
+
+    #[tokio::test]
     async fn connect_refuses_a_database_with_an_unknown_migration() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("glovebox.db");

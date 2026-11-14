@@ -514,6 +514,7 @@ mod tests {
             revisit_by_date: date.map(Into::into),
             revisit_by_miles: miles,
             completed_service_id: None,
+            appointment_id: None,
         }
     }
 
