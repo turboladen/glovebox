@@ -11,6 +11,11 @@ reset-env env:
 seed env:
     cargo run --quiet --release -p glovebox-cli -- seed --env {{quote(env)}}
 
+# Serve the web page on 127.0.0.1 and open it in the browser. Use `just web test`
+# for the made-up data from `just seed test`.
+web env="live":
+    GLOVEBOX_ENV={{quote(env)}} cargo run --quiet --release -p glovebox-web -- --open
+
 # --- CI ---
 # These recipes are what GitHub Actions runs, so `just ci` reproduces CI locally.
 

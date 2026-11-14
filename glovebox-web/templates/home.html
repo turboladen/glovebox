@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Glovebox{% endblock %}
+{% block content %}
+<h1>Open work</h1>
+{% if vehicles.is_empty() %}
+<p>No vehicles yet.</p>
+{% endif %}
+{% for v in vehicles %}
+<section>
+  <h2>{{ v.vehicle.name }}</h2>
+
+  <h3>Appointments</h3>
+  {% if v.appointments.is_empty() %}
+  <p>No open appointments.</p>
+  {% else %}
+  <ul>
+    {% for a in v.appointments %}
+    <li>
+      <strong>{{ a.purpose }}</strong>
+      <span class="when">{{ a.when }}</span>
+      {% if let Some(shop) = a.shop_name %}<span class="shop">{{ shop }}</span>{% endif %}
+      <br><span class="counts">{{ a.counts }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  <h3>Not scheduled yet</h3>
+  {% if v.unscheduled_jobs.is_empty() %}
+  <p>No jobs waiting for an appointment.</p>
+  {% else %}
+  <ul>
+    {% for j in v.unscheduled_jobs %}
+    <li><strong>{{ j.title }}</strong> <span class="counts">{{ j.counts }}</span></li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  <h3>To-dos with no appointment</h3>
+  {% if v.todos.is_empty() %}
+  <p>No open to-dos.</p>
+  {% else %}
+  <ul>
+    {% for t in v.todos %}
+    <li>{{ t.title }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+{% endfor %}
+{% endblock %}

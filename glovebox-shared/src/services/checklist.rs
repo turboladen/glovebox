@@ -480,6 +480,108 @@ fn step_summary(view: &NeedView, job_done: bool) -> String {
     }
 }
 
+/// One vehicle's open work for the home page.
+#[derive(Debug, Serialize)]
+pub struct VehicleHome {
+    pub vehicle: vehicle::Model,
+    /// The open appointments, soonest planned date first, unbooked ones last.
+    pub appointments: Vec<HomeAppointment>,
+    /// The planned jobs that are on no appointment and have needs.
+    pub unscheduled_jobs: Vec<HomeJob>,
+    /// The open to-dos that are on no appointment.
+    pub todos: Vec<todo::Model>,
+}
+
+/// An open appointment with its counts written out as statements.
+#[derive(Debug, Serialize)]
+pub struct HomeAppointment {
+    pub id: i32,
+    pub purpose: String,
+    pub shop_name: Option<String>,
+    /// The planned date, or `not booked`.
+    pub when: String,
+    /// For example `3 needs open · 2 to-dos open`.
+    pub counts: String,
+}
+
+/// An unscheduled job with its open needs written out as a statement.
+#[derive(Debug, Serialize)]
+pub struct HomeJob {
+    pub id: i32,
+    pub title: String,
+    /// For example `2 needs open`.
+    pub counts: String,
+}
+
+/// `1 need`, `2 needs`.
+fn count_of(n: usize, singular: &str, plural: &str) -> String {
+    format!("{n} {}", if n == 1 { singular } else { plural })
+}
+
+/// Whether a need still asks something of the owner before the visit.
+fn is_open(stage: Stage) -> bool {
+    matches!(stage, Stage::Undecided | Stage::ToOrder | Stage::Ordered)
+}
+
+/// What the home page shows for every vehicle that is not archived: its open
+/// appointments, its unscheduled jobs and its to-dos that are on no
+/// appointment. An appointment whose jobs are all done stays listed while it
+/// has an open to-do.
+///
+/// # Errors
+/// `Db` when a query fails.
+pub async fn home(db: &impl ConnectionTrait) -> DomainResult<Vec<VehicleHome>> {
+    let mut out = Vec::new();
+    for vehicle in super::vehicle::list(db)
+        .await?
+        .into_iter()
+        .filter(|v| v.archived_at.is_none())
+    {
+        let appointments = appointment::list(db, vehicle.id, false)
+            .await?
+            .into_iter()
+            .map(|s| HomeAppointment {
+                id: s.appointment.id,
+                purpose: s.appointment.purpose,
+                shop_name: s.appointment.shop_name,
+                when: s
+                    .appointment
+                    .planned_date
+                    .unwrap_or_else(|| "not booked".to_owned()),
+                counts: format!(
+                    "{} open \u{b7} {} open",
+                    count_of(s.needs_open, "need", "needs"),
+                    count_of(s.todos_open, "to-do", "to-dos")
+                ),
+            })
+            .collect();
+        let unscheduled = for_unscheduled(db, vehicle.id).await?;
+        let unscheduled_jobs = unscheduled
+            .jobs
+            .iter()
+            .map(|j| HomeJob {
+                id: j.job.id,
+                title: j.job.title.clone(),
+                counts: format!(
+                    "{} open",
+                    count_of(
+                        j.needs.iter().filter(|n| is_open(n.stage)).count(),
+                        "need",
+                        "needs"
+                    )
+                ),
+            })
+            .collect();
+        out.push(VehicleHome {
+            vehicle,
+            appointments,
+            unscheduled_jobs,
+            todos: unscheduled.next_steps.todos,
+        });
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1241,5 +1343,111 @@ mod tests {
         let db = test_db().await;
         let err = past_decisions(&db, "   ").await.unwrap_err();
         assert!(matches!(err, DomainError::Invalid { .. }), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn home_view_groups_by_vehicle() {
+        let db = test_db().await;
+        let golf = VehicleFixture::new().name("Golf").insert_id(&db).await;
+        let alltrack = VehicleFixture::new().name("Alltrack").insert_id(&db).await;
+        let old = VehicleFixture::new().name("Old").insert_id(&db).await;
+        crate::services::vehicle::archive(&db, old).await.unwrap();
+
+        let booked = appointment::create(
+            &db,
+            golf,
+            NewAppointment {
+                purpose: "60k service".into(),
+                planned_date: Some("2026-12-01".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+        let unbooked = appointment::create(
+            &db,
+            golf,
+            NewAppointment {
+                purpose: "Tire swap".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+        let job = new_job(&db, golf, "Brakes", Some(booked)).await;
+        new_need(&db, golf, job, "Rear pads").await;
+        new_need(&db, golf, job, "Rear rotors").await;
+        let todo_input = |title: &str, appointment_id| NewTodo {
+            title: title.into(),
+            appointment_id,
+            ..Default::default()
+        };
+        crate::services::todo::add(&db, golf, todo_input("Bring wheel locks", Some(booked)))
+            .await
+            .unwrap();
+        crate::services::todo::add(&db, golf, todo_input("Wash the car", None))
+            .await
+            .unwrap();
+        let done = crate::services::todo::add(&db, golf, todo_input("Buy wipers", None))
+            .await
+            .unwrap();
+        crate::services::todo::complete(&db, golf, done.id, None)
+            .await
+            .unwrap();
+        let loose = new_job(&db, golf, "Wiper blades", None).await;
+        new_need(&db, golf, loose, "Blades").await;
+        new_job(&db, golf, "Needless job", None).await;
+        crate::services::todo::add(&db, alltrack, todo_input("Check tire pressure", None))
+            .await
+            .unwrap();
+
+        let home = home(&db).await.unwrap();
+
+        let names: Vec<&str> = home.iter().map(|h| h.vehicle.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["Golf", "Alltrack"],
+            "archived vehicles are left out"
+        );
+        let g = &home[0];
+        let shown: Vec<(i32, &str, &str, &str)> = g
+            .appointments
+            .iter()
+            .map(|a| (a.id, a.purpose.as_str(), a.when.as_str(), a.counts.as_str()))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                (
+                    booked,
+                    "60k service",
+                    "2026-12-01",
+                    "2 needs open \u{b7} 1 to-do open"
+                ),
+                (
+                    unbooked,
+                    "Tire swap",
+                    "not booked",
+                    "0 needs open \u{b7} 0 to-dos open"
+                ),
+            ]
+        );
+        let jobs: Vec<(&str, &str)> = g
+            .unscheduled_jobs
+            .iter()
+            .map(|j| (j.title.as_str(), j.counts.as_str()))
+            .collect();
+        assert_eq!(jobs, [("Wiper blades", "1 need open")]);
+        let todos: Vec<&str> = g.todos.iter().map(|t| t.title.as_str()).collect();
+        assert_eq!(
+            todos,
+            ["Wash the car"],
+            "done and appointment to-dos are left out"
+        );
+        let a = &home[1];
+        assert!(a.appointments.is_empty() && a.unscheduled_jobs.is_empty());
+        assert_eq!(a.todos.len(), 1);
     }
 }

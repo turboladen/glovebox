@@ -52,6 +52,15 @@ glovebox conversation inside that project so the instructions apply.
       jobs on it, adds what each job needs and the options it researched, and asks you for each
       decision. `get_checklist` then shows what is left to decide, order and receive.
 
+## The web page
+
+`just web` serves a read-only page of what is open on each car at <http://127.0.0.1:4827/> and
+opens it in the browser. The page listens on `127.0.0.1` only and reads the same database as the
+Claude Desktop server, so both programs can run at once.
+
+To try the page on made-up data, run `just seed test` and then `just web test`. The test
+environment uses `data/glovebox-test.db` on port 4828 and shows its name in the page header.
+
 ## Environment
 
 - **`GLOVEBOX_ENV`** names the environment. It defaults to `live`, which uses `data/glovebox.db`.
