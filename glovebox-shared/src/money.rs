@@ -23,7 +23,9 @@ pub fn parse_dollars(text: &str) -> DomainResult<i32> {
     let digits = |s: &str| s.bytes().all(|b| b.is_ascii_digit());
     let mut groups = whole.split(',');
     let first = groups.next().unwrap_or_default();
-    let grouped_ok = first.len() <= 3 && digits(first) && groups.all(|g| g.len() == 3 && digits(g));
+    let grouped_ok = (1..=3).contains(&first.len())
+        && digits(first)
+        && groups.all(|g| g.len() == 3 && digits(g));
     // A comma is a thousands separator only: one to three digits, then
     // groups of exactly three. A lone decimal point is not an amount.
     let has_digits = !whole.is_empty() || !fraction.is_empty();
@@ -104,6 +106,10 @@ mod tests {
             "1 000",
             ".",
             "$.",
+            ",234",
+            ",000",
+            ",234.50",
+            "$,234",
             "1,23",
             "1,,234",
             ",5",
