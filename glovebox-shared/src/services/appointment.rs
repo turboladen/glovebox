@@ -54,22 +54,49 @@ async fn validate_shop(db: &impl ConnectionTrait, shop_id: Option<i32>) -> Domai
     Ok(())
 }
 
+/// How an appointment was put away by hand, read from its dates. A cancelled
+/// one counts as cancelled even when it also carries a closed date.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ending {
+    Closed,
+    Cancelled,
+}
+
+impl Ending {
+    fn of(a: &appointment::Model) -> Option<Self> {
+        if a.cancelled_on.is_some() {
+            Some(Self::Cancelled)
+        } else if a.closed_on.is_some() {
+            Some(Self::Closed)
+        } else {
+            None
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Closed => "closed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
 /// The appointment's state from its dates and its jobs' statuses: `cancelled`
 /// when cancelled, `done` when closed by hand or when it has jobs and every
 /// one is done or dropped, otherwise `planning`.
 #[must_use]
 pub fn status(a: &appointment::Model, job_statuses: &[&str]) -> &'static str {
-    if a.cancelled_on.is_some() {
-        "cancelled"
-    } else if a.closed_on.is_some()
-        || (!job_statuses.is_empty()
+    match Ending::of(a) {
+        Some(Ending::Cancelled) => "cancelled",
+        Some(Ending::Closed) => "done",
+        None if !job_statuses.is_empty()
             && job_statuses
                 .iter()
-                .all(|s| matches!(*s, "done" | "dropped")))
-    {
-        "done"
-    } else {
-        "planning"
+                .all(|s| matches!(*s, "done" | "dropped")) =>
+        {
+            "done"
+        }
+        None => "planning",
     }
 }
 
@@ -155,8 +182,16 @@ pub async fn update_with_status<C: ConnectionTrait + TransactionTrait>(
     let txn = db.begin().await?;
     update(&txn, vehicle_id, id, input).await?;
     let unassigned_job_ids = match change {
-        Some(StatusChange::Close) => close(&txn, vehicle_id, id, false).await?.unassigned_job_ids,
-        Some(StatusChange::Cancel) => close(&txn, vehicle_id, id, true).await?.unassigned_job_ids,
+        Some(StatusChange::Close) => {
+            put_away(&txn, vehicle_id, id, Ending::Closed)
+                .await?
+                .unassigned_job_ids
+        }
+        Some(StatusChange::Cancel) => {
+            put_away(&txn, vehicle_id, id, Ending::Cancelled)
+                .await?
+                .unassigned_job_ids
+        }
         Some(StatusChange::Reopen) => {
             reopen(&txn, vehicle_id, id).await?;
             Vec::new()
@@ -195,14 +230,10 @@ pub(crate) async fn require_assignable(
     id: i32,
 ) -> DomainResult<appointment::Model> {
     let found = require(db, vehicle_id, id).await?;
-    if found.cancelled_on.is_some() || found.closed_on.is_some() {
+    if let Some(ending) = Ending::of(&found) {
         return Err(DomainError::BadRequest(format!(
             "Appointment {id} is {}; reopen it first",
-            if found.cancelled_on.is_some() {
-                "cancelled"
-            } else {
-                "closed"
-            }
+            ending.label()
         )));
     }
     Ok(found)
@@ -340,9 +371,9 @@ async fn summaries(
     Ok(out)
 }
 
-/// Closes an appointment by hand (`closed_on`), or cancels it (`cancelled_on`)
-/// when `cancel` is set, and takes every job still `planned` off it. Done and
-/// dropped jobs stay, and no need is touched.
+/// Closes an appointment by hand (`closed_on`) and takes every job still
+/// `planned` off it, in one transaction. Done and dropped jobs stay, and no
+/// need is touched.
 ///
 /// # Errors
 /// `NotFound` for an appointment that is not the vehicle's; `BadRequest` when
@@ -351,26 +382,48 @@ pub async fn close<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
     id: i32,
-    cancel: bool,
+) -> DomainResult<ClosedAppointment> {
+    let txn = db.begin().await?;
+    let closed = put_away(&txn, vehicle_id, id, Ending::Closed).await?;
+    txn.commit().await?;
+    Ok(closed)
+}
+
+/// [`close`], marking the appointment cancelled (`cancelled_on`) instead.
+///
+/// # Errors
+/// As for [`close`].
+pub async fn cancel<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    id: i32,
+) -> DomainResult<ClosedAppointment> {
+    let txn = db.begin().await?;
+    let cancelled = put_away(&txn, vehicle_id, id, Ending::Cancelled).await?;
+    txn.commit().await?;
+    Ok(cancelled)
+}
+
+// Closes or cancels on the caller's transaction.
+async fn put_away(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    id: i32,
+    ending: Ending,
 ) -> DomainResult<ClosedAppointment> {
     let existing = require(db, vehicle_id, id).await?;
-    if existing.cancelled_on.is_some() || existing.closed_on.is_some() {
+    if let Some(current) = Ending::of(&existing) {
         return Err(DomainError::BadRequest(format!(
             "Appointment {id} is already {}",
-            if existing.cancelled_on.is_some() {
-                "cancelled"
-            } else {
-                "closed"
-            }
+            current.label()
         )));
     }
     let today = crate::services::today_label();
-    let txn = db.begin().await?;
     let unassigned_job_ids: Vec<i32> = work_item::Entity::find()
         .filter(work_item::Column::AppointmentId.eq(id))
         .filter(work_item::Column::Status.eq("planned"))
         .order_by_asc(work_item::Column::Id)
-        .all(&txn)
+        .all(db)
         .await?
         .into_iter()
         .map(|j| j.id)
@@ -383,18 +436,16 @@ pub async fn close<C: ConnectionTrait + TransactionTrait>(
                 Expr::value(super::now_stamp()),
             )
             .filter(work_item::Column::Id.is_in(unassigned_job_ids.clone()))
-            .exec(&txn)
+            .exec(db)
             .await?;
     }
     let mut active: appointment::ActiveModel = existing.into();
-    if cancel {
-        active.cancelled_on = Set(Some(today));
-    } else {
-        active.closed_on = Set(Some(today));
+    match ending {
+        Ending::Cancelled => active.cancelled_on = Set(Some(today)),
+        Ending::Closed => active.closed_on = Set(Some(today)),
     }
     active.updated_at = Set(super::now_stamp());
-    let appointment = active.update(&txn).await?;
-    txn.commit().await?;
+    let appointment = active.update(db).await?;
     Ok(ClosedAppointment {
         appointment,
         unassigned_job_ids,
@@ -430,7 +481,7 @@ pub(crate) async fn settle_reopened_jobs(
             .all(db)
             .await?
             .into_iter()
-            .partition(|a| a.cancelled_on.is_some());
+            .partition(|a| Ending::of(a) == Some(Ending::Cancelled));
     if !closed.is_empty() {
         appointment::Entity::update_many()
             .col_expr(appointment::Column::ClosedOn, Expr::value(None::<String>))
@@ -686,7 +737,7 @@ mod tests {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
         let a = create(&db, v, appt("Brakes")).await.unwrap();
-        close(&db, v, a.id, true).await.unwrap();
+        cancel(&db, v, a.id).await.unwrap();
         let err = job::create(
             &db,
             v,
@@ -704,7 +755,7 @@ mod tests {
             format!("Appointment {} is cancelled; reopen it first", a.id)
         );
         let b = create(&db, v, appt("Other")).await.unwrap();
-        close(&db, v, b.id, false).await.unwrap();
+        close(&db, v, b.id).await.unwrap();
         let mine = add_job(&db, v, None).await;
         let err = job::update(
             &db,
@@ -795,7 +846,7 @@ mod tests {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
         let a = create(&db, v, appt("Brakes")).await.unwrap();
-        close(&db, v, a.id, false).await.unwrap();
+        close(&db, v, a.id).await.unwrap();
 
         let err = update_with_status(
             &db,
@@ -863,7 +914,7 @@ mod tests {
         .await
         .unwrap();
 
-        let closed = close(&db, v, a.id, false).await.unwrap();
+        let closed = close(&db, v, a.id).await.unwrap();
         assert_eq!(closed.unassigned_job_ids, vec![planned]);
         assert!(closed.appointment.closed_on.is_some());
         assert!(closed.appointment.cancelled_on.is_none());
@@ -882,14 +933,14 @@ mod tests {
             .unwrap();
         assert_eq!(needs.len(), 1);
 
-        let again = close(&db, v, a.id, true).await.unwrap_err();
+        let again = cancel(&db, v, a.id).await.unwrap_err();
         assert!(matches!(again, DomainError::BadRequest(_)));
         let reopened = reopen(&db, v, a.id).await.unwrap();
         assert!(reopened.closed_on.is_none() && reopened.cancelled_on.is_none());
-        let cancelled = close(&db, v, a.id, true).await.unwrap();
+        let cancelled = cancel(&db, v, a.id).await.unwrap();
         assert!(cancelled.appointment.cancelled_on.is_some());
         assert!(cancelled.appointment.closed_on.is_none());
-        let again = close(&db, v, a.id, false).await.unwrap_err();
+        let again = close(&db, v, a.id).await.unwrap_err();
         assert!(matches!(again, DomainError::BadRequest(_)));
         let reopened = reopen(&db, v, a.id).await.unwrap();
         assert!(reopened.cancelled_on.is_none());
@@ -1035,7 +1086,7 @@ mod tests {
             (false, 0, 0, 0)
         );
 
-        close(&db, v, unbooked.id, true).await.unwrap();
+        cancel(&db, v, unbooked.id).await.unwrap();
         let open_only = list(&db, v, false).await.unwrap();
         assert_eq!(open_only.len(), 1);
         assert_eq!(open_only[0].appointment.id, a.id);
@@ -1066,7 +1117,7 @@ mod tests {
                 .await
                 .unwrap_err(),
         );
-        same_as_missing(close(&db, v2, a.id, false).await.unwrap_err());
+        same_as_missing(close(&db, v2, a.id).await.unwrap_err());
         same_as_missing(reopen(&db, v2, a.id).await.unwrap_err());
         same_as_missing(delete(&db, v2, a.id).await.unwrap_err());
         assert!(require(&db, v1, a.id).await.is_ok());
@@ -1130,8 +1181,8 @@ mod tests {
         };
         set_status(on_closed, "done").await.unwrap();
         set_status(on_cancelled, "dropped").await.unwrap();
-        close(&db, v, closed.id, false).await.unwrap();
-        close(&db, v, cancelled.id, true).await.unwrap();
+        close(&db, v, closed.id).await.unwrap();
+        cancel(&db, v, cancelled.id).await.unwrap();
 
         set_status(on_closed, "planned").await.unwrap();
         set_status(on_cancelled, "planned").await.unwrap();
@@ -1163,7 +1214,7 @@ mod tests {
         )
         .await
         .unwrap();
-        close(&db, v, a.id, false).await.unwrap();
+        close(&db, v, a.id).await.unwrap();
         assert!(list(&db, v, false).await.unwrap().is_empty());
     }
 

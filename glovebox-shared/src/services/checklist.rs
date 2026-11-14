@@ -30,12 +30,29 @@ pub struct Checklist {
     pub jobs: Vec<JobView>,
     /// Every to-do of the appointment, done ones included.
     pub todos: Vec<todo::Model>,
-    /// Each need's notes, prefixed with the need's name.
-    pub warnings: Vec<String>,
-    /// The same notes as `warnings`, one per note, with the need and job each
-    /// belongs to.
-    #[serde(skip)]
+    /// Each note about a need, with the need and job it belongs to. It is
+    /// serialized as `warnings`, the lines [`Checklist::warnings`] writes.
+    #[serde(rename = "warnings", serialize_with = "serialize_warnings")]
     pub checks: Vec<Check>,
+}
+
+impl Checklist {
+    /// Each need's notes, prefixed with the need's name.
+    #[must_use]
+    pub fn warnings(&self) -> Vec<String> {
+        warning_lines(&self.checks)
+    }
+}
+
+fn warning_lines(checks: &[Check]) -> Vec<String> {
+    checks
+        .iter()
+        .map(|c| format!("{}: {}", c.need_name, c.note))
+        .collect()
+}
+
+fn serialize_warnings<S: serde::Serializer>(checks: &[Check], out: S) -> Result<S::Ok, S::Error> {
+    out.collect_seq(warning_lines(checks))
 }
 
 /// One note about a need, for a page that shows it in a row of its own.
@@ -68,20 +85,13 @@ pub struct StepRow {
     pub job_id: i32,
     pub job_title: String,
     pub name: String,
+    /// The sentence "{name}: {detail}".
     pub summary: String,
-    pub stage: Stage,
-}
-
-impl StepRow {
     /// The summary without its leading "{name}: ", so a page can show the
     /// name in its own column.
-    #[must_use]
-    pub fn detail(&self) -> &str {
-        self.summary
-            .strip_prefix(self.name.as_str())
-            .and_then(|rest| rest.strip_prefix(": "))
-            .unwrap_or(&self.summary)
-    }
+    #[serde(skip)]
+    pub detail: String,
+    pub stage: Stage,
 }
 
 /// A job with its needs.
@@ -446,16 +456,11 @@ fn assemble(
             })
         })
         .collect();
-    let warnings = checks
-        .iter()
-        .map(|c| format!("{}: {}", c.need_name, c.note))
-        .collect();
     Checklist {
         appointment,
         next_steps,
         jobs,
         todos,
-        warnings,
         checks,
     }
 }
@@ -478,22 +483,32 @@ fn next_steps(jobs: &[JobView], todos: &[todo::Model]) -> NextSteps {
             status => status == "done",
         };
         for view in &job.needs {
-            let row = StepRow {
+            // Every need of a done job is done; one still open says so.
+            let (group, detail) = if job_done {
+                let detail = if view.stage.is_open() {
+                    "the job is done".to_owned()
+                } else {
+                    step_detail(view)
+                };
+                (&mut steps.done, detail)
+            } else {
+                let group = match view.stage {
+                    Stage::Undecided => &mut steps.decide,
+                    Stage::ToOrder => &mut steps.order,
+                    Stage::Ordered => &mut steps.arriving,
+                    Stage::ShopSupplies | Stage::Received | Stage::Installed => &mut steps.done,
+                };
+                (group, step_detail(view))
+            };
+            group.push(StepRow {
                 need_id: view.need.id,
                 job_id: job.job.id,
                 job_title: job.job.title.clone(),
                 name: view.need.name.clone(),
-                summary: step_summary(view, job_done),
+                summary: format!("{}: {detail}", view.need.name),
+                detail,
                 stage: view.stage,
-            };
-            let group = match view.stage {
-                _ if job_done => &mut steps.done,
-                Stage::Undecided => &mut steps.decide,
-                Stage::ToOrder => &mut steps.order,
-                Stage::Ordered => &mut steps.arriving,
-                Stage::ShopSupplies | Stage::Received | Stage::Installed => &mut steps.done,
-            };
-            group.push(row);
+            });
         }
     }
     steps
@@ -515,16 +530,12 @@ fn option_label(option: &need_option::Model) -> String {
     .join(" ")
 }
 
-fn step_summary(view: &NeedView, job_done: bool) -> String {
-    let name = &view.need.name;
+// What is asked of the owner for a need of a job that is not done, without
+// the need's name.
+fn step_detail(view: &NeedView) -> String {
     match view.stage {
-        Stage::Undecided | Stage::ToOrder | Stage::Ordered if job_done => {
-            format!("{name}: the job is done")
-        }
-        Stage::Undecided if view.chosen.is_some() => {
-            format!("{name}: who supplies it is not decided")
-        }
-        Stage::Undecided => format!("{name}: no part chosen"),
+        Stage::Undecided if view.chosen.is_some() => "who supplies it is not decided".to_owned(),
+        Stage::Undecided => "no part chosen".to_owned(),
         Stage::ToOrder => {
             let what = view.chosen.as_ref().map_or_else(String::new, |c| {
                 let from = c
@@ -538,23 +549,23 @@ fn step_summary(view: &NeedView, job_done: bool) -> String {
                 };
                 format!(" {count}{}{from}", option_label(c))
             });
-            format!("{name}: order{what}")
+            format!("order{what}")
         }
         Stage::Ordered => {
             let seller = view.part.as_ref().and_then(|p| p.seller.as_ref());
             let date = view.part.as_ref().and_then(|p| p.purchase_date.as_ref());
             format!(
-                "{name}: ordered{}{}",
+                "ordered{}{}",
                 seller.map_or_else(String::new, |s| format!(" from {s}")),
                 date.map_or_else(String::new, |d| format!(" on {d}"))
             )
         }
-        Stage::ShopSupplies => format!("{name}: the shop supplies it"),
+        Stage::ShopSupplies => "the shop supplies it".to_owned(),
         Stage::Received => match view.part.as_ref().and_then(|p| p.received_on.as_ref()) {
-            Some(date) => format!("{name}: received on {date}"),
-            None => format!("{name}: received"),
+            Some(date) => format!("received on {date}"),
+            None => "received".to_owned(),
         },
-        Stage::Installed => format!("{name}: installed"),
+        Stage::Installed => "installed".to_owned(),
     }
 }
 
@@ -887,26 +898,18 @@ mod tests {
         }
     }
 
-    #[test]
-    fn step_detail_drops_the_leading_name() {
-        let row = |name: &str, summary: &str| StepRow {
-            need_id: 1,
-            job_id: 1,
-            job_title: "Brakes".into(),
-            name: name.into(),
-            summary: summary.into(),
-            stage: Stage::Undecided,
-        };
-        assert_eq!(
-            row("Rear pads", "Rear pads: no part chosen").detail(),
-            "no part chosen"
-        );
-        assert_eq!(
-            row("Oil: 5W-30", "Oil: 5W-30: order Mann").detail(),
-            "order Mann"
-        );
-        // A summary that does not start with the name is returned whole.
-        assert_eq!(row("Pads", "something else").detail(), "something else");
+    #[tokio::test]
+    async fn step_detail_is_the_summary_without_the_leading_name() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let job = new_job(&db, v, "Oil change", None).await;
+        new_need(&db, v, job, "Oil: 5W-30").await;
+
+        let list = for_unscheduled(&db, v).await.unwrap();
+
+        let row = &list.next_steps.decide[0];
+        assert_eq!(row.summary, "Oil: 5W-30: no part chosen");
+        assert_eq!(row.detail, "no part chosen");
     }
 
     #[tokio::test]
@@ -939,7 +942,7 @@ mod tests {
         assert_eq!(check.job_title, "Oil change");
         assert_eq!(check.note, "Fitment of the chosen option is not confirmed.");
         assert_eq!(
-            list.warnings,
+            list.warnings(),
             ["Oil: 5W-30: Fitment of the chosen option is not confirmed."]
         );
     }
@@ -1350,7 +1353,7 @@ mod tests {
             "The linked part's number (5Q0615601F) differs from the chosen option's (5Q0615601E).";
         assert_eq!(list.jobs[0].needs[0].notes, [UNCONFIRMED, mismatch]);
         assert_eq!(
-            list.warnings,
+            list.warnings(),
             [
                 format!("Rear rotors: {UNCONFIRMED}"),
                 format!("Rear rotors: {mismatch}")
@@ -1394,7 +1397,7 @@ mod tests {
         .unwrap();
         need::link_part(&db, v, n, bought.id, None).await.unwrap();
         let list = for_appointment(&db, v, a).await.unwrap();
-        assert!(list.warnings.is_empty(), "{:?}", list.warnings);
+        assert!(list.warnings().is_empty(), "{:?}", list.warnings());
     }
 
     #[tokio::test]

@@ -12,6 +12,30 @@ pub const VALID_SUPPLIED_BY: [&str; 2] = ["self", "shop"];
 /// Allowed values for `parts.status`.
 pub const VALID_STATUSES: [&str; 4] = ["purchased", "installed", "replaced", "returned"];
 
+const RETURNED: &str = "returned";
+
+/// Whether `p` was sent back from its need.
+pub(crate) fn is_returned(p: &part::Model) -> bool {
+    p.status == RETURNED
+}
+
+/// Marks `p` returned today for `reason`, remembering the need it was
+/// returned from.
+pub(crate) async fn mark_returned(
+    db: &impl ConnectionTrait,
+    p: part::Model,
+    reason: String,
+    need_id: i32,
+) -> DomainResult<part::Model> {
+    let mut active: part::ActiveModel = p.into();
+    active.status = Set(RETURNED.to_string());
+    active.returned_on = Set(Some(super::today_label()));
+    active.return_reason = Set(Some(reason));
+    active.returned_from_need_id = Set(Some(need_id));
+    active.updated_at = Set(super::now_stamp());
+    Ok(active.update(db).await?)
+}
+
 // Checks a status a caller asks for. `returned` is in the vocabulary but is
 // only reachable through the return action on a need, which records the
 // reason and unlinks the part in the same write.
@@ -25,7 +49,7 @@ fn validate_requested_status(status: &str) -> DomainResult<()> {
             ),
         });
     }
-    if status == "returned" {
+    if status == RETURNED {
         return Err(DomainError::BadRequest(
             "A part is marked returned by returning it from its need (return_part)".into(),
         ));
@@ -36,7 +60,7 @@ fn validate_requested_status(status: &str) -> DomainResult<()> {
 // A returned part may only go back to `purchased`.
 fn validate_status_change(existing: &part::Model, status: &str) -> DomainResult<()> {
     validate_requested_status(status)?;
-    if existing.status == "returned" && status != "purchased" {
+    if is_returned(existing) && status != "purchased" {
         return Err(DomainError::BadRequest(format!(
             "Part {} was returned; its status can only change back to purchased",
             existing.id
@@ -52,7 +76,7 @@ fn validate_install_details(existing: &part::Model, input: &UpdatePart) -> Domai
     let sets_install = matches!(input.installed_service_id, Some(Some(_)))
         || matches!(input.installed_date, Some(Some(_)))
         || matches!(input.installed_odometer, Some(Some(_)));
-    if existing.status == "returned" && sets_install && !goes_back {
+    if is_returned(existing) && sets_install && !goes_back {
         return Err(DomainError::BadRequest(format!(
             "Part {} was returned and cannot be given install details",
             existing.id
@@ -171,7 +195,7 @@ pub async fn update(
         super::validate_optional_date(field, value.as_ref().and_then(|v| v.as_deref()))?;
     }
 
-    let existing_returned = existing.status == "returned";
+    let existing_returned = is_returned(&existing);
     let mut active: part::ActiveModel = existing.into();
 
     if let Some(v) = input.supplied_by {
@@ -265,7 +289,7 @@ pub(crate) async fn install(
     odometer: ActiveValue<Option<i32>>,
 ) -> DomainResult<()> {
     let existing = get(db, vehicle_id, part_id).await?;
-    if existing.status == "returned" {
+    if is_returned(&existing) {
         return Err(DomainError::BadRequest(format!(
             "Part {part_id} was returned and cannot be installed"
         )));
@@ -321,7 +345,7 @@ pub(crate) async fn uninstall(
 ) -> DomainResult<()> {
     // A returned part keeps its status in both modes.
     let revert = match status {
-        _ if p.status == "returned" => false,
+        _ if is_returned(&p) => false,
         UninstallStatus::Purchased => true,
         UninstallStatus::PurchasedIfInstalled => p.status == "installed",
     };

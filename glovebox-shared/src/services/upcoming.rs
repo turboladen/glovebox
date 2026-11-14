@@ -180,9 +180,7 @@ mod tests {
         )
         .await
         .unwrap();
-        appointment::close(&db, v, cancelled.id, true)
-            .await
-            .unwrap();
+        appointment::cancel(&db, v, cancelled.id).await.unwrap();
         let job = work_item_svc::create(
             &db,
             v,

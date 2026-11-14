@@ -433,10 +433,10 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
             String::new()
         },
         option_was_wrong: typed("option_was_wrong").is_some(),
-        can_order: stage == Stage::ToOrder,
-        can_receive: stage == Stage::Ordered,
-        can_unreceive: stage == Stage::Received,
-        can_return: matches!(stage, Stage::Ordered | Stage::Received),
+        can_order: stage.can_order(),
+        can_receive: stage.can_receive(),
+        can_unreceive: stage.can_unreceive(),
+        can_return: stage.can_return(),
         error: failure.map(|f| FormError {
             form: f.form,
             message: f.message.clone(),
@@ -489,7 +489,7 @@ pub fn steps(list: &Checklist, jobs: &[JobCard], ctx: &CardContext<'_>) -> Steps
         };
         Some(StepCard {
             group,
-            detail: row.detail().to_owned(),
+            detail: row.detail.clone(),
             job_title: row.job_title.clone(),
             stage_class: need.stage_class,
             stage_text: need.stage_text,

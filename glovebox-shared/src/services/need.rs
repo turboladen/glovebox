@@ -40,6 +40,31 @@ impl Stage {
     pub fn is_open(self) -> bool {
         matches!(self, Stage::Undecided | Stage::ToOrder | Stage::Ordered)
     }
+
+    /// Whether the checklist offers to order the need's part.
+    #[must_use]
+    pub fn can_order(self) -> bool {
+        self == Stage::ToOrder
+    }
+
+    /// Whether the checklist offers to mark the need's part received.
+    #[must_use]
+    pub fn can_receive(self) -> bool {
+        self == Stage::Ordered
+    }
+
+    /// Whether the checklist offers to clear the need's arrival date.
+    #[must_use]
+    pub fn can_unreceive(self) -> bool {
+        self == Stage::Received
+    }
+
+    /// Whether the need's part can be sent back; [`return_part`] refuses
+    /// every other stage.
+    #[must_use]
+    pub fn can_return(self) -> bool {
+        matches!(self, Stage::Ordered | Stage::Received)
+    }
 }
 
 /// Whether a need at `stage` on a job whose status is `job_status` counts as
@@ -646,7 +671,7 @@ pub async fn link_part<C: ConnectionTrait + TransactionTrait>(
     super::validate_optional_date("received_on", received_on.as_deref())?;
     let need = require(db, vehicle_id, need_id).await?;
     let found = super::part::get(db, vehicle_id, part_id).await?;
-    if found.status == "returned" {
+    if super::part::is_returned(&found) {
         return Err(DomainError::BadRequest(format!(
             "Part {part_id} was returned and cannot be linked"
         )));
@@ -766,7 +791,7 @@ pub async fn return_part<C: ConnectionTrait + TransactionTrait>(
     let need = require(db, vehicle_id, need_id).await?;
     let found = linked_part(db, &need).await?;
     let current = stage(&need, Some(&found));
-    if !matches!(current, Stage::Ordered | Stage::Received) {
+    if !current.can_return() {
         return Err(DomainError::BadRequest(format!(
             "Need {need_id} is {}; only an ordered or received part can be returned",
             current.label()
@@ -782,13 +807,8 @@ pub async fn return_part<C: ConnectionTrait + TransactionTrait>(
     let chosen_option_id = need.chosen_option_id;
 
     let txn = db.begin().await?;
-    let mut active: part::ActiveModel = found.into();
-    active.status = Set("returned".to_string());
-    active.returned_on = Set(Some(crate::services::today_label()));
-    active.return_reason = Set(Some(input.reason.clone()));
-    active.returned_from_need_id = Set(Some(need_id));
-    active.updated_at = Set(super::now_stamp());
-    let returned_part = active.update(&txn).await?;
+    let returned_part =
+        super::part::mark_returned(&txn, found, input.reason.clone(), need_id).await?;
     set_need_part(&txn, need, None, None).await?;
     if let Some(option_id) = chosen_option_id.filter(|_| input.option_was_wrong) {
         // The rejection goes through the option update so the need's whole

@@ -3789,7 +3789,7 @@ mod tests {
                 ..invoice(&f)
             };
             let created = create(&f.db, f.vehicle, filed()).await.unwrap();
-            appointment::close(&f.db, f.vehicle, f.appointment, false)
+            appointment::close(&f.db, f.vehicle, f.appointment)
                 .await
                 .unwrap();
 
@@ -3825,7 +3825,7 @@ mod tests {
             )
             .await
             .unwrap();
-            appointment::close(&f.db, f.vehicle, f.appointment, true)
+            appointment::cancel(&f.db, f.vehicle, f.appointment)
                 .await
                 .unwrap();
 
@@ -3926,7 +3926,7 @@ mod tests {
         #[tokio::test]
         async fn cancelled_or_closed_appointment_is_refused() {
             let f = fixture().await;
-            appointment::close(&f.db, f.vehicle, f.appointment, true)
+            appointment::cancel(&f.db, f.vehicle, f.appointment)
                 .await
                 .unwrap();
             let err = create(&f.db, f.vehicle, invoice(&f)).await.unwrap_err();
@@ -4148,7 +4148,7 @@ mod tests {
         #[tokio::test]
         async fn filing_an_invoice_on_a_closed_appointment_gives_a_neutral_message() {
             let f = fixture().await;
-            appointment::close(&f.db, f.vehicle, f.appointment, true)
+            appointment::cancel(&f.db, f.vehicle, f.appointment)
                 .await
                 .unwrap();
 
