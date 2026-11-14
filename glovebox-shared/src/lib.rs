@@ -16,6 +16,7 @@
     clippy::implicit_hasher
 )]
 
+pub mod backup;
 pub mod db;
 pub mod entities;
 pub mod error;

@@ -25,7 +25,7 @@ cargo test -p glovebox-mcp --test rehearsal       # One MCP integration test fil
 just ci                   # Everything CI runs: nightly fmt-check, layering, build, test, clippy
 just fmt                  # cargo +nightly fmt — rustfmt.toml uses nightly-only options; plain `cargo fmt` passes locally but CI's format job will fail
 just check-layering       # Layering gate only (scripts/check-layering.sh)
-just reset-db             # Delete data/glovebox.db; the next start recreates it
+just backup               # Copy the database to data/backups/ now
 
 cargo clippy --workspace -- -D clippy::pedantic   # Rust lints (pedantic is the CI gate)
 
@@ -55,6 +55,21 @@ sets the tracing filter (default `info`). The Claude Desktop config snippet sets
 
 **`db.rs`**: `db::connect(path)` is the only place a SQLite connection is opened. It creates the
 parent directory, uses WAL mode with foreign keys enforced, and runs `Migrator::up()`.
+
+**`backup.rs`**: `db::connect` copies a database that already holds data to `backups/` beside it
+(`VACUUM INTO`, so the copy is consistent while another process writes) before any pending
+migration runs. Otherwise it copies once per calendar day, at open and from an hourly task
+(`backup::spawn_daily`) so a server that runs for weeks is covered, and only when the database
+holds a vehicle. `prune` keeps the newest 14, the newest of every month and the largest file, so
+copies of an emptied database cannot push out the last good one. A backup that fails stops the
+open only when a migration is pending. To restore: quit Claude Desktop, move the current
+`data/glovebox.db`, `-wal` and `-shm` files somewhere outside `data/backups/`, and copy a backup
+to `data/glovebox.db`. The backups share a disk with the database, so they do not protect against
+losing the directory or the machine.
+
+**The database holds the owner's real records and there is no recipe that deletes it.** Never
+delete, reset or overwrite `data/glovebox.db`, and never run a command against it to see what the
+command does. Tests use `test_db()` or a temporary directory.
 
 **Entities** (`entities/`): Hand-written `DeriveEntityModel` structs. Parent entities declare
 `has_many` relations; junction tables have `via()` impls.

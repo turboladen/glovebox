@@ -65,3 +65,22 @@ Pipe an `initialize` request into the binary and look for a JSON-RPC response on
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
   | GLOVEBOX_DB_PATH=/tmp/glovebox-smoke.db target/release/glovebox-mcp
 ```
+
+## Backups
+
+The server copies the database to `data/backups/` before any update that changes the database's
+structure, and otherwise once a day while it holds a car. It keeps the newest 14 copies, the newest
+copy of every month, and the largest copy. `just backup` makes a copy on demand and fails if there
+is no database to copy.
+
+The copies are on the same disk as the database. They protect against a deleted or damaged
+database file, not against losing the folder or the computer, so include `data/` in whatever backs
+up this machine.
+
+To restore a copy:
+
+1. Quit Claude Desktop.
+2. Move `data/glovebox.db`, and `data/glovebox.db-wal` and `data/glovebox.db-shm` if they exist,
+   to somewhere outside `data/backups/`.
+3. Copy the backup file to `data/glovebox.db`.
+4. Start Claude Desktop again.

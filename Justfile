@@ -1,7 +1,7 @@
-# Delete the SQLite database (migrations will recreate it on next run)
-reset-db:
-    rm -f data/glovebox.db data/glovebox.db-shm data/glovebox.db-wal
-    @echo "Database deleted. The next start recreates it."
+# Copy the database to data/backups/ now. The server also does this itself
+# once a day and before every migration, keeping the newest 14.
+backup:
+    cargo run --quiet --release -p glovebox-mcp -- backup
 
 # --- CI ---
 # These recipes are what GitHub Actions runs, so `just ci` reproduces CI locally.
