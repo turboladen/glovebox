@@ -154,8 +154,8 @@ pub async fn require(
         .ok_or_else(|| DomainError::NotFound(format!("Appointment {id} not found")))
 }
 
-/// [`require`] for an appointment that is about to receive a job: a cancelled
-/// or hand-closed appointment is refused.
+/// [`require`] for an appointment that is about to receive a job or an invoice:
+/// a cancelled or hand-closed appointment is refused.
 pub(crate) async fn require_assignable(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -164,7 +164,7 @@ pub(crate) async fn require_assignable(
     let found = require(db, vehicle_id, id).await?;
     if found.cancelled_on.is_some() || found.closed_on.is_some() {
         return Err(DomainError::BadRequest(format!(
-            "Appointment {id} is {}; reopen it before adding jobs",
+            "Appointment {id} is {}; reopen it first",
             if found.cancelled_on.is_some() {
                 "cancelled"
             } else {
@@ -614,6 +614,10 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(err, DomainError::BadRequest(_)));
+        assert_eq!(
+            err.to_string(),
+            format!("Appointment {} is cancelled; reopen it first", a.id)
+        );
         let b = create(&db, v, appt("Other")).await.unwrap();
         close(&db, v, b.id, false).await.unwrap();
         let mine = add_job(&db, v, None).await;
@@ -629,6 +633,10 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(err, DomainError::BadRequest(_)));
+        assert_eq!(
+            err.to_string(),
+            format!("Appointment {} is closed; reopen it first", b.id)
+        );
     }
 
     #[tokio::test]
