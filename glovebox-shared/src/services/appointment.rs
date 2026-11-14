@@ -45,13 +45,6 @@ pub struct RevisedAppointment {
     pub unassigned_job_ids: Vec<i32>,
 }
 
-fn validate_purpose(purpose: &str) -> DomainResult<()> {
-    if purpose.trim().is_empty() {
-        return Err(DomainError::invalid("purpose", "must not be blank"));
-    }
-    Ok(())
-}
-
 // The shop directory is global, so an id is checked for existence only. A
 // missing shop would otherwise surface as an opaque foreign-key failure.
 async fn validate_shop(db: &impl ConnectionTrait, shop_id: Option<i32>) -> DomainResult<()> {
@@ -90,7 +83,7 @@ pub async fn create(
     vehicle_id: i32,
     input: NewAppointment,
 ) -> DomainResult<appointment::Model> {
-    validate_purpose(&input.purpose)?;
+    super::validate_not_blank("purpose", &input.purpose)?;
     super::validate_optional_date("planned_date", input.planned_date.as_deref())?;
     super::vehicle::require(db, vehicle_id).await?;
     validate_shop(db, input.shop_id).await?;
@@ -119,7 +112,7 @@ pub async fn update(
 ) -> DomainResult<appointment::Model> {
     let existing = require(db, vehicle_id, id).await?;
     if let Some(purpose) = &input.purpose {
-        validate_purpose(purpose)?;
+        super::validate_not_blank("purpose", purpose)?;
     }
     super::validate_optional_date(
         "planned_date",
@@ -371,7 +364,7 @@ pub async fn close<C: ConnectionTrait + TransactionTrait>(
             }
         )));
     }
-    let today = super::today().format("%Y-%m-%d").to_string();
+    let today = crate::services::today_label();
     let txn = db.begin().await?;
     let unassigned_job_ids: Vec<i32> = work_item::Entity::find()
         .filter(work_item::Column::AppointmentId.eq(id))

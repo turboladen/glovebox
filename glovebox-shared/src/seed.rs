@@ -60,10 +60,6 @@ pub async fn demo<C: ConnectionTrait + TransactionTrait>(db: &C) -> DomainResult
     Ok(summary)
 }
 
-fn today() -> String {
-    services::today().format("%Y-%m-%d").to_string()
-}
-
 // One researched candidate with the fields the sentences are built from.
 fn option(description: &str, manufacturer: &str, part_number: &str, price_cents: i32) -> NewOption {
     NewOption {
@@ -195,11 +191,9 @@ async fn build(db: &(impl ConnectionTrait + TransactionTrait)) -> DomainResult<(
         NewAppointment {
             purpose: "60k service + loose ends".into(),
             shop_name: Some("Demo Auto Works".into()),
-            planned_date: Some(
-                (services::today() + chrono::Duration::days(14))
-                    .format("%Y-%m-%d")
-                    .to_string(),
-            ),
+            planned_date: Some(services::date_label(
+                services::today() + chrono::Duration::days(14),
+            )),
             ..Default::default()
         },
     )
@@ -379,7 +373,7 @@ async fn oil_change(
         db,
         v,
         NewServiceRecord {
-            service_date: today(),
+            service_date: services::today_label(),
             performed_by: Some("self".into()),
             mileage: Some(59_900),
             description: Some("Oil and filter change".into()),

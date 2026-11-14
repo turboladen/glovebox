@@ -42,6 +42,12 @@ pub fn date_label(date: chrono::NaiveDate) -> String {
     date.format("%Y-%m-%d").to_string()
 }
 
+/// [`today`] written `YYYY-MM-DD`, the default for every date the owner
+/// leaves out.
+pub(crate) fn today_label() -> String {
+    date_label(today())
+}
+
 /// The server's local date and time as `YYYY-MM-DD HH:MM:SS`, for an event
 /// time the owner left out ("when the reading was taken"). It is not a
 /// bookkeeping stamp; those use [`now_stamp`].
@@ -81,6 +87,25 @@ pub(crate) fn validate_date(field: &str, value: &str) -> crate::error::DomainRes
             "must be a date like 2027-05-01",
         ))
     }
+}
+
+/// Checks that `value` holds something other than whitespace.
+pub(crate) fn validate_not_blank(field: &str, value: &str) -> crate::error::DomainResult<()> {
+    if value.trim().is_empty() {
+        return Err(crate::error::DomainError::invalid(
+            field,
+            "must not be blank",
+        ));
+    }
+    Ok(())
+}
+
+/// `value` without its surrounding whitespace, or `None` when nothing is
+/// left, so blank text is stored and read as absent.
+#[must_use]
+pub fn trim_to_none(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
 /// [`validate_date`] on a value that may be absent.

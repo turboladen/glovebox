@@ -82,16 +82,6 @@ fn validate_who_and_when(
     Ok(())
 }
 
-/// Trims an invoice number and treats a blank one as absent. An LLM may send
-/// "" or spaces rather than omitting the field, and a blank ref stored as a
-/// real one would make the partial unique index reject a second ref-less
-/// record as a duplicate.
-fn normalize_invoice_ref(invoice_ref: Option<&str>) -> Option<String> {
-    invoice_ref
-        .map(|r| r.trim().to_string())
-        .filter(|r| !r.is_empty())
-}
-
 /// Payer whitelist for `service_records.paid_by` and
 /// `service_record_line_items.paid_by`.
 pub const VALID_PAYERS: [&str; 4] = ["self", "insurance", "third_party", "manufacturer"];
@@ -772,7 +762,10 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
         validate_payer(paid_by)?;
     }
 
-    let invoice_ref = normalize_invoice_ref(input.invoice_ref.as_deref());
+    // An LLM may send "" or spaces rather than omitting the invoice number, and a
+    // blank ref stored as a real one would make the partial unique index reject a
+    // second ref-less record as a duplicate.
+    let invoice_ref = input.invoice_ref.as_deref().and_then(super::trim_to_none);
 
     // Hard-idempotency: an invoice_ref is a deterministic identity signal.
     // If this vehicle already has a record with the same ref, return it
@@ -937,7 +930,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     }
     let invoice_ref = input
         .invoice_ref
-        .map(|r| normalize_invoice_ref(r.as_deref()));
+        .map(|r| r.as_deref().and_then(super::trim_to_none));
     if let Some(Some(invoice_ref)) = &invoice_ref {
         require_invoice_ref_free(db, vehicle_id, id, invoice_ref).await?;
     }

@@ -92,21 +92,6 @@ fn validate_optional_vocabulary(
     value.map_or(Ok(()), |v| validate_vocabulary(field, v, allowed))
 }
 
-fn validate_name(field: &str, value: &str) -> DomainResult<()> {
-    if value.trim().is_empty() {
-        return Err(DomainError::invalid(field, "must not be blank"));
-    }
-    Ok(())
-}
-
-// Trims optional text and stores blank text as NULL, so a blank field reads as
-// absent everywhere the option is shown.
-fn blank_to_none(value: Option<String>) -> Option<String> {
-    value
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-}
-
 fn validate_quantity(quantity: i32) -> DomainResult<()> {
     if quantity < 1 {
         return Err(DomainError::invalid("quantity", "must be at least 1"));
@@ -166,7 +151,7 @@ pub async fn add(
     work_item_id: i32,
     input: NewNeed,
 ) -> DomainResult<job_need::Model> {
-    validate_name("name", &input.name)?;
+    super::validate_not_blank("name", &input.name)?;
     let quantity = input.quantity.unwrap_or(1);
     validate_quantity(quantity)?;
     validate_optional_vocabulary(
@@ -199,7 +184,7 @@ pub async fn update(
 ) -> DomainResult<job_need::Model> {
     let existing = require(db, vehicle_id, need_id).await?;
     if let Some(name) = &input.name {
-        validate_name("name", name)?;
+        super::validate_not_blank("name", name)?;
     }
     if let Some(quantity) = input.quantity {
         validate_quantity(quantity)?;
@@ -250,20 +235,20 @@ pub async fn add_option(
     need_id: i32,
     input: NewOption,
 ) -> DomainResult<need_option::Model> {
-    validate_name("description", &input.description)?;
+    super::validate_not_blank("description", &input.description)?;
     validate_price(input.price_cents)?;
     validate_optional_vocabulary("fitment", input.fitment.as_deref(), &VALID_FITMENTS)?;
     require(db, vehicle_id, need_id).await?;
     let model = need_option::ActiveModel {
         need_id: Set(need_id),
         description: Set(input.description),
-        manufacturer: Set(blank_to_none(input.manufacturer)),
-        part_number: Set(blank_to_none(input.part_number)),
-        seller: Set(blank_to_none(input.seller)),
+        manufacturer: Set(input.manufacturer.as_deref().and_then(super::trim_to_none)),
+        part_number: Set(input.part_number.as_deref().and_then(super::trim_to_none)),
+        seller: Set(input.seller.as_deref().and_then(super::trim_to_none)),
         price_cents: Set(input.price_cents),
-        url: Set(blank_to_none(input.url)),
+        url: Set(input.url.as_deref().and_then(super::trim_to_none)),
         fitment: Set(input.fitment.unwrap_or_else(|| "unconfirmed".to_string())),
-        fitment_note: Set(blank_to_none(input.fitment_note)),
+        fitment_note: Set(input.fitment_note.as_deref().and_then(super::trim_to_none)),
         ..Default::default()
     };
     Ok(model.insert(db).await?)
@@ -331,7 +316,7 @@ pub async fn update_option<C: ConnectionTrait + TransactionTrait>(
 ) -> DomainResult<need_option::Model> {
     let existing = require_option(db, vehicle_id, option_id).await?;
     if let Some(description) = &input.description {
-        validate_name("description", description)?;
+        super::validate_not_blank("description", description)?;
     }
     if let Some(price) = input.price_cents {
         validate_price(price)?;
@@ -342,30 +327,28 @@ pub async fn update_option<C: ConnectionTrait + TransactionTrait>(
         active.description = Set(value);
     }
     if let Some(value) = input.manufacturer {
-        active.manufacturer = Set(blank_to_none(value));
+        active.manufacturer = Set(value.as_deref().and_then(super::trim_to_none));
     }
     if let Some(value) = input.part_number {
-        active.part_number = Set(blank_to_none(value));
+        active.part_number = Set(value.as_deref().and_then(super::trim_to_none));
     }
     if let Some(value) = input.seller {
-        active.seller = Set(blank_to_none(value));
+        active.seller = Set(value.as_deref().and_then(super::trim_to_none));
     }
     if let Some(value) = input.price_cents {
         active.price_cents = Set(value);
     }
     if let Some(value) = input.url {
-        active.url = Set(blank_to_none(value));
+        active.url = Set(value.as_deref().and_then(super::trim_to_none));
     }
     if let Some(value) = &input.fitment {
         active.fitment = Set(value.clone());
     }
     if let Some(value) = input.fitment_note {
-        active.fitment_note = Set(blank_to_none(value));
+        active.fitment_note = Set(value.as_deref().and_then(super::trim_to_none));
     }
     if let Some(reason) = &input.rejected_reason {
-        active.rejected_on = Set(reason
-            .is_some()
-            .then(|| super::today().format("%Y-%m-%d").to_string()));
+        active.rejected_on = Set(reason.is_some().then(crate::services::today_label));
         active.rejected_reason = Set(reason.clone());
     }
     active.updated_at = Set(super::now_stamp());
@@ -480,7 +463,7 @@ pub async fn decide(
     let decided_on = if option_id.is_some() && option_id == need.chosen_option_id {
         need.decided_on.clone()
     } else {
-        option_id.map(|_| super::today().format("%Y-%m-%d").to_string())
+        option_id.map(|_| crate::services::today_label())
     };
     let mut active: job_need::ActiveModel = need.into();
     active.chosen_option_id = Set(option_id);
@@ -622,7 +605,7 @@ pub async fn mark_ordered<C: ConnectionTrait + TransactionTrait>(
     })?;
     let purchase_date = details
         .purchase_date
-        .unwrap_or_else(|| super::today().format("%Y-%m-%d").to_string());
+        .unwrap_or_else(crate::services::today_label);
     let cost_cents = details.cost_cents.or(order_cost_cents(&need, &option));
     let created = super::part::create(
         &txn,
@@ -745,7 +728,7 @@ pub async fn mark_received(
     on: Option<String>,
 ) -> DomainResult<NeedPurchase> {
     super::validate_optional_date("received_on", on.as_deref())?;
-    let on = on.unwrap_or_else(|| super::today().format("%Y-%m-%d").to_string());
+    let on = on.unwrap_or_else(crate::services::today_label);
     set_received(db, vehicle_id, need_id, Some(on)).await
 }
 
@@ -779,7 +762,7 @@ pub async fn return_part<C: ConnectionTrait + TransactionTrait>(
     need_id: i32,
     input: ReturnInput,
 ) -> DomainResult<ReturnOutcome> {
-    validate_name("reason", &input.reason)?;
+    super::validate_not_blank("reason", &input.reason)?;
     let need = require(db, vehicle_id, need_id).await?;
     let found = linked_part(db, &need).await?;
     let current = stage(&need, Some(&found));
@@ -789,16 +772,10 @@ pub async fn return_part<C: ConnectionTrait + TransactionTrait>(
             current.label()
         )));
     }
-    let appointment_id = work_item::Entity::find_by_id(need.work_item_id)
-        .one(db)
+    let appointment_id = super::work_item::get(db, vehicle_id, need.work_item_id)
         .await?
-        .and_then(|job| job.appointment_id);
-    let title = match found
-        .seller
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
+        .appointment_id;
+    let title = match found.seller.as_deref().and_then(super::trim_to_none) {
         Some(seller) => format!("Return {} to {seller}", found.name),
         None => format!("Return {}", found.name),
     };
@@ -807,7 +784,7 @@ pub async fn return_part<C: ConnectionTrait + TransactionTrait>(
     let txn = db.begin().await?;
     let mut active: part::ActiveModel = found.into();
     active.status = Set("returned".to_string());
-    active.returned_on = Set(Some(super::today().format("%Y-%m-%d").to_string()));
+    active.returned_on = Set(Some(crate::services::today_label()));
     active.return_reason = Set(Some(input.reason.clone()));
     active.returned_from_need_id = Set(Some(need_id));
     active.updated_at = Set(super::now_stamp());
@@ -1223,7 +1200,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let today = crate::services::today().format("%Y-%m-%d").to_string();
+        let today = crate::services::today_label();
         assert_eq!(decided.chosen_option_id, Some(o.id));
         assert_eq!(decided.decision_reason.as_deref(), Some("best reviews"));
         assert_eq!(decided.decided_on.as_deref(), Some(today.as_str()));
@@ -1531,7 +1508,7 @@ mod tests {
         let bought = mark_ordered(&db, vehicle_id, n.id, OrderDetails::default())
             .await
             .unwrap();
-        let today = crate::services::today().format("%Y-%m-%d").to_string();
+        let today = crate::services::today_label();
         assert_eq!(bought.part.name, o.description);
         assert_eq!(bought.part.manufacturer.as_deref(), Some("Zimmermann"));
         assert_eq!(bought.part.part_number.as_deref(), Some("100.3394.20"));
@@ -1642,7 +1619,7 @@ mod tests {
         let changed = decide(&db, vehicle_id, n.id, Some(other.id), None)
             .await
             .unwrap();
-        let today = crate::services::today().format("%Y-%m-%d").to_string();
+        let today = crate::services::today_label();
         assert_eq!(changed.decided_on.as_deref(), Some(today.as_str()));
     }
 
@@ -1790,7 +1767,7 @@ mod tests {
         let cleared = clear_received(&db, vehicle_id, n.id).await.unwrap();
         assert_eq!(cleared.part.received_on, None);
         assert_eq!(cleared.stage, Stage::Ordered);
-        let today = crate::services::today().format("%Y-%m-%d").to_string();
+        let today = crate::services::today_label();
         let got = mark_received(&db, vehicle_id, n.id, None).await.unwrap();
         assert_eq!(got.part.received_on.as_deref(), Some(today.as_str()));
 
@@ -1829,7 +1806,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let today = crate::services::today().format("%Y-%m-%d").to_string();
+        let today = crate::services::today_label();
         assert_eq!(out.returned_part.status, "returned");
         assert_eq!(
             out.returned_part.return_reason.as_deref(),
@@ -1917,7 +1894,7 @@ mod tests {
             Some("does not fit the GTI")
         );
         // The reason the owner chose it survives on the rejected option.
-        let today = crate::services::today().format("%Y-%m-%d").to_string();
+        let today = crate::services::today_label();
         assert_eq!(rejected.chosen_reason.as_deref(), Some("fits"));
         assert_eq!(rejected.chosen_on.as_deref(), Some(today.as_str()));
     }

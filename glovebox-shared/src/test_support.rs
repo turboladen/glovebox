@@ -16,9 +16,7 @@ pub async fn test_db() -> DatabaseConnection {
 /// date dates its fixtures with this, so that it holds on whatever day it
 /// runs and agrees with the code under test about what "today" is.
 pub fn days_ago(days: i64) -> String {
-    (crate::services::today() - chrono::Duration::days(days))
-        .format("%Y-%m-%d")
-        .to_string()
+    crate::services::date_label(crate::services::today() - chrono::Duration::days(days))
 }
 
 /// The number of rows in `E`'s table. Panics if the query fails.

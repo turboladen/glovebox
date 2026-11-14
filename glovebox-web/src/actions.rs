@@ -17,7 +17,7 @@ use glovebox_shared::{
         todo::NewTodo,
     },
     money,
-    services::{need, todo},
+    services::{need, todo, trim_to_none},
 };
 use serde::Deserialize;
 
@@ -25,12 +25,6 @@ use crate::{
     AppState, pages,
     view::{Failure, Target},
 };
-
-/// A form field that was left empty reads as absent.
-fn present(text: &str) -> Option<String> {
-    let trimmed = text.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_owned())
-}
 
 /// The page a form returns to: a path on this site, or the home page.
 fn safe_back(back: Option<&str>) -> String {
@@ -227,8 +221,8 @@ pub async fn post_supplier(
         post.vid,
         id,
         UpdateNeed {
-            supplied_by: Some(present(&form.supplied_by)),
-            approach: Some(present(&form.approach)),
+            supplied_by: Some(trim_to_none(&form.supplied_by)),
+            approach: Some(trim_to_none(&form.approach)),
             ..Default::default()
         },
     )
@@ -265,7 +259,7 @@ pub async fn post_decision(
 }
 
 async fn decide(state: &AppState, vid: i32, id: i32, form: &DecisionForm) -> DomainResult<()> {
-    let option_id = match present(&form.option_id) {
+    let option_id = match trim_to_none(&form.option_id) {
         None => None,
         Some(text) => Some(
             text.parse::<i32>()
@@ -274,7 +268,7 @@ async fn decide(state: &AppState, vid: i32, id: i32, form: &DecisionForm) -> Dom
     };
     // The form sends the stored reason along with an empty choice; clearing
     // the choice drops the reason.
-    let reason = option_id.and(present(&form.reason));
+    let reason = option_id.and(trim_to_none(&form.reason));
     need::decide(&state.db, vid, id, option_id, reason)
         .await
         .map(|_| ())
@@ -317,7 +311,7 @@ pub async fn post_ordered(
 }
 
 async fn order(state: &AppState, vid: i32, id: i32, form: &OrderedForm) -> DomainResult<()> {
-    let cost_cents = present(&form.cost)
+    let cost_cents = trim_to_none(&form.cost)
         .map(|text| money::parse_dollars(&text))
         .transpose()?;
     need::mark_ordered(
@@ -325,10 +319,10 @@ async fn order(state: &AppState, vid: i32, id: i32, form: &OrderedForm) -> Domai
         vid,
         id,
         OrderDetails {
-            seller: present(&form.seller),
-            purchase_date: present(&form.purchase_date),
+            seller: trim_to_none(&form.seller),
+            purchase_date: trim_to_none(&form.purchase_date),
             cost_cents,
-            order_ref: present(&form.order_ref),
+            order_ref: trim_to_none(&form.order_ref),
         },
     )
     .await
@@ -446,7 +440,7 @@ pub async fn post_todo(
 }
 
 async fn add_todo(state: &AppState, vid: i32, form: &TodoForm) -> DomainResult<()> {
-    let appointment_id = match present(&form.appointment_id) {
+    let appointment_id = match trim_to_none(&form.appointment_id) {
         None => None,
         Some(text) => Some(
             text.parse::<i32>()

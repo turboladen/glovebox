@@ -25,13 +25,6 @@ pub(crate) async fn insert(
     Ok(model.insert(db).await?)
 }
 
-fn validate_title(title: &str) -> DomainResult<()> {
-    if title.trim().is_empty() {
-        return Err(DomainError::invalid("title", "must not be blank"));
-    }
-    Ok(())
-}
-
 /// Loads a to-do that belongs to `vehicle_id`.
 ///
 /// # Errors
@@ -59,7 +52,7 @@ pub async fn add(
     vehicle_id: i32,
     input: NewTodo,
 ) -> DomainResult<todo::Model> {
-    validate_title(&input.title)?;
+    super::validate_not_blank("title", &input.title)?;
     super::vehicle::require(db, vehicle_id).await?;
     if let Some(id) = input.appointment_id {
         super::appointment::require(db, vehicle_id, id).await?;
@@ -88,7 +81,7 @@ pub async fn update(
 ) -> DomainResult<todo::Model> {
     let existing = require(db, vehicle_id, id).await?;
     if let Some(title) = &input.title {
-        validate_title(title)?;
+        super::validate_not_blank("title", title)?;
     }
     if let Some(Some(appointment_id)) = input.appointment_id {
         super::appointment::require(db, vehicle_id, appointment_id).await?;
@@ -145,7 +138,7 @@ pub async fn complete(
 ) -> DomainResult<todo::Model> {
     super::validate_optional_date("done_on", on.as_deref())?;
     let existing = require(db, vehicle_id, id).await?;
-    let done_on = on.unwrap_or_else(|| super::today().format("%Y-%m-%d").to_string());
+    let done_on = on.unwrap_or_else(crate::services::today_label);
     let mut active: todo::ActiveModel = existing.into();
     active.done_on = Set(Some(done_on));
     active.updated_at = Set(super::now_stamp());
@@ -241,10 +234,7 @@ mod tests {
             .unwrap();
         assert_eq!(done.done_on.as_deref(), Some("2026-11-10"));
         let today = complete(&db, v, t.id, None).await.unwrap();
-        assert_eq!(
-            today.done_on,
-            Some(crate::services::today().format("%Y-%m-%d").to_string())
-        );
+        assert_eq!(today.done_on, Some(crate::services::today_label()));
         let bad = complete(&db, v, t.id, Some("11/10".into()))
             .await
             .unwrap_err();
@@ -289,10 +279,7 @@ mod tests {
         let ticked = update_with_done(&db, v, t.id, UpdateTodo::default(), Some(true))
             .await
             .unwrap();
-        assert_eq!(
-            ticked.done_on,
-            Some(crate::services::today().format("%Y-%m-%d").to_string())
-        );
+        assert_eq!(ticked.done_on, Some(crate::services::today_label()));
         let untouched = update_with_done(&db, v, t.id, UpdateTodo::default(), None)
             .await
             .unwrap();
