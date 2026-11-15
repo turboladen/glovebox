@@ -61,27 +61,13 @@ pub async fn upcoming(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResul
     let reminders = reminders::calculate_reminders(db, vehicle_id).await?;
     let budget = budget::forecast_from(db, vehicle_id, &reminders).await?;
 
-    let mut planned_work: Vec<PlannedItem> = work_item::list_with_status(db, vehicle_id, false)
-        .await?
-        .into_iter()
-        .filter(|p| p.item.status == "planned")
-        .collect();
-    planned_work.sort_by_key(|p| (urgency(p.revisit_status), p.item.id));
+    let planned_work = planned_work(db, vehicle_id).await?;
     let planned_work_est_cost_cents = planned_work
         .iter()
         .map(|p| p.item.est_cost_cents.unwrap_or(0))
         .sum();
-
-    let recalls = recall::list(db, vehicle_id)
-        .await?
-        .into_iter()
-        .filter(|r| r.status == "open" || r.status == "planned")
-        .collect();
-    let open_incidents = incident_svc::list_rows(db, vehicle_id, Some(false))
-        .await?
-        .into_iter()
-        .filter(|i| i.category != "note")
-        .collect();
+    let recalls = open_recalls(db, vehicle_id).await?;
+    let open_incidents = open_incidents(db, vehicle_id).await?;
 
     let appointments = appointment::list(db, vehicle_id, false).await?;
 
@@ -94,6 +80,46 @@ pub async fn upcoming(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResul
         open_incidents,
         appointments,
     })
+}
+
+/// The vehicle's planned jobs, most urgent revisit first. Jobs sharing a
+/// revisit status keep creation order, and jobs with no revisit status come
+/// last.
+pub(crate) async fn planned_work(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+) -> DomainResult<Vec<PlannedItem>> {
+    let mut planned: Vec<PlannedItem> = work_item::list_with_status(db, vehicle_id, false)
+        .await?
+        .into_iter()
+        .filter(|p| p.item.status == "planned")
+        .collect();
+    planned.sort_by_key(|p| (urgency(p.revisit_status), p.item.id));
+    Ok(planned)
+}
+
+/// The vehicle's recalls that are still `open` or `planned`.
+pub(crate) async fn open_recalls(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+) -> DomainResult<Vec<RecallWithStatus>> {
+    Ok(recall::list(db, vehicle_id)
+        .await?
+        .into_iter()
+        .filter(|r| r.status == "open" || r.status == "planned")
+        .collect())
+}
+
+/// The vehicle's unresolved incidents, newest first, excluding notes.
+pub(crate) async fn open_incidents(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+) -> DomainResult<Vec<incident::Model>> {
+    Ok(incident_svc::list_rows(db, vehicle_id, Some(false))
+        .await?
+        .into_iter()
+        .filter(|i| i.category != "note")
+        .collect())
 }
 
 #[cfg(test)]

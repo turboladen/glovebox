@@ -107,7 +107,8 @@ ConnectionTrait` first and returning `DomainResult<T>`. Composite reads: `upcomi
 `whats_coming` answer: reminders, budget, planned work, recalls, open incidents), `reminders`,
 `budget`, `costs`, `activity`, `search`, and `checklist` (the checklist for an appointment, an
 unscheduled job or one job, the past decisions across vehicles, and the home page's rows; the MCP
-tools and the web page both render it). `whats_coming` lists each open appointment.
+tools and the web page both render it), and `waiting` (what is not yet on an appointment: due
+maintenance, planned jobs, open recalls and open incidents, for the home page). `whats_coming` lists each open appointment.
 `seed::demo` fills an empty database with made-up data that exercises every need stage.
 `vin_decode` and `nhtsa` make the only network calls.
 
@@ -270,6 +271,11 @@ A page is a view of the shared library, and a future page follows the same rules
   address.
 - **Tests** drive the router in process over an in-memory database with a fixed clock
   (`AppState::today`).
+- **The home page leads with what is waiting.** Per vehicle it lists the maintenance that is
+  overdue or due soon, every planned job on no appointment, the open recalls and the open
+  incidents (`waiting::waiting`), then the appointments and to-dos. Those four lists hold no
+  forms. An item a planned job covers links to the job, and an item whose job is on an
+  appointment is left out. `docs/adr/0002-home-page-shows-waiting-work.md` records why.
 - **Marking a need ordered has no undo**, because it creates a purchase record. A to-do tick and a
   received date show a banner with an undo form.
 
