@@ -6,9 +6,9 @@ pub struct NewNeed {
     pub name: String,
     /// How many are needed; defaults to 1 and must be at least 1.
     pub quantity: Option<i32>,
-    /// Absent while undecided.
+    /// Who supplies it. `None` means the owner has not decided.
     pub supplied_by: Option<Supplier>,
-    /// Absent while undecided.
+    /// How it is filled. `None` means the owner has not decided.
     pub approach: Option<Approach>,
 }
 

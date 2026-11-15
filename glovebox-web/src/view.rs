@@ -254,13 +254,16 @@ pub struct NeedCard {
     error: Option<FormError>,
 }
 
+/// What a supplier or an approach reads as while the owner has not chosen one.
+const NOT_DECIDED: &str = "Not decided";
+
 impl NeedCard {
     pub fn supplier_text(&self) -> &str {
-        self.supplier_kind.as_deref().unwrap_or("Not decided")
+        self.supplier_kind.as_deref().unwrap_or(NOT_DECIDED)
     }
 
     pub fn approach_text(&self) -> &str {
-        self.approach_kind.as_deref().unwrap_or("Not decided")
+        self.approach_kind.as_deref().unwrap_or(NOT_DECIDED)
     }
 
     /// The message of a failure of `form`, when that is the form that failed.
@@ -695,7 +698,7 @@ pub struct Choice {
 /// the text the owner sent when the form failed, else the stored value.
 fn choices<V: Vocabulary>(current: Option<&str>) -> Vec<Choice> {
     let current = current.unwrap_or_default();
-    let blank = std::iter::once(("", "Not decided".to_owned()));
+    let blank = std::iter::once(("", NOT_DECIDED.to_owned()));
     let listed = V::ALL
         .iter()
         .map(|v| (v.as_str(), sentence_case(v.as_str())));

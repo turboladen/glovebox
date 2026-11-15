@@ -1,12 +1,11 @@
 //! Made-up data for a test environment, so the web page can be developed and
 //! shown without the owner's real records.
 
-use crate::entities::{job_need::Approach, need_option::Fitment, part::Supplier};
 use sea_orm::*;
 use serde::Serialize;
 
 use crate::{
-    entities,
+    entities::{self, job_need::Approach, need_option::Fitment, part::Supplier},
     error::{DomainError, DomainResult},
     inputs::{
         appointment::NewAppointment,

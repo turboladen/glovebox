@@ -2,16 +2,17 @@
 //! work item, and its vehicle is the work item's vehicle. A wrong-vehicle id
 //! reads exactly like a nonexistent one.
 
-use crate::entities::{
-    need_option::Fitment,
-    part::{PartStatus, Supplier},
-    work_item::JobStatus,
-};
 use sea_orm::{sea_query::Expr, *};
 use serde::Serialize;
 
 use crate::{
-    entities::{job_need, need_option, part, todo, work_item},
+    entities::{
+        job_need,
+        need_option::{self, Fitment},
+        part::{self, PartStatus, Supplier},
+        todo,
+        work_item::{self, JobStatus},
+    },
     error::{DomainError, DomainResult},
     inputs::{
         need::{NewNeed, NewOption, OrderDetails, ReturnInput, UpdateNeed, UpdateOption},

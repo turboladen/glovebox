@@ -1,8 +1,10 @@
-use crate::entities::part::{PartStatus, Supplier};
 use sea_orm::*;
 
 use crate::{
-    entities::{part, service_record},
+    entities::{
+        part::{self, PartStatus, Supplier},
+        service_record,
+    },
     error::{DomainError, DomainResult},
     inputs::part::{NewPart, PartFilter, UpdatePart},
 };

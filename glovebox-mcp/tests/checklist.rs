@@ -801,6 +801,24 @@ async fn a_returned_part_is_not_a_settable_status() {
             "fitment",
             "`does_not_fit`",
         ),
+        // An argument that also takes `null`.
+        (
+            "update_need",
+            json!({ "vehicle_id": v, "need_id": 1, "supplied_by": "dealer" }),
+            "supplied_by",
+            "`shop`",
+        ),
+        // An argument inside a list.
+        (
+            "record_service",
+            json!({
+                "vehicle_id": v,
+                "service_date": "2026-11-01",
+                "parts": [{ "name": "Pads", "supplied_by": "dealer" }],
+            }),
+            "parts[0].supplied_by",
+            "`shop`",
+        ),
     ] {
         let err = t.call_err(tool, args).await;
         assert!(

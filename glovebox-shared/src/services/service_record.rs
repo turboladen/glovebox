@@ -1,4 +1,3 @@
-use crate::entities::part::{PartStatus, Supplier};
 use sea_orm::*;
 use serde::Serialize;
 
@@ -8,7 +7,9 @@ use crate::{
     entities::{
         incident::{self, IncidentCategory},
         incident_service_link::{self, LinkRole},
-        job_need, mileage_log, part, service_recall_link,
+        job_need, mileage_log,
+        part::{self, PartStatus, Supplier},
+        service_recall_link,
         service_record::{self, Payer, Performer},
         service_record_line_item, service_schedule_link,
     },

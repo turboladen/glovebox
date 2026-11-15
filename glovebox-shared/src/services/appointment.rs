@@ -1,14 +1,16 @@
 //! Appointments: a visit that groups jobs and to-dos. Every function scopes
 //! its ids to a vehicle, so another vehicle's id reads as a missing one.
 
-use crate::entities::work_item::JobStatus;
 use std::collections::HashMap;
 
 use sea_orm::{sea_query::Expr, *};
 use serde::Serialize;
 
 use crate::{
-    entities::{appointment, job_need, part, todo, work_item},
+    entities::{
+        appointment, job_need, part, todo,
+        work_item::{self, JobStatus},
+    },
     error::{DomainError, DomainResult},
     inputs::appointment::{NewAppointment, StatusChange, UpdateAppointment},
     services::need::{counts_as_open, stage},

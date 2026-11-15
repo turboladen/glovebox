@@ -11,11 +11,6 @@ crate::vocab::vocabulary! {
     }
 }
 
-/// A planned piece of work. It can come from a schedule item, a research
-/// finding (such as a recall), an incident, or be ad hoc. The service layer
-/// checks each source id against the vehicle. A source id,
-/// `completed_service_id` and `appointment_id` each clear when the row they
-/// name is deleted.
 impl JobStatus {
     /// Whether nothing more will happen on the job: it is done or dropped.
     #[must_use]
@@ -27,6 +22,11 @@ impl JobStatus {
     }
 }
 
+/// A planned piece of work. It can come from a schedule item, a research
+/// finding (such as a recall), an incident, or be ad hoc. The service layer
+/// checks each source id against the vehicle. A source id,
+/// `completed_service_id` and `appointment_id` each clear when the row they
+/// name is deleted.
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "work_items")]
 pub struct Model {

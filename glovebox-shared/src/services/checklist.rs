@@ -2,7 +2,6 @@
 //! grouped into the next steps the owner takes, the same needs grouped by
 //! job, and the decisions made before for a kind of part.
 
-use crate::entities::{need_option::Fitment, part::Supplier, work_item::JobStatus};
 use std::collections::HashMap;
 
 use sea_orm::{
@@ -12,7 +11,13 @@ use sea_orm::{
 use serde::Serialize;
 
 use crate::{
-    entities::{job_need, need_option, part, todo, vehicle, work_item},
+    entities::{
+        job_need,
+        need_option::{self, Fitment},
+        part::{self, Supplier},
+        todo, vehicle,
+        work_item::{self, JobStatus},
+    },
     error::{DomainError, DomainResult},
     money::format_cents,
     services::{

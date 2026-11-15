@@ -3,12 +3,14 @@
 //! finding (recall), or an incident. Every source link is vehicle-scoped: a
 //! cross-vehicle reference is indistinguishable from a nonexistent one.
 
-use crate::entities::work_item::JobStatus;
 use sea_orm::*;
 use serde::Serialize;
 
 use crate::{
-    entities::{mileage_log, research_finding, research_report, work_item},
+    entities::{
+        mileage_log, research_finding, research_report,
+        work_item::{self, JobStatus},
+    },
     error::{DomainError, DomainResult},
     inputs::work_item::{NewWorkItem, UpdateWorkItem},
     services::schedule::{DEFAULT_WARNING_DAYS, DEFAULT_WARNING_MILES},

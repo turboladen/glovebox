@@ -1,4 +1,3 @@
-use crate::entities::part::{PartStatus, Supplier};
 use std::collections::HashMap;
 
 use sea_orm::*;
@@ -6,7 +5,8 @@ use serde::Serialize;
 
 use crate::{
     entities::{
-        mileage_log, part,
+        mileage_log,
+        part::{self, PartStatus, Supplier},
         service_record::{self, Payer},
         service_record_line_item::{self, WorkKind},
     },

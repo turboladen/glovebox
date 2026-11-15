@@ -5,14 +5,16 @@
 //! `completed`, `not_applicable` when its stored status is `dismissed`,
 //! `planned` when an open work item points at it, and `open` otherwise.
 
-use crate::entities::work_item::JobStatus;
 use std::collections::HashMap;
 
 use sea_orm::*;
 use serde::Serialize;
 
 use crate::{
-    entities::{research_finding, research_report, service_recall_link, service_record, work_item},
+    entities::{
+        research_finding, research_report, service_recall_link, service_record,
+        work_item::{self, JobStatus},
+    },
     error::{DomainError, DomainResult},
     services::incident::ServiceRef,
 };

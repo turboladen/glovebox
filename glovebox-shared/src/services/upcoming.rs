@@ -1,12 +1,14 @@
 //! The one-call answer to "what is coming for this car": scheduled
 //! maintenance, the to-do list, open recalls and unresolved incidents.
 
-use crate::entities::work_item::JobStatus;
 use sea_orm::*;
 use serde::Serialize;
 
 use crate::{
-    entities::incident::{self, IncidentCategory},
+    entities::{
+        incident::{self, IncidentCategory},
+        work_item::JobStatus,
+    },
     error::DomainResult,
     services::{
         appointment::{self, AppointmentSummary},
