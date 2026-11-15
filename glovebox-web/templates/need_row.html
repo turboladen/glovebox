@@ -1,13 +1,13 @@
 <li>
   <details class="need" id="need-{{ n.id }}"{% if n.open %} open{% endif %}>
     <summary class="row">
-      <span class="key" data-l="Need">{{ n.name }}{% if let Some(q) = n.quantity %} <span class="qty">{{ q }}</span>{% endif %}</span>
+      <span class="key">{{ n.name }}{% if let Some(q) = n.quantity %} <span class="qty">{{ q }}</span>{% endif %}</span>
       <span data-l="Stage"><span class="pill pill--{{ n.stage_class }}">{{ n.stage_text }}</span></span>
       {% if let Some(c) = n.chosen %}
       {% let o = c %}{% include "part_cells.html" %}
       <span data-l="Fit"><span class="pill fit--{{ c.fit_class }}">{{ c.fit_text }}</span></span>
       {% else %}
-      <span class="span{% if n.stage_class == "undecided" %} empty{% endif %}">{{ n.status_line }}{% if !n.options.is_empty() %}, {{ n.options_note }}{% endif %}</span>
+      <span class="span{% if n.stage_class == "undecided" %} empty{% endif %}">{{ n.status_line }}</span>
       {% endif %}
       <span class="toggle" aria-hidden="true"></span>
       <span class="memo">
@@ -16,7 +16,7 @@
         {% if let Some(r) = n.decision_reason %}<span><span class="l">Reason</span>{{ r }}</span>{% endif %}
         {% if let Some(p) = n.purchase %}<span class="line">{{ p }}</span>{% endif %}
         {% for note in n.notes %}<span class="line note">{{ note }}</span>{% endfor %}
-        {% if let Some(c) = n.chosen %}{% if let Some(href) = c.link %}<span class="line"><a class="opt-link" href="{{ href }}" target="_blank" rel="noopener noreferrer">Open the listing</a></span>{% endif %}{% endif %}
+        {% if let Some(c) = n.chosen %}{% if let Some(href) = c.link %}<span class="line"><a href="{{ href }}" target="_blank" rel="noopener noreferrer">Open the listing</a></span>{% endif %}{% endif %}
       </span>
     </summary>
 
@@ -27,7 +27,7 @@
       {% if let Some(e) = n.error_in("decide") %}<div class="work"><p class="error" role="alert"><b>Not saved.</b> {{ e }}</p></div>{% endif %}
       <div role="radiogroup" aria-label="Options for {{ n.name }}">
       {% for o in n.options %}
-      <label class="row opt{% if o.blocked %} opt--blocked opt--{% if o.is_rejected() %}rejected{% else %}{{ o.fit_class }}{% endif %}{% endif %}">
+      <label class="row opt{% if o.blocked %} opt--blocked{% if o.fit_class == "does_not_fit" %} opt--does_not_fit{% endif %}{% endif %}">
         {% if loop.first %}<span class="l" aria-hidden="true">Options</span>{% else %}<span></span>{% endif %}
         <span class="pick"><input type="radio" name="option_id" value="{{ o.id }}"{% if o.checked %} checked{% endif %}{% if o.blocked %} disabled aria-describedby="opt-{{ o.id }}-why opt-{{ o.id }}-note"{% endif %}></span>
         {% include "part_cells.html" %}
@@ -36,7 +36,7 @@
         <span class="memo" id="opt-{{ o.id }}-note">
           {% if let Some(why) = o.rejected_reason %}<span><span class="pill pill--rejected">Rejected</span> {{ why }}</span>{% endif %}
           {% if let Some(note) = o.fit_note %}<span>{{ note }}</span>{% endif %}
-          {% if let Some(href) = o.link %}<span><a class="opt-link" href="{{ href }}" target="_blank" rel="noopener noreferrer">Open the listing</a></span>{% endif %}
+          {% if let Some(href) = o.link %}<span><a href="{{ href }}" target="_blank" rel="noopener noreferrer">Open the listing</a></span>{% endif %}
         </span>
       </label>
       {% endfor %}
@@ -90,10 +90,7 @@
         </details>
         {% endif %}
         {% if n.can_receive %}
-        <form method="post" action="/vehicles/{{ n.vid }}/needs/{{ n.id }}/received">
-          <input type="hidden" name="back" value="{{ n.back }}">
-          <button class="btn" type="submit" aria-label="Mark {{ n.name }} received">Mark received</button>
-        </form>
+        {% include "received_form.html" %}
         {% endif %}
         {% if n.can_unreceive %}
         <form method="post" action="/vehicles/{{ n.vid }}/needs/{{ n.id }}/received/undo">

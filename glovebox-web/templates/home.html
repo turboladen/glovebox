@@ -11,7 +11,7 @@
 </section>
 {% for hv in vehicles %}
 {% let v = hv.home %}
-<section class="section page vehicle">
+<section class="section page">
   <h2>{{ v.vehicle.name }}</h2>
 
   <section class="sheet">
@@ -21,11 +21,11 @@
     {% else %}
     <div class="cols cols--home" aria-hidden="true"><span>Appointment</span><span>Status</span><span>Date</span><span>Shop</span><span class="num">Jobs</span><span class="num">Needs open</span><span class="num">To-dos open</span></div>
     <ul class="needs">
-      {% for a in v.appointments %}
+      {% for a in hv.appointments %}
       <li class="row row--home">
-        <span class="key" data-l="Appointment"><a href="/vehicles/{{ v.vehicle.id }}/appointments/{{ a.id }}">{{ a.purpose }}</a></span>
-        <span data-l="Status"><span class="pill pill--{{ a.status }}">{{ a.status|capitalize }}</span></span>
-        {% if a.when == "not booked" %}<span class="empty cap" data-l="Date">{{ a.when }}</span>{% else %}<span data-l="Date">{{ a.when }}</span>{% endif %}
+        <span class="key"><a href="/vehicles/{{ v.vehicle.id }}/appointments/{{ a.id }}">{{ a.purpose }}</a></span>
+        <span data-l="Status"><span class="pill pill--{{ a.status_class }}">{{ a.status_text }}</span></span>
+        <span{% if !a.booked %} class="empty cap"{% endif %} data-l="Date">{{ a.when }}</span>
         <span data-l="Shop">{% if let Some(shop) = a.shop_name %}{{ shop }}{% endif %}</span>
         <span class="num" data-l="Jobs">{{ a.jobs }}</span>
         <span class="num" data-l="Needs open"><span class="n{% if a.needs_open > 0 %} n--todo{% endif %}">{{ a.needs_open }}</span></span>
@@ -41,14 +41,12 @@
     {% if v.unscheduled_jobs.is_empty() %}
     <p class="empty lone">No jobs waiting for an appointment.</p>
     {% else %}
-    <div class="cols cols--home" aria-hidden="true"><span>Job</span><span></span><span></span><span></span><span></span><span class="num">Needs open</span><span></span></div>
+    <div class="cols cols--home" aria-hidden="true"><span>Job</span><span class="num at-needs">Needs open</span></div>
     <ul class="needs">
       {% for j in v.unscheduled_jobs %}
       <li class="row row--home">
-        <span class="key" data-l="Job"><a href="/vehicles/{{ v.vehicle.id }}/jobs/{{ j.id }}">{{ j.title }}</a></span>
-        <span></span><span></span><span></span><span></span>
-        <span class="num" data-l="Needs open"><span class="n{% if j.needs_open > 0 %} n--todo{% endif %}">{{ j.needs_open }}</span></span>
-        <span></span>
+        <span class="key"><a href="/vehicles/{{ v.vehicle.id }}/jobs/{{ j.id }}">{{ j.title }}</a></span>
+        <span class="num at-needs" data-l="Needs open"><span class="n{% if j.needs_open > 0 %} n--todo{% endif %}">{{ j.needs_open }}</span></span>
       </li>
       {% endfor %}
     </ul>

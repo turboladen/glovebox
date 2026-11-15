@@ -20,8 +20,8 @@
   <h2 id="steps-title">Next steps</h2>
 
   {% if !steps.check.is_empty() %}
-  <section class="sheet sheet--todo" aria-labelledby="g-check">
-    <div class="sheet-head"><h3 id="g-check">Check</h3><span class="n">{{ steps.check.len() }}</span></div>
+  <section class="sheet" aria-labelledby="g-check">
+    <div class="sheet-head"><h3 id="g-check">Check</h3><span class="n n--todo">{{ steps.check.len() }}</span></div>
     <ul>
       {% for c in steps.check %}
       <li class="step"><span>{{ c.job_title }}</span><span class="key">{{ c.name }}</span><span class="say">{{ c.note }}</span>
@@ -33,8 +33,8 @@
   {% endif %}
 
   {% if !steps.decide.is_empty() %}
-  <section class="sheet sheet--todo" aria-labelledby="g-decide">
-    <div class="sheet-head"><h3 id="g-decide">Decide</h3><span class="n">{{ steps.decide.len() }}</span></div>
+  <section class="sheet" aria-labelledby="g-decide">
+    <div class="sheet-head"><h3 id="g-decide">Decide</h3><span class="n n--todo">{{ steps.decide.len() }}</span></div>
     <ol>
       {% for s in steps.decide %}{% include "step_row.html" %}{% endfor %}
     </ol>
@@ -42,8 +42,8 @@
   {% endif %}
 
   {% if !steps.order.is_empty() %}
-  <section class="sheet sheet--todo" aria-labelledby="g-order">
-    <div class="sheet-head"><h3 id="g-order">Order</h3><span class="n">{{ steps.order.len() }}</span></div>
+  <section class="sheet" aria-labelledby="g-order">
+    <div class="sheet-head"><h3 id="g-order">Order</h3><span class="n n--todo">{{ steps.order.len() }}</span></div>
     <ol>
       {% for s in steps.order %}{% include "step_row.html" %}{% endfor %}
     </ol>

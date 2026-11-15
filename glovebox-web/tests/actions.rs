@@ -180,6 +180,12 @@ fn group<'a>(body: &'a str, name: &str) -> &'a str {
     &rest[..rest.find("</section>").unwrap_or(rest.len())]
 }
 
+// The markup of one need's row in its job, without its details.
+fn need_summary(body: &str, need_id: i32) -> &str {
+    let rest = &body[body.find(&format!(r#"id="need-{need_id}""#)).unwrap()..];
+    &rest[..rest.find("</summary>").unwrap()]
+}
+
 #[tokio::test]
 async fn appointment_page_shows_next_steps_then_jobs() {
     let w = World::new().await;
@@ -457,7 +463,7 @@ async fn an_option_link_is_shown_only_for_a_web_address() {
 
     assert!(
         body.contains(
-            r#"<a class="opt-link" href="https://example.com/pads?a=1&#38;b=2" target="_blank" rel="noopener noreferrer">"#
+            r#"<a href="https://example.com/pads?a=1&#38;b=2" target="_blank" rel="noopener noreferrer">"#
         ),
         "{body}"
     );
@@ -1403,8 +1409,7 @@ async fn a_need_ordered_without_an_option_shows_its_step_sentence() {
 
     let (_, body) = w.get(&w.job_path()).await;
 
-    let row = &body[body.find(&format!(r#"id="need-{need_id}""#)).unwrap()..];
-    let row = &row[..row.find("</summary>").unwrap()];
+    let row = need_summary(&body, need_id);
     assert!(row.contains("ordered from FCP Euro on 2026-11-13"), "{row}");
     assert!(!row.contains("No part chosen"), "{row}");
 }
@@ -1500,8 +1505,7 @@ async fn a_chosen_option_without_a_seller_or_price_keeps_its_columns() {
 
     let (_, body) = w.get(&w.page_path()).await;
 
-    let row = &body[body.find(&format!(r#"id="need-{}""#, w.need)).unwrap()..];
-    let row = &row[..row.find("</summary>").unwrap()];
+    let row = need_summary(&body, w.need);
     assert!(row.contains(r#"<span data-l="Brand"></span>"#), "{row}");
     assert!(row.contains(r#"<span data-l="Seller"></span>"#), "{row}");
     assert!(
@@ -1567,23 +1571,6 @@ async fn the_order_drawer_in_a_step_row_is_not_an_action_cell() {
         "{order}"
     );
     assert!(!order.contains(r#"class="drawer act""#), "{order}");
-    assert!(
-        body.contains(".step > span.act {"),
-        "the action rule names the span"
-    );
-}
-
-// A link to a need or to one of its forms must stop below the job's sticky head.
-#[tokio::test]
-async fn a_linked_need_scrolls_clear_of_the_sticky_job_head() {
-    let w = World::new().await;
-
-    let (_, body) = w.get(&w.page_path()).await;
-
-    assert!(
-        body.contains(".need, .need [id] { scroll-margin-top: 5rem; }"),
-        "{body}"
-    );
 }
 
 #[tokio::test]

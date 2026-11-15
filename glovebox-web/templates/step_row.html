@@ -13,10 +13,7 @@
   </details>
   {% else if s.is("arriving") %}
   <span class="act">
-    <form method="post" action="/vehicles/{{ n.vid }}/needs/{{ n.id }}/received">
-      <input type="hidden" name="back" value="{{ n.back }}">
-      <button class="btn" type="submit" aria-label="Mark {{ n.name }} received">Mark received</button>
-    </form>
+    {% include "received_form.html" %}
   </span>
   {% endif %}
   {% if let Some(e) = n.error_elsewhere() %}<p class="error more" role="alert"><b>Not saved.</b> {{ e }}</p>{% endif %}

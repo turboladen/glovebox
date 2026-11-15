@@ -21,8 +21,8 @@ use serde::Deserialize;
 use crate::{
     AppState,
     view::{
-        Banner, CardContext, Count, Failure, JobCard, Steps, Target, TodoCard, TodoForm, job_card,
-        sentence_case, steps,
+        Banner, CardContext, Count, Failure, HomeAppointmentRow, JobCard, Steps, Target, TodoCard,
+        TodoForm, job_card, sentence_case, steps,
     },
 };
 
@@ -62,6 +62,7 @@ fn today_label(state: &AppState) -> String {
 /// One vehicle on the home page, with its to-dos as rows the owner can tick.
 struct HomeVehicle {
     home: VehicleHome,
+    appointments: Vec<HomeAppointmentRow>,
     todos: Vec<TodoCard>,
     todo_form: TodoForm,
 }
@@ -191,6 +192,7 @@ pub async fn home_response(state: &AppState, view: Page<'_>, status: StatusCode)
             })
             .collect();
         vehicles.push(HomeVehicle {
+            appointments: home.appointments.iter().map(Into::into).collect(),
             todo_form: TodoForm::after(failure.filter(|f| f.vid == vid)),
             todos,
             home,

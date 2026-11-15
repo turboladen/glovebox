@@ -1,0 +1,4 @@
+<form method="post" action="/vehicles/{{ n.vid }}/needs/{{ n.id }}/received">
+  <input type="hidden" name="back" value="{{ n.back }}">
+  <button class="btn" type="submit" aria-label="Mark {{ n.name }} received">Mark received</button>
+</form>

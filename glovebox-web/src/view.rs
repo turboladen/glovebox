@@ -8,7 +8,7 @@ use glovebox_shared::{
     entities::{need_option, todo},
     money::format_cents,
     services::{
-        checklist::{self, Checklist, JobView, NeedView, StepRow},
+        checklist::{self, Checklist, HomeAppointment, JobView, NeedView, StepRow},
         need::{self, Stage},
     },
 };
@@ -130,10 +130,6 @@ impl OptionCard {
             blocked: !checked && (rejected || option.fitment == "does_not_fit"),
         }
     }
-
-    pub fn is_rejected(&self) -> bool {
-        self.rejected_reason.is_some()
-    }
 }
 
 // Only a web address becomes a link, so a stored `javascript:` or `data:`
@@ -174,7 +170,9 @@ pub struct NeedCard {
     pub back: String,
     pub stage_class: &'static str,
     pub stage_text: &'static str,
-    /// The sentence the need's row under Next steps shows, without its name.
+    /// What a row with no chosen option shows in place of the part: the
+    /// sentence the need's row under Next steps shows, then the options note
+    /// when the need has options.
     pub status_line: String,
     /// Whether the need's details start open.
     pub open: bool,
@@ -182,7 +180,6 @@ pub struct NeedCard {
     /// Every option, the chosen one included, for the decision form.
     pub options: Vec<OptionCard>,
     pub none_checked: bool,
-    pub options_note: String,
     supplier: String,
     approach: String,
     /// The stored supplier and approach as their tags read, when decided.
@@ -340,6 +337,38 @@ impl Steps {
     }
 }
 
+/// An open appointment on the home page.
+pub struct HomeAppointmentRow {
+    pub id: i32,
+    pub purpose: String,
+    pub shop_name: Option<String>,
+    /// The planned date, or the words the shared row gives when there is none.
+    pub when: String,
+    pub booked: bool,
+    pub status_class: &'static str,
+    pub status_text: String,
+    pub jobs: usize,
+    pub needs_open: usize,
+    pub todos_open: usize,
+}
+
+impl From<&HomeAppointment> for HomeAppointmentRow {
+    fn from(a: &HomeAppointment) -> Self {
+        Self {
+            id: a.id,
+            purpose: a.purpose.clone(),
+            shop_name: a.shop_name.clone(),
+            when: a.when.clone(),
+            booked: a.booked,
+            status_class: a.status,
+            status_text: sentence_case(a.status),
+            jobs: a.jobs,
+            needs_open: a.needs_open,
+            todos_open: a.todos_open,
+        }
+    }
+}
+
 /// Capitalizes the first letter, as the stage and status tags read.
 pub fn sentence_case(word: &str) -> String {
     let mut chars = word.chars();
@@ -419,18 +448,21 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
         order_ref: typed("order_ref").unwrap_or_default().to_owned(),
     };
 
+    let mut status_line = checklist::step_detail(view);
+    if !options.is_empty() {
+        status_line = format!("{status_line}, {}", view.options_note());
+    }
     NeedCard {
         vid: ctx.vid,
         id: need.id,
         name: need.name.clone(),
         quantity: several.then(|| format!("\u{d7} {}", need.quantity)),
-        status_line: checklist::step_detail(view),
+        status_line,
         back: ctx.back.to_owned(),
         stage_class: stage.label(),
         stage_text: stage_text(stage),
         open: failure.is_some() || ctx.open == Some(need.id),
         none_checked: !options.iter().any(|o| o.checked),
-        options_note: view.options_note(),
         can_decide: view.part.is_none() && !options.is_empty(),
         chosen,
         options,
