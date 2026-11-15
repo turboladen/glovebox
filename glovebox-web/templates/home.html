@@ -15,8 +15,8 @@
   <h2>{{ v.vehicle.name }}</h2>
 
   <section class="sheet">
-    <div class="sheet-head"><h3>Appointments</h3><span class="n">{{ v.appointments.len() }}</span></div>
-    {% if v.appointments.is_empty() %}
+    <div class="sheet-head"><h3>Appointments</h3><span class="n">{{ hv.appointments.len() }}</span></div>
+    {% if hv.appointments.is_empty() %}
     <p class="empty lone">No open appointments.</p>
     {% else %}
     <div class="cols cols--home" aria-hidden="true"><span>Appointment</span><span>Status</span><span>Date</span><span>Shop</span><span class="num">Jobs</span><span class="num">Needs open</span><span class="num">To-dos open</span></div>
@@ -25,7 +25,7 @@
       <li class="row row--home">
         <span class="key"><a href="/vehicles/{{ v.vehicle.id }}/appointments/{{ a.id }}">{{ a.purpose }}</a></span>
         <span data-l="Status"><span class="pill pill--{{ a.status_class }}">{{ a.status_text }}</span></span>
-        <span{% if !a.booked %} class="empty cap"{% endif %} data-l="Date">{{ a.when }}</span>
+        <span data-l="Date">{% if a.booked %}{{ a.when }}{% else %}<span class="empty cap">{{ a.when }}</span>{% endif %}</span>
         <span data-l="Shop">{% if let Some(shop) = a.shop_name %}{{ shop }}{% endif %}</span>
         <span class="num" data-l="Jobs">{{ a.jobs }}</span>
         <span class="num" data-l="Needs open"><span class="n{% if a.needs_open > 0 %} n--todo{% endif %}">{{ a.needs_open }}</span></span>

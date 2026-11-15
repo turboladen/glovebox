@@ -180,7 +180,7 @@ fn group<'a>(body: &'a str, name: &str) -> &'a str {
     &rest[..rest.find("</section>").unwrap_or(rest.len())]
 }
 
-// The markup of one need's row in its job, without its details.
+// Returns the markup of one need's row in its job, without its details.
 fn need_summary(body: &str, need_id: i32) -> &str {
     let rest = &body[body.find(&format!(r#"id="need-{need_id}""#)).unwrap()..];
     &rest[..rest.find("</summary>").unwrap()]

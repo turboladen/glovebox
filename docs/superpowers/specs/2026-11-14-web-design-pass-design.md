@@ -166,8 +166,10 @@ The existing templates' wording stays except for these changes:
   up under the chosen part. A blocked option is gray, a part that does not fit is struck through,
   and the reason sits on its own line. Then "Your decision" (the reason field and Save decision)
   and "Actions" (the outlined buttons), each named by a label in the Need column.
-- **Narrow widths.** Below 68rem the header line is hidden and each row becomes a list of label
-  and value pairs, the label taken from the column name.
+- **Narrow widths.** At 76rem and narrower the header line is hidden and each row becomes a list
+  of label and value pairs, the label taken from the column name. The fixed ledger columns take
+  62rem, so a window narrower than that leaves the Description column too little room. A value a
+  row does not have is left out there with its label.
 
 ## Left to the builder
 

@@ -337,7 +337,7 @@ impl Steps {
     }
 }
 
-/// An open appointment on the home page.
+/// Describes an open appointment as the home page lists it.
 pub struct HomeAppointmentRow {
     pub id: i32,
     pub purpose: String,

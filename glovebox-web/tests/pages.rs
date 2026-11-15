@@ -113,7 +113,13 @@ async fn home_lists_open_appointments_and_unscheduled_jobs() {
         "{body}"
     );
     assert!(
-        body.contains(r#"<span data-l="Status"><span class="pill pill--"#),
+        body.contains(
+            r#"<span data-l="Status"><span class="pill pill--planning">Planning</span></span>"#
+        ),
+        "{body}"
+    );
+    assert!(
+        body.contains(r#"<span class="num" data-l="Jobs">1</span>"#),
         "{body}"
     );
     assert!(
@@ -134,10 +140,19 @@ async fn home_lists_open_appointments_and_unscheduled_jobs() {
         "{body}"
     );
     assert!(body.contains("Winter tires"), "{body}");
-    assert!(body.contains("not booked"), "{body}");
+    assert!(
+        body.contains(r#"<span data-l="Date"><span class="empty cap">not booked</span></span>"#),
+        "{body}"
+    );
     assert!(body.contains("Not scheduled yet"), "{body}");
     assert!(body.contains("Replace wiper blades"), "{body}");
     assert!(body.contains("<span>Job</span>"), "{body}");
+    assert!(
+        body.contains(
+            r#"<span class="num at-needs" data-l="Needs open"><span class="n n--todo">1</span></span>"#
+        ),
+        "{body}"
+    );
     assert!(body.contains("Wash the car"), "{body}");
     assert!(
         body.contains(r#"<span data-l="Date">2026-12-01</span>"#),

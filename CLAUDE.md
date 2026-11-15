@@ -258,7 +258,7 @@ A page is a view of the shared library, and a future page follows the same rules
   loads, from this server), so a script would not run.
 - **Every count and sentence about the records comes from a tested shared function** (stage,
   step sentences, open counts, option notes, warnings, errors). `src/view.rs` picks labels and
-  nouns for those values, such as "2 needed" or "Price for 2", and decides which forms a row shows;
+  nouns for those values, such as "× 2" or "Price for 2", and decides which forms a row shows;
   templates print what `view.rs` built.
 - **Local only.** The server binds `127.0.0.1` on `GLOVEBOX_WEB_PORT` (4827 for `live`, 4828
   otherwise) and refuses a request whose Host or Origin is not local. Every page shows the

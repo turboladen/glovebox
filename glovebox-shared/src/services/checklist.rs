@@ -1800,7 +1800,8 @@ mod tests {
                 (unbooked, "Tire swap", "not booked", false, 0, 0),
             ]
         );
-        assert!(g.appointments.iter().all(|a| !a.status.is_empty()));
+        let state: Vec<(&str, usize)> = g.appointments.iter().map(|a| (a.status, a.jobs)).collect();
+        assert_eq!(state, [("planning", 1), ("planning", 0)]);
         let jobs: Vec<(&str, usize)> = g
             .unscheduled_jobs
             .iter()
