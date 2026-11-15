@@ -4,13 +4,17 @@
 //! leaves the stored value alone, an explicit JSON `null` clears it, and a
 //! value sets it. Doc comments become the field descriptions the model sees.
 
-use glovebox_shared::inputs::{
-    incident::{NewFollowup, UpdateIncident},
-    part::UpdatePart,
-    schedule::{NewScheduleItem, UpdateScheduleItem},
-    service_record::UpdateServiceRecord,
-    vehicle::{NewVehicle, UpdateVehicle},
-    work_item::UpdateWorkItem,
+use glovebox_shared::{
+    dates,
+    error::DomainResult,
+    inputs::{
+        incident::{NewFollowup, UpdateIncident},
+        part::UpdatePart,
+        schedule::{NewScheduleItem, UpdateScheduleItem},
+        service_record::UpdateServiceRecord,
+        vehicle::{NewVehicle, UpdateVehicle},
+        work_item::UpdateWorkItem,
+    },
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer};
@@ -71,8 +75,8 @@ pub struct AddVehicleInput {
 }
 
 impl AddVehicleInput {
-    pub fn into_domain(self) -> NewVehicle {
-        NewVehicle {
+    pub fn into_domain(self) -> DomainResult<NewVehicle> {
+        Ok(NewVehicle {
             name: self.name,
             model_template_id: self.model_template_id,
             year: self.year,
@@ -86,14 +90,17 @@ impl AddVehicleInput {
             vin: self.vin,
             license_plate: self.license_plate,
             color: self.color,
-            purchase_date: self.purchase_date,
+            purchase_date: dates::parse_optional_date("purchase_date", self.purchase_date)?,
             purchase_price_cents: self.purchase_price_cents,
             purchase_price_currency: None,
             purchase_mileage: self.purchase_mileage,
             notes: self.notes,
-            warranty_expires_on: self.warranty_expires_on,
+            warranty_expires_on: dates::parse_optional_date(
+                "warranty_expires_on",
+                self.warranty_expires_on,
+            )?,
             warranty_expires_miles: self.warranty_expires_miles,
-        }
+        })
     }
 }
 
@@ -233,8 +240,8 @@ pub struct UpdateVehicleInput {
 }
 
 impl UpdateVehicleInput {
-    pub fn into_domain(self) -> (i32, UpdateVehicle) {
-        (
+    pub fn into_domain(self) -> DomainResult<(i32, UpdateVehicle)> {
+        Ok((
             self.vehicle_id,
             UpdateVehicle {
                 name: self.name,
@@ -250,18 +257,21 @@ impl UpdateVehicleInput {
                 vin: self.vin,
                 license_plate: self.license_plate,
                 color: self.color,
-                purchase_date: self.purchase_date,
+                purchase_date: dates::parse_date_change("purchase_date", self.purchase_date)?,
                 purchase_price_cents: self.purchase_price_cents,
                 purchase_mileage: self.purchase_mileage,
-                sold_date: self.sold_date,
+                sold_date: dates::parse_date_change("sold_date", self.sold_date)?,
                 sold_price_cents: self.sold_price_cents,
                 sold_mileage: self.sold_mileage,
                 notes: self.notes,
-                warranty_expires_on: self.warranty_expires_on,
+                warranty_expires_on: dates::parse_date_change(
+                    "warranty_expires_on",
+                    self.warranty_expires_on,
+                )?,
                 warranty_expires_miles: self.warranty_expires_miles,
                 ..Default::default()
             },
-        )
+        ))
     }
 }
 
@@ -385,17 +395,17 @@ pub struct CorrectServiceInput {
 }
 
 impl CorrectServiceInput {
-    pub fn into_domain(self) -> (i32, i32, UpdateServiceRecord) {
-        (
+    pub fn into_domain(self) -> DomainResult<(i32, i32, UpdateServiceRecord)> {
+        Ok((
             self.vehicle_id,
             self.service_id,
             UpdateServiceRecord {
-                service_date: self.service_date,
+                service_date: dates::parse_optional_date("service_date", self.service_date)?,
                 performed_by: self.performed_by,
                 paid_by: self.paid_by,
                 schedule_item_ids: self.schedule_item_ids,
                 part_ids: self.part_ids,
-                end_date: self.end_date,
+                end_date: dates::parse_date_change("end_date", self.end_date)?,
                 mileage: self.mileage,
                 description: self.description,
                 parts_cost_cents: self.parts_cost_cents,
@@ -412,7 +422,7 @@ impl CorrectServiceInput {
                     .map(|items| items.into_iter().map(LineItemInput::into_domain).collect()),
                 ..Default::default()
             },
-        )
+        ))
     }
 }
 
@@ -570,8 +580,8 @@ pub struct CorrectPartInput {
 }
 
 impl CorrectPartInput {
-    pub fn into_domain(self) -> (i32, i32, UpdatePart) {
-        (
+    pub fn into_domain(self) -> DomainResult<(i32, i32, UpdatePart)> {
+        Ok((
             self.vehicle_id,
             self.part_id,
             UpdatePart {
@@ -581,23 +591,26 @@ impl CorrectPartInput {
                 manufacturer: self.manufacturer,
                 part_number: self.part_number,
                 seller: self.seller,
-                purchase_date: self.purchase_date,
+                purchase_date: dates::parse_date_change("purchase_date", self.purchase_date)?,
                 cost_cents: self.cost_cents,
                 retailer_url: self.retailer_url,
-                installed_date: self.installed_date,
+                installed_date: dates::parse_date_change("installed_date", self.installed_date)?,
                 installed_odometer: self.installed_odometer,
                 installed_service_id: self.installed_service_id,
-                replaced_date: self.replaced_date,
+                replaced_date: dates::parse_date_change("replaced_date", self.replaced_date)?,
                 replaced_odometer: self.replaced_odometer,
                 notes: self.notes,
                 location: self.location,
-                warranty_expires_on: self.warranty_expires_on,
+                warranty_expires_on: dates::parse_date_change(
+                    "warranty_expires_on",
+                    self.warranty_expires_on,
+                )?,
                 warranty_expires_miles: self.warranty_expires_miles,
                 order_ref: self.order_ref,
-                received_on: self.received_on,
+                received_on: dates::parse_date_change("received_on", self.received_on)?,
                 ..Default::default()
             },
-        )
+        ))
     }
 }
 
@@ -738,14 +751,14 @@ pub struct UpdateIncidentInput {
 }
 
 impl UpdateIncidentInput {
-    pub fn into_domain(self) -> (i32, i32, UpdateIncident) {
-        (
+    pub fn into_domain(self) -> DomainResult<(i32, i32, UpdateIncident)> {
+        Ok((
             self.vehicle_id,
             self.incident_id,
             UpdateIncident {
                 category: self.category,
                 title: self.title,
-                occurred_at: self.occurred_at,
+                occurred_at: dates::parse_optional_day_or_time("occurred_at", self.occurred_at)?,
                 resolved: self.resolved,
                 resolved_by_service_ids: self.resolved_by_service_ids,
                 description: self.description,
@@ -768,7 +781,7 @@ impl UpdateIncidentInput {
                 noticed_during_service_id: self.noticed_during_service_id,
                 ..Default::default()
             },
-        )
+        ))
     }
 }
 
@@ -792,18 +805,18 @@ pub struct AddIncidentFollowupInput {
 }
 
 impl AddIncidentFollowupInput {
-    pub fn into_domain(self) -> (i32, i32, NewFollowup) {
-        (
+    pub fn into_domain(self) -> DomainResult<(i32, i32, NewFollowup)> {
+        Ok((
             self.vehicle_id,
             self.incident_id,
             NewFollowup {
-                occurred_at: self.occurred_at,
+                occurred_at: dates::parse_day_or_time("occurred_at", &self.occurred_at)?,
                 contact_method: self.contact_method,
                 contact_with: self.contact_with,
                 summary: self.summary,
                 notes: self.notes,
             },
-        )
+        ))
     }
 }
 
@@ -880,8 +893,8 @@ pub struct UpdatePlannedWorkInput {
 }
 
 impl UpdatePlannedWorkInput {
-    pub fn into_domain(self) -> (i32, i32, UpdateWorkItem) {
-        (
+    pub fn into_domain(self) -> DomainResult<(i32, i32, UpdateWorkItem)> {
+        Ok((
             self.vehicle_id,
             self.work_item_id,
             UpdateWorkItem {
@@ -892,11 +905,11 @@ impl UpdatePlannedWorkInput {
                 research_finding_id: self.research_finding_id,
                 incident_id: self.incident_id,
                 est_cost_cents: self.est_cost_cents,
-                revisit_by_date: self.revisit_by_date,
+                revisit_by_date: dates::parse_date_change("revisit_by_date", self.revisit_by_date)?,
                 revisit_by_miles: self.revisit_by_miles,
                 appointment_id: self.appointment_id,
             },
-        )
+        ))
     }
 }
 

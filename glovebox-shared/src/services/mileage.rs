@@ -26,10 +26,7 @@ pub async fn create(
     input: NewMileageEntry,
 ) -> DomainResult<mileage_log::Model> {
     super::vehicle::require(db, vehicle_id).await?;
-    if let Some(at) = &input.recorded_at {
-        super::validate_datetime("recorded_at", at)?;
-    }
-    let now = super::local_now_stamp();
+    let now = crate::dates::local_now();
     let model = mileage_log::ActiveModel {
         vehicle_id: Set(vehicle_id),
         mileage: Set(input.mileage),
@@ -63,7 +60,7 @@ pub async fn delete(db: &impl ConnectionTrait, vehicle_id: i32, id: i32) -> Doma
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{VehicleFixture, test_db};
+    use crate::test_support::{VehicleFixture, date, test_db};
 
     async fn seed_vehicle(db: &impl ConnectionTrait) -> i32 {
         VehicleFixture::new().insert_id(db).await
@@ -104,7 +101,7 @@ mod tests {
             v1,
             NewMileageEntry {
                 mileage: 100,
-                recorded_at: Some("2024-01-01 00:00:00".into()),
+                recorded_at: Some(date("2024-01-01 00:00:00")),
                 source: Some("import".into()),
                 notes: None,
             },
@@ -136,7 +133,7 @@ mod tests {
             &db,
             vid,
             crate::inputs::service_record::NewServiceRecord {
-                service_date: "2026-05-02".into(),
+                service_date: date("2026-05-02"),
                 mileage: Some(48_100),
                 ..Default::default()
             },

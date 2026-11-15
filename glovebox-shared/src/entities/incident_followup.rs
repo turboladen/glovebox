@@ -7,7 +7,7 @@ pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
     pub incident_id: i32,
-    pub occurred_at: String,
+    pub occurred_at: crate::dates::DayOrTime,
     pub contact_method: Option<String>,
     pub contact_with: Option<String>,
     pub summary: String,

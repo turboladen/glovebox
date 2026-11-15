@@ -14,9 +14,9 @@ pub struct NewLineItem {
 
 #[derive(Default)]
 pub struct NewServiceRecord {
-    pub service_date: String,
+    pub service_date: chrono::NaiveDate,
     /// Last day of the work for multi-day jobs; never before `service_date`.
-    pub end_date: Option<String>,
+    pub end_date: Option<chrono::NaiveDate>,
     /// `shop` (default) or `self`.
     pub performed_by: Option<String>,
     pub mileage: Option<i32>,
@@ -62,8 +62,8 @@ pub struct NewServiceRecord {
 
 #[derive(Default)]
 pub struct UpdateServiceRecord {
-    pub service_date: Option<String>,
-    pub end_date: Option<Option<String>>,
+    pub service_date: Option<chrono::NaiveDate>,
+    pub end_date: Option<Option<chrono::NaiveDate>>,
     /// Plain option: the column is non-nullable, so there is no "clear" case.
     pub performed_by: Option<String>,
     pub mileage: Option<Option<i32>>,

@@ -8,6 +8,7 @@ use sea_orm::*;
 use serde::Serialize;
 
 use crate::{
+    dates::DayOrTime,
     entities::{incident, mileage_log, service_record},
     error::DomainResult,
 };
@@ -16,10 +17,9 @@ use crate::{
 pub const DEFAULT_LIMIT: usize = 20;
 
 /// One entry in the merged feed. `date` is the record's own domain date
-/// (`service_date`, `occurred_at`, or `recorded_at`) — ISO-8601
-/// `YYYY-MM-DD[ HH:MM:SS]` strings. Granularity is mixed: services are
-/// date-only while incidents/mileage carry timestamps, so sorting uses a
-/// normalized key (see `sort_key`), not the raw string.
+/// (`service_date`, `occurred_at`, or `recorded_at`), printed
+/// `YYYY-MM-DD[ HH:MM:SS]`. Granularity is mixed: a service has a day, while
+/// an incident or a reading may carry a time.
 #[derive(Debug, Serialize)]
 pub struct ActivityItem {
     /// `service`, `incident`, or `mileage`.
@@ -28,7 +28,8 @@ pub struct ActivityItem {
     /// Owning vehicle.
     pub vehicle_id: i32,
     pub vehicle_name: String,
-    pub date: String,
+    /// The day of a service, or the day or time of an incident or reading.
+    pub date: DayOrTime,
     /// When the record was added (its row's `created_at`), a
     /// `YYYY-MM-DD HH:MM:SS` timestamp distinct from the domain `date`.
     pub created_at: String,
@@ -94,7 +95,7 @@ pub async fn recent(
                 .description
                 .clone()
                 .unwrap_or_else(|| format!("Service on {}", s.service_date)),
-            date: s.service_date,
+            date: s.service_date.into(),
             created_at: s.created_at,
             mileage: s.mileage,
             total_cost_cents: s.total_cost_cents,
@@ -135,32 +136,19 @@ pub async fn recent(
     Ok(items)
 }
 
-/// Sort newest-first by the domain date (via [`sort_key`]'s end-of-day
-/// normalization for mixed granularity). Equal dates break by `kind` first
+/// Sort newest-first by the domain date, a bare day counting as the end of
+/// that day (see [`DayOrTime::or_end_of_day`]). Equal dates break by `kind` first
 /// (ids are per-table sequences, so they aren't comparable across kinds),
 /// then by `id` descending within a kind, where a higher id is a later
 /// insert. This keeps equal-date ordering deterministic.
 fn sort_newest_first(items: &mut [ActivityItem]) {
     items.sort_by(|a, b| {
-        sort_key(&b.date)
-            .cmp(&sort_key(&a.date))
+        b.date
+            .or_end_of_day()
+            .cmp(&a.date.or_end_of_day())
             .then_with(|| a.kind.cmp(&b.kind))
             .then_with(|| b.id.cmp(&a.id))
     });
-}
-
-/// Normalize mixed-granularity dates into one sortable key. Date-only values
-/// (services' `service_date`) sort at end-of-day so a service records as
-/// *newer* than that same day's timestamped incidents — matching the
-/// common "noticed it in the morning, fixed it that afternoon" flow. Raw
-/// lexicographic order would instead sort every date-only service before
-/// any timestamped item on its own day.
-fn sort_key(date: &str) -> std::borrow::Cow<'_, str> {
-    if date.len() == 10 {
-        std::borrow::Cow::Owned(format!("{date} 23:59:59"))
-    } else {
-        std::borrow::Cow::Borrowed(date)
-    }
 }
 
 #[cfg(test)]
@@ -172,7 +160,7 @@ mod tests {
             incident::NewIncident, mileage::NewMileageEntry, service_record::NewServiceRecord,
         },
         services::{incident as incident_svc, mileage as mileage_svc, service_record as svc_svc},
-        test_support::{VehicleFixture, test_db},
+        test_support::{VehicleFixture, date, test_db},
     };
 
     async fn seed_vehicle(db: &impl ConnectionTrait) -> i32 {
@@ -181,7 +169,7 @@ mod tests {
 
     fn service(date: &str, description: &str, mileage: Option<i32>) -> NewServiceRecord {
         NewServiceRecord {
-            service_date: date.into(),
+            service_date: crate::test_support::date(date),
             mileage,
             description: Some(description.into()),
             parts_cost_cents: None,
@@ -214,7 +202,7 @@ mod tests {
         NewIncident {
             category: "note".into(),
             title: title.into(),
-            occurred_at: Some(occurred_at.into()),
+            occurred_at: Some(date(occurred_at)),
             ..Default::default()
         }
     }
@@ -234,7 +222,7 @@ mod tests {
             vid,
             NewMileageEntry {
                 mileage: 50_000,
-                recorded_at: Some("2026-03-01 09:00:00".into()),
+                recorded_at: Some(date("2026-03-01 09:00:00")),
                 source: None,
                 notes: None,
             },
@@ -300,7 +288,7 @@ mod tests {
             vid,
             NewMileageEntry {
                 mileage: 60_000,
-                recorded_at: Some("2026-04-01 10:00:00".into()),
+                recorded_at: Some(date("2026-04-01 10:00:00")),
                 source: Some("service".into()),
                 notes: None,
             },
@@ -345,7 +333,7 @@ mod tests {
         }
         let items = recent(&db, vid, 3).await.unwrap();
         assert_eq!(items.len(), 3);
-        assert_eq!(items[0].date, "2026-01-05");
+        assert_eq!(items[0].date, date("2026-01-05"));
     }
 
     #[tokio::test]

@@ -11,7 +11,7 @@ pub struct Model {
     pub title: String,
     pub description: Option<String>,
     pub odometer: Option<i32>,
-    pub occurred_at: String,
+    pub occurred_at: crate::dates::DayOrTime,
     pub obd_codes: Option<String>,
     pub resolved: bool,
     pub notes: Option<String>,

@@ -683,7 +683,7 @@ fn home_appointment(s: AppointmentSummary) -> HomeAppointment {
         when: s
             .appointment
             .planned_date
-            .unwrap_or_else(|| "not booked".to_owned()),
+            .map_or_else(|| "not booked".to_owned(), super::date_label),
         booked: s.booked,
         status: s.status,
         jobs: s.jobs,
@@ -703,7 +703,7 @@ mod tests {
             todo::NewTodo,
         },
         services::{need, part as part_svc},
-        test_support::{VehicleFixture, add_job, set_job_status, test_db},
+        test_support::{VehicleFixture, add_job, date, set_job_status, test_db},
     };
 
     async fn new_need(db: &DatabaseConnection, vehicle_id: i32, job_id: i32, name: &str) -> i32 {
@@ -802,7 +802,7 @@ mod tests {
             vehicle_id,
             need_id,
             OrderDetails {
-                purchase_date: Some(on.into()),
+                purchase_date: Some(date(on)),
                 ..Default::default()
             },
         )
@@ -838,7 +838,7 @@ mod tests {
             part_number: None,
             oe_part_number_replaced: None,
             seller: seller.map(Into::into),
-            purchase_date: date.map(Into::into),
+            purchase_date: date.map(crate::test_support::date),
             cost_cents: cost,
             cost_currency: None,
             status: "purchased".into(),
@@ -975,7 +975,7 @@ mod tests {
         order(&db, v, front_pads, "2026-11-14").await;
         let front_rotors = to_order_need(&db, v, job, "Front rotors", "Zimmermann rotors").await;
         order(&db, v, front_rotors, "2026-11-06").await;
-        need::mark_received(&db, v, front_rotors, Some("2026-11-09".into()))
+        need::mark_received(&db, v, front_rotors, Some(date("2026-11-09")))
             .await
             .unwrap();
         crate::services::todo::add(
@@ -1284,7 +1284,7 @@ mod tests {
         set_supplier(&db, v, shop, "shop").await;
         let received = to_order_need(&db, v, job, "Front pads", "Textar pads").await;
         order(&db, v, received, "2026-11-06").await;
-        need::mark_received(&db, v, received, Some("2026-11-09".into()))
+        need::mark_received(&db, v, received, Some(date("2026-11-09")))
             .await
             .unwrap();
         let installed = to_order_need(&db, v, job, "Front rotors", "Zimmermann rotors").await;
@@ -1409,7 +1409,7 @@ mod tests {
             NewPart {
                 name: "Pads".into(),
                 seller: Some("FCP Euro".into()),
-                purchase_date: Some("2026-11-06".into()),
+                purchase_date: Some(date("2026-11-06")),
                 cost_cents: Some(8_499),
                 order_ref: Some("12345".into()),
                 ..Default::default()
@@ -1519,7 +1519,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let mut active: job_need::ActiveModel = found.into();
-        active.decided_on = Set(Some(on.into()));
+        active.decided_on = Set(Some(date(on)));
         active.update(db).await.unwrap();
     }
 
@@ -1725,7 +1725,7 @@ mod tests {
             golf,
             NewAppointment {
                 purpose: "60k service".into(),
-                planned_date: Some("2026-12-01".into()),
+                planned_date: Some(date("2026-12-01")),
                 ..Default::default()
             },
         )

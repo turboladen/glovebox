@@ -216,7 +216,7 @@ mod tests {
     use crate::{
         inputs::service_record::NewServiceRecord,
         services::{schedule, service_record},
-        test_support::VehicleFixture,
+        test_support::{VehicleFixture, date},
     };
 
     async fn scalar(db: &DatabaseConnection, sql: &str) -> i32 {
@@ -401,7 +401,7 @@ mod tests {
             &db,
             v.id,
             NewServiceRecord {
-                service_date: "2026-01-01".into(),
+                service_date: date("2026-01-01"),
                 mileage: None,
                 description: Some("Oil change".into()),
                 parts_cost_cents: None,
@@ -607,14 +607,16 @@ mod tests {
     #[tokio::test]
     async fn migration_is_rerun_safe() {
         let db = crate::test_support::test_db().await;
-        // Forgetting the two newest versions makes `up` run the job-checklist
-        // migrations again over the finished schema.
-        forget_newest_migration(&db).await;
-        forget_newest_migration(&db).await;
+        // Forgetting every version after the seed makes `up` run each later
+        // migration again over the finished schema.
+        let all = Migrator::migrations().len();
+        for _ in 2..all {
+            forget_newest_migration(&db).await;
+        }
         Migrator::up(&db, None).await.unwrap();
         assert_eq!(
             scalar(&db, "SELECT COUNT(*) FROM seaql_migrations").await,
-            4
+            i32::try_from(all).unwrap()
         );
     }
 

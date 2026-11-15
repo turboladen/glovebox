@@ -69,7 +69,7 @@ impl GloveboxMcp {
         params: Parameters<LogMileageInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "log_mileage");
-        let (vehicle_id, input) = p.into_domain();
+        let (vehicle_id, input) = domain_input!(p.into_domain());
         domain_result(mileage::create(&*self.db, vehicle_id, input).await)
     }
 
@@ -145,7 +145,7 @@ impl GloveboxMcp {
         params: Parameters<AddVehicleInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "add_vehicle");
-        let input = p.into_domain();
+        let input = domain_input!(p.into_domain());
         let (decoded, vin_decode_error) = match input.vin.as_deref().map(str::trim) {
             Some(vin) if !vin.is_empty() => match vin_decode::decode_vin(vin).await {
                 Ok(d) => (Some(d), None),
@@ -178,7 +178,7 @@ impl GloveboxMcp {
         params: Parameters<UpdateVehicleInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "update_vehicle");
-        let (vehicle_id, input) = p.into_domain();
+        let (vehicle_id, input) = domain_input!(p.into_domain());
         domain_result(vehicle::update(&*self.db, vehicle_id, input).await)
     }
 

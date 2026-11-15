@@ -4,10 +4,14 @@
 //! A field typed `Option<Option<T>>` follows the convention in `corrections`:
 //! an absent key leaves the value alone, `null` clears it, and a value sets it.
 
-use glovebox_shared::inputs::{
-    appointment::{NewAppointment, StatusChange, UpdateAppointment},
-    need::{NewNeed, NewOption, OrderDetails, ReturnInput, UpdateNeed, UpdateOption},
-    todo::{NewTodo, UpdateTodo},
+use glovebox_shared::{
+    dates,
+    error::DomainResult,
+    inputs::{
+        appointment::{NewAppointment, StatusChange, UpdateAppointment},
+        need::{NewNeed, NewOption, OrderDetails, ReturnInput, UpdateNeed, UpdateOption},
+        todo::{NewTodo, UpdateTodo},
+    },
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -32,17 +36,17 @@ pub struct PlanAppointmentInput {
 }
 
 impl PlanAppointmentInput {
-    pub fn into_domain(self) -> (i32, NewAppointment) {
-        (
+    pub fn into_domain(self) -> DomainResult<(i32, NewAppointment)> {
+        Ok((
             self.vehicle_id,
             NewAppointment {
                 purpose: self.purpose,
                 shop_name: self.shop_name,
                 shop_id: None,
-                planned_date: self.planned_date,
+                planned_date: dates::parse_optional_date("planned_date", self.planned_date)?,
                 notes: self.notes,
             },
-        )
+        ))
     }
 }
 
@@ -91,24 +95,24 @@ pub struct UpdateAppointmentInput {
 }
 
 impl UpdateAppointmentInput {
-    pub fn into_domain(self) -> (i32, i32, UpdateAppointment, Option<StatusChange>) {
+    pub fn into_domain(self) -> DomainResult<(i32, i32, UpdateAppointment, Option<StatusChange>)> {
         let change = self.status.map(|s| match s {
             AppointmentStatus::Planning => StatusChange::Reopen,
             AppointmentStatus::Done => StatusChange::Close,
             AppointmentStatus::Cancelled => StatusChange::Cancel,
         });
-        (
+        Ok((
             self.vehicle_id,
             self.appointment_id,
             UpdateAppointment {
                 purpose: self.purpose,
                 shop_name: self.shop_name,
                 shop_id: None,
-                planned_date: self.planned_date,
+                planned_date: dates::parse_date_change("planned_date", self.planned_date)?,
                 notes: self.notes,
             },
             change,
-        )
+        ))
     }
 }
 
@@ -407,17 +411,17 @@ pub struct MarkNeedOrderedInput {
 }
 
 impl MarkNeedOrderedInput {
-    pub fn into_domain(self) -> (i32, i32, OrderDetails) {
-        (
+    pub fn into_domain(self) -> DomainResult<(i32, i32, OrderDetails)> {
+        Ok((
             self.vehicle_id,
             self.need_id,
             OrderDetails {
                 seller: self.seller,
-                purchase_date: self.purchase_date,
+                purchase_date: dates::parse_optional_date("purchase_date", self.purchase_date)?,
                 cost_cents: self.cost_cents,
                 order_ref: self.order_ref,
             },
-        )
+        ))
     }
 }
 

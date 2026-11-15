@@ -41,6 +41,17 @@ macro_rules! tool_input {
     };
 }
 
+/// Unwraps a `DomainResult` built from a tool's arguments, returning the
+/// refusal from the enclosing tool the way [`domain_error`] reports it.
+macro_rules! domain_input {
+    ($result:expr) => {
+        match $result {
+            Ok(v) => v,
+            Err(e) => return super::domain_error(e),
+        }
+    };
+}
+
 mod checklist;
 mod incidents;
 mod parts;

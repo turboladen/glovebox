@@ -15,7 +15,7 @@ pub struct Model {
     pub approach: Option<String>,
     pub chosen_option_id: Option<i32>,
     pub decision_reason: Option<String>,
-    pub decided_on: Option<String>,
+    pub decided_on: Option<chrono::NaiveDate>,
     pub part_id: Option<i32>,
     pub created_at: String,
     pub updated_at: String,

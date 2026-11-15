@@ -11,12 +11,23 @@ pub async fn test_db() -> DatabaseConnection {
     crate::db::connect_in_memory().await
 }
 
-/// The date `days` days before [`services::today`](crate::services::today),
-/// written `YYYY-MM-DD`. A test that judges a reminder against the current
-/// date dates its fixtures with this, so that it holds on whatever day it
-/// runs and agrees with the code under test about what "today" is.
-pub fn days_ago(days: i64) -> String {
-    crate::services::date_label(crate::services::today() - chrono::Duration::days(days))
+/// The date `days` days before [`services::today`](crate::services::today).
+/// A test that judges a reminder against the current date dates its fixtures
+/// with this, so that it holds on whatever day it runs and agrees with the
+/// code under test about what "today" is.
+pub fn days_ago(days: i64) -> chrono::NaiveDate {
+    crate::services::today() - chrono::Duration::days(days)
+}
+
+/// Reads a date literal such as `"2026-12-01"` or `"2026-12-01 08:30:00"` as
+/// whatever type the place it is written wants: a calendar date, an event
+/// time, or the text itself. Panics when the literal is not one.
+pub fn date<T>(literal: &str) -> T
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Debug,
+{
+    literal.parse().unwrap()
 }
 
 /// Creates a planned job titled `title` for `vehicle_id`, on
@@ -74,7 +85,10 @@ pub async fn set_decided_on(db: &DatabaseConnection, need_id: i32, date: &str) {
 
     use crate::entities::job_need;
     job_need::Entity::update_many()
-        .col_expr(job_need::Column::DecidedOn, Expr::value(date))
+        .col_expr(
+            job_need::Column::DecidedOn,
+            Expr::value(self::date::<chrono::NaiveDate>(date)),
+        )
         .filter(job_need::Column::Id.eq(need_id))
         .exec(db)
         .await
@@ -96,9 +110,9 @@ pub struct VehicleFixture {
     name: Option<String>,
     make: Option<String>,
     model_template_id: Option<i32>,
-    purchase_date: Option<String>,
+    purchase_date: Option<chrono::NaiveDate>,
     purchase_mileage: Option<i32>,
-    warranty_expires_on: Option<String>,
+    warranty_expires_on: Option<chrono::NaiveDate>,
     warranty_expires_miles: Option<i32>,
 }
 
@@ -128,8 +142,8 @@ impl VehicleFixture {
     }
 
     #[must_use]
-    pub fn purchase_date(mut self, v: &str) -> Self {
-        self.purchase_date = Some(v.into());
+    pub fn purchase_date(mut self, v: impl ToString) -> Self {
+        self.purchase_date = Some(date(&v.to_string()));
         self
     }
 
@@ -140,8 +154,8 @@ impl VehicleFixture {
     }
 
     #[must_use]
-    pub fn warranty_expires_on(mut self, v: &str) -> Self {
-        self.warranty_expires_on = Some(v.into());
+    pub fn warranty_expires_on(mut self, v: impl ToString) -> Self {
+        self.warranty_expires_on = Some(date(&v.to_string()));
         self
     }
 

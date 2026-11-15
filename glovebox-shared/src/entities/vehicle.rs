@@ -19,11 +19,11 @@ pub struct Model {
     pub vin: Option<String>,
     pub license_plate: Option<String>,
     pub color: Option<String>,
-    pub purchase_date: Option<String>,
+    pub purchase_date: Option<chrono::NaiveDate>,
     pub purchase_price_cents: Option<i32>,
     pub purchase_price_currency: Option<String>,
     pub purchase_mileage: Option<i32>,
-    pub sold_date: Option<String>,
+    pub sold_date: Option<chrono::NaiveDate>,
     pub sold_price_cents: Option<i32>,
     pub sold_price_currency: Option<String>,
     pub sold_mileage: Option<i32>,
@@ -31,7 +31,7 @@ pub struct Model {
     pub created_at: String,
     pub updated_at: String,
     pub archived_at: Option<String>,
-    pub warranty_expires_on: Option<String>,
+    pub warranty_expires_on: Option<chrono::NaiveDate>,
     pub warranty_expires_miles: Option<i32>,
 }
 

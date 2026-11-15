@@ -12,3 +12,6 @@ data/
 .beads-credential-key
 .beads.gate.lock
 .superpowers/
+# Brainstorming specs and task plans are working files. A decision that should
+# outlive the work is written as an ADR in docs/adr/.
+docs/superpowers/

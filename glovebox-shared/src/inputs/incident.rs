@@ -6,7 +6,7 @@ pub struct NewIncident {
     pub description: Option<String>,
     pub odometer: Option<i32>,
     /// Defaults to the current local date and time when omitted.
-    pub occurred_at: Option<String>,
+    pub occurred_at: Option<crate::dates::DayOrTime>,
     pub obd_codes: Option<String>,
     pub notes: Option<String>,
     pub fault: Option<String>,
@@ -59,7 +59,7 @@ pub struct UpdateIncident {
     pub title: Option<String>,
     pub description: Option<Option<String>>,
     pub odometer: Option<Option<i32>>,
-    pub occurred_at: Option<String>,
+    pub occurred_at: Option<crate::dates::DayOrTime>,
     pub obd_codes: Option<Option<String>>,
     pub resolved: Option<bool>,
     pub notes: Option<Option<String>>,
@@ -91,7 +91,7 @@ pub struct UpdateIncident {
 }
 
 pub struct NewFollowup {
-    pub occurred_at: String,
+    pub occurred_at: crate::dates::DayOrTime,
     pub contact_method: Option<String>,
     pub contact_with: Option<String>,
     pub summary: String,

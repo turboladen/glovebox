@@ -6,7 +6,9 @@
 //! surface doesn't expose are filled with `None`) — no business logic here.
 
 use glovebox_shared::{
+    dates,
     entities::vehicle,
+    error::DomainResult,
     inputs::{
         incident::NewIncident,
         mileage::NewMileageEntry,
@@ -166,14 +168,18 @@ impl LineItemInput {
 }
 
 impl RecordServiceInput {
-    pub fn into_domain(self) -> (i32, NewServiceRecord) {
+    pub fn into_domain(self) -> DomainResult<(i32, NewServiceRecord)> {
         let line_items = self
             .line_items
             .map(|items| items.into_iter().map(LineItemInput::into_domain).collect());
-        (
+        let parts = self
+            .parts
+            .map(|ps| ps.into_iter().map(InlinePartInput::into_domain).collect())
+            .transpose()?;
+        Ok((
             self.vehicle_id,
             NewServiceRecord {
-                service_date: self.service_date,
+                service_date: dates::parse_date("service_date", &self.service_date)?,
                 mileage: self.mileage,
                 description: self.description,
                 parts_cost_cents: self.parts_cost_cents,
@@ -195,14 +201,12 @@ impl RecordServiceInput {
                 recall_finding_ids: self.recall_finding_ids,
                 line_items,
                 invoice_ref: self.invoice_ref,
-                end_date: self.end_date,
+                end_date: dates::parse_optional_date("end_date", self.end_date)?,
                 performed_by: self.performed_by,
-                parts: self
-                    .parts
-                    .map(|ps| ps.into_iter().map(InlinePartInput::into_domain).collect()),
+                parts,
                 appointment_id: self.appointment_id,
             },
-        )
+        ))
     }
 }
 
@@ -268,22 +272,22 @@ pub struct GetIncidentInput {
 }
 
 impl LogIncidentInput {
-    pub fn into_domain(self) -> (i32, NewIncident) {
-        (
+    pub fn into_domain(self) -> DomainResult<(i32, NewIncident)> {
+        Ok((
             self.vehicle_id,
             NewIncident {
                 category: self.category.unwrap_or_else(|| "general".to_string()),
                 title: self.title,
                 description: self.description,
                 odometer: self.odometer,
-                occurred_at: self.occurred_at,
+                occurred_at: dates::parse_optional_day_or_time("occurred_at", self.occurred_at)?,
                 obd_codes: self.obd_codes,
                 notes: self.notes,
                 recurrence_of_id: self.recurrence_of_id,
                 noticed_during_service_id: self.noticed_during_service_id,
                 ..Default::default()
             },
-        )
+        ))
     }
 }
 
@@ -354,23 +358,26 @@ pub struct InlinePartInput {
 }
 
 impl InlinePartInput {
-    fn into_domain(self) -> NewPart {
-        NewPart {
+    fn into_domain(self) -> DomainResult<NewPart> {
+        Ok(NewPart {
             name: self.name,
             manufacturer: self.manufacturer,
             part_number: self.part_number,
             seller: self.seller,
-            purchase_date: self.purchase_date,
+            purchase_date: dates::parse_optional_date("purchase_date", self.purchase_date)?,
             cost_cents: self.cost_cents,
             supplied_by: self.supplied_by,
             location: self.location,
             notes: self.notes,
-            warranty_expires_on: self.warranty_expires_on,
+            warranty_expires_on: dates::parse_optional_date(
+                "warranty_expires_on",
+                self.warranty_expires_on,
+            )?,
             warranty_expires_miles: self.warranty_expires_miles,
             order_ref: self.order_ref,
             need_id: self.need_id,
             ..Default::default()
-        }
+        })
     }
 }
 
@@ -418,8 +425,8 @@ pub struct RecordPartInput {
 }
 
 impl RecordPartInput {
-    pub fn into_domain(self) -> (i32, NewPart) {
-        (
+    pub fn into_domain(self) -> DomainResult<(i32, NewPart)> {
+        Ok((
             self.vehicle_id,
             NewPart {
                 name: self.name,
@@ -427,24 +434,27 @@ impl RecordPartInput {
                 part_number: self.part_number,
                 oe_part_number_replaced: None,
                 seller: self.seller,
-                purchase_date: self.purchase_date,
+                purchase_date: dates::parse_optional_date("purchase_date", self.purchase_date)?,
                 cost_cents: self.cost_cents,
                 cost_currency: None,
                 manufacturer_url: None,
                 retailer_url: self.retailer_url,
                 status: self.status,
-                installed_date: self.installed_date,
+                installed_date: dates::parse_optional_date("installed_date", self.installed_date)?,
                 installed_odometer: self.installed_odometer,
                 installed_service_id: self.installed_service_id,
                 notes: self.notes,
                 location: self.location,
-                warranty_expires_on: self.warranty_expires_on,
+                warranty_expires_on: dates::parse_optional_date(
+                    "warranty_expires_on",
+                    self.warranty_expires_on,
+                )?,
                 warranty_expires_miles: self.warranty_expires_miles,
                 supplied_by: self.supplied_by,
                 order_ref: self.order_ref,
                 need_id: None,
             },
-        )
+        ))
     }
 }
 
@@ -485,8 +495,8 @@ pub struct PlanWorkInput {
 }
 
 impl PlanWorkInput {
-    pub fn into_domain(self) -> (i32, NewWorkItem) {
-        (
+    pub fn into_domain(self) -> DomainResult<(i32, NewWorkItem)> {
+        Ok((
             self.vehicle_id,
             NewWorkItem {
                 title: self.title,
@@ -495,11 +505,14 @@ impl PlanWorkInput {
                 research_finding_id: self.research_finding_id,
                 incident_id: self.incident_id,
                 est_cost_cents: self.est_cost_cents,
-                revisit_by_date: self.revisit_by_date,
+                revisit_by_date: dates::parse_optional_date(
+                    "revisit_by_date",
+                    self.revisit_by_date,
+                )?,
                 revisit_by_miles: self.revisit_by_miles,
                 appointment_id: self.appointment_id,
             },
-        )
+        ))
     }
 }
 
@@ -527,16 +540,16 @@ pub struct LogMileageInput {
 }
 
 impl LogMileageInput {
-    pub fn into_domain(self) -> (i32, NewMileageEntry) {
-        (
+    pub fn into_domain(self) -> DomainResult<(i32, NewMileageEntry)> {
+        Ok((
             self.vehicle_id,
             NewMileageEntry {
                 mileage: self.mileage,
-                recorded_at: self.recorded_at,
+                recorded_at: dates::parse_optional_day_or_time("recorded_at", self.recorded_at)?,
                 source: None,
                 notes: self.notes,
             },
-        )
+        ))
     }
 }
 

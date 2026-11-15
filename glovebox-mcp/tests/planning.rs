@@ -31,7 +31,7 @@ async fn whats_coming_flags_missing_history_and_missing_estimates() {
     let v = vehicle::create(
         &t.db,
         NewVehicle {
-            purchase_date: Some("2020-01-01".into()),
+            purchase_date: Some(glovebox_shared::test_support::date("2020-01-01")),
             ..new_vehicle("Daily")
         },
     )
@@ -73,7 +73,7 @@ async fn recall_and_schedule_item_plan_into_the_todo_list_and_forecast() {
     let v = vehicle::create(
         &t.db,
         NewVehicle {
-            purchase_date: Some("2020-01-01".into()),
+            purchase_date: Some(glovebox_shared::test_support::date("2020-01-01")),
             ..new_vehicle("Daily")
         },
     )

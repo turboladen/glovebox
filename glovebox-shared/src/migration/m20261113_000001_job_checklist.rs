@@ -294,7 +294,11 @@ mod tests {
     #[tokio::test]
     async fn rollback_is_refused_and_leaves_the_tables_usable() {
         let db = test_db().await;
-        let error = Migrator::down(&db, Some(2)).await.unwrap_err();
+        // Every migration from this one on is rolled back, newest first.
+        let through_this_one = u32::try_from(Migrator::migrations().len() - 2).unwrap();
+        let error = Migrator::down(&db, Some(through_this_one))
+            .await
+            .unwrap_err();
         assert!(
             error.to_string().contains("cannot be rolled back"),
             "{error}"

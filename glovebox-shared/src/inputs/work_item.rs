@@ -9,8 +9,8 @@ pub struct NewWorkItem {
     pub research_finding_id: Option<i32>,
     pub incident_id: Option<i32>,
     pub est_cost_cents: Option<i32>,
-    /// Date (`YYYY-MM-DD`) by which to look at this item again.
-    pub revisit_by_date: Option<String>,
+    /// Date by which to look at this item again.
+    pub revisit_by_date: Option<chrono::NaiveDate>,
     /// Odometer reading by which to look at this item again.
     pub revisit_by_miles: Option<i32>,
     /// The appointment the job goes on; it must be the vehicle's and still open.
@@ -25,7 +25,7 @@ pub struct UpdateWorkItem {
     pub research_finding_id: Option<Option<i32>>,
     pub incident_id: Option<Option<i32>>,
     pub est_cost_cents: Option<Option<i32>>,
-    pub revisit_by_date: Option<Option<String>>,
+    pub revisit_by_date: Option<Option<chrono::NaiveDate>>,
     pub revisit_by_miles: Option<Option<i32>>,
     /// One of `planned | done | dropped`.
     pub status: Option<String>,

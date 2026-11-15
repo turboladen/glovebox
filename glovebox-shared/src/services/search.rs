@@ -281,7 +281,7 @@ mod tests {
     use super::*;
     use crate::{
         entities,
-        test_support::{VehicleFixture, test_db},
+        test_support::{VehicleFixture, date, test_db},
     };
 
     async fn seed_vehicle(db: &impl ConnectionTrait, name: &str) -> i32 {
@@ -291,7 +291,7 @@ mod tests {
     async fn seed_service(db: &impl ConnectionTrait, vehicle_id: i32, notes: &str) -> i32 {
         entities::service_record::ActiveModel {
             vehicle_id: Set(vehicle_id),
-            service_date: Set("2026-01-15".into()),
+            service_date: Set(date("2026-01-15")),
             description: Set(Some("Front brake job".into())),
             notes: Set(Some(notes.into())),
             ..Default::default()
@@ -477,7 +477,7 @@ mod tests {
             &db,
             vid,
             crate::inputs::service_record::NewServiceRecord {
-                service_date: "2026-03-01".into(),
+                service_date: date("2026-03-01"),
                 line_items: Some(
                     words
                         .iter()
@@ -556,7 +556,7 @@ mod tests {
             category: Set("accident".into()),
             title: Set("rear-ended at a stoplight".into()),
             description: Set(Some("rear-ended at a stoplight".into())),
-            occurred_at: Set("2026-02-01".into()),
+            occurred_at: Set(date("2026-02-01")),
             ..Default::default()
         }
         .insert(&db)
@@ -564,7 +564,7 @@ mod tests {
         .unwrap();
         entities::incident_followup::ActiveModel {
             incident_id: Set(crash.id),
-            occurred_at: Set("2026-02-02".into()),
+            occurred_at: Set(date("2026-02-02")),
             summary: Set("Adjuster approved bumper repair".into()),
             ..Default::default()
         }
@@ -573,7 +573,7 @@ mod tests {
         .unwrap();
         let report = entities::research_report::ActiveModel {
             vehicle_id: Set(vid),
-            generated_at: Set("2026-02-03 00:00:00".into()),
+            generated_at: Set(date("2026-02-03 00:00:00")),
             ..Default::default()
         }
         .insert(&db)

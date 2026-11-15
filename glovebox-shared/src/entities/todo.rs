@@ -12,7 +12,7 @@ pub struct Model {
     pub appointment_id: Option<i32>,
     pub title: String,
     pub notes: Option<String>,
-    pub done_on: Option<String>,
+    pub done_on: Option<chrono::NaiveDate>,
     pub created_at: String,
     pub updated_at: String,
 }

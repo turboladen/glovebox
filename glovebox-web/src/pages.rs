@@ -422,7 +422,10 @@ async fn appointment_page(
         vehicle: car.name,
         purpose: summary.appointment.purpose.clone(),
         shop: summary.appointment.shop_name.clone(),
-        date: summary.appointment.planned_date.clone(),
+        date: summary
+            .appointment
+            .planned_date
+            .map(glovebox_shared::services::date_label),
         status_class: summary.status,
         status_text: sentence_case(summary.status),
         needs_open: Count::new(summary.needs_open, "need open", "needs open"),

@@ -29,7 +29,7 @@ impl GloveboxMcp {
         params: Parameters<LogIncidentInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "log_incident");
-        let (vehicle_id, input) = p.into_domain();
+        let (vehicle_id, input) = domain_input!(p.into_domain());
         domain_result(incident::create(&*self.db, vehicle_id, input).await)
     }
 
@@ -82,7 +82,7 @@ impl GloveboxMcp {
         params: Parameters<UpdateIncidentInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "update_incident");
-        let (vehicle_id, incident_id, input) = p.into_domain();
+        let (vehicle_id, incident_id, input) = domain_input!(p.into_domain());
         domain_result(incident::update(&*self.db, vehicle_id, incident_id, input).await)
     }
 
@@ -98,7 +98,7 @@ impl GloveboxMcp {
         params: Parameters<AddIncidentFollowupInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "add_incident_followup");
-        let (vehicle_id, incident_id, input) = p.into_domain();
+        let (vehicle_id, incident_id, input) = domain_input!(p.into_domain());
         domain_result(incident::create_followup(&*self.db, vehicle_id, incident_id, input).await)
     }
 

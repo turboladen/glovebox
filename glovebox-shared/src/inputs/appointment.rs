@@ -6,8 +6,8 @@ pub struct NewAppointment {
     pub shop_name: Option<String>,
     /// A shop from the shop directory.
     pub shop_id: Option<i32>,
-    /// The planned date (`YYYY-MM-DD`); an appointment without one is not booked.
-    pub planned_date: Option<String>,
+    /// The planned date; an appointment without one is not booked.
+    pub planned_date: Option<chrono::NaiveDate>,
     pub notes: Option<String>,
 }
 
@@ -18,7 +18,7 @@ pub struct UpdateAppointment {
     pub purpose: Option<String>,
     pub shop_name: Option<Option<String>>,
     pub shop_id: Option<Option<i32>>,
-    pub planned_date: Option<Option<String>>,
+    pub planned_date: Option<Option<chrono::NaiveDate>>,
     pub notes: Option<Option<String>>,
 }
 

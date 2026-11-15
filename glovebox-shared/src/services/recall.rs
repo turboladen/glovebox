@@ -472,7 +472,7 @@ mod tests {
 
     fn service(date: &str) -> NewServiceRecord {
         NewServiceRecord {
-            service_date: date.into(),
+            service_date: crate::test_support::date(date),
             ..Default::default()
         }
     }
@@ -548,7 +548,10 @@ mod tests {
         let svc = record_service_with_recalls(&db, v, "2025-03-25", vec![r.finding_id]).await;
         let r = &list(&db, v).await.unwrap()[0];
         assert_eq!(r.status, "done");
-        assert_eq!(r.done_service.as_ref().unwrap().service_date, "2025-03-25");
+        assert_eq!(
+            r.done_service.as_ref().unwrap().service_date,
+            crate::test_support::date("2025-03-25")
+        );
         assert_eq!(r.done_service.as_ref().unwrap().id, svc.record.id);
         assert_eq!(svc.performed_recalls.len(), 1);
         assert_eq!(

@@ -55,7 +55,7 @@ MCP server, and its `--open` flag opens the browser.
 ### Workspace layout
 
 - **`glovebox-shared/`** (lib crate `glovebox_shared`) — the transport-agnostic domain:
-  `src/{db.rs,env.rs,seed.rs,entities,migration,services,inputs,error.rs,test_support.rs}`. All SQL, validation
+  `src/{db.rs,env.rs,dates.rs,seed.rs,entities,migration,services,inputs,error.rs,test_support.rs}`. All SQL, validation
   and business logic live here. It never depends on axum or rmcp.
 - **`glovebox-mcp/`** (lib crate `glovebox_mcp` plus the `glovebox-mcp` binary) — the thin MCP
   surface. Every tool body is argument struct → shared-service call → serialize, with one
@@ -117,9 +117,10 @@ with the `DomainResult<T>` alias.
 **Migrations** (`migration/`): one squashed schema migration (`m20261112_000001_initial_schema`),
 one seed migration (`m20261112_000002_seed_vw_mqb`: the VW MQB platform, the Golf GTI and
 Alltrack templates and their schedule items), the job checklist migration
-(`m20261113_000001_job_checklist`: appointments, needs, options and to-dos, additive only) and
-`m20261113_000002_option_choice_history` (an option's `chosen_reason` and `chosen_on`). They run on
-startup.
+(`m20261113_000001_job_checklist`: appointments, needs, options and to-dos, additive only),
+`m20261113_000002_option_choice_history` (an option's `chosen_reason` and `chosen_on`) and
+`m20261114_000001_typed_dates`, which refuses to finish while a date column holds a value that is
+not a real `YYYY-MM-DD`, because such a row could not be read. They run on startup.
 
 **Test harness** (`test_support.rs`): `test_db()` is an in-memory SQLite database with migrations
 applied. It is compiled under `#[cfg(any(test, feature = "test-support"))]`; `glovebox-mcp` uses it
@@ -311,10 +312,19 @@ opens a form and the button that submits it carry the same words. Every date is 
 ### General
 
 - **Issue tracking**: Use `bd` (beads), never markdown TODOs.
+- **Design decisions**: a design or architecture decision is recorded as an ADR in `docs/adr/`
+  (`NNNN-short-name.md`: status, date, context, decision, alternatives, consequences). Brainstorming
+  specs and task plans under `docs/superpowers/` are working files that git ignores, so new
+  text points at the ADR and never at one of them.
 - **Currency**: Stored as integer cents (`i32`). Tool inputs and outputs are cents. Use integer
   division for formatting, not `as f64 / 100.0`.
-- **DB datetimes**: `String` at the SeaORM boundary (SQLite TEXT). Dates are `YYYY-MM-DD`.
-- **Migrations**: new migrations go after `m20261113_000002_option_choice_history`; the `new-migration` skill
+- **Dates**: a calendar date is `chrono::NaiveDate` and an event time (`incidents.occurred_at`,
+  `incident_followups.occurred_at`, `mileage_log.recorded_at`) is `dates::DayOrTime`, a day or a
+  local date and time. Both are stored as SQLite TEXT (`YYYY-MM-DD`, `YYYY-MM-DD HH:MM:SS`). Text
+  the owner types is read only by `dates::parse_date` and `dates::parse_day_or_time`, which the
+  MCP `into_domain` conversions and the web forms call, so shared inputs and services never see a
+  date as a string. `created_at` and `updated_at` are `String` (`YYYY-MM-DD HH:MM:SS`, UTC).
+- **Migrations**: new migrations go after `m20261114_000001_typed_dates`; the `new-migration` skill
   has the templates. Use `Expr::cust()` for expressions inside builder queries; raw
   `execute_unprepared` only where no builder form exists (FTS5 DDL, cross-table copies).
 - **Migrations are not transactional on SQLite** (sea-orm-migration only wraps Postgres), so write
