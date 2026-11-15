@@ -344,14 +344,19 @@ opens a form and the button that submits it carry the same words. Every date is 
   seconds (`2026-11-14T12:00:00+00:00`) and printed in tool output as `2026-11-14T12:00:00Z`.
   `docs/adr/0001-typed-dates-and-timestamps.md` records why.
 - **Vocabularies**: a value from a fixed list is an enum made by `vocabulary!` (`vocab.rs`) in
-  the entity module that owns its column, such as `incident::IncidentCategory` and
-  `incident_service_link::LinkRole`. The enum is stored, serialized and printed as one text. A
-  tool argument names the enum, so its schema lists the values, and a web form reads text through
-  `vocab::parse`. Explain a variant in a `//` comment or in the argument's description, because a
-  doc comment on a variant turns the schema's `enum` list into `oneOf`. Adding
-  a value is one line in the macro call. Removing or renaming one needs a migration that rewrites
-  the rows, placed after `m20261115_000001_vocabulary_values`, whose lists stay as written.
-  The lists still held as `VALID_*` strings in `services/` are tracked in glovebox-nd5i.
+  the entity module that owns its column, such as `work_item::JobStatus` and
+  `service_record::Payer`. The enum is stored, serialized and printed as one text; `Payer`,
+  `Performer` and `Supplier` name the stored text `self` as the variant `Owner`. A tool argument
+  names the enum, so its schema lists the values, and a web form reads text through
+  `vocab::parse`. Explain a variant in a `//` comment or in the argument's description: the
+  macro refuses a doc comment on a variant, because one turns the schema's `enum` list into
+  `oneOf`. A query filter takes a variant (`Column::Status.eq(JobStatus::Planned)`), never a
+  string literal. Adding a value is one line in the macro call, and every program must be
+  rebuilt with it, because an older binary cannot read a row that holds the new value. Removing
+  or renaming one needs a migration that rewrites the rows, placed after
+  `m20261115_000001_vocabulary_values`, whose lists stay as written.
+  `services::recall::RecallStatus` is the one enum no column stores: `set_recall_status` takes
+  it, and the recall service maps it to and from the stored finding status.
   `docs/adr/0004-typed-vocabularies.md` records why.
 - **Migrations**: new migrations go after `m20261115_000001_vocabulary_values`; the
   `new-migration` skill has the templates. Use `Expr::cust()` for expressions inside builder queries; raw

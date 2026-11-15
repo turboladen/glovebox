@@ -68,6 +68,18 @@ async fn a_recall_named_on_a_service_reads_as_done_with_that_service() {
         json!({ "vehicle_id": v.id, "finding_id": 9999, "status": "done" }),
     )
     .await;
+
+    // `planned` is read from a planned job and cannot be set.
+    let err = t
+        .call_err(
+            "set_recall_status",
+            json!({ "vehicle_id": v.id, "finding_id": other, "status": "planned" }),
+        )
+        .await;
+    assert!(
+        err.contains("status: unknown variant") && err.contains("`not_applicable`"),
+        "got: {err}"
+    );
 }
 
 #[tokio::test]

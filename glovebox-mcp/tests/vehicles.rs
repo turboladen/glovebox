@@ -451,6 +451,7 @@ async fn a_vocabulary_argument_lists_its_values_in_the_schema() {
     let job_statuses = json!(["planned", "done", "dropped"]);
     let approaches = json!(["replacement", "upgrade"]);
     let fitments = json!(["confirmed", "unconfirmed", "does_not_fit"]);
+    let recall_statuses = json!(["open", "done", "not_applicable"]);
     // `[]` in a path steps into the items of a list.
     for (tool, path, values) in [
         ("log_incident", "category", &categories),
@@ -476,6 +477,7 @@ async fn a_vocabulary_argument_lists_its_values_in_the_schema() {
         ("update_need", "approach", &approaches),
         ("add_need_option", "fitment", &fitments),
         ("update_need_option", "fitment", &fitments),
+        ("set_recall_status", "status", &recall_statuses),
     ] {
         let input = tools
             .iter()

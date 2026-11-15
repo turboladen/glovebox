@@ -17,10 +17,46 @@ use crate::{
     },
     error::{DomainError, DomainResult},
     services::incident::ServiceRef,
+    vocab::Vocabulary,
 };
 
-/// The statuses a caller can set with [`set_status`].
-pub const VALID_STATUSES: [&str; 3] = ["open", "done", "not_applicable"];
+crate::vocab::vocabulary! {
+    /// The statuses a caller can set with [`set_status`].
+    // A recall also reads `planned`, which comes from a planned job and is
+    // never set. No column stores these texts, so a filter on a finding's
+    // status takes `stored()`, never the variant.
+    pub enum RecallStatus {
+        Open => "open",
+        Done => "done",
+        NotApplicable => "not_applicable",
+    }
+}
+
+impl RecallStatus {
+    /// The stored finding status that makes a recall with no service read as
+    /// this status.
+    fn stored(self) -> &'static str {
+        match self {
+            RecallStatus::Open => "new",
+            RecallStatus::Done => "completed",
+            RecallStatus::NotApplicable => "dismissed",
+        }
+    }
+
+    /// The status a recall with no service reads from a stored finding
+    /// status. Any text `stored` does not give reads as open.
+    fn from_stored(text: &str) -> Self {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|status| status.stored() == text)
+            .unwrap_or(RecallStatus::Open)
+    }
+}
+
+/// The status a recall reads while a planned job addresses it and nothing
+/// has marked it done or not applicable. No caller can set it.
+pub(crate) const PLANNED: &str = "planned";
 
 /// A recall as the owner sees it.
 #[derive(Debug, Serialize)]
@@ -157,14 +193,15 @@ async fn with_status(
                 .map(|s| ServiceRef::from((*s).clone()));
             let planned_work_item_id = planned.get(&f.id).copied();
             let work_item_id = planned_work_item_id.or_else(|| completed.get(&f.id).copied());
-            let status = if done_service.is_some() || f.status == "completed" {
-                "done"
-            } else if f.status == "dismissed" {
-                "not_applicable"
-            } else if planned_work_item_id.is_some() {
-                "planned"
+            let set = if done_service.is_some() {
+                RecallStatus::Done
             } else {
-                "open"
+                RecallStatus::from_stored(&f.status)
+            };
+            let status = if set == RecallStatus::Open && planned_work_item_id.is_some() {
+                PLANNED
+            } else {
+                set.as_str()
             };
             RecallWithStatus {
                 finding_id: f.id,
@@ -211,17 +248,6 @@ pub async fn list_for_vehicle(
     list(db, vehicle_id).await
 }
 
-/// The stored finding status that makes a recall with no service read as
-/// `status`, or `None` for a status a caller cannot set.
-fn stored_status(status: &str) -> Option<&'static str> {
-    match status {
-        "open" => Some("new"),
-        "done" => Some("completed"),
-        "not_applicable" => Some("dismissed"),
-        _ => None,
-    }
-}
-
 /// Sets a recall to `open`, `done` or `not_applicable` without a service.
 ///
 /// A recall linked to a service is `done` for as long as the link exists, so
@@ -230,19 +256,13 @@ pub async fn set_status(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     finding_id: i32,
-    status: &str,
+    status: RecallStatus,
 ) -> DomainResult<RecallWithStatus> {
-    let Some(stored) = stored_status(status) else {
-        return Err(DomainError::BadRequest(format!(
-            "Invalid status '{status}'. Must be one of: {}",
-            VALID_STATUSES.join(", ")
-        )));
-    };
     let finding = require_recalls(db, vehicle_id, &[finding_id])
         .await?
         .remove(0);
 
-    if status != "done" {
+    if status != RecallStatus::Done {
         let linked = service_recall_link::Entity::find()
             .filter(service_recall_link::Column::ResearchFindingId.eq(finding_id))
             .count(db)
@@ -256,7 +276,7 @@ pub async fn set_status(
     }
 
     let mut active: research_finding::ActiveModel = finding.into();
-    active.status = Set(stored.to_owned());
+    active.status = Set(status.stored().to_owned());
     active.updated_at = Set(super::now());
     let updated = active.update(db).await?;
     Ok(with_status(db, vec![updated]).await?.remove(0))
@@ -317,7 +337,7 @@ pub(crate) async fn link_service(
 pub enum RecallsOnDelete {
     /// Each recall reads `open` again, unless another service also performed it.
     Reopen,
-    /// Each recall reads `done` with no service, as `recall::set_status(.., "done")` stores it.
+    /// Each recall reads `done` with no service, as `recall::set_status` stores `done`.
     KeepDone,
 }
 
@@ -343,13 +363,12 @@ pub(crate) async fn release_from_deleted_service(
         return Ok(out);
     }
     let shown = match choice {
-        RecallsOnDelete::Reopen => "open",
-        RecallsOnDelete::KeepDone => "done",
+        RecallsOnDelete::Reopen => RecallStatus::Open,
+        RecallsOnDelete::KeepDone => RecallStatus::Done,
     };
-    let stored = stored_status(shown).expect("open and done are settable statuses");
     research_finding::Entity::update_many()
         .set(research_finding::ActiveModel {
-            status: Set(stored.to_owned()),
+            status: Set(shown.stored().to_owned()),
             updated_at: Set(super::now()),
             ..Default::default()
         })
@@ -367,7 +386,7 @@ pub(crate) async fn release_from_deleted_service(
     let done: std::collections::HashSet<i32> = with_status(db, findings)
         .await?
         .into_iter()
-        .filter(|r| r.status == "done")
+        .filter(|r| r.status == RecallStatus::Done.as_str())
         .map(|r| r.finding_id)
         .collect();
     (out.still_done_elsewhere, out.reopened) =
@@ -573,7 +592,7 @@ mod tests {
         let v = seed_vehicle(&db).await;
         let found = [recall_info("24V110000", "Pump")];
         let first = research::record_recalls(&db, v, &found).await.unwrap();
-        set_status(&db, v, first.recalls[0].finding_id, "done")
+        set_status(&db, v, first.recalls[0].finding_id, RecallStatus::Done)
             .await
             .unwrap();
 
@@ -589,15 +608,26 @@ mod tests {
         let v = seed_vehicle(&db).await;
         let id = seed_recall(&db, v, "24V110000").await;
         assert_eq!(
-            set_status(&db, v, id, "not_applicable")
+            set_status(&db, v, id, RecallStatus::NotApplicable)
                 .await
                 .unwrap()
                 .status,
             "not_applicable"
         );
-        assert_eq!(set_status(&db, v, id, "done").await.unwrap().status, "done");
-        assert_eq!(set_status(&db, v, id, "open").await.unwrap().status, "open");
-        assert!(set_status(&db, v, id, "closed").await.is_err());
+        assert_eq!(
+            set_status(&db, v, id, RecallStatus::Done)
+                .await
+                .unwrap()
+                .status,
+            "done"
+        );
+        assert_eq!(
+            set_status(&db, v, id, RecallStatus::Open)
+                .await
+                .unwrap()
+                .status,
+            "open"
+        );
     }
 
     #[tokio::test]
@@ -606,7 +636,7 @@ mod tests {
         let v = seed_vehicle(&db).await;
         let id = seed_recall(&db, v, "24V110000").await;
         record_service_with_recalls(&db, v, "2025-03-25", vec![id]).await;
-        for status in ["open", "not_applicable"] {
+        for status in [RecallStatus::Open, RecallStatus::NotApplicable] {
             let err = set_status(&db, v, id, status).await.unwrap_err();
             assert!(
                 matches!(&err, DomainError::BadRequest(m) if m.contains("linked to a service")),
@@ -637,9 +667,13 @@ mod tests {
         .unwrap()
         .id;
 
-        let missing = set_status(&db, v, 9999, "done").await.unwrap_err();
+        let missing = set_status(&db, v, 9999, RecallStatus::Done)
+            .await
+            .unwrap_err();
         for id in [foreign, note] {
-            let err = set_status(&db, v, id, "done").await.unwrap_err();
+            let err = set_status(&db, v, id, RecallStatus::Done)
+                .await
+                .unwrap_err();
             assert!(matches!(err, DomainError::NotFound(_)));
             assert_eq!(
                 err.to_string().replace(&id.to_string(), "N"),
@@ -786,6 +820,18 @@ mod tests {
                 .await
                 .unwrap(),
             1
+        );
+    }
+
+    #[test]
+    fn a_stored_status_reads_back_as_the_status_that_wrote_it() {
+        for status in RecallStatus::ALL.iter().copied() {
+            assert_eq!(RecallStatus::from_stored(status.stored()), status);
+        }
+        // A finding status that no recall status writes reads as open.
+        assert_eq!(
+            RecallStatus::from_stored("acknowledged"),
+            RecallStatus::Open
         );
     }
 

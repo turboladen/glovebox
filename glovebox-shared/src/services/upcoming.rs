@@ -109,7 +109,7 @@ pub(crate) async fn open_recalls(
     Ok(recall::list(db, vehicle_id)
         .await?
         .into_iter()
-        .filter(|r| r.status == "open" || r.status == "planned")
+        .filter(|r| r.status == recall::RecallStatus::Open.as_str() || r.status == recall::PLANNED)
         .collect())
 }
 
@@ -321,7 +321,7 @@ mod tests {
             .await
             .unwrap()
             .recalls;
-        recall::set_status(&db, v, recalls[1].finding_id, "done")
+        recall::set_status(&db, v, recalls[1].finding_id, recall::RecallStatus::Done)
             .await
             .unwrap();
 

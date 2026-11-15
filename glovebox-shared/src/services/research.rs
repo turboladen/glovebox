@@ -395,7 +395,7 @@ mod tests {
             .await
             .unwrap();
         let id = first.recalls[0].finding_id;
-        recall::set_status(&db, vid, id, "not_applicable")
+        recall::set_status(&db, vid, id, recall::RecallStatus::NotApplicable)
             .await
             .unwrap();
 

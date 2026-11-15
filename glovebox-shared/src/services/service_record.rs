@@ -3134,7 +3134,7 @@ mod tests {
         let v = seed_vehicle(&db).await;
         let finding_id = seed_recall(&db, v, "24V999").await;
         let svc = service_with_recall(&db, v, finding_id).await;
-        crate::services::recall::set_status(&db, v, finding_id, "done")
+        recall::set_status(&db, v, finding_id, recall::RecallStatus::Done)
             .await
             .unwrap();
 
