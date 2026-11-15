@@ -134,7 +134,10 @@ async fn every_page_names_its_environment_and_an_overriding_file() {
     let (_, live_body) = page(app(db().await, "live"), get("/")).await;
     let (_, file_body) = page(app_with_file(db().await, "test", "glovebox.db"), get("/")).await;
 
-    assert!(test_body.contains(r#"<span class="env""#), "{test_body}");
+    assert!(
+        test_body.contains(r#"<span class="pill pill--env""#),
+        "{test_body}"
+    );
     assert!(test_body.contains(">test</span>"), "{test_body}");
     assert!(live_body.contains(">live</span>"), "{live_body}");
     assert!(
@@ -254,4 +257,22 @@ async fn font_files_are_served_as_woff2() {
         );
         assert!(body.starts_with(b"wOF2"), "{path}");
     }
+}
+
+#[tokio::test]
+async fn every_page_loads_the_bundled_typeface_and_labels_the_database() {
+    let (_, body) = page(app(db().await, "live"), get("/")).await;
+    assert!(
+        body.contains(r#"url("/assets/plex-sans-400.woff2")"#),
+        "{body}"
+    );
+    assert!(
+        body.contains(r#"url("/assets/plex-sans-600.woff2")"#),
+        "{body}"
+    );
+    assert!(
+        body.contains(r#"<span class="l">Database </span><span class="pill pill--env""#),
+        "{body}"
+    );
+    assert!(body.contains(r#"<span class="l">Today </span>"#), "{body}");
 }
