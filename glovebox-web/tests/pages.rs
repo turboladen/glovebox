@@ -1,15 +1,15 @@
 mod common;
 
 use axum::{body::Body, http::StatusCode};
-use common::{app, app_with_file, db, get, page, request, send};
+use common::{app, app_with_file, db, get, page, request, send, send_bytes};
 use glovebox_shared::{
     inputs::{appointment::NewAppointment, need::NewNeed, todo::NewTodo, work_item::NewWorkItem},
     services::{appointment, need, todo, work_item},
     test_support::VehicleFixture,
 };
 
-const CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri \
-                   'none'; frame-ancestors 'none'";
+const CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; form-action \
+                   'self'; base-uri 'none'; frame-ancestors 'none'";
 
 #[tokio::test]
 async fn home_lists_open_appointments_and_unscheduled_jobs() {
@@ -238,5 +238,20 @@ async fn cross_site_fetch_metadata_post_is_403() {
             .unwrap();
         let (status, _) = page(app(db().await, "live"), req).await;
         assert_ne!(status, StatusCode::FORBIDDEN, "{site}");
+    }
+}
+
+#[tokio::test]
+async fn font_files_are_served_as_woff2() {
+    for path in ["/assets/plex-sans-400.woff2", "/assets/plex-sans-600.woff2"] {
+        let (res, body) = send_bytes(app(db().await, "live"), get(path)).await;
+        assert_eq!(res.status(), StatusCode::OK, "{path}");
+        assert_eq!(res.headers()["content-type"], "font/woff2", "{path}");
+        assert_eq!(
+            res.headers()["cache-control"],
+            "public, max-age=604800",
+            "{path}"
+        );
+        assert!(body.starts_with(b"wOF2"), "{path}");
     }
 }

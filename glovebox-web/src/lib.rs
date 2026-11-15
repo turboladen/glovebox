@@ -2,6 +2,7 @@
 //! the MCP server uses.
 
 mod actions;
+mod assets;
 mod guard;
 mod pages;
 mod view;
@@ -74,6 +75,8 @@ pub fn router(state: AppState) -> Router {
             "/vehicles/{vid}/todos/{id}/delete",
             post(actions::post_todo_delete),
         )
+        .route("/assets/plex-sans-400.woff2", get(assets::regular))
+        .route("/assets/plex-sans-600.woff2", get(assets::semibold))
         .fallback(pages::not_found)
         .layer(middleware::from_fn(guard::same_origin_only))
         .layer(middleware::map_response(guard::content_security_policy))

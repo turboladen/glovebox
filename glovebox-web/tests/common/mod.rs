@@ -66,6 +66,14 @@ pub async fn send(app: Router, req: Request<Body>) -> (Response<Body>, String) {
     (Response::from_parts(parts, Body::empty()), text)
 }
 
+/// Sends `req` through `app` and returns the whole response with its body as bytes.
+pub async fn send_bytes(app: Router, req: Request<Body>) -> (Response<Body>, Vec<u8>) {
+    let res = app.oneshot(req).await.unwrap();
+    let (parts, body) = res.into_parts();
+    let bytes = body.collect().await.unwrap().to_bytes();
+    (Response::from_parts(parts, Body::empty()), bytes.to_vec())
+}
+
 /// Sends `req` through `app` and returns the status and body.
 pub async fn page(app: Router, req: Request<Body>) -> (StatusCode, String) {
     let (res, body) = send(app, req).await;
