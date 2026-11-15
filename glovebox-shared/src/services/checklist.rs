@@ -611,6 +611,14 @@ pub struct HomeAppointment {
     pub when: String,
     /// Holds a statement such as `3 needs open · 2 to-dos open`.
     pub counts: String,
+    /// Holds the appointment's status as `appointment::summary` derives it.
+    pub status: &'static str,
+    /// Counts the jobs on the appointment.
+    pub jobs: usize,
+    /// Counts the needs that are still open.
+    pub needs_open: usize,
+    /// Counts the to-dos that are still open.
+    pub todos_open: usize,
 }
 
 /// Describes an unscheduled job, with its open needs written out as a statement.
@@ -620,6 +628,8 @@ pub struct HomeJob {
     pub title: String,
     /// Holds a statement such as `2 needs open`.
     pub counts: String,
+    /// Counts the needs that are still open.
+    pub needs_open: usize,
 }
 
 /// Writes `n` followed by the singular or plural noun, such as `1 need` or `2 needs`.
@@ -646,11 +656,13 @@ pub async fn home(db: &impl ConnectionTrait) -> DomainResult<Vec<VehicleHome>> {
     let mut appointments = appointment::open_by_vehicle(db, &ids).await?;
     let mut jobs: HashMap<i32, Vec<HomeJob>> = HashMap::new();
     for view in unscheduled_jobs(db, &ids).await? {
-        let counts = format!("{} open", count_of(view.open_needs(), "need", "needs"));
+        let needs_open = view.open_needs();
+        let counts = format!("{} open", count_of(needs_open, "need", "needs"));
         jobs.entry(view.job.vehicle_id).or_default().push(HomeJob {
             id: view.job.id,
             title: view.job.title,
             counts,
+            needs_open,
         });
     }
     let mut todos: HashMap<i32, Vec<todo::Model>> = HashMap::new();
@@ -687,6 +699,10 @@ fn home_appointment(s: AppointmentSummary) -> HomeAppointment {
             count_of(s.needs_open, "need", "needs"),
             count_of(s.todos_open, "to-do", "to-dos")
         ),
+        status: s.status,
+        jobs: s.jobs,
+        needs_open: s.needs_open,
+        todos_open: s.todos_open,
     }
 }
 
@@ -1799,6 +1815,16 @@ mod tests {
                 ),
             ]
         );
+        let numbers: Vec<(&str, usize, usize, usize)> = g
+            .appointments
+            .iter()
+            .map(|a| (a.status, a.jobs, a.needs_open, a.todos_open))
+            .collect();
+        assert_eq!(numbers[0].2, 2);
+        assert_eq!(numbers[0].3, 1);
+        assert_eq!((numbers[1].2, numbers[1].3), (0, 0));
+        assert!(numbers.iter().all(|n| !n.0.is_empty()));
+        assert_eq!(g.unscheduled_jobs[0].needs_open, 1);
         let jobs: Vec<(&str, &str)> = g
             .unscheduled_jobs
             .iter()

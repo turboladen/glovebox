@@ -256,10 +256,15 @@
   .step--todo > .drawer, .step--todo > .drawer[open] { grid-column: 2 / -1; }
   .notice { padding-top: 1rem; }
   .appt > p { margin-top: 0.75rem; }
-  .step--home { grid-template-columns: minmax(0, 1.4fr) 10rem minmax(0, 1fr) minmax(0, 1fr); }
-  .step--home a { text-underline-offset: 0.2em; }
+  /* Home rows: appointments and unscheduled jobs share one set of columns. */
+  .cols--home, .row--home { grid-template-columns: minmax(0, 1fr) 8rem 8rem minmax(0, 14rem) 4rem 7rem 7rem; }
+  .cols--home { border-bottom: 1px solid var(--rule); }
+  .row--home a { text-underline-offset: 0.2em; }
+  .n { font-weight: 600; }
+  .n--todo { padding: 0 0.45rem; border-radius: 3px; background: var(--accent); color: var(--on-accent); }
   @media (max-width: 68rem) {
-    .step--home { grid-template-columns: minmax(0, 1fr); }
+    .row--home { grid-template-columns: 7rem minmax(0, 1fr); }
+    .row--home > span:empty { display: none; }
     .step > .drawer--end:not([open]) { justify-self: start; }
     .row > .key { display: block; }
     .row > .key::before { content: none; }

@@ -15,17 +15,21 @@
   <h2>{{ v.vehicle.name }}</h2>
 
   <section class="sheet">
-    <div class="sheet-head"><h3>Appointments</h3></div>
+    <div class="sheet-head"><h3>Appointments</h3><span class="n">{{ v.appointments.len() }}</span></div>
     {% if v.appointments.is_empty() %}
     <p class="empty lone">No open appointments.</p>
     {% else %}
-    <ul>
+    <div class="cols cols--home" aria-hidden="true"><span>Appointment</span><span>Status</span><span>Date</span><span>Shop</span><span class="num">Jobs</span><span class="num">Needs open</span><span class="num">To-dos open</span></div>
+    <ul class="needs">
       {% for a in v.appointments %}
-      <li class="step step--home">
-        <span class="key"><a href="/vehicles/{{ v.vehicle.id }}/appointments/{{ a.id }}">{{ a.purpose }}</a></span>
-        <span><span class="l">Date </span>{{ a.when }}</span>
-        <span>{% if let Some(shop) = a.shop_name %}<span class="l">Shop </span>{{ shop }}{% endif %}</span>
-        <span>{{ a.counts }}</span>
+      <li class="row row--home">
+        <span class="key" data-l="Appointment"><a href="/vehicles/{{ v.vehicle.id }}/appointments/{{ a.id }}">{{ a.purpose }}</a></span>
+        <span data-l="Status"><span class="pill pill--{{ a.status }}">{{ a.status|capitalize }}</span></span>
+        {% if a.when == "not booked" %}<span class="empty cap" data-l="Date">{{ a.when }}</span>{% else %}<span data-l="Date">{{ a.when }}</span>{% endif %}
+        <span data-l="Shop">{% if let Some(shop) = a.shop_name %}{{ shop }}{% endif %}</span>
+        <span class="num" data-l="Jobs">{{ a.jobs }}</span>
+        <span class="num" data-l="Needs open"><span class="n{% if a.needs_open > 0 %} n--todo{% endif %}">{{ a.needs_open }}</span></span>
+        <span class="num" data-l="To-dos open"><span class="n{% if a.todos_open > 0 %} n--todo{% endif %}">{{ a.todos_open }}</span></span>
       </li>
       {% endfor %}
     </ul>
@@ -33,17 +37,18 @@
   </section>
 
   <section class="sheet">
-    <div class="sheet-head"><h3>Not scheduled yet</h3></div>
+    <div class="sheet-head"><h3>Not scheduled yet</h3><span class="n">{{ v.unscheduled_jobs.len() }}</span></div>
     {% if v.unscheduled_jobs.is_empty() %}
     <p class="empty lone">No jobs waiting for an appointment.</p>
     {% else %}
-    <ul>
+    <div class="cols cols--home" aria-hidden="true"><span>Job</span><span></span><span></span><span></span><span></span><span class="num">Needs open</span><span></span></div>
+    <ul class="needs">
       {% for j in v.unscheduled_jobs %}
-      <li class="step step--home">
-        <span class="key"><a href="/vehicles/{{ v.vehicle.id }}/jobs/{{ j.id }}">{{ j.title }}</a></span>
+      <li class="row row--home">
+        <span class="key" data-l="Job"><a href="/vehicles/{{ v.vehicle.id }}/jobs/{{ j.id }}">{{ j.title }}</a></span>
+        <span></span><span></span><span></span><span></span>
+        <span class="num" data-l="Needs open"><span class="n{% if j.needs_open > 0 %} n--todo{% endif %}">{{ j.needs_open }}</span></span>
         <span></span>
-        <span></span>
-        <span>{{ j.counts }}</span>
       </li>
       {% endfor %}
     </ul>
@@ -51,7 +56,7 @@
   </section>
 
   <section class="sheet">
-    <div class="sheet-head"><h3>To-dos with no appointment</h3></div>
+    <div class="sheet-head"><h3>To-dos with no appointment</h3><span class="n">{{ hv.todos.len() }}</span></div>
     {% if hv.todos.is_empty() %}
     <p class="empty lone">No open to-dos.</p>
     {% endif %}

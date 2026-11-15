@@ -104,15 +104,43 @@ async fn home_lists_open_appointments_and_unscheduled_jobs() {
     assert!(body.contains("Golf GTI"), "{body}");
     assert!(body.contains("60k service"), "{body}");
     assert!(body.contains("2026-12-01"), "{body}");
-    assert!(body.contains("2 needs open \u{b7} 1 to-do open"), "{body}");
+    assert!(
+        body.contains(
+            "<span>Appointment</span><span>Status</span><span>Date</span><span>Shop</span><span \
+             class=\"num\">Jobs</span><span class=\"num\">Needs open</span><span \
+             class=\"num\">To-dos open</span>"
+        ),
+        "{body}"
+    );
+    assert!(
+        body.contains(r#"<span data-l="Status"><span class="pill pill--"#),
+        "{body}"
+    );
+    assert!(
+        body.contains(
+            r#"<span class="num" data-l="Needs open"><span class="n n--todo">2</span></span>"#
+        ),
+        "{body}"
+    );
+    assert!(
+        body.contains(
+            r#"<span class="num" data-l="To-dos open"><span class="n n--todo">1</span></span>"#
+        ),
+        "{body}"
+    );
+    // An appointment with nothing open shows plain zeros.
+    assert!(
+        body.contains(r#"<span class="num" data-l="Needs open"><span class="n">0</span></span>"#),
+        "{body}"
+    );
     assert!(body.contains("Winter tires"), "{body}");
     assert!(body.contains("not booked"), "{body}");
     assert!(body.contains("Not scheduled yet"), "{body}");
     assert!(body.contains("Replace wiper blades"), "{body}");
-    assert!(body.contains("1 need open"), "{body}");
+    assert!(body.contains("<span>Job</span>"), "{body}");
     assert!(body.contains("Wash the car"), "{body}");
     assert!(
-        body.contains(r#"<span class="l">Date </span>2026-12-01"#),
+        body.contains(r#"<span data-l="Date">2026-12-01</span>"#),
         "{body}"
     );
     assert_eq!(body.matches(">Add a to-do<").count(), 2, "{body}");
