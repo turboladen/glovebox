@@ -8,7 +8,7 @@ use glovebox_shared::{
     entities::{need_option, todo},
     money::format_cents,
     services::{
-        checklist::{Checklist, JobView, NeedView, StepRow},
+        checklist::{self, Checklist, HomeAppointment, JobView, NeedView, StepRow},
         need::{self, Stage},
     },
 };
@@ -103,9 +103,9 @@ impl OptionCard {
         let rejected = need::is_rejected(option);
         let has_number = option.part_number.is_some();
         let fit_text = match option.fitment.as_str() {
-            "confirmed" => "Fit confirmed",
+            "confirmed" => "Confirmed",
             "does_not_fit" => "Does not fit",
-            _ => "Fit unconfirmed",
+            _ => "Unconfirmed",
         };
         Self {
             id: option.id,
@@ -129,10 +129,6 @@ impl OptionCard {
             checked,
             blocked: !checked && (rejected || option.fitment == "does_not_fit"),
         }
-    }
-
-    pub fn is_rejected(&self) -> bool {
-        self.rejected_reason.is_some()
     }
 }
 
@@ -168,19 +164,22 @@ pub struct NeedCard {
     pub vid: i32,
     pub id: i32,
     pub name: String,
-    /// How many are needed, such as `2 needed`, when that is more than one.
+    /// How many are needed, such as `× 2`, when that is more than one.
     pub quantity: Option<String>,
     /// The page the forms return to.
     pub back: String,
     pub stage_class: &'static str,
     pub stage_text: &'static str,
+    /// What a row with no chosen option shows in place of the part: the
+    /// sentence the need's row under Next steps shows, then the options note
+    /// when the need has options.
+    pub status_line: String,
     /// Whether the need's details start open.
     pub open: bool,
     pub chosen: Option<OptionCard>,
     /// Every option, the chosen one included, for the decision form.
     pub options: Vec<OptionCard>,
     pub none_checked: bool,
-    pub options_note: String,
     supplier: String,
     approach: String,
     /// The stored supplier and approach as their tags read, when decided.
@@ -211,15 +210,11 @@ impl NeedCard {
     }
 
     pub fn supplier_text(&self) -> &str {
-        self.supplier_kind
-            .as_deref()
-            .unwrap_or("Supplier not decided")
+        self.supplier_kind.as_deref().unwrap_or("Not decided")
     }
 
     pub fn approach_text(&self) -> &str {
-        self.approach_kind
-            .as_deref()
-            .unwrap_or("Approach not decided")
+        self.approach_kind.as_deref().unwrap_or("Not decided")
     }
 
     /// The message of a failure of `form`, when that is the form that failed.
@@ -342,6 +337,38 @@ impl Steps {
     }
 }
 
+/// Describes an open appointment as the home page lists it.
+pub struct HomeAppointmentRow {
+    pub id: i32,
+    pub purpose: String,
+    pub shop_name: Option<String>,
+    /// The planned date, or the words the shared row gives when there is none.
+    pub when: String,
+    pub booked: bool,
+    pub status_class: &'static str,
+    pub status_text: String,
+    pub jobs: usize,
+    pub needs_open: usize,
+    pub todos_open: usize,
+}
+
+impl From<&HomeAppointment> for HomeAppointmentRow {
+    fn from(a: &HomeAppointment) -> Self {
+        Self {
+            id: a.id,
+            purpose: a.purpose.clone(),
+            shop_name: a.shop_name.clone(),
+            when: a.when.clone(),
+            booked: a.booked,
+            status_class: a.status,
+            status_text: sentence_case(a.status),
+            jobs: a.jobs,
+            needs_open: a.needs_open,
+            todos_open: a.todos_open,
+        }
+    }
+}
+
 /// Capitalizes the first letter, as the stage and status tags read.
 pub fn sentence_case(word: &str) -> String {
     let mut chars = word.chars();
@@ -421,17 +448,21 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
         order_ref: typed("order_ref").unwrap_or_default().to_owned(),
     };
 
+    let mut status_line = checklist::step_detail(view);
+    if !options.is_empty() {
+        status_line = format!("{status_line}, {}", view.options_note());
+    }
     NeedCard {
         vid: ctx.vid,
         id: need.id,
         name: need.name.clone(),
-        quantity: several.then(|| format!("{} needed", need.quantity)),
+        quantity: several.then(|| format!("\u{d7} {}", need.quantity)),
+        status_line,
         back: ctx.back.to_owned(),
         stage_class: stage.label(),
         stage_text: stage_text(stage),
         open: failure.is_some() || ctx.open == Some(need.id),
         none_checked: !options.iter().any(|o| o.checked),
-        options_note: view.options_note(),
         can_decide: view.part.is_none() && !options.is_empty(),
         chosen,
         options,

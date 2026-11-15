@@ -7,7 +7,7 @@ use glovebox_shared::{
     inputs::{
         appointment::NewAppointment,
         need::{NewNeed, NewOption, OrderDetails, UpdateNeed},
-        part::PartFilter,
+        part::{NewPart, PartFilter},
         work_item::NewWorkItem,
     },
     services::{appointment, need, part, todo, work_item},
@@ -180,6 +180,12 @@ fn group<'a>(body: &'a str, name: &str) -> &'a str {
     &rest[..rest.find("</section>").unwrap_or(rest.len())]
 }
 
+// Returns the markup of one need's row in its job, without its details.
+fn need_summary(body: &str, need_id: i32) -> &str {
+    let rest = &body[body.find(&format!(r#"id="need-{need_id}""#)).unwrap()..];
+    &rest[..rest.find("</summary>").unwrap()]
+}
+
 #[tokio::test]
 async fn appointment_page_shows_next_steps_then_jobs() {
     let w = World::new().await;
@@ -199,10 +205,26 @@ async fn appointment_page_shows_next_steps_then_jobs() {
 
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("60k service"), "{body}");
+    for (label, value) in [
+        ("Vehicle", "Golf GTI"),
+        ("Shop", "Demo Auto Works"),
+        ("Date", "2026-12-01"),
+    ] {
+        assert!(
+            body.contains(&format!(r#"<span class="l">{label}</span>{value}</div>"#)),
+            "{label}: {body}"
+        );
+    }
     assert!(
-        body.contains("Golf GTI at Demo Auto Works on 2026-12-01"),
+        body.contains(r#"<span class="l">Status</span><span class="pill pill--"#),
         "{body}"
     );
+    for label in ["need open", "to-do open", "job"] {
+        assert!(
+            body.contains(&format!(r#"<span class="l cap">{label}</span>"#)),
+            "{label}: {body}"
+        );
+    }
     assert!(body.contains("Planning"), "{body}");
     let steps = body.find("Next steps").expect("next steps heading");
     let jobs = body.find("By job").expect("by-job heading");
@@ -210,15 +232,12 @@ async fn appointment_page_shows_next_steps_then_jobs() {
     // The row splits the need's name from the rest of its summary.
     let decide = group(&body, "decide");
     assert!(
-        decide.contains(r#"<p class="step-need">Front pads</p>"#),
+        decide
+            .contains(r#"<li class="step"><span>Brakes</span><span class="key">Front pads</span>"#),
         "{decide}"
     );
     assert!(decide.contains("who supplies it is not decided") || decide.contains("no part chosen"));
     assert!(!decide.contains("Front pads: "), "{decide}");
-    assert!(
-        decide.contains(r#"<span class="tag">Brakes</span>"#),
-        "{decide}"
-    );
     assert!(group(&body, "todos").contains("Bring the wheel lock key"));
     assert!(body.contains("Supplier"), "{body}");
 }
@@ -243,9 +262,12 @@ async fn appointment_header_omits_a_missing_shop_and_date() {
         .await;
 
     assert_eq!(status, StatusCode::OK);
-    assert!(body.contains("Golf GTI<"), "{body}");
-    assert!(!body.contains("Golf GTI at"), "{body}");
-    assert!(!body.contains("Golf GTI on"), "{body}");
+    assert!(
+        body.contains(r#"<span class="l">Vehicle</span>Golf GTI</div>"#),
+        "{body}"
+    );
+    assert!(!body.contains(r#"<span class="l">Shop</span>"#), "{body}");
+    assert!(!body.contains(r#"<span class="l">Date</span>"#), "{body}");
 }
 
 #[tokio::test]
@@ -314,8 +336,8 @@ async fn supplier_and_approach_are_saved_and_cleared() {
     )
     .await;
     let (_, body) = w.get(&back).await;
-    assert!(body.contains("Supplier not decided"), "{body}");
-    assert!(body.contains("Approach not decided"), "{body}");
+    assert_eq!(body.matches(">Not decided</span>").count(), 2, "{body}");
+    assert!(!body.contains("Supplier not decided"), "{body}");
 
     let (status, _, body) = w
         .post(
@@ -396,7 +418,7 @@ async fn a_need_for_two_shows_its_count_and_the_price_of_both() {
         "{order}"
     );
     assert!(
-        body.contains(r#"<span class="qty">2 needed</span>"#),
+        body.contains("<span class=\"qty\">\u{d7} 2</span>"),
         "{body}"
     );
     assert!(body.contains(r#"value="$149.98""#), "{body}");
@@ -441,7 +463,7 @@ async fn an_option_link_is_shown_only_for_a_web_address() {
 
     assert!(
         body.contains(
-            r#"<a class="opt-link" href="https://example.com/pads?a=1&#38;b=2" target="_blank" rel="noopener noreferrer">"#
+            r#"<a href="https://example.com/pads?a=1&#38;b=2" target="_blank" rel="noopener noreferrer">"#
         ),
         "{body}"
     );
@@ -586,6 +608,16 @@ async fn ordering_with_bad_money_rerenders_422_and_writes_nothing() {
         assert!(body.contains("TYPED-REF"), "{body}");
         assert!(body.contains(&format!(r#"value="{cost}""#)), "{body}");
         assert!(body.contains(r#"aria-invalid="true""#), "{body}");
+        // The order form is open in its step row, with the error above the fields.
+        let order = group(&body, "order");
+        let form = &order[order
+            .find(r#"<details class="drawer drawer--end" open>"#)
+            .expect("open form")..];
+        let error = form
+            .find(r#"<p class="error" role="alert">"#)
+            .expect("error");
+        let fields = form.find(r#"<div class="fields">"#).expect("fields");
+        assert!(error < fields, "{form}");
         assert_eq!(w.part_count().await, 0, "{cost}");
     }
 }
@@ -1017,13 +1049,13 @@ async fn a_need_name_with_a_colon_renders_whole() {
 
     let order = group(&body, "order");
     assert!(
-        order.contains(r#"<p class="step-need">Oil: 5W-30</p>"#),
+        order.contains(r#"<span class="key">Oil: 5W-30</span>"#),
         "{order}"
     );
     assert!(order.contains("order Any oil"), "{order}");
     let check = group(&body, "check");
     assert!(
-        check.contains(r#"<p class="step-need">Oil: 5W-30</p>"#),
+        check.contains(r#"<span class="key">Oil: 5W-30</span>"#),
         "{check}"
     );
     assert!(
@@ -1329,4 +1361,230 @@ async fn a_failed_to_do_add_for_a_vehicle_the_home_page_does_not_list_shows_its_
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(body.contains("Not saved"), "{body}");
     assert!(body.contains("Vehicle 99999 not found"), "{body}");
+}
+
+#[tokio::test]
+async fn fit_labels_leave_the_word_fit_to_the_column_header() {
+    let w = World::new().await;
+    w.choose_good().await;
+
+    let (_, body) = w.get(&w.page_path()).await;
+
+    assert!(body.contains(">Confirmed</span>"), "{body}");
+    assert!(!body.contains("Fit confirmed"), "{body}");
+}
+
+#[tokio::test]
+async fn a_need_ordered_without_an_option_shows_its_step_sentence() {
+    let w = World::new().await;
+    let need_id = need::add(
+        &w.db,
+        w.vehicle,
+        w.job,
+        NewNeed {
+            name: "Brake fluid".into(),
+            supplied_by: Some("self".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    let part_id = part::create(
+        &w.db,
+        w.vehicle,
+        NewPart {
+            name: "Brake fluid".into(),
+            seller: Some("FCP Euro".into()),
+            purchase_date: Some("2026-11-13".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    need::link_part(&w.db, w.vehicle, need_id, part_id, None)
+        .await
+        .unwrap();
+
+    let (_, body) = w.get(&w.job_path()).await;
+
+    let row = need_summary(&body, need_id);
+    assert!(row.contains("ordered from FCP Euro on 2026-11-13"), "{row}");
+    assert!(!row.contains("No part chosen"), "{row}");
+}
+
+#[tokio::test]
+async fn a_job_shows_one_header_line_and_each_part_in_its_own_columns() {
+    let w = World::new().await;
+    need::decide(
+        &w.db,
+        w.vehicle,
+        w.need,
+        Some(w.good),
+        Some("Quiet and low dust.".into()),
+    )
+    .await
+    .unwrap();
+
+    let (_, body) = w.get(&w.page_path()).await;
+
+    assert!(
+        body.contains(
+            "<span>Need</span><span>Stage</span><span>Brand</span><span>Part \
+             number</span><span>Description</span><span>Seller</span><span \
+             class=\"num\">Price</span><span>Fit</span>"
+        ),
+        "{body}"
+    );
+    assert!(
+        body.contains(r#"<span data-l="Brand">Akebono</span>"#),
+        "{body}"
+    );
+    assert!(
+        body.contains(r#"<span class="pn" data-l="Part number">ACT1633</span>"#),
+        "{body}"
+    );
+    assert!(
+        body.contains(r#"<span class="num" data-l="Price">$74.99</span>"#),
+        "{body}"
+    );
+    assert!(
+        body.contains(r#"<span class="l">Reason</span>Quiet and low dust."#),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn an_option_without_a_part_number_spans_the_number_and_description_columns() {
+    let w = World::new().await;
+    need::add_option(
+        &w.db,
+        w.vehicle,
+        w.need,
+        NewOption {
+            description: "Pollen cabin air filter".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let (_, body) = w.get(&w.page_path()).await;
+
+    assert!(
+        body.contains(r#"<span class="pn span2" data-l="Part">Pollen cabin air filter</span>"#),
+        "{body}"
+    );
+    assert!(
+        !body.contains(r#"data-l="Description">Pollen cabin air filter"#),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn a_chosen_option_without_a_seller_or_price_keeps_its_columns() {
+    let w = World::new().await;
+    let bare = need::add_option(
+        &w.db,
+        w.vehicle,
+        w.need,
+        NewOption {
+            description: "Pads".into(),
+            part_number: Some("BARE-1".into()),
+            fitment: Some("confirmed".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    need::decide(&w.db, w.vehicle, w.need, Some(bare), None)
+        .await
+        .unwrap();
+
+    let (_, body) = w.get(&w.page_path()).await;
+
+    let row = need_summary(&body, w.need);
+    assert!(row.contains(r#"<span data-l="Brand"></span>"#), "{row}");
+    assert!(row.contains(r#"<span data-l="Seller"></span>"#), "{row}");
+    assert!(
+        row.contains(r#"<span class="num" data-l="Price"></span>"#),
+        "{row}"
+    );
+}
+
+#[tokio::test]
+async fn an_action_keeps_one_name() {
+    let w = World::new().await;
+    w.choose_good().await;
+    w.order_it().await;
+
+    let (_, body) = w.get(&w.page_path()).await;
+
+    // The need shows the return form in its step row and in its job row,
+    // each with an opener and a submit button.
+    assert_eq!(body.matches(">Return it<").count(), 4, "{body}");
+    assert_eq!(body.matches(">Add a to-do<").count(), 2, "{body}");
+    assert!(body.contains("Why are you returning it?"), "{body}");
+    for gone in [
+        "Wrong part, returning it",
+        "Record the return",
+        ">Add to-do<",
+        "What was wrong",
+    ] {
+        assert!(!body.contains(gone), "{gone}: {body}");
+    }
+}
+
+#[tokio::test]
+async fn a_done_step_row_keeps_its_stage_pill() {
+    let w = World::new().await;
+    w.choose_good().await;
+    w.order_it().await;
+    need::mark_received(&w.db, w.vehicle, w.need, Some("2026-11-14".into()))
+        .await
+        .unwrap();
+
+    let (_, body) = w.get(&w.page_path()).await;
+
+    let done = group(&body, "done");
+    assert!(
+        done.contains(r#"<span class="pill pill--received">Received</span>"#),
+        "{done}"
+    );
+    assert!(done.contains(">Return it<"), "{done}");
+}
+
+// An open form in a step row is a block under the sentence, so the drawer
+// must not take the flex layout of the action cell.
+#[tokio::test]
+async fn the_order_drawer_in_a_step_row_is_not_an_action_cell() {
+    let w = World::new().await;
+    w.choose_good().await;
+
+    let (_, body) = w.get(&w.page_path()).await;
+
+    let order = group(&body, "order");
+    assert!(
+        order.contains(r#"<details class="drawer drawer--end">"#),
+        "{order}"
+    );
+    assert!(!order.contains(r#"class="drawer act""#), "{order}");
+}
+
+#[tokio::test]
+async fn the_option_radios_are_one_named_group() {
+    let w = World::new().await;
+
+    let (_, body) = w.get(&w.page_path()).await;
+
+    assert!(
+        body.contains(r#"<div role="radiogroup" aria-label="Options for Front pads">"#),
+        "{body}"
+    );
+    assert!(
+        body.contains(r#"<span class="l" aria-hidden="true">Options</span>"#),
+        "{body}"
+    );
 }

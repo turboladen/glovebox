@@ -1,15 +1,15 @@
 mod common;
 
 use axum::{body::Body, http::StatusCode};
-use common::{app, app_with_file, db, get, page, request, send};
+use common::{app, app_with_file, db, get, page, request, send, send_bytes};
 use glovebox_shared::{
     inputs::{appointment::NewAppointment, need::NewNeed, todo::NewTodo, work_item::NewWorkItem},
     services::{appointment, need, todo, work_item},
     test_support::VehicleFixture,
 };
 
-const CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri \
-                   'none'; frame-ancestors 'none'";
+const CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; form-action \
+                   'self'; base-uri 'none'; frame-ancestors 'none'";
 
 #[tokio::test]
 async fn home_lists_open_appointments_and_unscheduled_jobs() {
@@ -104,13 +104,62 @@ async fn home_lists_open_appointments_and_unscheduled_jobs() {
     assert!(body.contains("Golf GTI"), "{body}");
     assert!(body.contains("60k service"), "{body}");
     assert!(body.contains("2026-12-01"), "{body}");
-    assert!(body.contains("2 needs open \u{b7} 1 to-do open"), "{body}");
+    assert!(
+        body.contains(
+            "<span>Appointment</span><span>Status</span><span>Date</span><span>Shop</span><span \
+             class=\"num\">Jobs</span><span class=\"num\">Needs open</span><span \
+             class=\"num\">To-dos open</span>"
+        ),
+        "{body}"
+    );
+    assert!(
+        body.contains(
+            r#"<span data-l="Status"><span class="pill pill--planning">Planning</span></span>"#
+        ),
+        "{body}"
+    );
+    assert!(
+        body.contains(r#"<span class="num" data-l="Jobs">1</span>"#),
+        "{body}"
+    );
+    assert!(
+        body.contains(
+            r#"<span class="num" data-l="Needs open"><span class="n n--todo">2</span></span>"#
+        ),
+        "{body}"
+    );
+    assert!(
+        body.contains(
+            r#"<span class="num" data-l="To-dos open"><span class="n n--todo">1</span></span>"#
+        ),
+        "{body}"
+    );
+    // An appointment with nothing open shows plain zeros.
+    assert!(
+        body.contains(r#"<span class="num" data-l="Needs open"><span class="n">0</span></span>"#),
+        "{body}"
+    );
     assert!(body.contains("Winter tires"), "{body}");
-    assert!(body.contains("not booked"), "{body}");
+    assert!(
+        body.contains(r#"<span data-l="Date"><span class="empty cap">not booked</span></span>"#),
+        "{body}"
+    );
     assert!(body.contains("Not scheduled yet"), "{body}");
     assert!(body.contains("Replace wiper blades"), "{body}");
-    assert!(body.contains("1 need open"), "{body}");
+    assert!(body.contains("<span>Job</span>"), "{body}");
+    assert!(
+        body.contains(
+            r#"<span class="num at-needs" data-l="Needs open"><span class="n n--todo">1</span></span>"#
+        ),
+        "{body}"
+    );
     assert!(body.contains("Wash the car"), "{body}");
+    assert!(
+        body.contains(r#"<span data-l="Date">2026-12-01</span>"#),
+        "{body}"
+    );
+    assert_eq!(body.matches(">Add a to-do<").count(), 2, "{body}");
+    assert!(!body.contains(">Add to-do<"), "{body}");
     assert!(
         !body.contains("Brake job"),
         "a job on an appointment is not unscheduled: {body}"
@@ -134,7 +183,10 @@ async fn every_page_names_its_environment_and_an_overriding_file() {
     let (_, live_body) = page(app(db().await, "live"), get("/")).await;
     let (_, file_body) = page(app_with_file(db().await, "test", "glovebox.db"), get("/")).await;
 
-    assert!(test_body.contains(r#"<span class="env""#), "{test_body}");
+    assert!(
+        test_body.contains(r#"<span class="pill pill--env""#),
+        "{test_body}"
+    );
     assert!(test_body.contains(">test</span>"), "{test_body}");
     assert!(live_body.contains(">live</span>"), "{live_body}");
     assert!(
@@ -239,4 +291,37 @@ async fn cross_site_fetch_metadata_post_is_403() {
         let (status, _) = page(app(db().await, "live"), req).await;
         assert_ne!(status, StatusCode::FORBIDDEN, "{site}");
     }
+}
+
+#[tokio::test]
+async fn font_files_are_served_as_woff2() {
+    for path in ["/assets/plex-sans-400.woff2", "/assets/plex-sans-600.woff2"] {
+        let (res, body) = send_bytes(app(db().await, "live"), get(path)).await;
+        assert_eq!(res.status(), StatusCode::OK, "{path}");
+        assert_eq!(res.headers()["content-type"], "font/woff2", "{path}");
+        assert_eq!(
+            res.headers()["cache-control"],
+            "public, max-age=604800",
+            "{path}"
+        );
+        assert!(body.starts_with(b"wOF2"), "{path}");
+    }
+}
+
+#[tokio::test]
+async fn every_page_loads_the_bundled_typeface_and_labels_the_database() {
+    let (_, body) = page(app(db().await, "live"), get("/")).await;
+    assert!(
+        body.contains(r#"url("/assets/plex-sans-400.woff2")"#),
+        "{body}"
+    );
+    assert!(
+        body.contains(r#"url("/assets/plex-sans-600.woff2")"#),
+        "{body}"
+    );
+    assert!(
+        body.contains(r#"<span class="l">Database </span><span class="pill pill--env""#),
+        "{body}"
+    );
+    assert!(body.contains(r#"<span class="l">Today </span>"#), "{body}");
 }

@@ -12,9 +12,10 @@ use axum::{
 };
 
 // `style-src` allows inline styles because the one stylesheet lives in
-// `base.html`. The page has no script, and nothing from another origin loads.
-const POLICY: &str = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri \
-                      'none'; frame-ancestors 'none'";
+// `base.html`, and `font-src` allows the typeface this server serves. The
+// page has no script, and nothing from another origin loads.
+const POLICY: &str = "default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; form-action \
+                      'self'; base-uri 'none'; frame-ancestors 'none'";
 
 /// Sets the `Content-Security-Policy` header on a response, replacing any
 /// header of that name, so a browser runs no script and loads nothing the

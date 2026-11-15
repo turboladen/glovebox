@@ -254,10 +254,11 @@ A page is a view of the shared library, and a future page follows the same rules
 - **No script.** Every action is an HTML form post followed by a redirect back to the page, and a
   failed write renders the page again with the domain error beside the row. That page is served
   at the form's address, so every link on a page names the page's own path. The content security
-  policy allows no scripts and no external resources, so a script would not run.
+  policy allows no scripts and no external resources (the page's typeface is the one file it
+  loads, from this server), so a script would not run.
 - **Every count and sentence about the records comes from a tested shared function** (stage,
   step sentences, open counts, option notes, warnings, errors). `src/view.rs` picks labels and
-  nouns for those values, such as "2 needed" or "Price for 2", and decides which forms a row shows;
+  nouns for those values, such as "× 2" or "Price for 2", and decides which forms a row shows;
   templates print what `view.rs` built.
 - **Local only.** The server binds `127.0.0.1` on `GLOVEBOX_WEB_PORT` (4827 for `live`, 4828
   otherwise) and refuses a request whose Host or Origin is not local. Every page shows the
@@ -269,13 +270,17 @@ A page is a view of the shared library, and a future page follows the same rules
 - **Marking a need ordered has no undo**, because it creates a purchase record. A to-do tick and a
   received date show a banner with an undo form.
 
-The look lives in one inline stylesheet in `templates/base.html`. It uses one typeface in two
-weights and four sizes. A black bar heads each group of next steps and carries its count in a
-window, and a gray bar heads each job. A solid tag is a signal (amber needs the owner, green means
-finished, red means a problem) and an outlined tag states a fact. A solid button commits
-something, and underlined text does everything else. Every date is `YYYY-MM-DD`. The owner accepted
-this look as a starting point and a design pass is planned, so the stylesheet stays in that one
-template.
+The look lives in one inline stylesheet in `templates/base.html`, and
+`docs/superpowers/specs/2026-11-14-web-design-pass-design.md` states its rules. The page reads as a
+ledger: panels on a tinted ground, with each job's needs in columns under one sticky header line
+(Need, Stage, Brand, Part number, Description, Seller, Price, Fit). It uses IBM Plex Sans in two
+weights and four sizes, served from `/assets/` by `src/assets.rs`. Gray text is a label and dark
+text is a value. A pill is a value from a fixed list, and each kind has a tint and a mark (yellow
+with an empty box needs the owner, blue with a chevron is on its way, green with a check is
+settled, red with a cross is a problem, gray with a circle is a plain fact), so no state is told
+apart by color alone. Only form fields have a boxed outline. A solid button commits something, an
+outlined button opens a form or a row, and underlined text does minor things. The control that
+opens a form and the button that submits it carry the same words. Every date is `YYYY-MM-DD`.
 
 ## Conventions
 
