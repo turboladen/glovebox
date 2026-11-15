@@ -243,7 +243,7 @@ pub async fn update(
     if let Some(value) = input.decision_reason {
         active.decision_reason = Set(value);
     }
-    active.updated_at = Set(super::now_stamp());
+    active.updated_at = Set(super::now());
     Ok(active.update(db).await?)
 }
 
@@ -300,7 +300,7 @@ async fn clear_choice(db: &impl ConnectionTrait, need_id: i32, option_id: i32) -
             job_need::Column::DecisionReason,
             Expr::value(None::<String>),
         )
-        .col_expr(job_need::Column::UpdatedAt, Expr::value(super::now_stamp()))
+        .col_expr(job_need::Column::UpdatedAt, Expr::value(super::now()))
         .filter(job_need::Column::Id.eq(need_id))
         .filter(job_need::Column::ChosenOptionId.eq(option_id))
         .exec(db)
@@ -396,7 +396,7 @@ pub async fn update_option<C: ConnectionTrait + TransactionTrait>(
         active.rejected_on = Set(reason.is_some().then(crate::services::today));
         active.rejected_reason = Set(reason.clone());
     }
-    active.updated_at = Set(super::now_stamp());
+    active.updated_at = Set(super::now());
 
     let now_unusable = input.fitment.as_deref() == Some("does_not_fit")
         || input.rejected_reason.as_ref().is_some_and(Option::is_some);
@@ -514,7 +514,7 @@ pub async fn decide(
     active.chosen_option_id = Set(option_id);
     active.decision_reason = Set(reason);
     active.decided_on = Set(decided_on);
-    active.updated_at = Set(super::now_stamp());
+    active.updated_at = Set(super::now());
     Ok(active.update(db).await?)
 }
 
@@ -580,7 +580,7 @@ async fn set_need_part(
     if let Some(supplier) = supplied_by {
         active.supplied_by = Set(Some(supplier.to_string()));
     }
-    active.updated_at = Set(super::now_stamp());
+    active.updated_at = Set(super::now());
     Ok(active.update(db).await?)
 }
 
@@ -621,7 +621,7 @@ pub async fn mark_ordered<C: ConnectionTrait + TransactionTrait>(
     // is read. A second order for the same need then sees the first one's
     // part and claims nothing.
     let claimed = job_need::Entity::update_many()
-        .col_expr(job_need::Column::UpdatedAt, Expr::value(super::now_stamp()))
+        .col_expr(job_need::Column::UpdatedAt, Expr::value(super::now()))
         .filter(job_need::Column::Id.eq(need_id))
         .filter(job_need::Column::PartId.is_null())
         .exec(&txn)
@@ -717,7 +717,7 @@ pub async fn link_part<C: ConnectionTrait + TransactionTrait>(
         Some(date) => {
             let mut active: part::ActiveModel = found.into();
             active.received_on = Set(Some(date));
-            active.updated_at = Set(super::now_stamp());
+            active.updated_at = Set(super::now());
             active.update(&txn).await?
         }
         None => found,
@@ -752,7 +752,7 @@ async fn set_received(
     let found = linked_part(db, &need).await?;
     let mut active: part::ActiveModel = found.into();
     active.received_on = Set(on);
-    active.updated_at = Set(super::now_stamp());
+    active.updated_at = Set(super::now());
     let found = active.update(db).await?;
     Ok(purchase(need, found))
 }
@@ -889,8 +889,8 @@ mod tests {
             decision_reason: None,
             decided_on: None,
             part_id: None,
-            created_at: String::new(),
-            updated_at: String::new(),
+            created_at: chrono::DateTime::default(),
+            updated_at: chrono::DateTime::default(),
         }
     }
 
@@ -913,8 +913,8 @@ mod tests {
             replaced_date: None,
             replaced_odometer: None,
             notes: None,
-            created_at: String::new(),
-            updated_at: String::new(),
+            created_at: chrono::DateTime::default(),
+            updated_at: chrono::DateTime::default(),
             manufacturer_url: None,
             retailer_url: None,
             location: None,

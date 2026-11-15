@@ -203,7 +203,7 @@ pub(crate) async fn link_service(
     if role == ROLE_RESOLVED && !inc.resolved {
         let mut active: incident::ActiveModel = inc.into();
         active.resolved = Set(true);
-        active.updated_at = Set(super::now_stamp());
+        active.updated_at = Set(super::now());
         active.update(db).await?;
     }
     Ok(())
@@ -443,7 +443,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         active.recurrence_of_id = Set(v);
     }
 
-    active.updated_at = Set(super::now_stamp());
+    active.updated_at = Set(super::now());
 
     let inc = active.update(&txn).await?;
 
@@ -513,11 +513,11 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .filter(incident_service_link::Column::IncidentId.eq(existing.id))
         .exec(&txn)
         .await?;
-    let stamp = super::now_stamp();
+    let stamp = super::now();
     incident::Entity::update_many()
         .set(incident::ActiveModel {
             recurrence_of_id: Set(None),
-            updated_at: Set(stamp.clone()),
+            updated_at: Set(stamp),
             ..Default::default()
         })
         .filter(incident::Column::RecurrenceOfId.eq(existing.id))
@@ -1390,8 +1390,8 @@ mod tests {
             title: Set("Chase the rattle".into()),
             status: Set("todo".into()),
             incident_id: Set(Some(doomed.incident.id)),
-            created_at: Set(date("2024-01-01 00:00:00")),
-            updated_at: Set(date("2024-01-01 00:00:00")),
+            created_at: Set(date("2024-01-01T00:00:00Z")),
+            updated_at: Set(date("2024-01-01T00:00:00Z")),
             ..Default::default()
         }
         .insert(&db)
@@ -1426,7 +1426,10 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(wi.incident_id, None);
-        assert_ne!(wi.updated_at, "2024-01-01 00:00:00");
+        assert_ne!(
+            wi.updated_at,
+            date::<chrono::DateTime<chrono::Utc>>("2024-01-01T00:00:00Z")
+        );
     }
 
     #[tokio::test]

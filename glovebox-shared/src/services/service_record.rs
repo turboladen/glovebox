@@ -443,7 +443,9 @@ async fn insert_line_items(
     record_id: i32,
     items: Vec<NewLineItem>,
 ) -> DomainResult<()> {
-    // An empty batch inserts nothing.
+    // A bulk insert does not pass through the entity's `before_save`, so the
+    // stamps are set here. An empty batch inserts nothing.
+    let now = super::now();
     let rows = items
         .into_iter()
         .map(|item| service_record_line_item::ActiveModel {
@@ -454,6 +456,8 @@ async fn insert_line_items(
             quantity: Set(item.quantity),
             unit_cost_cents: Set(item.unit_cost_cents),
             cost_cents: Set(item.cost_cents),
+            created_at: Set(now),
+            updated_at: Set(now),
             ..Default::default()
         });
     service_record_line_item::Entity::insert_many(rows)
@@ -994,7 +998,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         active.appointment_id = Set(v);
     }
 
-    active.updated_at = Set(super::now_stamp());
+    active.updated_at = Set(super::now());
 
     let record = active.update(&txn).await?;
 
@@ -1082,7 +1086,7 @@ async fn unlink_shop_parts_from_needs(
         )
         .col_expr(
             job_need::Column::UpdatedAt,
-            sea_query::Expr::value(super::now_stamp()),
+            sea_query::Expr::value(super::now()),
         )
         .filter(job_need::Column::PartId.is_in(shop_part_ids))
         .exec(txn)
@@ -1134,7 +1138,7 @@ pub async fn link_schedule_items<C: ConnectionTrait + TransactionTrait>(
 
     // Linking changes what the record accounts for — stamp it like update().
     let mut active: service_record::ActiveModel = existing.into();
-    active.updated_at = Set(super::now_stamp());
+    active.updated_at = Set(super::now());
     let record = active.update(&txn).await?;
     txn.commit().await?;
 
@@ -1304,7 +1308,7 @@ async fn reopen_resolved_incidents(
     incident::Entity::update_many()
         .set(incident::ActiveModel {
             resolved: Set(false),
-            updated_at: Set(super::now_stamp()),
+            updated_at: Set(super::now()),
             ..Default::default()
         })
         .filter(incident::Column::Id.is_in(reopen))

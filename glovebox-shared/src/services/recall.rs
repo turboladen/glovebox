@@ -254,7 +254,7 @@ pub async fn set_status(
 
     let mut active: research_finding::ActiveModel = finding.into();
     active.status = Set(stored.to_owned());
-    active.updated_at = Set(super::now_stamp());
+    active.updated_at = Set(super::now());
     let updated = active.update(db).await?;
     Ok(with_status(db, vec![updated]).await?.remove(0))
 }
@@ -347,7 +347,7 @@ pub(crate) async fn release_from_deleted_service(
     research_finding::Entity::update_many()
         .set(research_finding::ActiveModel {
             status: Set(stored.to_owned()),
-            updated_at: Set(super::now_stamp()),
+            updated_at: Set(super::now()),
             ..Default::default()
         })
         .filter(research_finding::Column::Id.is_in(finding_ids.clone()))

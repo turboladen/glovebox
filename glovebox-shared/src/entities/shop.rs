@@ -12,11 +12,11 @@ pub struct Model {
     pub website: Option<String>,
     pub specialty: Option<String>,
     pub notes: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
+    pub created_at: DateTimeUtc,
+    pub updated_at: DateTimeUtc,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {}
 
-impl ActiveModelBehavior for ActiveModel {}
+super::stamp_on_insert!(created_at, updated_at);

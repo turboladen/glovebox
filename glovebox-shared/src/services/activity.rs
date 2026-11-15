@@ -30,9 +30,9 @@ pub struct ActivityItem {
     pub vehicle_name: String,
     /// The day of a service, or the day or time of an incident or reading.
     pub date: DayOrTime,
-    /// When the record was added (its row's `created_at`), a
-    /// `YYYY-MM-DD HH:MM:SS` timestamp distinct from the domain `date`.
-    pub created_at: String,
+    /// When the record was added (its row's `created_at`), in UTC. It is
+    /// distinct from the domain `date`.
+    pub created_at: chrono::DateTime<chrono::Utc>,
     pub summary: String,
     /// Odometer reading attached to the record, when present.
     pub mileage: Option<i32>,

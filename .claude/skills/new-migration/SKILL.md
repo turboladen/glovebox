@@ -19,8 +19,8 @@ migration `m20261112_000002_seed_vw_mqb`. New migrations go after those. Check
 `glovebox-shared/src/migration/mod.rs` for the current highest number; the next migration is `N+1`.
 
 File naming: `m{YYYYMMDD}_{NNNNNN}_{descriptive_name}.rs`
-- Use the date the migration is written, and keep the sequence number increasing (`000003` is next
-  after the seed). Migrations run in vector order, so the order of `migrations()` is what counts.
+- Use the date the migration is written, and keep the sequence number increasing (the newest file in
+  `mod.rs` shows the number to follow). Migrations run in vector order, so the order of `migrations()` is what counts.
 - Pad the sequence number to 6 digits.
 
 Migrations live in `glovebox-shared/src/migration/`. Read `m20261112_000001_initial_schema.rs` first:
@@ -63,14 +63,12 @@ impl MigrationTrait for Migration {
                     .col(
                         ColumnDef::new({TableEnum}::CreatedAt)
                             .text()
-                            .not_null()
-                            .default(Expr::cust("datetime('now')")),
+                            .not_null(),
                     )
                     .col(
                         ColumnDef::new({TableEnum}::UpdatedAt)
                             .text()
-                            .not_null()
-                            .default(Expr::cust("datetime('now')")),
+                            .not_null(),
                     )
                     // --- foreign keys ---
                     // .foreign_key(
@@ -178,8 +176,12 @@ instead.
 1. **Rerun-safe**: SQLite migrations are not transactional, so a crash mid-`up()` reruns from the
    top. Use `if_not_exists()` on tables and indexes, `INSERT ... WHERE NOT EXISTS` for data, and
    pragma-guarded `ALTER`s.
-2. **DateTime defaults**: use `Expr::cust("datetime('now')")`, never a string literal such as
-   `"CURRENT_TIMESTAMP"` (SeaORM quotes strings).
+2. **No default on a stamp column**: `created_at` and `updated_at` are `TEXT NOT NULL` with no
+   default. A stamp is RFC 3339 in UTC (`2026-11-14T12:00:00+00:00`), and `datetime('now')` writes
+   another form that sorts before it. The entity fills both on insert (`stamp_on_insert!` in
+   `entities/mod.rs`), so a migration that inserts rows with raw SQL sets both itself, for example
+   with `strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now')`. The `stamp()` helper in `schema.rs` carries
+   the default and is only for the migrations that already use it.
 3. **FK on-delete policy**:
    - Non-nullable parent ref (`vehicle_id`) uses `ForeignKeyAction::Cascade`.
    - Nullable ref (`shop_id`, `model_template_id`) uses `ForeignKeyAction::SetNull`.
@@ -203,5 +205,11 @@ In `glovebox-shared/src/migration/mod.rs`:
 ## Step 4: Verify
 
 Run `cargo test -p glovebox-shared`: `test_support::test_db()` applies every migration to an
-in-memory database. For a migration that moves data, also start the binary against a copy of
-`data/glovebox.db`.
+in-memory database. For a migration that moves data, also start the binary against a copy of a file from
+`data/backups/` in a scratch directory (`GLOVEBOX_DB_PATH` pointing at the copy), and compare row
+counts and a hash of every untouched column before and after. Never open `data/glovebox.db` for
+this.
+
+To change or remove a column default without rebuilding the table, follow
+`remove_defaults` in `m20261114_000002_utc_timestamps.rs`: SQLite allows editing the stored
+`CREATE TABLE` text inside a transaction for a change that does not alter stored rows.

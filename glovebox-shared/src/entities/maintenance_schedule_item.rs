@@ -15,8 +15,8 @@ pub struct Model {
     pub interval_miles: Option<i32>,
     pub interval_months: Option<i32>,
     pub labor_categories: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
+    pub created_at: DateTimeUtc,
+    pub updated_at: DateTimeUtc,
     pub warning_miles: Option<i32>,
     pub warning_days: Option<i32>,
     pub enabled: bool,
@@ -79,4 +79,4 @@ impl Related<super::service_record::Entity> for Entity {
     }
 }
 
-impl ActiveModelBehavior for ActiveModel {}
+super::stamp_on_insert!(created_at, updated_at);

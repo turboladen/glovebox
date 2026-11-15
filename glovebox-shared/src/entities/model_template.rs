@@ -16,8 +16,8 @@ pub struct Model {
     pub engine: Option<String>,
     pub transmission: Option<String>,
     pub drivetrain: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
+    pub created_at: DateTimeUtc,
+    pub updated_at: DateTimeUtc,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -52,4 +52,4 @@ impl Related<super::maintenance_schedule_item::Entity> for Entity {
     }
 }
 
-impl ActiveModelBehavior for ActiveModel {}
+super::stamp_on_insert!(created_at, updated_at);

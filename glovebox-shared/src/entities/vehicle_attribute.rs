@@ -11,7 +11,7 @@ pub struct Model {
     pub value: String,
     pub source: Option<String>,
     pub superseded_by: Option<i32>,
-    pub created_at: String,
+    pub created_at: DateTimeUtc,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -30,4 +30,4 @@ impl Related<super::vehicle::Entity> for Entity {
     }
 }
 
-impl ActiveModelBehavior for ActiveModel {}
+super::stamp_on_insert!(created_at);

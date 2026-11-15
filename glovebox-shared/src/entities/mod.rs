@@ -1,3 +1,31 @@
+/// Implements `ActiveModelBehavior` for the entity it is written in so that
+/// an insert fills each named stamp the caller left unset with the current
+/// time. No stamp column has a default, so an insert that bypasses this (a
+/// bulk insert or raw SQL) sets its stamps itself. An update is left alone:
+/// the service functions stamp `updated_at`.
+macro_rules! stamp_on_insert {
+    ($($stamp:ident),+) => {
+        #[async_trait::async_trait]
+        impl ActiveModelBehavior for ActiveModel {
+            async fn before_save<C>(mut self, _db: &C, insert: bool) -> Result<Self, DbErr>
+            where
+                C: ConnectionTrait,
+            {
+                if insert {
+                    let now = crate::services::now();
+                    $(
+                        if self.$stamp.is_not_set() {
+                            self.$stamp = sea_orm::ActiveValue::Set(now);
+                        }
+                    )+
+                }
+                Ok(self)
+            }
+        }
+    };
+}
+use stamp_on_insert;
+
 pub mod appointment;
 pub mod incident;
 pub mod incident_followup;

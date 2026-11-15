@@ -11,8 +11,8 @@ pub struct Model {
     pub quantity: Option<f64>,
     pub unit_cost_cents: Option<i32>,
     pub cost_cents: Option<i32>,
-    pub created_at: String,
-    pub updated_at: String,
+    pub created_at: DateTimeUtc,
+    pub updated_at: DateTimeUtc,
     /// One of `maintenance`, `mod`, `repair`, `inspection`, `recall`, `fee`.
     pub work_kind: String,
     /// Who paid this line when it differs from the service's `paid_by`;
@@ -36,4 +36,4 @@ impl Related<super::service_record::Entity> for Entity {
     }
 }
 
-impl ActiveModelBehavior for ActiveModel {}
+super::stamp_on_insert!(created_at, updated_at);

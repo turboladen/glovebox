@@ -181,7 +181,7 @@ pub async fn update(
         active.est_cost_cents = Set(v);
     }
 
-    active.updated_at = Set(super::now_stamp());
+    active.updated_at = Set(super::now());
     Ok(active.update(db).await?)
 }
 
@@ -460,7 +460,7 @@ async fn repoint_links(
     work_item::Entity::update_many()
         .set(work_item::ActiveModel {
             schedule_item_id: Set(Some(target_id)),
-            updated_at: Set(super::now_stamp()),
+            updated_at: Set(super::now()),
             ..Default::default()
         })
         .filter(work_item::Column::VehicleId.eq(vehicle_id))
@@ -806,7 +806,7 @@ pub async fn dismiss_for_vehicle<C: ConnectionTrait + TransactionTrait>(
     let mut active: maintenance_schedule_item::ActiveModel = target.into();
     active.enabled = Set(false);
     active.notes = Set(notes);
-    active.updated_at = Set(super::now_stamp());
+    active.updated_at = Set(super::now());
     let dismissed = active.update(&txn).await?;
 
     let shadowed = inherited_named(&txn, &v, &dismissed.name).await?;
@@ -837,7 +837,7 @@ pub async fn undismiss_for_vehicle(
 
     let mut active: maintenance_schedule_item::ActiveModel = item.into();
     active.enabled = Set(true);
-    active.updated_at = Set(super::now_stamp());
+    active.updated_at = Set(super::now());
     Ok(active.update(db).await?)
 }
 

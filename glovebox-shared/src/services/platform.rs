@@ -58,7 +58,7 @@ pub async fn update(
     }
     // SeaORM ActiveModel::update() does not auto-set updated_at, and the DB
     // default only fires on INSERT — stamp it explicitly (CLAUDE.md convention).
-    active.updated_at = Set(super::now_stamp());
+    active.updated_at = Set(super::now());
     Ok(active.update(db).await?)
 }
 
