@@ -550,9 +550,9 @@ fn option_label(option: &need_option::Model) -> String {
     .join(" ")
 }
 
-// What is asked of the owner for a need of a job that is not done, without
-// the need's name.
-fn step_detail(view: &NeedView) -> String {
+/// Returns what is asked of the owner for a need of a job that is not done,
+/// or what settled it, as a sentence without the need's name.
+pub fn step_detail(view: &NeedView) -> String {
     match view.stage {
         Stage::Undecided if view.chosen.is_some() => "who supplies it is not decided".to_owned(),
         Stage::Undecided => "no part chosen".to_owned(),

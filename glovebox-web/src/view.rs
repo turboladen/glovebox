@@ -8,7 +8,7 @@ use glovebox_shared::{
     entities::{need_option, todo},
     money::format_cents,
     services::{
-        checklist::{Checklist, JobView, NeedView, StepRow},
+        checklist::{self, Checklist, JobView, NeedView, StepRow},
         need::{self, Stage},
     },
 };
@@ -103,9 +103,9 @@ impl OptionCard {
         let rejected = need::is_rejected(option);
         let has_number = option.part_number.is_some();
         let fit_text = match option.fitment.as_str() {
-            "confirmed" => "Fit confirmed",
+            "confirmed" => "Confirmed",
             "does_not_fit" => "Does not fit",
-            _ => "Fit unconfirmed",
+            _ => "Unconfirmed",
         };
         Self {
             id: option.id,
@@ -168,12 +168,14 @@ pub struct NeedCard {
     pub vid: i32,
     pub id: i32,
     pub name: String,
-    /// How many are needed, such as `2 needed`, when that is more than one.
+    /// How many are needed, such as `× 2`, when that is more than one.
     pub quantity: Option<String>,
     /// The page the forms return to.
     pub back: String,
     pub stage_class: &'static str,
     pub stage_text: &'static str,
+    /// The sentence the need's row under Next steps shows, without its name.
+    pub status_line: String,
     /// Whether the need's details start open.
     pub open: bool,
     pub chosen: Option<OptionCard>,
@@ -211,15 +213,11 @@ impl NeedCard {
     }
 
     pub fn supplier_text(&self) -> &str {
-        self.supplier_kind
-            .as_deref()
-            .unwrap_or("Supplier not decided")
+        self.supplier_kind.as_deref().unwrap_or("Not decided")
     }
 
     pub fn approach_text(&self) -> &str {
-        self.approach_kind
-            .as_deref()
-            .unwrap_or("Approach not decided")
+        self.approach_kind.as_deref().unwrap_or("Not decided")
     }
 
     /// The message of a failure of `form`, when that is the form that failed.
@@ -425,7 +423,8 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
         vid: ctx.vid,
         id: need.id,
         name: need.name.clone(),
-        quantity: several.then(|| format!("{} needed", need.quantity)),
+        quantity: several.then(|| format!("\u{d7} {}", need.quantity)),
+        status_line: checklist::step_detail(view),
         back: ctx.back.to_owned(),
         stage_class: stage.label(),
         stage_text: stage_text(stage),

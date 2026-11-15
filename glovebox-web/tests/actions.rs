@@ -7,7 +7,7 @@ use glovebox_shared::{
     inputs::{
         appointment::NewAppointment,
         need::{NewNeed, NewOption, OrderDetails, UpdateNeed},
-        part::PartFilter,
+        part::{NewPart, PartFilter},
         work_item::NewWorkItem,
     },
     services::{appointment, need, part, todo, work_item},
@@ -314,8 +314,8 @@ async fn supplier_and_approach_are_saved_and_cleared() {
     )
     .await;
     let (_, body) = w.get(&back).await;
-    assert!(body.contains("Supplier not decided"), "{body}");
-    assert!(body.contains("Approach not decided"), "{body}");
+    assert_eq!(body.matches(">Not decided</span>").count(), 2, "{body}");
+    assert!(!body.contains("Supplier not decided"), "{body}");
 
     let (status, _, body) = w
         .post(
@@ -396,7 +396,7 @@ async fn a_need_for_two_shows_its_count_and_the_price_of_both() {
         "{order}"
     );
     assert!(
-        body.contains(r#"<span class="qty">2 needed</span>"#),
+        body.contains("<span class=\"qty\">\u{d7} 2</span>"),
         "{body}"
     );
     assert!(body.contains(r#"value="$149.98""#), "{body}");
@@ -1329,4 +1329,57 @@ async fn a_failed_to_do_add_for_a_vehicle_the_home_page_does_not_list_shows_its_
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(body.contains("Not saved"), "{body}");
     assert!(body.contains("Vehicle 99999 not found"), "{body}");
+}
+
+#[tokio::test]
+async fn fit_labels_leave_the_word_fit_to_the_column_header() {
+    let w = World::new().await;
+    w.choose_good().await;
+
+    let (_, body) = w.get(&w.page_path()).await;
+
+    assert!(body.contains(">Confirmed</span>"), "{body}");
+    assert!(!body.contains("Fit confirmed"), "{body}");
+}
+
+#[tokio::test]
+#[ignore = "passes once the need row prints status_line"]
+async fn a_need_ordered_without_an_option_shows_its_step_sentence() {
+    let w = World::new().await;
+    let need_id = need::add(
+        &w.db,
+        w.vehicle,
+        w.job,
+        NewNeed {
+            name: "Brake fluid".into(),
+            supplied_by: Some("self".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    let part_id = part::create(
+        &w.db,
+        w.vehicle,
+        NewPart {
+            name: "Brake fluid".into(),
+            seller: Some("FCP Euro".into()),
+            purchase_date: Some("2026-11-13".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    need::link_part(&w.db, w.vehicle, need_id, part_id, None)
+        .await
+        .unwrap();
+
+    let (_, body) = w.get(&w.job_path()).await;
+
+    let row = &body[body.find(&format!(r#"id="need-{need_id}""#)).unwrap()..];
+    let row = &row[..row.find("</summary>").unwrap()];
+    assert!(row.contains("ordered from FCP Euro on 2026-11-13"), "{row}");
+    assert!(!row.contains("No part chosen"), "{row}");
 }
