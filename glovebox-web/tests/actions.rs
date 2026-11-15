@@ -1343,7 +1343,6 @@ async fn fit_labels_leave_the_word_fit_to_the_column_header() {
 }
 
 #[tokio::test]
-#[ignore = "passes once the need row prints status_line"]
 async fn a_need_ordered_without_an_option_shows_its_step_sentence() {
     let w = World::new().await;
     let need_id = need::add(
@@ -1382,4 +1381,105 @@ async fn a_need_ordered_without_an_option_shows_its_step_sentence() {
     let row = &row[..row.find("</summary>").unwrap()];
     assert!(row.contains("ordered from FCP Euro on 2026-11-13"), "{row}");
     assert!(!row.contains("No part chosen"), "{row}");
+}
+
+#[tokio::test]
+async fn a_job_shows_one_header_line_and_each_part_in_its_own_columns() {
+    let w = World::new().await;
+    need::decide(
+        &w.db,
+        w.vehicle,
+        w.need,
+        Some(w.good),
+        Some("Quiet and low dust.".into()),
+    )
+    .await
+    .unwrap();
+
+    let (_, body) = w.get(&w.page_path()).await;
+
+    assert!(
+        body.contains(
+            "<span>Need</span><span>Stage</span><span>Brand</span><span>Part \
+             number</span><span>Description</span><span>Seller</span><span \
+             class=\"num\">Price</span><span>Fit</span>"
+        ),
+        "{body}"
+    );
+    assert!(
+        body.contains(r#"<span data-l="Brand">Akebono</span>"#),
+        "{body}"
+    );
+    assert!(
+        body.contains(r#"<span class="pn" data-l="Part number">ACT1633</span>"#),
+        "{body}"
+    );
+    assert!(
+        body.contains(r#"<span class="num" data-l="Price">$74.99</span>"#),
+        "{body}"
+    );
+    assert!(
+        body.contains(r#"<span class="l">Reason</span>Quiet and low dust."#),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn an_option_without_a_part_number_spans_the_number_and_description_columns() {
+    let w = World::new().await;
+    need::add_option(
+        &w.db,
+        w.vehicle,
+        w.need,
+        NewOption {
+            description: "Pollen cabin air filter".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let (_, body) = w.get(&w.page_path()).await;
+
+    assert!(
+        body.contains(r#"<span class="pn span2" data-l="Part">Pollen cabin air filter</span>"#),
+        "{body}"
+    );
+    assert!(
+        !body.contains(r#"data-l="Description">Pollen cabin air filter"#),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn a_chosen_option_without_a_seller_or_price_keeps_its_columns() {
+    let w = World::new().await;
+    let bare = need::add_option(
+        &w.db,
+        w.vehicle,
+        w.need,
+        NewOption {
+            description: "Pads".into(),
+            part_number: Some("BARE-1".into()),
+            fitment: Some("confirmed".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    need::decide(&w.db, w.vehicle, w.need, Some(bare), None)
+        .await
+        .unwrap();
+
+    let (_, body) = w.get(&w.page_path()).await;
+
+    let row = &body[body.find(&format!(r#"id="need-{}""#, w.need)).unwrap()..];
+    let row = &row[..row.find("</summary>").unwrap()];
+    assert!(row.contains(r#"<span data-l="Brand"></span>"#), "{row}");
+    assert!(row.contains(r#"<span data-l="Seller"></span>"#), "{row}");
+    assert!(
+        row.contains(r#"<span class="num" data-l="Price"></span>"#),
+        "{row}"
+    );
 }
