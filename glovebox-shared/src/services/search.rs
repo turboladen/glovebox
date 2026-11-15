@@ -332,6 +332,7 @@ mod tests {
         .await;
         entities::incident::ActiveModel {
             vehicle_id: Set(vid),
+            occurred_at: Set(crate::dates::local_now()),
             category: Set("noise".into()),
             title: Set("Brake squeal".into()),
             ..Default::default()
@@ -371,6 +372,7 @@ mod tests {
         seed_service(&db, vid, "replaced brake pads").await;
         entities::incident::ActiveModel {
             vehicle_id: Set(vid),
+            occurred_at: Set(crate::dates::local_now()),
             category: Set("noise".into()),
             title: Set("Brake squeal".into()),
             ..Default::default()
@@ -543,6 +545,7 @@ mod tests {
         let vid = seed_vehicle(&db, "Golf R with unicorn paint").await;
         entities::incident::ActiveModel {
             vehicle_id: Set(vid),
+            occurred_at: Set(crate::dates::local_now()),
             category: Set("noise".into()),
             title: Set("Turbo whistle".into()),
             description: Set(Some("whistle under boost".into())),
@@ -573,7 +576,7 @@ mod tests {
         .unwrap();
         let report = entities::research_report::ActiveModel {
             vehicle_id: Set(vid),
-            generated_at: Set(date("2026-02-03 00:00:00")),
+            generated_at: Set(date("2026-02-03T00:00:00Z")),
             ..Default::default()
         }
         .insert(&db)

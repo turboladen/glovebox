@@ -490,7 +490,9 @@ mod tests {
         let db = connect(path.to_str().unwrap()).await.unwrap();
         let err = db
             .execute_unprepared(
-                "INSERT INTO service_records (vehicle_id, service_date) VALUES (999, '2026-01-01')",
+                "INSERT INTO service_records (vehicle_id, service_date, created_at, updated_at) \
+                 VALUES (999, '2026-01-01', '2026-01-01T00:00:00+00:00', \
+                 '2026-01-01T00:00:00+00:00')",
             )
             .await
             .unwrap_err();
@@ -522,12 +524,19 @@ mod tests {
         let second = raw(&path).await;
         // The write lock is held on one pooled connection until `commit`.
         let txn = TransactionTrait::begin(&first).await.unwrap();
-        txn.execute_unprepared("INSERT INTO platforms (name) VALUES ('holder')")
-            .await
-            .unwrap();
+        txn.execute_unprepared(
+            "INSERT INTO platforms (name, created_at, updated_at) VALUES ('holder', \
+             '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')",
+        )
+        .await
+        .unwrap();
         let waiting = tokio::spawn(async move {
             second
-                .execute_unprepared("INSERT INTO platforms (name) VALUES ('busy-timeout-probe')")
+                .execute_unprepared(
+                    "INSERT INTO platforms (name, created_at, updated_at) VALUES \
+                     ('busy-timeout-probe', '2026-01-01T00:00:00+00:00', \
+                     '2026-01-01T00:00:00+00:00')",
+                )
                 .await
         });
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -543,19 +552,22 @@ mod tests {
         let db = crate::test_support::test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
         db.execute_unprepared(&format!(
-            "INSERT INTO work_items (vehicle_id, title, status) VALUES ({v}, 'Brakes', 'planned')"
+            "INSERT INTO work_items (vehicle_id, title, status, created_at, updated_at) VALUES \
+             ({v}, 'Brakes', 'planned', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')"
         ))
         .await
         .unwrap();
         let work_item = scalar(&db, "SELECT id FROM work_items").await;
         db.execute_unprepared(&format!(
-            "INSERT INTO job_needs (work_item_id, name) VALUES ({work_item}, 'Pads')"
+            "INSERT INTO job_needs (work_item_id, name, created_at, updated_at) VALUES \
+             ({work_item}, 'Pads', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')"
         ))
         .await
         .unwrap();
         let need = scalar(&db, "SELECT id FROM job_needs").await;
         db.execute_unprepared(&format!(
-            "INSERT INTO need_options (need_id, description) VALUES ({need}, 'OEM pads')"
+            "INSERT INTO need_options (need_id, description, created_at, updated_at) VALUES \
+             ({need}, 'OEM pads', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')"
         ))
         .await
         .unwrap();

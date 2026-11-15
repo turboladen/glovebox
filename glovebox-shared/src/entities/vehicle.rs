@@ -28,9 +28,9 @@ pub struct Model {
     pub sold_price_currency: Option<String>,
     pub sold_mileage: Option<i32>,
     pub notes: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
-    pub archived_at: Option<String>,
+    pub created_at: DateTimeUtc,
+    pub updated_at: DateTimeUtc,
+    pub archived_at: Option<DateTimeUtc>,
     pub warranty_expires_on: Option<chrono::NaiveDate>,
     pub warranty_expires_miles: Option<i32>,
 }
@@ -115,4 +115,4 @@ impl Related<super::work_item::Entity> for Entity {
     }
 }
 
-impl ActiveModelBehavior for ActiveModel {}
+super::stamp_on_insert!(created_at, updated_at);

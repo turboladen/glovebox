@@ -13,8 +13,8 @@ pub struct Model {
     pub title: String,
     pub notes: Option<String>,
     pub done_on: Option<chrono::NaiveDate>,
-    pub created_at: String,
-    pub updated_at: String,
+    pub created_at: DateTimeUtc,
+    pub updated_at: DateTimeUtc,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -45,4 +45,4 @@ impl Related<super::appointment::Entity> for Entity {
     }
 }
 
-impl ActiveModelBehavior for ActiveModel {}
+super::stamp_on_insert!(created_at, updated_at);

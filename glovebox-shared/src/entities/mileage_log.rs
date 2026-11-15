@@ -11,7 +11,7 @@ pub struct Model {
     pub recorded_at: crate::dates::DayOrTime,
     pub source: Option<String>,
     pub notes: Option<String>,
-    pub created_at: String,
+    pub created_at: DateTimeUtc,
     // Set on logs created by a service record; the activity feed dedupes on it.
     pub service_record_id: Option<i32>,
 }
@@ -44,4 +44,4 @@ impl Related<super::vehicle::Entity> for Entity {
     }
 }
 
-impl ActiveModelBehavior for ActiveModel {}
+super::stamp_on_insert!(created_at);

@@ -36,6 +36,9 @@ pub(super) fn text_default(name: &str, default: &str) -> ColumnDef {
 }
 
 /// A `TEXT NOT NULL` timestamp that defaults to the insert time.
+///
+/// `m20261114_000002_utc_timestamps` removes this default from every table, so
+/// a table created after it declares its stamps with [`text_not_null`].
 pub(super) fn stamp(name: &str) -> ColumnDef {
     c(name)
         .text()

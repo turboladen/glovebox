@@ -12,7 +12,7 @@ pub struct Model {
     pub contact_with: Option<String>,
     pub summary: String,
     pub notes: Option<String>,
-    pub created_at: String,
+    pub created_at: DateTimeUtc,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -31,4 +31,4 @@ impl Related<super::incident::Entity> for Entity {
     }
 }
 
-impl ActiveModelBehavior for ActiveModel {}
+super::stamp_on_insert!(created_at);

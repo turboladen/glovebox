@@ -191,7 +191,7 @@ async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
             {
                 let mut active: research_finding::ActiveModel = existing.into();
                 active.title = Set(recall.title.clone());
-                active.updated_at = Set(super::now_stamp());
+                active.updated_at = Set(super::now());
                 active.update(db).await?;
             }
             // Stops a campaign repeated within `recalls` from being stored twice.
@@ -275,7 +275,7 @@ pub async fn file_finding(
             // Touch generated_at so the anchor dates from its newest filing,
             // not a stale first-filing date.
             let mut active: research_report::ActiveModel = r.into();
-            active.generated_at = Set(super::now_stamp());
+            active.generated_at = Set(super::now());
             active.update(db).await?
         }
         None => {

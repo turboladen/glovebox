@@ -17,8 +17,8 @@ pub struct Model {
     pub decision_reason: Option<String>,
     pub decided_on: Option<chrono::NaiveDate>,
     pub part_id: Option<i32>,
-    pub created_at: String,
-    pub updated_at: String,
+    pub created_at: DateTimeUtc,
+    pub updated_at: DateTimeUtc,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -63,4 +63,4 @@ impl Related<super::need_option::Entity> for Entity {
     }
 }
 
-impl ActiveModelBehavior for ActiveModel {}
+super::stamp_on_insert!(created_at, updated_at);

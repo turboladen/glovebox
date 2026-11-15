@@ -257,7 +257,7 @@ pub async fn update(
     if let Some(v) = input.warranty_expires_miles {
         active.warranty_expires_miles = Set(v);
     }
-    active.updated_at = Set(super::now_stamp());
+    active.updated_at = Set(super::now());
 
     Ok(active.update(db).await?)
 }
@@ -265,8 +265,8 @@ pub async fn update(
 pub async fn archive(db: &impl ConnectionTrait, id: i32) -> DomainResult<vehicle::Model> {
     let existing = require(db, id).await?;
     let mut active: vehicle::ActiveModel = existing.into();
-    let now = super::now_stamp();
-    active.archived_at = Set(Some(now.clone()));
+    let now = super::now();
+    active.archived_at = Set(Some(now));
     active.updated_at = Set(now);
     Ok(active.update(db).await?)
 }
@@ -275,7 +275,7 @@ pub async fn unarchive(db: &impl ConnectionTrait, id: i32) -> DomainResult<vehic
     let existing = require(db, id).await?;
     let mut active: vehicle::ActiveModel = existing.into();
     active.archived_at = Set(None);
-    active.updated_at = Set(super::now_stamp());
+    active.updated_at = Set(super::now());
     Ok(active.update(db).await?)
 }
 

@@ -18,8 +18,8 @@ pub struct Model {
     pub total_cost_currency: Option<String>,
     pub shop_name: Option<String>,
     pub notes: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
+    pub created_at: DateTimeUtc,
+    pub updated_at: DateTimeUtc,
     pub shop_id: Option<i32>,
     pub paid_by: String,
     pub payer_note: Option<String>,
@@ -88,4 +88,4 @@ impl Related<super::maintenance_schedule_item::Entity> for Entity {
     }
 }
 
-impl ActiveModelBehavior for ActiveModel {}
+super::stamp_on_insert!(created_at, updated_at);

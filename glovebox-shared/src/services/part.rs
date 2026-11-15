@@ -32,7 +32,7 @@ pub(crate) async fn mark_returned(
     active.returned_on = Set(Some(super::today()));
     active.return_reason = Set(Some(reason));
     active.returned_from_need_id = Set(Some(need_id));
-    active.updated_at = Set(super::now_stamp());
+    active.updated_at = Set(super::now());
     Ok(active.update(db).await?)
 }
 
@@ -261,7 +261,7 @@ pub async fn update(
         active.received_on = Set(v);
     }
 
-    active.updated_at = Set(super::now_stamp());
+    active.updated_at = Set(super::now());
     Ok(active.update(db).await?)
 }
 
@@ -287,7 +287,7 @@ pub(crate) async fn install(
     active.installed_service_id = Set(Some(record.id));
     active.installed_date = Set(Some(record.service_date));
     active.installed_odometer = odometer;
-    active.updated_at = Set(super::now_stamp());
+    active.updated_at = Set(super::now());
     active.update(db).await?;
     Ok(())
 }
@@ -301,7 +301,7 @@ pub(crate) async fn follow_service(
 ) -> DomainResult<()> {
     let mut changes = part::ActiveModel {
         installed_date: Set(Some(record.service_date)),
-        updated_at: Set(super::now_stamp()),
+        updated_at: Set(super::now()),
         ..Default::default()
     };
     if let Some(miles) = record.mileage {
@@ -344,7 +344,7 @@ pub(crate) async fn uninstall(
     active.installed_service_id = Set(None);
     active.installed_date = Set(None);
     active.installed_odometer = Set(None);
-    active.updated_at = Set(super::now_stamp());
+    active.updated_at = Set(super::now());
     active.update(db).await?;
     Ok(())
 }

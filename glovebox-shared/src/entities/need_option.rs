@@ -20,8 +20,8 @@ pub struct Model {
     pub fitment_note: Option<String>,
     pub rejected_reason: Option<String>,
     pub rejected_on: Option<chrono::NaiveDate>,
-    pub created_at: String,
-    pub updated_at: String,
+    pub created_at: DateTimeUtc,
+    pub updated_at: DateTimeUtc,
     /// The reason a need gave when it chose this option, kept after the
     /// choice is cleared by a rejection.
     pub chosen_reason: Option<String>,
@@ -45,4 +45,4 @@ impl Related<super::job_need::Entity> for Entity {
     }
 }
 
-impl ActiveModelBehavior for ActiveModel {}
+super::stamp_on_insert!(created_at, updated_at);

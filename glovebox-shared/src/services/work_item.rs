@@ -219,7 +219,7 @@ pub(crate) async fn complete_with_service(
         let mut active: work_item::ActiveModel = existing.into();
         active.status = Set("done".to_string());
         active.completed_service_id = Set(Some(service_record_id));
-        active.updated_at = Set(super::now_stamp());
+        active.updated_at = Set(super::now());
         completed.push(active.update(db).await?);
 
         // The stored schedule item id was resolved when the work item was
@@ -289,7 +289,7 @@ pub(crate) async fn reopen_completed_by(
         .set(work_item::ActiveModel {
             status: Set("planned".to_string()),
             completed_service_id: Set(None),
-            updated_at: Set(super::now_stamp()),
+            updated_at: Set(super::now()),
             ..Default::default()
         })
         .filter(work_item::Column::Id.is_in(reopened.clone()))
@@ -442,7 +442,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         active.status = Set(v);
     }
 
-    active.updated_at = Set(super::now_stamp());
+    active.updated_at = Set(super::now());
     let mut updated = active.update(db).await?;
     if reopens {
         super::appointment::settle_reopened_jobs(db, &[updated.id]).await?;
@@ -519,6 +519,7 @@ mod tests {
     async fn seed_incident(db: &impl ConnectionTrait, vehicle_id: i32) -> i32 {
         incident::ActiveModel {
             vehicle_id: Set(vehicle_id),
+            occurred_at: Set(crate::dates::local_now()),
             category: Set("noise".into()),
             title: Set("Squeak".into()),
             ..Default::default()
@@ -554,8 +555,8 @@ mod tests {
             incident_id: None,
             est_cost_cents: None,
             status: "planned".into(),
-            created_at: String::new(),
-            updated_at: String::new(),
+            created_at: chrono::DateTime::default(),
+            updated_at: chrono::DateTime::default(),
             revisit_by_date: date.map(crate::test_support::date),
             revisit_by_miles: miles,
             completed_service_id: None,

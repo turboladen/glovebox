@@ -33,8 +33,8 @@ pub struct Model {
     /// Self-FK: this incident is a recurrence of an earlier one (same
     /// vehicle, enforced by the service layer). ON DELETE SET NULL.
     pub recurrence_of_id: Option<i32>,
-    pub created_at: String,
-    pub updated_at: String,
+    pub created_at: DateTimeUtc,
+    pub updated_at: DateTimeUtc,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -78,4 +78,4 @@ impl Related<super::service_record::Entity> for Entity {
     }
 }
 
-impl ActiveModelBehavior for ActiveModel {}
+super::stamp_on_insert!(created_at, updated_at);

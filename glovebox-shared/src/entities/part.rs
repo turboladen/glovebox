@@ -22,8 +22,8 @@ pub struct Model {
     pub replaced_date: Option<chrono::NaiveDate>,
     pub replaced_odometer: Option<i32>,
     pub notes: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
+    pub created_at: DateTimeUtc,
+    pub updated_at: DateTimeUtc,
     pub manufacturer_url: Option<String>,
     pub retailer_url: Option<String>,
     pub location: Option<String>,
@@ -72,4 +72,4 @@ impl Related<super::service_record::Entity> for Entity {
     }
 }
 
-impl ActiveModelBehavior for ActiveModel {}
+super::stamp_on_insert!(created_at, updated_at);

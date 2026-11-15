@@ -157,7 +157,7 @@ pub async fn update(
     if let Some(v) = input.notes {
         active.notes = Set(v);
     }
-    active.updated_at = Set(super::now_stamp());
+    active.updated_at = Set(super::now());
     Ok(active.update(db).await?)
 }
 
@@ -501,10 +501,7 @@ async fn put_away(
     if !unassigned_job_ids.is_empty() {
         work_item::Entity::update_many()
             .col_expr(work_item::Column::AppointmentId, Expr::value(None::<i32>))
-            .col_expr(
-                work_item::Column::UpdatedAt,
-                Expr::value(super::now_stamp()),
-            )
+            .col_expr(work_item::Column::UpdatedAt, Expr::value(super::now()))
             .filter(work_item::Column::Id.is_in(unassigned_job_ids.clone()))
             .exec(db)
             .await?;
@@ -514,7 +511,7 @@ async fn put_away(
         Ending::Cancelled => active.cancelled_on = Set(Some(today)),
         Ending::Closed => active.closed_on = Set(Some(today)),
     }
-    active.updated_at = Set(super::now_stamp());
+    active.updated_at = Set(super::now());
     let appointment = active.update(db).await?;
     Ok(ClosedAppointment {
         appointment,
@@ -558,10 +555,7 @@ pub(crate) async fn settle_reopened_jobs(
                 appointment::Column::ClosedOn,
                 Expr::value(None::<chrono::NaiveDate>),
             )
-            .col_expr(
-                appointment::Column::UpdatedAt,
-                Expr::value(super::now_stamp()),
-            )
+            .col_expr(appointment::Column::UpdatedAt, Expr::value(super::now()))
             .filter(appointment::Column::Id.is_in(closed.iter().map(|a| a.id)))
             .exec(db)
             .await?;
@@ -569,10 +563,7 @@ pub(crate) async fn settle_reopened_jobs(
     if !cancelled.is_empty() {
         work_item::Entity::update_many()
             .col_expr(work_item::Column::AppointmentId, Expr::value(None::<i32>))
-            .col_expr(
-                work_item::Column::UpdatedAt,
-                Expr::value(super::now_stamp()),
-            )
+            .col_expr(work_item::Column::UpdatedAt, Expr::value(super::now()))
             .filter(work_item::Column::Id.is_in(job_ids.to_vec()))
             .filter(work_item::Column::AppointmentId.is_in(cancelled.iter().map(|a| a.id)))
             .exec(db)
@@ -595,7 +586,7 @@ pub async fn reopen(
     let mut active: appointment::ActiveModel = existing.into();
     active.cancelled_on = Set(None);
     active.closed_on = Set(None);
-    active.updated_at = Set(super::now_stamp());
+    active.updated_at = Set(super::now());
     Ok(active.update(db).await?)
 }
 
@@ -643,8 +634,8 @@ mod tests {
             notes: None,
             cancelled_on: cancelled_on.map(date),
             closed_on: closed_on.map(date),
-            created_at: String::new(),
-            updated_at: String::new(),
+            created_at: chrono::DateTime::default(),
+            updated_at: chrono::DateTime::default(),
         }
     }
 

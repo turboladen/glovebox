@@ -23,14 +23,17 @@ pub mod vehicle;
 pub mod vin_decode;
 pub mod work_item;
 
-/// The project-wide stored-timestamp stamp (naive UTC, stored as text).
-pub(crate) fn now_stamp() -> String {
-    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
+/// The current instant in UTC, to the second, for a bookkeeping stamp
+/// (`created_at`, `updated_at`). Whole seconds give every stored stamp the
+/// same width, so the stored text sorts in time order.
+pub(crate) fn now() -> chrono::DateTime<chrono::Utc> {
+    use chrono::SubsecRound;
+    chrono::Utc::now().trunc_subsecs(0)
 }
 
 /// The calendar date where the server runs. Every day count and every default
 /// date value uses this, so "today" matches the owner's wall calendar. Stored
-/// `created_at`/`updated_at` stamps are UTC (see [`now_stamp`]).
+/// `created_at`/`updated_at` stamps are UTC (see [`now`]).
 #[must_use]
 pub fn today() -> chrono::NaiveDate {
     chrono::Local::now().date_naive()

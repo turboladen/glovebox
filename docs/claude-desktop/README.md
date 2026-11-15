@@ -71,7 +71,9 @@ the file.
 
 A new version can change the database's structure, and a program older than the database refuses
 to open it. The Claude Desktop server only checks when it starts, so one that is already running
-keeps serving after the page has updated the file. Upgrade in this order:
+keeps going after the page has updated the file, and it then works against a structure it does
+not know: adding a record can fail, and an edit can store a value in the form the older version
+used. Upgrade in this order:
 
 1. Stop the page if it is running.
 2. Run `just install`, then quit and reopen Claude Desktop, so the server it starts is the new one.

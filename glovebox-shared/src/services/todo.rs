@@ -96,7 +96,7 @@ pub async fn update(
     if let Some(v) = input.appointment_id {
         active.appointment_id = Set(v);
     }
-    active.updated_at = Set(super::now_stamp());
+    active.updated_at = Set(super::now());
     Ok(active.update(db).await?)
 }
 
@@ -139,7 +139,7 @@ pub async fn complete(
     let done_on = on.unwrap_or_else(crate::services::today);
     let mut active: todo::ActiveModel = existing.into();
     active.done_on = Set(Some(done_on));
-    active.updated_at = Set(super::now_stamp());
+    active.updated_at = Set(super::now());
     Ok(active.update(db).await?)
 }
 
@@ -155,7 +155,7 @@ pub async fn reopen(
     let existing = require(db, vehicle_id, id).await?;
     let mut active: todo::ActiveModel = existing.into();
     active.done_on = Set(None);
-    active.updated_at = Set(super::now_stamp());
+    active.updated_at = Set(super::now());
     Ok(active.update(db).await?)
 }
 

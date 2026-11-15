@@ -11,8 +11,8 @@ pub struct Model {
     pub summary: Option<String>,
     pub raw_data: Option<String>,
     pub notes: Option<String>,
-    pub generated_at: String,
-    pub created_at: String,
+    pub generated_at: DateTimeUtc,
+    pub created_at: DateTimeUtc,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -39,4 +39,4 @@ impl Related<super::research_finding::Entity> for Entity {
     }
 }
 
-impl ActiveModelBehavior for ActiveModel {}
+super::stamp_on_insert!(generated_at, created_at);

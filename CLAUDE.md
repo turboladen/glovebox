@@ -118,9 +118,11 @@ with the `DomainResult<T>` alias.
 one seed migration (`m20261112_000002_seed_vw_mqb`: the VW MQB platform, the Golf GTI and
 Alltrack templates and their schedule items), the job checklist migration
 (`m20261113_000001_job_checklist`: appointments, needs, options and to-dos, additive only),
-`m20261113_000002_option_choice_history` (an option's `chosen_reason` and `chosen_on`) and
+`m20261113_000002_option_choice_history` (an option's `chosen_reason` and `chosen_on`),
 `m20261114_000001_typed_dates`, which refuses to finish while a date column holds a value that is
-not a real `YYYY-MM-DD`, because such a row could not be read. They run on startup.
+not a real `YYYY-MM-DD`, because such a row could not be read, and
+`m20261114_000002_utc_timestamps`, which rewrites every stamp as RFC 3339 and removes the
+`datetime('now')` column defaults by editing the stored table definitions. They run on startup.
 
 **Test harness** (`test_support.rs`): `test_db()` is an in-memory SQLite database with migrations
 applied. It is compiled under `#[cfg(any(test, feature = "test-support"))]`; `glovebox-mcp` uses it
@@ -294,9 +296,11 @@ opens a form and the button that submits it carry the same words. Every date is 
 - Service functions take `db: &impl ConnectionTrait` as the first parameter, never a server type.
 - **Error model**: services return `DomainResult<T>`. `Invalid` renders as `"{field}: {message}"`;
   `BadRequest` renders its message verbatim; `Db` and `Internal` are opaque to the client.
-- **`updated_at` stamping lives in shared service update functions**, not handlers: every update
-  function sets `active.updated_at = Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string())`
-  because SeaORM `ActiveModel::update()` does not set it.
+- **Stamps are set by code, never by the database.** No stamp column has a default. An entity
+  fills `created_at` and `updated_at` on insert (`stamp_on_insert!` in `entities/mod.rs`), and
+  every update function sets `active.updated_at = Set(services::now())`, because SeaORM
+  `ActiveModel::update()` does not set it. A bulk insert (`insert_many`) or raw SQL bypasses the
+  entity and sets both stamps itself.
 - New domain logic gets service-level unit tests in `glovebox-shared` (via `test_support::test_db()`)
   and MCP coverage in `glovebox-mcp/tests`.
 - **Cross-reference guards**: services guard every foreign id they accept (schedule items, work
@@ -323,8 +327,11 @@ opens a form and the button that submits it carry the same words. Every date is 
   local date and time. Both are stored as SQLite TEXT (`YYYY-MM-DD`, `YYYY-MM-DD HH:MM:SS`). Text
   the owner types is read only by `dates::parse_date` and `dates::parse_day_or_time`, which the
   MCP `into_domain` conversions and the web forms call, so shared inputs and services never see a
-  date as a string. `created_at` and `updated_at` are `String` (`YYYY-MM-DD HH:MM:SS`, UTC).
-- **Migrations**: new migrations go after `m20261114_000001_typed_dates`; the `new-migration` skill
+  date as a string. A bookkeeping stamp (`created_at`,
+  `updated_at`, `archived_at`, `generated_at`) is `DateTime<Utc>`, stored as RFC 3339 with whole
+  seconds (`2026-11-14T12:00:00+00:00`) and printed in tool output as `2026-11-14T12:00:00Z`.
+  `docs/adr/0001-typed-dates-and-timestamps.md` records why.
+- **Migrations**: new migrations go after `m20261114_000002_utc_timestamps`; the `new-migration` skill
   has the templates. Use `Expr::cust()` for expressions inside builder queries; raw
   `execute_unprepared` only where no builder form exists (FTS5 DDL, cross-table copies).
 - **Migrations are not transactional on SQLite** (sea-orm-migration only wraps Postgres), so write
@@ -356,6 +363,30 @@ Crate-level `#![allow]`s in `glovebox-shared/src/lib.rs` suppress intentional pe
 `glovebox-mcp/src/schemas.rs` allows `clippy::option_option` on the corrections module for the same
 reason. Run `cargo clippy --workspace -- -D clippy::pedantic` to verify zero warnings. Add
 per-function `#[allow]` for unavoidable cases.
+
+## Non-Interactive Shell Commands
+
+**ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.
+
+Shell commands like `cp`, `mv`, and `rm` may be aliased to include `-i` (interactive) mode on some systems, causing the agent to hang indefinitely waiting for y/n input.
+
+**Use these forms instead:**
+```bash
+# Force overwrite without prompting
+cp -f source dest           # NOT: cp source dest
+mv -f source dest           # NOT: mv source dest
+rm -f file                  # NOT: rm file
+
+# For recursive operations
+rm -rf directory            # NOT: rm -r directory
+cp -rf source dest          # NOT: cp -r source dest
+```
+
+**Other commands that may prompt:**
+- `scp` - use `-o BatchMode=yes` for non-interactive
+- `ssh` - use `-o BatchMode=yes` to fail instead of prompting
+- `apt-get` - use `-y` flag
+- `brew` - use `HOMEBREW_NO_AUTO_UPDATE=1` env var
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker

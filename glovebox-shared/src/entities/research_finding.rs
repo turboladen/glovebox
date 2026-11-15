@@ -13,8 +13,8 @@ pub struct Model {
     pub source_url: Option<String>,
     pub severity: Option<String>,
     pub status: String,
-    pub created_at: String,
-    pub updated_at: String,
+    pub created_at: DateTimeUtc,
+    pub updated_at: DateTimeUtc,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -33,4 +33,4 @@ impl Related<super::research_report::Entity> for Entity {
     }
 }
 
-impl ActiveModelBehavior for ActiveModel {}
+super::stamp_on_insert!(created_at, updated_at);
