@@ -5,7 +5,8 @@
 //! `2026-11-14T12:00:00+00:00`. A row written by a `datetime('now')` default
 //! would hold `2026-11-14 12:00:00`, which sorts before every RFC 3339 value,
 //! so no stamp column keeps a default and code sets the stamps on every
-//! insert.
+//! insert. `incidents.occurred_at` carries the same default and loses it too;
+//! the incident service always sets that column.
 //!
 //! The whole change runs in one transaction. Running it again finds no value
 //! in the other form and no default to remove.
@@ -45,6 +46,11 @@ impl MigrationTrait for Migration {
         // One transaction pins one connection, which `PRAGMA writable_schema`
         // needs, and leaves nothing half done when a step fails.
         let txn = manager.get_connection().begin().await?;
+        // A write first takes the write lock, waiting out another program's
+        // write. A transaction that reads first and writes later fails at once
+        // if anything was written in between.
+        txn.execute_unprepared("UPDATE seaql_migrations SET version = version WHERE 0")
+            .await?;
 
         let mut unreadable = Vec::new();
         for (table, columns) in STAMPS {
@@ -80,8 +86,10 @@ impl MigrationTrait for Migration {
     }
 }
 
-/// The text shape of a stamp that `datetime('now')` wrote.
+/// The text shape of a stamp that `datetime('now')` wrote, as a `GLOB` and as
+/// a chrono format.
 const OLD_SHAPE: &str = "????-??-?? ??:??:??";
+const OLD_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
 
 /// Describes the values of `table.column` that are in neither stamp form, as
 /// `Some` text such as `2 values in parts.updated_at`, or `None` when there
@@ -104,8 +112,10 @@ async fn count_unreadable(
     let mut count = 0;
     for row in rows {
         let text = row.try_get_by_index::<String>(0)?;
-        let old = chrono::NaiveDateTime::parse_from_str(&text, "%Y-%m-%d %H:%M:%S").is_ok()
-            && text.len() == OLD_SHAPE.len();
+        // The parser alone also takes `2026-1-05  00:00:00`, which the
+        // rewrite's `GLOB` does not match, so the text must print back.
+        let old = chrono::NaiveDateTime::parse_from_str(&text, OLD_FORMAT)
+            .is_ok_and(|at| at.format(OLD_FORMAT).to_string() == text);
         if !old && chrono::DateTime::parse_from_rfc3339(&text).is_err() {
             count += row.try_get_by_index::<i64>(1)?;
         }
@@ -123,6 +133,7 @@ async fn count_unreadable(
 async fn remove_defaults(txn: &impl ConnectionTrait) -> Result<(), DbErr> {
     const DEFAULT: &str = " DEFAULT (datetime(''now''))";
     let version = scalar::<i64>(txn, "PRAGMA schema_version").await?;
+    let before = soundness(txn).await?;
 
     txn.execute_unprepared("PRAGMA writable_schema = ON")
         .await?;
@@ -147,22 +158,31 @@ async fn remove_defaults(txn: &impl ConnectionTrait) -> Result<(), DbErr> {
         "SELECT count(*) FROM sqlite_schema WHERE instr(sql, 'datetime(') > 0",
     )
     .await?;
-    let integrity = scalar::<String>(txn, "PRAGMA integrity_check").await?;
-    let broken_links = txn
+    // Both checks cover the whole database, so a fault that was already there
+    // is not this edit's doing and does not stop it.
+    let after = soundness(txn).await?;
+    if left > 0 || after != before {
+        return Err(DbErr::Migration(format!(
+            "removing the timestamp defaults did not leave the database as expected ({left} \
+             definitions still name datetime(); integrity check and broken foreign keys were \
+             {before:?} and are {after:?}). Nothing was changed."
+        )));
+    }
+    Ok(())
+}
+
+/// The result of `PRAGMA integrity_check` and the number of rows
+/// `PRAGMA foreign_key_check` reports.
+async fn soundness(db: &impl ConnectionTrait) -> Result<(String, usize), DbErr> {
+    let integrity = scalar::<String>(db, "PRAGMA integrity_check").await?;
+    let broken_links = db
         .query_all_raw(Statement::from_string(
             DatabaseBackend::Sqlite,
             "PRAGMA foreign_key_check",
         ))
         .await?
         .len();
-    if left > 0 || integrity != "ok" || broken_links > 0 {
-        return Err(DbErr::Migration(format!(
-            "removing the timestamp defaults left the database unsound ({left} definitions still \
-             name datetime(), integrity check: {integrity}, {broken_links} broken foreign keys). \
-             Nothing was changed."
-        )));
-    }
-    Ok(())
+    Ok((integrity, broken_links))
 }
 
 async fn scalar<T: sea_orm::TryGetable>(db: &impl ConnectionTrait, sql: &str) -> Result<T, DbErr> {
@@ -181,11 +201,11 @@ mod tests {
     use super::STAMPS;
     use crate::{db::connect_options, migration::Migrator};
 
-    /// The number of migrations that run before this one.
+    // The number of migrations that run before this one.
     const BEFORE: u32 = 5;
 
-    /// A database as the previous migration leaves it, holding the seeded
-    /// rows and one vehicle with a service, each stamped by its default.
+    // A database as the previous migration leaves it, holding the seeded
+    // rows and one vehicle with a service, each stamped by its default.
     async fn db_before() -> DatabaseConnection {
         let db = Database::connect(connect_options(None)).await.unwrap();
         Migrator::up(&db, Some(BEFORE)).await.unwrap();
@@ -218,8 +238,8 @@ mod tests {
             .unwrap()
     }
 
-    /// How many stamps across the database are not whole-second RFC 3339 in
-    /// UTC, and how many stamps there are.
+    // How many stamps across the database are not whole-second RFC 3339 in
+    // UTC, and how many stamps there are.
     async fn stamps(db: &DatabaseConnection) -> (i64, i64) {
         let (mut other, mut all) = (0, 0);
         for (table, columns) in STAMPS {
@@ -303,6 +323,26 @@ mod tests {
             .await,
             1
         );
+    }
+
+    // The checks after the schema edit look at the whole database, so they
+    // are judged against the same checks made before it.
+    #[tokio::test]
+    async fn a_broken_link_that_was_already_there_does_not_stop_it() {
+        let db = db_before().await;
+        db.execute_unprepared(
+            "PRAGMA foreign_keys = OFF;
+             INSERT INTO service_records (id, vehicle_id, service_date) VALUES (9, 999, \
+             '2026-01-05');
+             PRAGMA foreign_keys = ON;",
+        )
+        .await
+        .unwrap();
+
+        Migrator::up(&db, Some(1)).await.unwrap();
+
+        assert_eq!(tables_with_a_default(&db).await, 0);
+        assert_eq!(stamps(&db).await.0, 0);
     }
 
     #[tokio::test]

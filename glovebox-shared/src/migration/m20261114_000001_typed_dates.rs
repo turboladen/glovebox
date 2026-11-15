@@ -121,7 +121,7 @@ mod tests {
 
     use crate::{db::connect_options, migration::Migrator};
 
-    /// The number of migrations that run before this one.
+    // The number of migrations that run before this one.
     const BEFORE: u32 = 4;
 
     async fn db_before() -> DatabaseConnection {
@@ -151,7 +151,7 @@ mod tests {
             .unwrap()
     }
 
-    /// Every date and event-time value in the fixture, as one string.
+    // Every date and event-time value in the fixture, as one string.
     async fn snapshot(db: &DatabaseConnection) -> String {
         text(
             db,
