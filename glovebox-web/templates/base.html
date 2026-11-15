@@ -250,6 +250,9 @@
   /* A long value wraps inside its own column. */
   .row > span, .step > span { overflow-wrap: anywhere; }
   .span2 { grid-column: span 2; }
+  .cap::first-letter { text-transform: uppercase; }
+  .step--todo > .drawer, .step--todo > .drawer[open] { grid-column: 2 / -1; }
+  .notice { padding-top: 1rem; }
   .row .span::first-letter, .step .say::first-letter { text-transform: uppercase; }
 </style>
 </head>

@@ -3,13 +3,13 @@
     <input type="hidden" name="back" value="{{ t.back }}">
     <button class="tick" type="submit" aria-pressed="{% if t.done %}true{% else %}false{% endif %}" aria-label="{% if t.done %}Un-tick{% else %}Tick{% endif %}: {{ t.title }}"></button>
   </form>
-  <p class="step-text">{{ t.title }}</p>
+  <span class="say">{{ t.title }}</span>
   {% if !t.done %}
-  <div class="step-actions">
+  <span class="act">
     <form method="post" action="/vehicles/{{ t.vid }}/todos/{{ t.id }}/delete">
       <input type="hidden" name="back" value="{{ t.back }}">
       <button class="btn btn--quiet" type="submit" aria-label="Delete to-do: {{ t.title }}">Delete</button>
     </form>
-  </div>
+  </span>
   {% endif %}
 </li>

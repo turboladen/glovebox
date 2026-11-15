@@ -1,4 +1,4 @@
-<form class="form" method="post" action="/vehicles/{{ n.vid }}/needs/{{ n.id }}/ordered">
+<form class="formbox" method="post" action="/vehicles/{{ n.vid }}/needs/{{ n.id }}/ordered">
   {% if let Some(e) = n.error_in("order") %}<p class="error" role="alert"><b>Not saved.</b> {{ e }}</p>{% endif %}
   <input type="hidden" name="back" value="{{ n.back }}">
   {% if let Some(c) = n.chosen %}{% if let Some(href) = c.link %}<p class="form-note"><a class="opt-link" href="{{ href }}" target="_blank" rel="noopener noreferrer">Open the listing</a></p>{% endif %}{% endif %}
@@ -9,7 +9,7 @@
     <label class="field"><span>Order number</span><input type="text" name="order_ref" value="{{ n.order.order_ref }}" autocomplete="off"></label>
   </div>
   <div class="form-actions">
-    <button class="btn btn--primary" type="submit">Mark ordered</button>
+    <button class="btn" type="submit">Mark ordered</button>
     <p class="form-note">This records a purchase and cannot be undone here. Correct a mistaken order through Claude.</p>
   </div>
 </form>
