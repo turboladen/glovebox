@@ -465,8 +465,8 @@ mod tests {
     use super::*;
     use crate::{
         entities::{
-            incident, maintenance_schedule_item, mileage_log, part, service_record,
-            service_record_line_item, service_schedule_link,
+            incident, incident::IncidentCategory, maintenance_schedule_item, mileage_log, part,
+            service_record, service_record_line_item, service_schedule_link,
         },
         inputs::{
             part::NewPart,
@@ -520,7 +520,7 @@ mod tests {
         incident::ActiveModel {
             vehicle_id: Set(vehicle_id),
             occurred_at: Set(crate::dates::local_now()),
-            category: Set("noise".into()),
+            category: Set(IncidentCategory::Noise),
             title: Set("Squeak".into()),
             ..Default::default()
         }

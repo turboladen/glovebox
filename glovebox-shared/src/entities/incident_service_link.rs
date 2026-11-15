@@ -1,6 +1,14 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
+crate::vocabulary! {
+    /// What a service did for an incident it is linked to.
+    pub enum LinkRole {
+        Noticed => "noticed",
+        Resolved => "resolved",
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "incident_service_links")]
 pub struct Model {
@@ -8,9 +16,8 @@ pub struct Model {
     pub incident_id: i32,
     #[sea_orm(primary_key, auto_increment = false)]
     pub service_record_id: i32,
-    /// `noticed` or `resolved`.
     #[sea_orm(primary_key, auto_increment = false)]
-    pub role: String,
+    pub role: LinkRole,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

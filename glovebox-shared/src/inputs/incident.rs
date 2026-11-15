@@ -1,7 +1,9 @@
 //! Domain inputs for incidents and their followups.
 
+use crate::entities::incident::IncidentCategory;
+
 pub struct NewIncident {
-    pub category: String,
+    pub category: IncidentCategory,
     pub title: String,
     pub description: Option<String>,
     pub odometer: Option<i32>,
@@ -30,7 +32,7 @@ pub struct NewIncident {
 impl Default for NewIncident {
     fn default() -> Self {
         NewIncident {
-            category: "general".into(),
+            category: IncidentCategory::General,
             title: String::new(),
             description: None,
             odometer: None,
@@ -55,7 +57,7 @@ impl Default for NewIncident {
 
 #[derive(Default)]
 pub struct UpdateIncident {
-    pub category: Option<String>,
+    pub category: Option<IncidentCategory>,
     pub title: Option<String>,
     pub description: Option<Option<String>>,
     pub odometer: Option<Option<i32>>,

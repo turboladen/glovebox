@@ -1,6 +1,7 @@
 //! The one-call answer to "what is coming for this car": scheduled
 //! maintenance, the to-do list, open recalls and unresolved incidents.
 
+use crate::entities::incident::IncidentCategory;
 use sea_orm::*;
 use serde::Serialize;
 
@@ -118,7 +119,7 @@ pub(crate) async fn open_incidents(
     Ok(incident_svc::list_rows(db, vehicle_id, Some(false))
         .await?
         .into_iter()
-        .filter(|i| i.category != "note")
+        .filter(|i| i.category != IncidentCategory::Note)
         .collect())
 }
 
@@ -323,14 +324,14 @@ mod tests {
             .unwrap();
 
         for (category, title) in [
-            ("shop_observation", "Seeping valve cover"),
-            ("note", "Fact"),
+            (IncidentCategory::ShopObservation, "Seeping valve cover"),
+            (IncidentCategory::Note, "Fact"),
         ] {
             incident_svc::create(
                 &db,
                 v,
                 NewIncident {
-                    category: category.into(),
+                    category,
                     title: title.into(),
                     ..Default::default()
                 },

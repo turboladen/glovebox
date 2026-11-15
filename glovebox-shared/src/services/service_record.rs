@@ -1,3 +1,4 @@
+use crate::entities::{incident::IncidentCategory, incident_service_link::LinkRole};
 use sea_orm::*;
 use serde::Serialize;
 
@@ -186,7 +187,7 @@ impl std::ops::Deref for LineItemView {
 pub struct IncidentRef {
     pub id: i32,
     pub title: String,
-    pub category: String,
+    pub category: IncidentCategory,
     pub resolved: bool,
     /// The service on the other end of the incident's link; see the field it
     /// appears under on `ServiceRecordWithLinks`.
@@ -241,7 +242,7 @@ async fn load_incident_links(
 
     // The other end of a link: the incident's noticing service, or, when
     // looking from the noticing side, the latest service that fixed it.
-    let other_for = |incident_id: i32, role: &str| -> Option<ServiceRef> {
+    let other_for = |incident_id: i32, role: LinkRole| -> Option<ServiceRef> {
         all_links
             .iter()
             .filter(|l| l.incident_id == incident_id && l.role == role)
@@ -255,10 +256,9 @@ async fn load_incident_links(
         let Some(inc) = incidents.get(&link.incident_id) else {
             continue;
         };
-        let (bucket, other_role) = match link.role.as_str() {
-            "noticed" => (&mut out.noticed, "resolved"),
-            "resolved" => (&mut out.resolved, "noticed"),
-            _ => continue,
+        let (bucket, other_role) = match link.role {
+            LinkRole::Noticed => (&mut out.noticed, LinkRole::Resolved),
+            LinkRole::Resolved => (&mut out.resolved, LinkRole::Noticed),
         };
         bucket
             .entry(link.service_record_id)
@@ -266,7 +266,7 @@ async fn load_incident_links(
             .push(IncidentRef {
                 id: inc.id,
                 title: inc.title.clone(),
-                category: inc.category.clone(),
+                category: inc.category,
                 resolved: inc.resolved,
                 other_service: other_for(inc.id, other_role),
             });
@@ -722,7 +722,10 @@ async fn link_incidents(
     completed: &[crate::entities::work_item::Model],
 ) -> DomainResult<()> {
     resolved_ids.extend(completed.iter().filter_map(|w| w.incident_id));
-    for (ids, role) in [(resolved_ids, "resolved"), (noticed_ids, "noticed")] {
+    for (ids, role) in [
+        (resolved_ids, LinkRole::Resolved),
+        (noticed_ids, LinkRole::Noticed),
+    ] {
         for id in super::dedup_ids(&ids) {
             incident_svc::link_service(txn, vehicle_id, id, record_id, role).await?;
         }
@@ -1280,7 +1283,7 @@ async fn reopen_resolved_incidents(
 ) -> DomainResult<()> {
     let resolved_here: Vec<i32> = incident_service_link::Entity::find()
         .filter(incident_service_link::Column::ServiceRecordId.eq(service_id))
-        .filter(incident_service_link::Column::Role.eq(incident_svc::ROLE_RESOLVED))
+        .filter(incident_service_link::Column::Role.eq(LinkRole::Resolved))
         .all(txn)
         .await?
         .into_iter()
@@ -1291,7 +1294,7 @@ async fn reopen_resolved_incidents(
     }
     let resolved_elsewhere: std::collections::HashSet<i32> = incident_service_link::Entity::find()
         .filter(incident_service_link::Column::IncidentId.is_in(resolved_here.clone()))
-        .filter(incident_service_link::Column::Role.eq(incident_svc::ROLE_RESOLVED))
+        .filter(incident_service_link::Column::Role.eq(LinkRole::Resolved))
         .filter(incident_service_link::Column::ServiceRecordId.ne(service_id))
         .all(txn)
         .await?
@@ -1617,7 +1620,7 @@ mod tests {
         // An incident linked to the record via the M2M link table.
         let inc = incident::ActiveModel {
             vehicle_id: Set(vid),
-            category: Set("noise".into()),
+            category: Set(IncidentCategory::Noise),
             title: Set("Rattle".into()),
             occurred_at: Set(date("2024-02-01")),
             resolved: Set(false),
@@ -1629,7 +1632,7 @@ mod tests {
         incident_service_link::ActiveModel {
             incident_id: Set(inc.id),
             service_record_id: Set(svc_id),
-            role: Set("resolved".into()),
+            role: Set(LinkRole::Resolved),
         }
         .insert(&db)
         .await
@@ -2815,7 +2818,7 @@ mod tests {
             db,
             vehicle_id,
             NewIncident {
-                category: "shop_observation".into(),
+                category: IncidentCategory::ShopObservation,
                 title: "N80 purge valve failing".into(),
                 noticed_during_service_id: noticed_during,
                 ..Default::default()

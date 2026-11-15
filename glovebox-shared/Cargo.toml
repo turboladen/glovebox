@@ -11,6 +11,9 @@ path = "src/lib.rs"
 # Exposes `test_support` (in-memory migrated DB) to sibling crates' tests.
 # Enable only as a dev-dependency feature; never from a normal dependency.
 test-support = []
+# Derives `schemars::JsonSchema` for the vocabulary enums, so a tool schema lists
+# their values. `glovebox-mcp` enables it.
+schemars = ["dep:schemars"]
 
 [dependencies]
 sea-orm.workspace = true
@@ -23,6 +26,7 @@ thiserror.workspace = true
 reqwest.workspace = true
 async-trait.workspace = true
 tracing.workspace = true
+schemars = { version = "1.2", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

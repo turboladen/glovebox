@@ -44,7 +44,7 @@ async fn log_incident_rejects_unknown_category_and_wrong_links() {
         )
         .await;
     assert!(
-        err.contains("Invalid category") && err.contains("warning_light"),
+        err.contains("category: unknown variant `bogus`") && err.contains("`warning_light`"),
         "the error must steer toward valid categories; got: {err}"
     );
 

@@ -267,7 +267,7 @@ async fn home_shows_what_is_waiting_before_the_appointments() {
         &db,
         v,
         NewIncident {
-            category: "shop_observation".into(),
+            category: glovebox_shared::entities::incident::IncidentCategory::ShopObservation,
             title: "Seeping valve cover".into(),
             occurred_at: Some(date("2026-10-02 09:30:00")),
             ..Default::default()
