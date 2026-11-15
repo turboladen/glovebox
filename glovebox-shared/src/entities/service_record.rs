@@ -1,6 +1,26 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
+crate::vocab::vocabulary! {
+    /// Who paid for a service or for one of its lines.
+    pub enum Payer {
+        // The owner.
+        Owner => "self",
+        Insurance => "insurance",
+        ThirdParty => "third_party",
+        Manufacturer => "manufacturer",
+    }
+}
+
+crate::vocab::vocabulary! {
+    /// Who did the work of a service.
+    pub enum Performer {
+        Shop => "shop",
+        // The owner.
+        Owner => "self",
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "service_records")]
 pub struct Model {
@@ -21,13 +41,12 @@ pub struct Model {
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
     pub shop_id: Option<i32>,
-    pub paid_by: String,
+    pub paid_by: Payer,
     pub payer_note: Option<String>,
     /// Invoice/receipt number off the scan. Unique per vehicle when present;
     /// re-recording the same ref is idempotent (returns the existing record).
     pub invoice_ref: Option<String>,
-    /// Who did the work: `shop` or `self`.
-    pub performed_by: String,
+    pub performed_by: Performer,
     /// Last day of a multi-day job; `service_date` is the first day.
     pub end_date: Option<chrono::NaiveDate>,
     pub appointment_id: Option<i32>,

@@ -466,7 +466,8 @@ mod tests {
     use crate::{
         entities::{
             incident, incident::IncidentCategory, maintenance_schedule_item, mileage_log, part,
-            service_record, service_record_line_item, service_schedule_link,
+            service_record, service_record_line_item, service_record_line_item::WorkKind,
+            service_schedule_link,
         },
         inputs::{
             part::NewPart,
@@ -745,7 +746,7 @@ mod tests {
             line_items: Some(vec![NewLineItem {
                 paid_by: None,
                 description: "Oil".into(),
-                work_kind: "maintenance".into(),
+                work_kind: WorkKind::Maintenance,
                 quantity: None,
                 unit_cost_cents: None,
                 cost_cents: None,

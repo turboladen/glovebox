@@ -7,7 +7,12 @@
 
 use glovebox_shared::{
     dates,
-    entities::{incident::IncidentCategory, vehicle},
+    entities::{
+        incident::IncidentCategory,
+        service_record::{Payer, Performer},
+        service_record_line_item::WorkKind,
+        vehicle,
+    },
     error::DomainResult,
     inputs::{
         incident::NewIncident,
@@ -56,7 +61,7 @@ pub struct RecordServiceInput {
     pub end_date: Option<String>,
     /// Who did the work: `shop` (default) or `self` (the owner did it, e.g. a
     /// DIY job or an ECU flash). A `self` job takes no `shop_name`.
-    pub performed_by: Option<String>,
+    pub performed_by: Option<Performer>,
     /// What was done, e.g. "Oil change + tire rotation".
     pub description: Option<String>,
     /// Odometer reading at service time. Also logs a mileage entry.
@@ -79,7 +84,7 @@ pub struct RecordServiceInput {
     /// other driver), or `manufacturer` (the manufacturer or dealer covered
     /// the work, as with a recall or warranty repair). Anything not paid by
     /// the owner counts as covered, not out-of-pocket, in cost summaries.
-    pub paid_by: Option<String>,
+    pub paid_by: Option<Payer>,
     /// Who exactly paid / claim number, e.g. "Progressive claim #12345".
     pub payer_note: Option<String>,
     /// Itemized invoice lines, one per job on the paperwork.
@@ -137,13 +142,13 @@ pub struct LineItemInput {
     /// `inspection`, `recall` (work done under a recall campaign), or `fee`
     /// (tax, shop supplies, disposal and similar charges on the invoice that
     /// are not work).
-    pub work_kind: String,
+    pub work_kind: WorkKind,
     /// Who paid this line: `self`, `insurance`, `third_party` or `manufacturer`. Leave it
     /// out unless this line was paid by someone other than whoever paid the service. Mark a
     /// warranty or recall line on an owner-paid invoice `manufacturer`; the
     /// line's cost still counts inside the service's `total_cost_cents`, and
     /// the owner's share is the total minus the covered lines.
-    pub paid_by: Option<String>,
+    pub paid_by: Option<Payer>,
     /// How many units, e.g. 5 for five quarts of oil. May be fractional.
     pub quantity: Option<f64>,
     /// Per-unit cost, integer cents.

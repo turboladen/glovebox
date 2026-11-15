@@ -139,7 +139,12 @@ mod tests {
 
     use super::COLUMNS;
     use crate::{
-        entities::{incident::IncidentCategory, incident_service_link::LinkRole},
+        entities::{
+            incident::IncidentCategory,
+            incident_service_link::LinkRole,
+            service_record::{Payer, Performer},
+            service_record_line_item::WorkKind,
+        },
         migration::{Migrator, schema::testing::migrated_to},
         vocab::{self, Vocabulary},
     };
@@ -254,5 +259,9 @@ mod tests {
 
         check::<IncidentCategory>("incidents", "category");
         check::<LinkRole>("incident_service_links", "role");
+        check::<Payer>("service_records", "paid_by");
+        check::<Payer>("service_record_line_items", "paid_by");
+        check::<Performer>("service_records", "performed_by");
+        check::<WorkKind>("service_record_line_items", "work_kind");
     }
 }

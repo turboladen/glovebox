@@ -1,12 +1,16 @@
-use crate::inputs::part::NewPart;
+use crate::{
+    entities::{
+        service_record::{Payer, Performer},
+        service_record_line_item::WorkKind,
+    },
+    inputs::part::NewPart,
+};
 
 pub struct NewLineItem {
     pub description: String,
-    /// One of `service_record::VALID_WORK_KINDS`.
-    pub work_kind: String,
-    /// One of `service_record::VALID_PAYERS`, or `None` for the service's own
-    /// payer.
-    pub paid_by: Option<String>,
+    pub work_kind: WorkKind,
+    /// `None` for the service's own payer.
+    pub paid_by: Option<Payer>,
     pub quantity: Option<f64>,
     pub unit_cost_cents: Option<i32>,
     pub cost_cents: Option<i32>,
@@ -17,8 +21,8 @@ pub struct NewServiceRecord {
     pub service_date: chrono::NaiveDate,
     /// Last day of the work for multi-day jobs; never before `service_date`.
     pub end_date: Option<chrono::NaiveDate>,
-    /// `shop` (default) or `self`.
-    pub performed_by: Option<String>,
+    /// Defaults to the shop.
+    pub performed_by: Option<Performer>,
     pub mileage: Option<i32>,
     pub description: Option<String>,
     pub parts_cost_cents: Option<i32>,
@@ -31,7 +35,7 @@ pub struct NewServiceRecord {
     pub shop_id: Option<i32>,
     pub notes: Option<String>,
     /// Who paid: `self` (default), `insurance`, `third_party`, or `manufacturer`.
-    pub paid_by: Option<String>,
+    pub paid_by: Option<Payer>,
     pub payer_note: Option<String>,
     pub schedule_item_ids: Option<Vec<i32>>,
     pub part_ids: Option<Vec<i32>>,
@@ -65,7 +69,7 @@ pub struct UpdateServiceRecord {
     pub service_date: Option<chrono::NaiveDate>,
     pub end_date: Option<Option<chrono::NaiveDate>>,
     /// Plain option: the column is non-nullable, so there is no "clear" case.
-    pub performed_by: Option<String>,
+    pub performed_by: Option<Performer>,
     pub mileage: Option<Option<i32>>,
     pub description: Option<Option<String>>,
     pub parts_cost_cents: Option<Option<i32>>,
@@ -78,7 +82,7 @@ pub struct UpdateServiceRecord {
     pub shop_id: Option<Option<i32>>,
     pub notes: Option<Option<String>>,
     /// Plain option: the column is non-nullable, so there is no "clear" case.
-    pub paid_by: Option<String>,
+    pub paid_by: Option<Payer>,
     pub payer_note: Option<Option<String>>,
     pub schedule_item_ids: Option<Vec<i32>>,
     pub part_ids: Option<Vec<i32>>,

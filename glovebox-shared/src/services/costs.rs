@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::entities::{service_record::Payer, service_record_line_item::WorkKind};
 use sea_orm::*;
 use serde::Serialize;
 
@@ -8,7 +9,7 @@ use crate::{
     error::DomainResult,
     services::{
         recall::{self, RecallRef},
-        service_record::{PAYER_SELF, effective_payer},
+        service_record::effective_payer,
     },
 };
 
@@ -78,7 +79,7 @@ pub struct CoveredWork {
     pub service_date: chrono::NaiveDate,
     pub description: Option<String>,
     /// Who paid the invoice overall.
-    pub paid_by: String,
+    pub paid_by: Payer,
     pub payer_note: Option<String>,
     /// What others paid for this service: its total minus
     /// `out_of_pocket_cents`. Zero when the service has no total. Summed
@@ -96,9 +97,9 @@ pub struct CoveredWork {
 #[derive(Serialize)]
 pub struct CoveredLine {
     pub description: String,
-    pub work_kind: String,
+    pub work_kind: WorkKind,
     /// The line's own payer, or the service's when the line has none.
-    pub paid_by: String,
+    pub paid_by: Payer,
     pub cost_cents: Option<i32>,
 }
 
@@ -164,13 +165,11 @@ fn out_of_pocket_per_service(
         let line_cents = |covered: bool| -> i64 {
             lines
                 .iter()
-                .filter(|l| {
-                    (effective_payer(l.paid_by.as_deref(), &svc.paid_by) != PAYER_SELF) == covered
-                })
+                .filter(|l| (effective_payer(l.paid_by, svc.paid_by) != Payer::Owner) == covered)
                 .map(|l| i64::from(l.cost_cents.unwrap_or(0)))
                 .sum()
         };
-        let out_of_pocket = if svc.paid_by == PAYER_SELF {
+        let out_of_pocket = if svc.paid_by == Payer::Owner {
             Ord::max(total - line_cents(true), 0)
         } else {
             Ord::min(line_cents(false), total)
@@ -191,11 +190,11 @@ async fn covered_work(
     let mut covered: Vec<&service_record::Model> = services
         .iter()
         .filter(|s| {
-            s.paid_by != PAYER_SELF
+            s.paid_by != Payer::Owner
                 || lines_by_service.get(&s.id).is_some_and(|lines| {
                     lines
                         .iter()
-                        .any(|l| effective_payer(l.paid_by.as_deref(), &s.paid_by) != PAYER_SELF)
+                        .any(|l| effective_payer(l.paid_by, s.paid_by) != Payer::Owner)
                 })
         })
         .collect();
@@ -210,7 +209,7 @@ async fn covered_work(
                 service_id: s.id,
                 service_date: s.service_date,
                 description: s.description.clone(),
-                paid_by: s.paid_by.clone(),
+                paid_by: s.paid_by,
                 payer_note: s.payer_note.clone(),
                 covered_by_others_cents: i64::from(s.total_cost_cents.unwrap_or(0)) - out_of_pocket,
                 out_of_pocket_cents: out_of_pocket,
@@ -220,11 +219,11 @@ async fn covered_work(
                     .into_iter()
                     .flatten()
                     .filter_map(|l| {
-                        let payer = effective_payer(l.paid_by.as_deref(), &s.paid_by);
-                        (payer != PAYER_SELF).then(|| CoveredLine {
+                        let payer = effective_payer(l.paid_by, s.paid_by);
+                        (payer != Payer::Owner).then(|| CoveredLine {
                             description: l.description.clone(),
-                            work_kind: l.work_kind.clone(),
-                            paid_by: payer.to_owned(),
+                            work_kind: l.work_kind,
+                            paid_by: payer,
                             cost_cents: l.cost_cents,
                         })
                     })
@@ -476,7 +475,7 @@ mod tests {
             vehicle_id: Set(vid),
             service_date: Set(date("2024-02-20")),
             total_cost_cents: Set(Some(15_000)),
-            paid_by: Set("insurance".into()),
+            paid_by: Set(Payer::Insurance),
             payer_note: Set(Some("claim #123".into())),
             ..Default::default()
         }
@@ -582,7 +581,7 @@ mod tests {
             vehicle_id: Set(vid),
             service_date: Set(crate::test_support::date(date)),
             total_cost_cents: Set(total),
-            paid_by: Set(paid_by.into()),
+            paid_by: Set(paid_by.parse().unwrap()),
             ..Default::default()
         }
         .insert(db)
@@ -800,8 +799,8 @@ mod tests {
         service_record_line_item::ActiveModel {
             service_record_id: Set(service_id),
             description: Set(description.into()),
-            work_kind: Set(work_kind.into()),
-            paid_by: Set(paid_by.map(Into::into)),
+            work_kind: Set(work_kind.parse().unwrap()),
+            paid_by: Set(paid_by.map(|p| p.parse().unwrap())),
             cost_cents: Set(cost),
             ..Default::default()
         }
@@ -850,7 +849,7 @@ mod tests {
         let ids: Vec<i32> = s.covered_work.iter().map(|c| c.service_id).collect();
         assert_eq!(ids, vec![new, old]);
         let first = &s.covered_work[0];
-        assert_eq!(first.paid_by, "manufacturer");
+        assert_eq!(first.paid_by, Payer::Manufacturer);
         assert_eq!(first.covered_by_others_cents, 0);
         assert_eq!(first.out_of_pocket_cents, 0);
         assert!(first.lines.is_empty());
@@ -884,14 +883,14 @@ mod tests {
         assert_eq!(s.covered_work_count, 1);
         let work = &s.covered_work[0];
         assert_eq!(work.service_id, id);
-        assert_eq!(work.paid_by, "self");
+        assert_eq!(work.paid_by, Payer::Owner);
         assert_eq!(work.lines.len(), 1);
         assert_eq!(
             work.lines[0].description,
             "Replace failed water pump under warranty"
         );
-        assert_eq!(work.lines[0].work_kind, "repair");
-        assert_eq!(work.lines[0].paid_by, "manufacturer");
+        assert_eq!(work.lines[0].work_kind, WorkKind::Repair);
+        assert_eq!(work.lines[0].paid_by, Payer::Manufacturer);
         assert_eq!(work.lines[0].cost_cents, None);
     }
 
@@ -949,7 +948,7 @@ mod tests {
         assert_eq!(s.out_of_pocket_cents, 0);
         assert_eq!(s.covered_cents, 0);
         assert_eq!(s.covered_work_count, 1);
-        assert_eq!(s.covered_work[0].lines[0].paid_by, "manufacturer");
+        assert_eq!(s.covered_work[0].lines[0].paid_by, Payer::Manufacturer);
         assert_eq!(s.covered_work[0].lines[0].cost_cents, None);
     }
 

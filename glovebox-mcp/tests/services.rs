@@ -156,8 +156,37 @@ async fn record_service_payer_flows_into_cost_summary_split() {
         )
         .await;
     assert!(
-        err.contains("third_party"),
-        "the error must list the valid payers; got: {err}"
+        err.contains("paid_by: unknown variant") && err.contains("third_party"),
+        "the error must name the argument and list the valid payers; got: {err}"
+    );
+
+    // A bad value inside a line names the line and the argument.
+    let err = t
+        .call_err(
+            "record_service",
+            json!({
+                "vehicle_id": v.id,
+                "service_date": "2026-06-20",
+                "line_items": [
+                    { "description": "Oil", "work_kind": "maintenance" },
+                    { "description": "Flash", "work_kind": "upgrade" }
+                ]
+            }),
+        )
+        .await;
+    assert!(
+        err.contains("line_items[1].work_kind") && err.contains("`mod`"),
+        "got: {err}"
+    );
+    let err = t
+        .call_err(
+            "record_service",
+            json!({ "vehicle_id": v.id, "service_date": "2026-06-20", "performed_by": "dealer" }),
+        )
+        .await;
+    assert!(
+        err.contains("performed_by: unknown variant") && err.contains("`shop`"),
+        "got: {err}"
     );
 }
 
