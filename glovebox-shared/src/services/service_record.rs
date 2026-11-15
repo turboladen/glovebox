@@ -767,8 +767,9 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     // Hard-idempotency: an invoice_ref is a deterministic identity signal.
     // If this vehicle already has a record with the same ref, return it
     // UNTOUCHED: no new record, no new links, parts or line items from this
-    // call. The short-circuit runs before any other check or write. The
-    // partial unique index is the backstop against a race.
+    // call. The short-circuit runs before any other check or write in this
+    // function; the dates in `input` are typed, so the caller has already
+    // parsed them. The partial unique index is the backstop against a race.
     if let Some(invoice_ref) = &invoice_ref {
         let existing = service_record::Entity::find()
             .filter(service_record::Column::VehicleId.eq(vehicle_id))

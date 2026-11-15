@@ -9,6 +9,8 @@
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 use sea_orm_migration::prelude::*;
 
+use crate::dates::{self, DayOrTime};
+
 /// Columns that hold a calendar date, `YYYY-MM-DD`.
 const DATES: &[(&str, &str)] = &[
     ("appointments", "planned_date"),
@@ -54,18 +56,17 @@ impl MigrationTrait for Migration {
             .await?;
         }
 
-        // `date()` and `datetime()` give back their argument only when it is a
-        // real day or time in the stored form: they return NULL for other
-        // text and roll `2026-02-30` forward to March.
+        // Each value is judged by the parser that reads it, so the guard and
+        // the reader cannot disagree. SQLite's `date()` and `datetime()` do:
+        // they take hour 24 and refuse a leap second.
         let mut unreadable = Vec::new();
         for (table, column) in DATES {
-            let bad = format!("date({column}) IS NOT {column}");
-            unreadable.extend(count_bad(db, table, column, &bad).await?);
+            let readable = |text: &str| dates::parse_date(column, text).is_ok();
+            unreadable.extend(count_unreadable(db, table, column, readable).await?);
         }
         for (table, column) in EVENT_TIMES {
-            let bad =
-                format!("date({column}) IS NOT {column} AND datetime({column}) IS NOT {column}");
-            unreadable.extend(count_bad(db, table, column, &bad).await?);
+            let readable = |text: &str| text.parse::<DayOrTime>().is_ok();
+            unreadable.extend(count_unreadable(db, table, column, readable).await?);
         }
         if unreadable.is_empty() {
             return Ok(());
@@ -84,21 +85,31 @@ impl MigrationTrait for Migration {
     }
 }
 
-/// Describes the values of `table.column` that match `bad`, as `Some` text
-/// such as `2 values in parts.purchase_date`, or `None` when there are none.
-async fn count_bad(
+/// Describes the values of `table.column` that `readable` turns down, as
+/// `Some` text such as `2 values in parts.purchase_date`, or `None` when
+/// there are none.
+async fn count_unreadable(
     db: &SchemaManagerConnection<'_>,
     table: &str,
     column: &str,
-    bad: &str,
+    readable: impl Fn(&str) -> bool,
 ) -> Result<Option<String>, DbErr> {
-    let row = db
-        .query_one_raw(Statement::from_string(
+    // The column is cast because SQLite lets a TEXT column hold a number.
+    let rows = db
+        .query_all_raw(Statement::from_string(
             DatabaseBackend::Sqlite,
-            format!("SELECT count(*) FROM {table} WHERE {column} IS NOT NULL AND {bad}"),
+            format!(
+                "SELECT CAST({column} AS TEXT), count(*) FROM {table} WHERE {column} IS NOT NULL \
+                 GROUP BY 1"
+            ),
         ))
         .await?;
-    let count = row.map_or(Ok(0), |row| row.try_get_by_index::<i64>(0))?;
+    let mut count = 0;
+    for row in rows {
+        if !readable(&row.try_get_by_index::<String>(0)?) {
+            count += row.try_get_by_index::<i64>(1)?;
+        }
+    }
     let noun = if count == 1 { "value" } else { "values" };
     Ok((count > 0).then(|| format!("{count} {noun} in {table}.{column}")))
 }
@@ -165,6 +176,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_value_the_reader_takes_passes_even_where_sqlite_would_not() {
+        let db = db_before().await;
+        db.execute_unprepared(
+            "UPDATE incidents SET occurred_at = '2026-12-31 23:59:60' WHERE id = 2",
+        )
+        .await
+        .unwrap();
+
+        Migrator::up(&db, Some(1)).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn running_it_again_changes_nothing() {
         let db = db_before().await;
         Migrator::up(&db, Some(1)).await.unwrap();
@@ -198,6 +221,11 @@ mod tests {
             (
                 "UPDATE mileage_log SET recorded_at = 'last week'",
                 "mileage_log.recorded_at",
+            ),
+            // SQLite's own date functions take hour 24, and the reader does not.
+            (
+                "UPDATE incidents SET occurred_at = '2026-01-05 24:00:00' WHERE id = 2",
+                "incidents.occurred_at",
             ),
         ] {
             let db = db_before().await;

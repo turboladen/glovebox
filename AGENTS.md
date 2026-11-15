@@ -314,8 +314,8 @@ opens a form and the button that submits it carry the same words. Every date is 
 - **Issue tracking**: Use `bd` (beads), never markdown TODOs.
 - **Design decisions**: a design or architecture decision is recorded as an ADR in `docs/adr/`
   (`NNNN-short-name.md`: status, date, context, decision, alternatives, consequences). Brainstorming
-  specs and task plans under `docs/superpowers/` are working files and are ignored by git, so
-  nothing committed refers to one.
+  specs and task plans under `docs/superpowers/` are working files that git ignores, so new
+  text points at the ADR and never at one of them.
 - **Currency**: Stored as integer cents (`i32`). Tool inputs and outputs are cents. Use integer
   division for formatting, not `as f64 / 100.0`.
 - **Dates**: a calendar date is `chrono::NaiveDate` and an event time (`incidents.occurred_at`,
