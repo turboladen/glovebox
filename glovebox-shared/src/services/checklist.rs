@@ -56,6 +56,10 @@ fn serialize_warnings<S: serde::Serializer>(checks: &[Check], out: S) -> Result<
     out.collect_seq(warning_lines(checks))
 }
 
+/// The note on a need whose part is linked while no option is chosen. A page
+/// may show it in a shorter form of its own.
+pub const NO_DECISION_NOTE: &str = "A part is linked and no decision is recorded.";
+
 /// One note about a need, for a page that shows it in a row of its own.
 #[derive(Debug)]
 pub struct Check {
@@ -437,7 +441,7 @@ fn need_view(
     }
     // A shop-supplied need asks no decision of the owner.
     if part.is_some() && chosen.is_none() && need.supplied_by.as_deref() != Some("shop") {
-        notes.push("A part is linked and no decision is recorded.".to_string());
+        notes.push(NO_DECISION_NOTE.to_string());
     }
     NeedView {
         stage: stage(&need, part.as_ref()),
@@ -1315,7 +1319,7 @@ mod tests {
     }
 
     const UNCONFIRMED: &str = "Fitment of the chosen option is not confirmed.";
-    const NO_DECISION: &str = "A part is linked and no decision is recorded.";
+    const NO_DECISION: &str = NO_DECISION_NOTE;
 
     #[tokio::test]
     async fn unconfirmed_fitment_and_mismatched_part_number_warn() {

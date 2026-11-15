@@ -1465,6 +1465,49 @@ async fn a_linked_part_with_no_chosen_option_fills_the_part_columns() {
 }
 
 #[tokio::test]
+async fn a_linked_part_with_no_decision_shows_a_pill_and_no_check_row() {
+    let w = World::new().await;
+    let need_id = need::add(
+        &w.db,
+        w.vehicle,
+        w.job,
+        NewNeed {
+            name: "Front rotors".into(),
+            supplied_by: Some("self".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    let part_id = part::create(
+        &w.db,
+        w.vehicle,
+        NewPart {
+            name: "Coat Z front rotors".into(),
+            seller: Some("FCP Euro".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    need::link_part(&w.db, w.vehicle, need_id, part_id, None)
+        .await
+        .unwrap();
+
+    let (_, body) = w.get(&w.page_path()).await;
+
+    let row = need_summary(&body, need_id);
+    assert!(
+        row.contains(r#"<span class="pill">No decision recorded</span>"#),
+        "{row}"
+    );
+    assert!(!body.contains("A part is linked"), "{body}");
+    assert!(!body.contains(r#"id="g-check""#), "{body}");
+}
+
+#[tokio::test]
 async fn a_linked_part_with_no_number_shows_its_name_as_the_part() {
     let w = World::new().await;
     let need_id = need::add(

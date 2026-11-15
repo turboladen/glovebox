@@ -17,7 +17,7 @@
         <span><span class="l">Supplier</span>{% if n.supplier_kind.is_some() %}{{ n.supplier_text() }}{% else %}<span class="empty">{{ n.supplier_text() }}</span>{% endif %}</span>
         <span><span class="l">Approach</span>{% if n.approach_kind.is_some() %}{{ n.approach_text() }}{% else %}<span class="empty">{{ n.approach_text() }}</span>{% endif %}</span>
         {% if let Some(r) = n.decision_reason %}<span><span class="l">Reason</span>{{ r }}</span>{% endif %}
-        {% if let Some(p) = n.purchase %}<span class="line">{{ p }}</span>{% endif %}
+        {% if let Some(p) = n.purchase %}<span class="line">{{ p }}{% if n.no_decision %} <span class="pill">No decision recorded</span>{% endif %}</span>{% else if n.no_decision %}<span class="line"><span class="pill">No decision recorded</span></span>{% endif %}
         {% for note in n.notes %}<span class="line note">{{ note }}</span>{% endfor %}
         {% if let Some(c) = n.chosen %}{% if let Some(href) = c.link %}<span class="line"><a href="{{ href }}" target="_blank" rel="noopener noreferrer">Open the listing</a></span>{% endif %}{% endif %}
       </span>
