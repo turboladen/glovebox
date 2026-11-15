@@ -34,7 +34,7 @@ pub struct NewServiceRecord {
     pub shop_name: Option<String>,
     pub shop_id: Option<i32>,
     pub notes: Option<String>,
-    /// Who paid: `self` (default), `insurance`, `third_party`, or `manufacturer`.
+    /// Defaults to the owner.
     pub paid_by: Option<Payer>,
     pub payer_note: Option<String>,
     pub schedule_item_ids: Option<Vec<i32>>,

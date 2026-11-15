@@ -143,8 +143,8 @@ pub struct LineItemInput {
     /// (tax, shop supplies, disposal and similar charges on the invoice that
     /// are not work).
     pub work_kind: WorkKind,
-    /// Who paid this line: `self`, `insurance`, `third_party` or `manufacturer`. Leave it
-    /// out unless this line was paid by someone other than whoever paid the service. Mark a
+    /// Who paid this line. Leave it out unless this line was paid by someone other than
+    /// whoever paid the service. Mark a
     /// warranty or recall line on an owner-paid invoice `manufacturer`; the
     /// line's cost still counts inside the service's `total_cost_cents`, and
     /// the owner's share is the total minus the covered lines.

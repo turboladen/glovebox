@@ -2304,11 +2304,11 @@ mod tests {
 
     // --- invoice detail: who did the work, date range, line kinds, parts ---
 
-    fn line(description: &str, work_kind: &str) -> NewLineItem {
+    fn line(description: &str, work_kind: WorkKind) -> NewLineItem {
         NewLineItem {
             paid_by: None,
             description: description.into(),
-            work_kind: work_kind.parse().unwrap(),
+            work_kind,
             quantity: None,
             unit_cost_cents: None,
             cost_cents: None,
@@ -2325,10 +2325,10 @@ mod tests {
             NewServiceRecord {
                 service_date: date("2026-11-03"),
                 line_items: Some(vec![
-                    line("Oil change", "maintenance"),
+                    line("Oil change", WorkKind::Maintenance),
                     NewLineItem {
                         paid_by: Some(Payer::Manufacturer),
-                        ..line("Water pump under warranty", "repair")
+                        ..line("Water pump under warranty", WorkKind::Repair)
                     },
                 ]),
                 ..Default::default()
@@ -2353,11 +2353,8 @@ mod tests {
         }
     }
 
-    fn kinds(got: &ServiceRecordWithLinks) -> Vec<&str> {
-        got.line_items
-            .iter()
-            .map(|l| l.work_kind.as_str())
-            .collect()
+    fn kinds(got: &ServiceRecordWithLinks) -> Vec<WorkKind> {
+        got.line_items.iter().map(|l| l.work_kind).collect()
     }
 
     #[tokio::test]
@@ -2372,8 +2369,8 @@ mod tests {
                 end_date: Some(date("2025-03-25")),
                 performed_by: Some(Performer::Shop),
                 line_items: Some(vec![
-                    line("Replace suction jet pump", "repair"),
-                    line("Intake upgrade", "mod"),
+                    line("Replace suction jet pump", WorkKind::Repair),
+                    line("Intake upgrade", WorkKind::Mod),
                 ]),
                 ..Default::default()
             },
@@ -2382,7 +2379,7 @@ mod tests {
         .unwrap();
         assert_eq!(got.record.performed_by, Performer::Shop);
         assert_eq!(got.record.end_date, Some(date("2025-03-25")));
-        assert_eq!(kinds(&got), vec!["repair", "mod"]);
+        assert_eq!(kinds(&got), vec![WorkKind::Repair, WorkKind::Mod]);
     }
 
     #[tokio::test]
@@ -2500,7 +2497,7 @@ mod tests {
             NewServiceRecord {
                 service_date: date("2025-03-24"),
                 invoice_ref: Some("07447".into()),
-                line_items: Some(vec![line("Oil change", "maintenance")]),
+                line_items: Some(vec![line("Oil change", WorkKind::Maintenance)]),
                 parts: Some(vec![inline_part("Oil filter", "shop")]),
                 ..Default::default()
             },
@@ -2516,7 +2513,10 @@ mod tests {
             NewServiceRecord {
                 service_date: date("2025-03-24"),
                 invoice_ref: Some("07447".into()),
-                line_items: Some(vec![line("Other", "repair"), line("Another", "mod")]),
+                line_items: Some(vec![
+                    line("Other", WorkKind::Repair),
+                    line("Another", WorkKind::Mod),
+                ]),
                 parts: Some(vec![inline_part("A", "self"), inline_part("B", "self")]),
                 ..Default::default()
             },
@@ -2547,7 +2547,7 @@ mod tests {
             NewServiceRecord {
                 service_date: date("2025-03-24"),
                 mileage: Some(50_000),
-                line_items: Some(vec![line("Oil change", "maintenance")]),
+                line_items: Some(vec![line("Oil change", WorkKind::Maintenance)]),
                 parts: Some(vec![inline_part("Filter", "dealer")]),
                 ..Default::default()
             },
@@ -2573,7 +2573,7 @@ mod tests {
             NewServiceRecord {
                 service_date: date("2025-03-24"),
                 performed_by: Some(Performer::Owner),
-                line_items: Some(vec![line("IE Stage 1 tune flash", "mod")]),
+                line_items: Some(vec![line("IE Stage 1 tune flash", WorkKind::Mod)]),
                 ..Default::default()
             },
         )
@@ -2596,7 +2596,7 @@ mod tests {
             UpdateServiceRecord {
                 performed_by: Some(Performer::Owner),
                 end_date: Some(Some(date("2024-03-02"))),
-                line_items: Some(vec![line("Flash", "mod")]),
+                line_items: Some(vec![line("Flash", WorkKind::Mod)]),
                 ..Default::default()
             },
         )
@@ -2604,7 +2604,7 @@ mod tests {
         .unwrap();
         assert_eq!(updated.record.performed_by, Performer::Owner);
         assert_eq!(updated.record.end_date, Some(date("2024-03-02")));
-        assert_eq!(kinds(&updated), vec!["mod"]);
+        assert_eq!(kinds(&updated), vec![WorkKind::Mod]);
 
         let err = update(
             &db,
@@ -2872,7 +2872,7 @@ mod tests {
             NewServiceRecord {
                 service_date: date("2024-06-12"),
                 mileage: Some(50_000),
-                line_items: Some(vec![line("Oil", "maintenance")]),
+                line_items: Some(vec![line("Oil", WorkKind::Maintenance)]),
                 parts: Some(vec![NewPart {
                     name: "Filter".into(),
                     ..Default::default()

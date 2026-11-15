@@ -165,14 +165,14 @@ fn out_of_pocket_per_service(
         let line_cents = |covered: bool| -> i64 {
             lines
                 .iter()
-                .filter(|l| (effective_payer(l.paid_by, svc.paid_by) != Payer::Owner) == covered)
+                .filter(|l| effective_payer(l.paid_by, svc.paid_by).is_covered() == covered)
                 .map(|l| i64::from(l.cost_cents.unwrap_or(0)))
                 .sum()
         };
-        let out_of_pocket = if svc.paid_by == Payer::Owner {
-            Ord::max(total - line_cents(true), 0)
-        } else {
+        let out_of_pocket = if svc.paid_by.is_covered() {
             Ord::min(line_cents(false), total)
+        } else {
+            Ord::max(total - line_cents(true), 0)
         };
         out_of_pocket_by_service.insert(svc.id, out_of_pocket);
     }
@@ -190,11 +190,11 @@ async fn covered_work(
     let mut covered: Vec<&service_record::Model> = services
         .iter()
         .filter(|s| {
-            s.paid_by != Payer::Owner
+            s.paid_by.is_covered()
                 || lines_by_service.get(&s.id).is_some_and(|lines| {
                     lines
                         .iter()
-                        .any(|l| effective_payer(l.paid_by, s.paid_by) != Payer::Owner)
+                        .any(|l| effective_payer(l.paid_by, s.paid_by).is_covered())
                 })
         })
         .collect();
@@ -220,7 +220,7 @@ async fn covered_work(
                     .flatten()
                     .filter_map(|l| {
                         let payer = effective_payer(l.paid_by, s.paid_by);
-                        (payer != Payer::Owner).then(|| CoveredLine {
+                        payer.is_covered().then(|| CoveredLine {
                             description: l.description.clone(),
                             work_kind: l.work_kind,
                             paid_by: payer,
@@ -575,13 +575,13 @@ mod tests {
         vid: i32,
         date: &str,
         total: Option<i32>,
-        paid_by: &str,
+        paid_by: Payer,
     ) -> i32 {
         service_record::ActiveModel {
             vehicle_id: Set(vid),
             service_date: Set(crate::test_support::date(date)),
             total_cost_cents: Set(total),
-            paid_by: Set(paid_by.parse().unwrap()),
+            paid_by: Set(paid_by),
             ..Default::default()
         }
         .insert(db)
@@ -617,7 +617,7 @@ mod tests {
     async fn a_shop_part_inside_an_invoice_total_is_not_added_again() {
         let db = test_db().await;
         let vid = seed_vehicle(&db, None).await;
-        insert_service(&db, vid, "2026-11-03", Some(56_900), "self").await;
+        insert_service(&db, vid, "2026-11-03", Some(56_900), Payer::Owner).await;
         insert_part(&db, vid, "shop", 2_200, None, Some("2026-11-03")).await;
         insert_part(&db, vid, "self", 8_900, Some("2026-10-20"), None).await;
 
@@ -631,9 +631,9 @@ mod tests {
     async fn the_headline_is_the_service_totals_plus_the_self_supplied_parts() {
         let db = test_db().await;
         let vid = seed_vehicle(&db, None).await;
-        insert_service(&db, vid, "2026-11-03", Some(57_500), "self").await;
-        insert_service(&db, vid, "2026-11-10", None, "self").await;
-        insert_service(&db, vid, "2026-11-12", None, "self").await;
+        insert_service(&db, vid, "2026-11-03", Some(57_500), Payer::Owner).await;
+        insert_service(&db, vid, "2026-11-10", None, Payer::Owner).await;
+        insert_service(&db, vid, "2026-11-12", None, Payer::Owner).await;
         insert_part(&db, vid, "shop", 2_200, None, Some("2026-11-03")).await;
         // No purchase date, so the install date places it in a month.
         insert_part(&db, vid, "self", 8_900, None, Some("2026-10-30")).await;
@@ -698,7 +698,7 @@ mod tests {
     async fn a_part_with_no_date_is_reported_as_unbucketed() {
         let db = test_db().await;
         let vid = seed_vehicle(&db, None).await;
-        insert_service(&db, vid, "2026-11-03", Some(10_000), "self").await;
+        insert_service(&db, vid, "2026-11-03", Some(10_000), Payer::Owner).await;
         insert_part(&db, vid, "self", 3_000, None, None).await;
 
         let s = summary(&db, vid).await.unwrap();
@@ -712,8 +712,8 @@ mod tests {
     async fn subtotals_nobody_entered_are_null_and_manufacturer_pays_count_as_covered() {
         let db = test_db().await;
         let vid = seed_vehicle(&db, None).await;
-        insert_service(&db, vid, "2026-11-03", Some(10_000), "self").await;
-        insert_service(&db, vid, "2026-11-04", Some(5_000), "manufacturer").await;
+        insert_service(&db, vid, "2026-11-03", Some(10_000), Payer::Owner).await;
+        insert_service(&db, vid, "2026-11-04", Some(5_000), Payer::Manufacturer).await;
 
         let s = summary(&db, vid).await.unwrap();
         assert_eq!(s.labor_subtotals_cents, None);
@@ -766,7 +766,7 @@ mod tests {
             ("2026-10-01", 62_800, Some(57_500)),
             ("2026-11-09", 63_950, None),
         ] {
-            let id = insert_service(&db, vid, date, total, "self").await;
+            let id = insert_service(&db, vid, date, total, Payer::Owner).await;
             let mut active: service_record::ActiveModel = service_record::Entity::find_by_id(id)
                 .one(&db)
                 .await
@@ -792,15 +792,15 @@ mod tests {
         db: &impl ConnectionTrait,
         service_id: i32,
         description: &str,
-        work_kind: &str,
+        work_kind: WorkKind,
         cost: Option<i32>,
-        paid_by: Option<&str>,
+        paid_by: Option<Payer>,
     ) {
         service_record_line_item::ActiveModel {
             service_record_id: Set(service_id),
             description: Set(description.into()),
-            work_kind: Set(work_kind.parse().unwrap()),
-            paid_by: Set(paid_by.map(|p| p.parse().unwrap())),
+            work_kind: Set(work_kind),
+            paid_by: Set(paid_by),
             cost_cents: Set(cost),
             ..Default::default()
         }
@@ -813,9 +813,9 @@ mod tests {
     async fn covered_work_lists_every_service_someone_else_paid_newest_first() {
         let db = test_db().await;
         let vid = seed_vehicle(&db, None).await;
-        insert_service(&db, vid, "2026-10-01", Some(10_000), "self").await;
-        let old = insert_service(&db, vid, "2026-10-05", Some(5_000), "insurance").await;
-        let new = insert_service(&db, vid, "2026-11-09", None, "manufacturer").await;
+        insert_service(&db, vid, "2026-10-01", Some(10_000), Payer::Owner).await;
+        let old = insert_service(&db, vid, "2026-10-05", Some(5_000), Payer::Insurance).await;
+        let new = insert_service(&db, vid, "2026-11-09", None, Payer::Manufacturer).await;
         let finding = crate::services::research::record_recalls(
             &db,
             vid,
@@ -865,15 +865,23 @@ mod tests {
     async fn a_warranty_line_with_no_cost_on_an_owner_paid_invoice_is_listed_but_costs_nothing() {
         let db = test_db().await;
         let vid = seed_vehicle(&db, None).await;
-        let id = insert_service(&db, vid, "2026-11-03", Some(12_000), "self").await;
-        insert_line(&db, id, "Oil change", "maintenance", Some(12_000), None).await;
+        let id = insert_service(&db, vid, "2026-11-03", Some(12_000), Payer::Owner).await;
+        insert_line(
+            &db,
+            id,
+            "Oil change",
+            WorkKind::Maintenance,
+            Some(12_000),
+            None,
+        )
+        .await;
         insert_line(
             &db,
             id,
             "Replace failed water pump under warranty",
-            "repair",
+            WorkKind::Repair,
             None,
-            Some("manufacturer"),
+            Some(Payer::Manufacturer),
         )
         .await;
 
@@ -898,21 +906,21 @@ mod tests {
     async fn a_line_paid_by_insurance_on_an_owner_paid_invoice_is_covered() {
         let db = test_db().await;
         let vid = seed_vehicle(&db, None).await;
-        let id = insert_service(&db, vid, "2026-11-03", Some(90_000), "self").await;
+        let id = insert_service(&db, vid, "2026-11-03", Some(90_000), Payer::Owner).await;
         insert_line(
             &db,
             id,
             "Bodywork",
-            "repair",
+            WorkKind::Repair,
             Some(80_000),
-            Some("insurance"),
+            Some(Payer::Insurance),
         )
         .await;
         insert_line(
             &db,
             id,
             "Deductible-side repair",
-            "repair",
+            WorkKind::Repair,
             Some(10_000),
             None,
         )
@@ -929,8 +937,16 @@ mod tests {
     async fn a_covered_line_total_never_pushes_out_of_pocket_below_zero() {
         let db = test_db().await;
         let vid = seed_vehicle(&db, None).await;
-        let id = insert_service(&db, vid, "2026-11-03", Some(10_000), "self").await;
-        insert_line(&db, id, "Work", "repair", Some(15_000), Some("insurance")).await;
+        let id = insert_service(&db, vid, "2026-11-03", Some(10_000), Payer::Owner).await;
+        insert_line(
+            &db,
+            id,
+            "Work",
+            WorkKind::Repair,
+            Some(15_000),
+            Some(Payer::Insurance),
+        )
+        .await;
 
         let s = summary(&db, vid).await.unwrap();
         assert_eq!(s.out_of_pocket_cents, 0);
@@ -941,8 +957,8 @@ mod tests {
     async fn a_manufacturer_paid_recall_with_no_total_costs_nothing_and_is_listed() {
         let db = test_db().await;
         let vid = seed_vehicle(&db, None).await;
-        let id = insert_service(&db, vid, "2026-11-09", None, "manufacturer").await;
-        insert_line(&db, id, "Fuel pump recall", "recall", None, None).await;
+        let id = insert_service(&db, vid, "2026-11-09", None, Payer::Manufacturer).await;
+        insert_line(&db, id, "Fuel pump recall", WorkKind::Recall, None, None).await;
 
         let s = summary(&db, vid).await.unwrap();
         assert_eq!(s.out_of_pocket_cents, 0);
@@ -958,22 +974,30 @@ mod tests {
         let vid = seed_vehicle(&db, None).await;
         // The worked example: $450 warranty repair, $129 oil change and $11
         // in fees on one invoice with a grand total of $590.
-        let a = insert_service(&db, vid, "2026-11-03", Some(59_000), "self").await;
+        let a = insert_service(&db, vid, "2026-11-03", Some(59_000), Payer::Owner).await;
         insert_line(
             &db,
             a,
             "Water pump",
-            "repair",
+            WorkKind::Repair,
             Some(45_000),
-            Some("manufacturer"),
+            Some(Payer::Manufacturer),
         )
         .await;
-        insert_line(&db, a, "Oil change", "maintenance", Some(12_900), None).await;
-        insert_line(&db, a, "Shop fees", "fee", Some(1_100), None).await;
-        let b = insert_service(&db, vid, "2026-11-05", Some(30_000), "insurance").await;
-        insert_line(&db, b, "Bodywork", "repair", Some(30_000), None).await;
-        let c = insert_service(&db, vid, "2026-11-06", Some(8_000), "manufacturer").await;
-        insert_line(&db, c, "Tax", "fee", Some(500), Some("self")).await;
+        insert_line(
+            &db,
+            a,
+            "Oil change",
+            WorkKind::Maintenance,
+            Some(12_900),
+            None,
+        )
+        .await;
+        insert_line(&db, a, "Shop fees", WorkKind::Fee, Some(1_100), None).await;
+        let b = insert_service(&db, vid, "2026-11-05", Some(30_000), Payer::Insurance).await;
+        insert_line(&db, b, "Bodywork", WorkKind::Repair, Some(30_000), None).await;
+        let c = insert_service(&db, vid, "2026-11-06", Some(8_000), Payer::Manufacturer).await;
+        insert_line(&db, c, "Tax", WorkKind::Fee, Some(500), Some(Payer::Owner)).await;
 
         let s = summary(&db, vid).await.unwrap();
         let first = s.covered_work.iter().find(|w| w.service_id == a).unwrap();
@@ -993,7 +1017,7 @@ mod tests {
     async fn history_of_miles(miles: i32) -> CostSummary {
         let db = test_db().await;
         let vid = seed_vehicle(&db, None).await;
-        insert_service(&db, vid, "2026-11-03", Some(14_000), "self").await;
+        insert_service(&db, vid, "2026-11-03", Some(14_000), Payer::Owner).await;
         insert_reading(&db, vid, "2026-11-01", 63_000).await;
         insert_reading(&db, vid, "2026-11-12", 63_000 + miles).await;
         summary(&db, vid).await.unwrap()
@@ -1015,8 +1039,16 @@ mod tests {
     async fn a_line_marked_self_on_a_covered_invoice_is_out_of_pocket() {
         let db = test_db().await;
         let vid = seed_vehicle(&db, None).await;
-        let id = insert_service(&db, vid, "2026-11-09", Some(50_000), "manufacturer").await;
-        insert_line(&db, id, "Shop supplies", "fee", Some(5_000), Some("self")).await;
+        let id = insert_service(&db, vid, "2026-11-09", Some(50_000), Payer::Manufacturer).await;
+        insert_line(
+            &db,
+            id,
+            "Shop supplies",
+            WorkKind::Fee,
+            Some(5_000),
+            Some(Payer::Owner),
+        )
+        .await;
 
         let s = summary(&db, vid).await.unwrap();
         assert_eq!(s.out_of_pocket_cents, 5_000);
@@ -1028,24 +1060,48 @@ mod tests {
     async fn the_breakdown_and_monthly_rows_add_up_to_the_headline() {
         let db = test_db().await;
         let vid = seed_vehicle(&db, None).await;
-        let a = insert_service(&db, vid, "2026-10-03", Some(12_000), "self").await;
-        insert_line(&db, a, "Oil change", "maintenance", Some(12_000), None).await;
-        insert_line(&db, a, "Water pump", "repair", None, Some("manufacturer")).await;
-        let b = insert_service(&db, vid, "2026-10-20", Some(90_000), "self").await;
+        let a = insert_service(&db, vid, "2026-10-03", Some(12_000), Payer::Owner).await;
+        insert_line(
+            &db,
+            a,
+            "Oil change",
+            WorkKind::Maintenance,
+            Some(12_000),
+            None,
+        )
+        .await;
+        insert_line(
+            &db,
+            a,
+            "Water pump",
+            WorkKind::Repair,
+            None,
+            Some(Payer::Manufacturer),
+        )
+        .await;
+        let b = insert_service(&db, vid, "2026-10-20", Some(90_000), Payer::Owner).await;
         insert_line(
             &db,
             b,
             "Bodywork",
-            "repair",
+            WorkKind::Repair,
             Some(80_000),
-            Some("insurance"),
+            Some(Payer::Insurance),
         )
         .await;
-        insert_line(&db, b, "Repair", "repair", Some(10_000), None).await;
-        let c = insert_service(&db, vid, "2026-11-09", None, "manufacturer").await;
-        insert_line(&db, c, "Recall", "recall", None, None).await;
-        let d = insert_service(&db, vid, "2026-11-10", Some(50_000), "manufacturer").await;
-        insert_line(&db, d, "Fee", "fee", Some(5_000), Some("self")).await;
+        insert_line(&db, b, "Repair", WorkKind::Repair, Some(10_000), None).await;
+        let c = insert_service(&db, vid, "2026-11-09", None, Payer::Manufacturer).await;
+        insert_line(&db, c, "Recall", WorkKind::Recall, None, None).await;
+        let d = insert_service(&db, vid, "2026-11-10", Some(50_000), Payer::Manufacturer).await;
+        insert_line(
+            &db,
+            d,
+            "Fee",
+            WorkKind::Fee,
+            Some(5_000),
+            Some(Payer::Owner),
+        )
+        .await;
         insert_part(&db, vid, "self", 3_000, Some("2026-10-05"), None).await;
 
         let s = summary(&db, vid).await.unwrap();

@@ -372,7 +372,7 @@ async fn oil_change(
         v,
         NewServiceRecord {
             service_date: services::today(),
-            performed_by: Some(crate::entities::service_record::Performer::Owner),
+            performed_by: Some(entities::service_record::Performer::Owner),
             mileage: Some(59_900),
             description: Some("Oil and filter change".into()),
             part_ids: filter_part.map(|id| vec![id]),

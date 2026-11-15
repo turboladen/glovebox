@@ -12,6 +12,15 @@ crate::vocab::vocabulary! {
     }
 }
 
+impl Payer {
+    /// Whether someone other than the owner paid, so the amount counts as
+    /// covered and not as out of pocket.
+    #[must_use]
+    pub fn is_covered(self) -> bool {
+        self != Payer::Owner
+    }
+}
+
 crate::vocab::vocabulary! {
     /// Who did the work of a service.
     pub enum Performer {
