@@ -104,14 +104,14 @@
      a circle for a plain fact, an empty box for something to do, a chevron for
      on its way, a check for settled and a cross for a problem. */
   .pill::before { content: ""; display: inline-block; width: 0.55rem; height: 0.55rem; margin-inline-end: 0.4rem; border: 1.5px solid currentColor; border-radius: 50%; }
-  .pill--undecided, .pill--to_order, .fit--unconfirmed { background: var(--accent); color: var(--on-accent); font-weight: 600; }
-  .pill--undecided::before, .pill--to_order::before, .fit--unconfirmed::before { border-radius: 1px; }
+  .pill--undecided, .pill--to_order, .pill--due_soon, .fit--unconfirmed { background: var(--accent); color: var(--on-accent); font-weight: 600; }
+  .pill--undecided::before, .pill--to_order::before, .pill--due_soon::before, .fit--unconfirmed::before { border-radius: 1px; }
   .pill--ordered { background: var(--wait-bg); }
   .pill--ordered::before { width: 0.45rem; height: 0.45rem; margin-inline: 0 0.5rem; border: solid var(--wait); border-width: 2px 2px 0 0; border-radius: 0; transform: translateY(-0.05rem) rotate(45deg); }
   .pill--received, .pill--installed, .pill--shop_supplies, .pill--done, .fit--confirmed { background: var(--ok-bg); }
   .pill--received::before, .pill--installed::before, .pill--shop_supplies::before, .pill--done::before, .fit--confirmed::before { width: 0.34rem; height: 0.62rem; margin-inline: 0.15rem 0.5rem; border: solid var(--ok); border-width: 0 2px 2px 0; border-radius: 0; transform: translateY(-0.08rem) rotate(45deg); }
-  .fit--does_not_fit, .pill--rejected { background: var(--bad-bg); font-weight: 600; }
-  .fit--does_not_fit::before, .pill--rejected::before {
+  .fit--does_not_fit, .pill--rejected, .pill--overdue { background: var(--bad-bg); font-weight: 600; }
+  .fit--does_not_fit::before, .pill--rejected::before, .pill--overdue::before {
     width: 0.62rem; height: 0.62rem; border: 0; border-radius: 0;
     background:
       linear-gradient(45deg, transparent 42%, var(--bad) 42% 58%, transparent 58%),
@@ -250,7 +250,13 @@
   /* Home rows: appointments and unscheduled jobs share one set of columns. */
   .cols--home, .row--home { grid-template-columns: minmax(0, 1fr) 8rem 8rem minmax(0, 14rem) 4rem 7rem 7rem; }
   .cols--home { border-bottom: 1px solid var(--rule); }
-  .cols--home > .at-needs, .row--home > .at-needs { grid-column: 6; }
+  /* Waiting rows: the first two columns line up with the home rows. */
+  .cols--wait, .row--wait { grid-template-columns: minmax(0, 1fr) 8rem minmax(0, 13rem) minmax(0, 15rem) 8rem 7rem; }
+  .cols--wait { border-bottom: 1px solid var(--rule); }
+  .cols--wait > .at-key, .row--wait > .at-key { grid-column: 1 / 3; }
+  .cols--wait > .at-wide, .row--wait > .at-wide { grid-column: 3; }
+  .cols--wait > .at-date, .row--wait > .at-date { grid-column: 5; }
+  .cols--wait > .at-job, .row--wait > .at-job { grid-column: 6; }
 
   /* Narrow: each row becomes a short list of labeled values. The fixed
      ledger columns take 62rem, so a narrower window than this leaves the
@@ -266,7 +272,7 @@
     .row > .key { grid-column: 1 / 3; }
     .row > .toggle { grid-column: 3; grid-row: 1; }
     .row .span, .memo, .work > *, .work > .l { grid-column: 1 / 3; grid-row: auto; }
-    .row--home { grid-template-columns: 7rem minmax(0, 1fr); }
+    .row--home, .row--wait { grid-template-columns: 7rem minmax(0, 1fr); }
     .num { text-align: left; }
     .opt .pick { justify-self: start; }
     .work { grid-template-columns: minmax(0, 1fr); }

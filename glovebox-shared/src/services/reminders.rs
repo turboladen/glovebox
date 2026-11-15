@@ -489,7 +489,7 @@ pub fn miles_label(miles: i32) -> String {
     let digits = miles.unsigned_abs().to_string();
     let mut out = String::from(if miles < 0 { "-" } else { "" });
     for (i, digit) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(digit);
@@ -517,6 +517,32 @@ pub fn how_far(miles_remaining: Option<i32>, days_remaining: Option<i64>) -> Str
         }
     });
     miles.into_iter().chain(days).collect::<Vec<_>>().join(", ")
+}
+
+/// Says where a schedule item comes due: `60,040 mi`, `2027-03-05`, or
+/// `60,040 mi or 2027-03-05` for an item judged on both. It is empty for an
+/// item with neither.
+#[must_use]
+pub fn due_at(miles: Option<i32>, date: Option<NaiveDate>) -> String {
+    let miles = miles.map(|m| format!("{} mi", miles_label(m)));
+    let date = date.map(super::date_label);
+    miles
+        .into_iter()
+        .chain(date)
+        .collect::<Vec<_>>()
+        .join(" or ")
+}
+
+/// Says which odometer reading the maintenance was judged against:
+/// `64,000 mi`, or `about 61,200 mi (estimated)` for a projected one.
+#[must_use]
+pub fn judged_at(miles: i32, is_estimate: bool) -> String {
+    let miles = miles_label(miles);
+    if is_estimate {
+        format!("about {miles} mi (estimated)")
+    } else {
+        format!("{miles} mi")
+    }
 }
 
 /// One shop-trip suggestion listing every overdue or due-soon item, or none
@@ -574,6 +600,21 @@ fn days_in_month(year: i32, month: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn due_at_names_the_mileage_the_date_or_both() {
+        let day = crate::test_support::date::<NaiveDate>("2027-03-05");
+        assert_eq!(due_at(Some(60040), None), "60,040 mi");
+        assert_eq!(due_at(None, Some(day)), "2027-03-05");
+        assert_eq!(due_at(Some(60040), Some(day)), "60,040 mi or 2027-03-05");
+        assert_eq!(due_at(None, None), "");
+    }
+
+    #[test]
+    fn judged_at_marks_an_estimate() {
+        assert_eq!(judged_at(64000, false), "64,000 mi");
+        assert_eq!(judged_at(61200, true), "about 61,200 mi (estimated)");
+    }
 
     #[test]
     fn miles_label_puts_a_comma_between_thousands() {

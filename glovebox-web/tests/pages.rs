@@ -3,8 +3,16 @@ mod common;
 use axum::{body::Body, http::StatusCode};
 use common::{app, app_with_file, db, get, page, request, send, send_bytes};
 use glovebox_shared::{
-    inputs::{appointment::NewAppointment, need::NewNeed, todo::NewTodo, work_item::NewWorkItem},
-    services::{appointment, need, todo, work_item},
+    db::DatabaseConnection,
+    inputs::{
+        appointment::NewAppointment, incident::NewIncident, mileage::NewMileageEntry,
+        need::NewNeed, todo::NewTodo, work_item::NewWorkItem,
+    },
+    services::{
+        appointment, incident, mileage, model_template, need,
+        research::{self, NewFiledFinding},
+        todo, waiting, work_item,
+    },
     test_support::{VehicleFixture, date},
 };
 
@@ -12,7 +20,7 @@ const CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; font-src 'self
                    'self'; base-uri 'none'; frame-ancestors 'none'";
 
 #[tokio::test]
-async fn home_lists_open_appointments_and_unscheduled_jobs() {
+async fn home_lists_open_appointments_and_jobs_not_scheduled() {
     let db = db().await;
     let v = VehicleFixture::new().name("Golf GTI").insert_id(&db).await;
     let a = appointment::create(
@@ -144,12 +152,12 @@ async fn home_lists_open_appointments_and_unscheduled_jobs() {
         body.contains(r#"<span data-l="Date"><span class="empty cap">not booked</span></span>"#),
         "{body}"
     );
-    assert!(body.contains("Not scheduled yet"), "{body}");
+    assert!(body.contains("Jobs not scheduled"), "{body}");
     assert!(body.contains("Replace wiper blades"), "{body}");
     assert!(body.contains("<span>Job</span>"), "{body}");
     assert!(
         body.contains(
-            r#"<span class="num at-needs" data-l="Needs open"><span class="n n--todo">1</span></span>"#
+            r#"<span class="at-job num" data-l="Needs open"><span class="n n--todo">1</span></span>"#
         ),
         "{body}"
     );
@@ -167,6 +175,166 @@ async fn home_lists_open_appointments_and_unscheduled_jobs() {
 }
 
 // The page edits no research facts, so every page says where they are changed.
+// A GTI on the seeded schedule at 64,000 miles, where the 60k spark plugs are
+// overdue.
+async fn gti_at_64k(db: &DatabaseConnection) -> i32 {
+    let template = model_template::list(db)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|t| t.model.as_deref() == Some("Golf GTI"))
+        .expect("seeded GTI template");
+    let v = VehicleFixture::new()
+        .name("Golf GTI")
+        .model_template_id(template.id)
+        .purchase_date("2017-03-05")
+        .purchase_mileage(40)
+        .insert_id(db)
+        .await;
+    mileage::create(
+        db,
+        v,
+        NewMileageEntry {
+            mileage: 64000,
+            recorded_at: Some(glovebox_shared::services::today().into()),
+            source: None,
+            notes: None,
+        },
+    )
+    .await
+    .unwrap();
+    v
+}
+
+// The part of the home page from the first waiting sheet up to Appointments.
+fn waiting_block(body: &str) -> &str {
+    let start = body.find("Maintenance due").expect("the waiting sheets");
+    let end = body.find("<h3>Appointments</h3>").expect("appointments");
+    &body[start..end]
+}
+
+#[tokio::test]
+async fn home_shows_what_is_waiting_before_the_appointments() {
+    let db = db().await;
+    let v = gti_at_64k(&db).await;
+    let plugs = waiting::waiting(&db, v)
+        .await
+        .unwrap()
+        .maintenance
+        .into_iter()
+        .find(|m| m.name == "Spark Plugs")
+        .unwrap()
+        .schedule_item_id;
+    let plug_job = work_item::create(
+        &db,
+        v,
+        NewWorkItem {
+            title: "Do the plugs".into(),
+            schedule_item_id: Some(plugs),
+            est_cost_cents: Some(18000),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    let wiper = work_item::create(
+        &db,
+        v,
+        NewWorkItem {
+            title: "Rear wiper".into(),
+            revisit_by_miles: Some(63000),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    research::file_finding(
+        &db,
+        v,
+        NewFiledFinding {
+            category: "recall".into(),
+            title: "Fuel pump".into(),
+            description: None,
+            source_url: Some("https://www.nhtsa.gov/recalls?nhtsaId=24V123".into()),
+            severity: None,
+        },
+    )
+    .await
+    .unwrap();
+    incident::create(
+        &db,
+        v,
+        NewIncident {
+            category: "shop_observation".into(),
+            title: "Seeping valve cover".into(),
+            occurred_at: Some(date("2026-10-02 09:30:00")),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let (status, body) = page(app(db, "live"), get("/")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let block = waiting_block(&body);
+    assert!(!block.contains("<form"), "the waiting sheets only show");
+    assert!(block.contains("Judged at 64,000 mi"), "{block}");
+    assert!(block.contains("Spark Plugs"), "{block}");
+    assert!(
+        block.contains(r#"<span class="pill pill--overdue">Overdue</span>"#),
+        "{block}"
+    );
+    assert!(block.contains("60,040 mi"), "{block}");
+    assert!(block.contains("3,960 mi over"), "{block}");
+    assert!(
+        block.contains(&format!(
+            r#"<a href="/vehicles/{v}/jobs/{plug_job}">Job planned</a>"#
+        )),
+        "{block}"
+    );
+    assert!(block.contains("Not planned"), "{block}");
+    // A job with no needs is listed, with its estimate and its revisit status.
+    assert!(
+        block.contains(&format!(
+            r#"<a href="/vehicles/{v}/jobs/{wiper}">Rear wiper</a>"#
+        )),
+        "{block}"
+    );
+    assert!(block.contains("$180.00"), "{block}");
+    assert!(
+        block.contains("Fuel pump") && block.contains("24V123"),
+        "{block}"
+    );
+    assert!(block.contains("Seeping valve cover"), "{block}");
+    assert!(block.contains("Shop observation"), "{block}");
+    assert!(block.contains("2026-10-02"), "{block}");
+    assert!(
+        !block.contains("09:30"),
+        "a page date is YYYY-MM-DD: {block}"
+    );
+}
+
+#[tokio::test]
+async fn home_says_so_when_nothing_is_waiting() {
+    let db = db().await;
+    VehicleFixture::new().name("Golf GTI").insert_id(&db).await;
+
+    let (_, body) = page(app(db, "live"), get("/")).await;
+
+    let block = waiting_block(&body);
+    for line in [
+        "No maintenance is due.",
+        "No jobs waiting for an appointment.",
+        "No open recalls.",
+        "No open incidents.",
+    ] {
+        assert!(block.contains(line), "{line}: {block}");
+    }
+}
+
 #[tokio::test]
 async fn every_page_says_research_facts_are_changed_through_claude() {
     const HINT: &str = "To add or change options, prices, part numbers or fitment, ask Claude.";

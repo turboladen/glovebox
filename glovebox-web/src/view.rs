@@ -9,7 +9,10 @@ use glovebox_shared::{
     money::format_cents,
     services::{
         checklist::{self, Checklist, HomeAppointment, JobView, NeedView, StepRow},
+        date_label,
         need::{self, Stage},
+        reminders,
+        waiting::Waiting,
     },
 };
 
@@ -365,6 +368,120 @@ impl From<&HomeAppointment> for HomeAppointmentRow {
             jobs: a.jobs,
             needs_open: a.needs_open,
             todos_open: a.todos_open,
+        }
+    }
+}
+
+/// A tag for a status: the class that picks its tint and mark, and its words.
+pub struct Tag {
+    pub class: String,
+    pub text: String,
+}
+
+impl Tag {
+    /// Reads `overdue` as "Overdue" and `due_soon` as "Due soon".
+    fn of(status: &str) -> Self {
+        Self {
+            class: status.to_owned(),
+            text: sentence_case(&status.replace('_', " ")),
+        }
+    }
+}
+
+/// A schedule item that is due, as the home page lists it.
+pub struct DueRow {
+    pub name: String,
+    pub status: Tag,
+    pub due_at: String,
+    pub how_far: String,
+    pub last_done: Option<String>,
+    pub job_id: Option<i32>,
+}
+
+/// A planned job on no appointment, as the home page lists it.
+pub struct WaitingJobRow {
+    pub id: i32,
+    pub title: String,
+    /// The revisit tag, for a job whose revisit is overdue or due soon.
+    pub revisit: Option<Tag>,
+    pub estimate: Option<String>,
+    pub needs_open: usize,
+}
+
+/// An open recall, as the home page lists it.
+pub struct RecallRow {
+    pub title: String,
+    pub campaign: Option<String>,
+    pub job_id: Option<i32>,
+}
+
+/// An open incident, as the home page lists it.
+pub struct IncidentRow {
+    pub title: String,
+    pub category: String,
+    pub date: String,
+    pub job_id: Option<i32>,
+}
+
+/// What is waiting on one vehicle, as the home page lists it.
+pub struct WaitingRows {
+    /// The odometer reading the maintenance was judged against.
+    pub judged_at: String,
+    pub due: Vec<DueRow>,
+    pub jobs: Vec<WaitingJobRow>,
+    pub recalls: Vec<RecallRow>,
+    pub incidents: Vec<IncidentRow>,
+}
+
+impl From<&Waiting> for WaitingRows {
+    fn from(w: &Waiting) -> Self {
+        Self {
+            judged_at: reminders::judged_at(w.estimated_mileage, w.mileage_is_estimate),
+            due: w
+                .maintenance
+                .iter()
+                .map(|m| DueRow {
+                    name: m.name.clone(),
+                    status: Tag::of(&m.status),
+                    due_at: reminders::due_at(m.due_at_miles, m.due_at_date),
+                    how_far: m.how_far.clone(),
+                    last_done: m.last_done.map(date_label),
+                    job_id: m.job_id,
+                })
+                .collect(),
+            jobs: w
+                .jobs
+                .iter()
+                .map(|j| WaitingJobRow {
+                    id: j.id,
+                    title: j.title.clone(),
+                    revisit: j
+                        .revisit_status
+                        .filter(|status| *status != "ok")
+                        .map(Tag::of),
+                    estimate: j.est_cost_cents.map(format_cents),
+                    needs_open: j.needs_open,
+                })
+                .collect(),
+            recalls: w
+                .recalls
+                .iter()
+                .map(|r| RecallRow {
+                    title: r.title.clone(),
+                    campaign: r.campaign_number.clone(),
+                    job_id: r.job_id,
+                })
+                .collect(),
+            incidents: w
+                .incidents
+                .iter()
+                .map(|i| IncidentRow {
+                    title: i.title.clone(),
+                    category: sentence_case(&i.category.replace('_', " ")),
+                    date: date_label(i.occurred_at.day()),
+                    job_id: i.job_id,
+                })
+                .collect(),
         }
     }
 }
