@@ -544,6 +544,57 @@ mod tests {
         }
     }
 
+    // Each source id is a foreign key that clears when its row is deleted, so
+    // a job never names a schedule item, finding or incident that is gone.
+    #[tokio::test]
+    async fn deleting_a_jobs_source_clears_the_link_and_keeps_the_job() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let (sched, finding, inc) = (
+            seed_schedule_item(&db, vid).await,
+            seed_finding(&db, vid).await,
+            seed_incident(&db, vid).await,
+        );
+        let job = create(
+            &db,
+            vid,
+            NewWorkItem {
+                schedule_item_id: Some(sched),
+                research_finding_id: Some(finding),
+                incident_id: Some(inc),
+                ..item("Everything at once")
+            },
+        )
+        .await
+        .unwrap();
+        let sources = async || {
+            let job = get(&db, vid, job.id).await.unwrap();
+            (
+                job.schedule_item_id,
+                job.research_finding_id,
+                job.incident_id,
+            )
+        };
+
+        crate::services::schedule::delete(&db, sched).await.unwrap();
+        assert_eq!(sources().await, (None, Some(finding), Some(inc)));
+
+        research_finding::Entity::delete_by_id(finding)
+            .exec(&db)
+            .await
+            .unwrap();
+        assert_eq!(sources().await, (None, None, Some(inc)));
+
+        crate::services::incident::delete(&db, vid, inc)
+            .await
+            .unwrap();
+        assert_eq!(sources().await, (None, None, None));
+        assert_eq!(
+            get(&db, vid, job.id).await.unwrap().title,
+            "Everything at once"
+        );
+    }
+
     fn with_revisit(date: Option<&str>, miles: Option<i32>) -> work_item::Model {
         work_item::Model {
             id: 1,

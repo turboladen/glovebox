@@ -6,6 +6,7 @@ mod m20261113_000001_job_checklist;
 mod m20261113_000002_option_choice_history;
 mod m20261114_000001_typed_dates;
 mod m20261114_000002_utc_timestamps;
+mod m20261114_000003_work_item_link_foreign_keys;
 mod schema;
 
 pub struct Migrator;
@@ -20,6 +21,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261113_000002_option_choice_history::Migration),
             Box::new(m20261114_000001_typed_dates::Migration),
             Box::new(m20261114_000002_utc_timestamps::Migration),
+            Box::new(m20261114_000003_work_item_link_foreign_keys::Migration),
         ]
     }
 }

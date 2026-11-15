@@ -14,6 +14,8 @@
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement, TransactionTrait};
 use sea_orm_migration::prelude::*;
 
+use super::schema::{scalar, soundness};
+
 /// Every column that holds a bookkeeping stamp.
 const STAMPS: &[(&str, &[&str])] = &[
     ("appointments", &["created_at", "updated_at"]),
@@ -169,28 +171,6 @@ async fn remove_defaults(txn: &impl ConnectionTrait) -> Result<(), DbErr> {
         )));
     }
     Ok(())
-}
-
-/// The result of `PRAGMA integrity_check` and the number of rows
-/// `PRAGMA foreign_key_check` reports.
-async fn soundness(db: &impl ConnectionTrait) -> Result<(String, usize), DbErr> {
-    let integrity = scalar::<String>(db, "PRAGMA integrity_check").await?;
-    let broken_links = db
-        .query_all_raw(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            "PRAGMA foreign_key_check",
-        ))
-        .await?
-        .len();
-    Ok((integrity, broken_links))
-}
-
-async fn scalar<T: sea_orm::TryGetable>(db: &impl ConnectionTrait, sql: &str) -> Result<T, DbErr> {
-    let row = db
-        .query_one_raw(Statement::from_string(DatabaseBackend::Sqlite, sql))
-        .await?
-        .ok_or_else(|| DbErr::Migration(format!("`{sql}` returned no row")))?;
-    row.try_get_by_index::<T>(0)
 }
 
 #[cfg(test)]
