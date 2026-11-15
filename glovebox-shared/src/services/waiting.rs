@@ -29,12 +29,28 @@ pub struct Waiting {
     pub mileage_as_of: NaiveDate,
     /// Schedule items that are overdue or due soon, overdue first.
     pub maintenance: Vec<WaitingMaintenance>,
+    /// Counts the due schedule items left out because their job is on an
+    /// appointment.
+    pub maintenance_booked: usize,
     /// Planned jobs on no appointment, most urgent revisit first.
     pub jobs: Vec<WaitingJob>,
     /// Recalls that are `open` or `planned`.
     pub recalls: Vec<WaitingRecall>,
+    /// Counts the open recalls left out because their job is on an appointment.
+    pub recalls_booked: usize,
     /// Unresolved incidents, newest first, excluding notes.
     pub incidents: Vec<WaitingIncident>,
+    /// Counts the open incidents left out because their job is on an
+    /// appointment.
+    pub incidents_booked: usize,
+}
+
+/// Says how many items a list leaves out because their job is on an
+/// appointment, such as `plus 2 on an appointment`, or `None` when it leaves
+/// out none.
+#[must_use]
+pub fn booked_note(booked: usize) -> Option<String> {
+    (booked > 0).then(|| format!("plus {booked} on an appointment"))
 }
 
 /// A schedule item that is overdue or due soon.
@@ -138,10 +154,13 @@ pub async fn waiting(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult
         .job_id()
     };
 
-    let maintenance = reminders
+    let due: Vec<_> = reminders
         .reminders
         .iter()
         .filter(|r| r.status == "overdue" || r.status == "due_soon")
+        .collect();
+    let maintenance: Vec<WaitingMaintenance> = due
+        .iter()
         .filter_map(|r| {
             let job_id = covering(|job| job.schedule_item_id, r.schedule_item.id)?;
             Some(WaitingMaintenance {
@@ -157,8 +176,9 @@ pub async fn waiting(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult
         })
         .collect();
 
-    let recalls = upcoming::open_recalls(db, vehicle_id)
-        .await?
+    let open_recalls = upcoming::open_recalls(db, vehicle_id).await?;
+    let recalls_open = open_recalls.len();
+    let recalls: Vec<WaitingRecall> = open_recalls
         .into_iter()
         .filter_map(|r| {
             let job_id = covering(|job| job.research_finding_id, r.finding_id)?;
@@ -171,8 +191,9 @@ pub async fn waiting(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult
         })
         .collect();
 
-    let incidents = upcoming::open_incidents(db, vehicle_id)
-        .await?
+    let open_incidents = upcoming::open_incidents(db, vehicle_id).await?;
+    let incidents_open = open_incidents.len();
+    let incidents: Vec<WaitingIncident> = open_incidents
         .into_iter()
         .filter_map(|i| {
             let job_id = covering(|job| job.incident_id, i.id)?;
@@ -207,9 +228,12 @@ pub async fn waiting(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult
         estimated_mileage: reminders.estimated_mileage,
         mileage_is_estimate: reminders.mileage_is_estimate,
         mileage_as_of: reminders.mileage_as_of,
+        maintenance_booked: due.len() - maintenance.len(),
         maintenance,
         jobs,
+        recalls_booked: recalls_open - recalls.len(),
         recalls,
+        incidents_booked: incidents_open - incidents.len(),
         incidents,
     })
 }
@@ -497,6 +521,10 @@ mod tests {
             ("Seeping valve cover", Some(leak_job))
         );
         assert_eq!(w.jobs.len(), 3);
+        assert_eq!(
+            (w.maintenance_booked, w.recalls_booked, w.incidents_booked),
+            (0, 0, 0)
+        );
 
         let appt = open_appointment(&db, v).await;
         for id in [plug_job, recall_job, leak_job] {
@@ -517,6 +545,16 @@ mod tests {
         assert!(plugs(&w).is_none());
         assert!(!w.maintenance.is_empty(), "other due items still wait");
         assert!(w.recalls.is_empty() && w.incidents.is_empty() && w.jobs.is_empty());
+        assert_eq!(
+            (w.maintenance_booked, w.recalls_booked, w.incidents_booked),
+            (1, 1, 1)
+        );
+    }
+
+    #[test]
+    fn booked_note_counts_what_a_list_leaves_out() {
+        assert_eq!(booked_note(0), None);
+        assert_eq!(booked_note(2).as_deref(), Some("plus 2 on an appointment"));
     }
 
     #[tokio::test]

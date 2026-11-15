@@ -12,7 +12,7 @@ use glovebox_shared::{
         date_label,
         need::{self, Stage},
         reminders,
-        waiting::Waiting,
+        waiting::{Waiting, booked_note},
     },
 };
 
@@ -428,15 +428,24 @@ pub struct WaitingRows {
     /// The odometer reading the maintenance was judged against.
     pub judged_at: String,
     pub due: Vec<DueRow>,
+    /// Says how many due items are left out, when any are.
+    pub due_note: Option<String>,
     pub jobs: Vec<WaitingJobRow>,
     pub recalls: Vec<RecallRow>,
+    /// Says how many open recalls are left out, when any are.
+    pub recalls_note: Option<String>,
     pub incidents: Vec<IncidentRow>,
+    /// Says how many open incidents are left out, when any are.
+    pub incidents_note: Option<String>,
 }
 
 impl From<&Waiting> for WaitingRows {
     fn from(w: &Waiting) -> Self {
         Self {
             judged_at: reminders::judged_at(w.estimated_mileage, w.mileage_is_estimate),
+            due_note: booked_note(w.maintenance_booked),
+            recalls_note: booked_note(w.recalls_booked),
+            incidents_note: booked_note(w.incidents_booked),
             due: w
                 .maintenance
                 .iter()

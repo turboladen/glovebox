@@ -499,13 +499,13 @@ pub fn miles_label(miles: i32) -> String {
 
 /// Says how far past or short of due a schedule item is, from its
 /// `miles_remaining` and `days_remaining`: `1,200 mi over`, `in 800 mi`,
-/// `45 days over`, `in 1 day`, or `due now` at exactly zero. An item judged
-/// on both reads as both, mileage first.
+/// `45 days over`, `in 1 day`, and `due now` or `due today` at exactly zero.
+/// An item judged on both reads as both, mileage first.
 #[must_use]
 pub fn how_far(miles_remaining: Option<i32>, days_remaining: Option<i64>) -> String {
     let miles = miles_remaining.map(|r| match r {
         0 => "due now".to_owned(),
-        r if r < 0 => format!("{} mi over", miles_label(-r)),
+        r if r < 0 => format!("{} mi over", miles_label(r.saturating_neg())),
         r => format!("in {} mi", miles_label(r)),
     });
     let days = days_remaining.map(|r| {
@@ -601,9 +601,11 @@ fn days_in_month(year: i32, month: u32) -> u32 {
 mod tests {
     use super::*;
 
+    use crate::test_support::{VehicleFixture, date, days_ago, test_db};
+
     #[test]
     fn due_at_names_the_mileage_the_date_or_both() {
-        let day = crate::test_support::date::<NaiveDate>("2027-03-05");
+        let day = date::<NaiveDate>("2027-03-05");
         assert_eq!(due_at(Some(60040), None), "60,040 mi");
         assert_eq!(due_at(None, Some(day)), "2027-03-05");
         assert_eq!(due_at(Some(60040), Some(day)), "60,040 mi or 2027-03-05");
@@ -646,7 +648,6 @@ mod tests {
             assert_eq!(how_far(miles, days), text);
         }
     }
-    use crate::test_support::{VehicleFixture, date, days_ago, test_db};
 
     async fn seed_vehicle(
         db: &impl ConnectionTrait,

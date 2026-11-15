@@ -174,7 +174,6 @@ async fn home_lists_open_appointments_and_jobs_not_scheduled() {
     );
 }
 
-// The page edits no research facts, so every page says where they are changed.
 // A GTI on the seeded schedule at 64,000 miles, where the 60k spark plugs are
 // overdue.
 async fn gti_at_64k(db: &DatabaseConnection) -> i32 {
@@ -244,6 +243,7 @@ async fn home_shows_what_is_waiting_before_the_appointments() {
         NewWorkItem {
             title: "Rear wiper".into(),
             revisit_by_miles: Some(63000),
+            est_cost_cents: Some(2500),
             ..Default::default()
         },
     )
@@ -295,15 +295,32 @@ async fn home_shows_what_is_waiting_before_the_appointments() {
         )),
         "{block}"
     );
-    assert!(block.contains("Not planned"), "{block}");
+    let sheet = |from: &str, to: &str| {
+        let start = block.find(from).unwrap();
+        &block[start..start + block[start..].find(to).unwrap()]
+    };
+    let due = sheet("Maintenance due", "Jobs not scheduled");
+    assert!(
+        due.contains("Not planned"),
+        "another due item has no job: {due}"
+    );
+    assert!(!due.contains("on an appointment"), "{due}");
     // A job with no needs is listed, with its estimate and its revisit status.
+    let jobs = sheet("Jobs not scheduled", "Open recalls");
+    assert!(
+        jobs.contains("$25.00") && jobs.contains("$180.00"),
+        "{jobs}"
+    );
+    assert!(
+        jobs.contains(r#"<span class="pill pill--overdue">Overdue</span>"#),
+        "{jobs}"
+    );
     assert!(
         block.contains(&format!(
             r#"<a href="/vehicles/{v}/jobs/{wiper}">Rear wiper</a>"#
         )),
         "{block}"
     );
-    assert!(block.contains("$180.00"), "{block}");
     assert!(
         block.contains("Fuel pump") && block.contains("24V123"),
         "{block}"
@@ -335,6 +352,52 @@ async fn home_says_so_when_nothing_is_waiting() {
     }
 }
 
+#[tokio::test]
+async fn home_says_how_many_due_items_are_already_on_an_appointment() {
+    let db = db().await;
+    let v = gti_at_64k(&db).await;
+    let due = waiting::waiting(&db, v).await.unwrap().maintenance;
+    let appt = appointment::create(
+        &db,
+        v,
+        NewAppointment {
+            purpose: "Everything due".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    for item in &due {
+        work_item::create(
+            &db,
+            v,
+            NewWorkItem {
+                title: item.name.clone(),
+                schedule_item_id: Some(item.schedule_item_id),
+                appointment_id: Some(appt),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    let (_, body) = page(app(db, "live"), get("/")).await;
+
+    let block = waiting_block(&body);
+    assert!(
+        block.contains(&format!("plus {} on an appointment", due.len())),
+        "{block}"
+    );
+    assert!(
+        block.contains("None waiting for an appointment."),
+        "{block}"
+    );
+    assert!(!block.contains("No maintenance is due."), "{block}");
+}
+
+// The page edits no research facts, so every page says where they are changed.
 #[tokio::test]
 async fn every_page_says_research_facts_are_changed_through_claude() {
     const HINT: &str = "To add or change options, prices, part numbers or fitment, ask Claude.";

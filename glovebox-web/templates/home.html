@@ -15,9 +15,9 @@
   <h2>{{ v.vehicle.name }}</h2>
 
   <section class="sheet">
-    <div class="sheet-head"><h3>Maintenance due</h3><span class="n">{{ hv.waiting.due.len() }}</span><span class="aside l">Judged at {{ hv.waiting.judged_at }}</span></div>
+    <div class="sheet-head"><h3>Maintenance due</h3><span class="n">{{ hv.waiting.due.len() }}</span>{% if let Some(note) = hv.waiting.due_note %}<span class="l">{{ note }}</span>{% endif %}<span class="aside l">Judged at {{ hv.waiting.judged_at }}</span></div>
     {% if hv.waiting.due.is_empty() %}
-    <p class="empty lone">No maintenance is due.</p>
+    <p class="empty lone">{% if hv.waiting.due_note.is_some() %}None waiting for an appointment.{% else %}No maintenance is due.{% endif %}</p>
     {% else %}
     <div class="cols cols--wait" aria-hidden="true"><span>Item</span><span>Status</span><span>Due at</span><span>How far</span><span>Last done</span><span>Job</span></div>
     <ul class="needs">
@@ -55,9 +55,9 @@
   </section>
 
   <section class="sheet">
-    <div class="sheet-head"><h3>Open recalls</h3><span class="n">{{ hv.waiting.recalls.len() }}</span></div>
+    <div class="sheet-head"><h3>Open recalls</h3><span class="n">{{ hv.waiting.recalls.len() }}</span>{% if let Some(note) = hv.waiting.recalls_note %}<span class="l">{{ note }}</span>{% endif %}</div>
     {% if hv.waiting.recalls.is_empty() %}
-    <p class="empty lone">No open recalls.</p>
+    <p class="empty lone">{% if hv.waiting.recalls_note.is_some() %}None waiting for an appointment.{% else %}No open recalls.{% endif %}</p>
     {% else %}
     <div class="cols cols--wait" aria-hidden="true"><span class="at-key">Recall</span><span class="at-wide">Campaign</span><span class="at-job">Job</span></div>
     <ul class="needs">
@@ -73,9 +73,9 @@
   </section>
 
   <section class="sheet">
-    <div class="sheet-head"><h3>Open incidents</h3><span class="n">{{ hv.waiting.incidents.len() }}</span></div>
+    <div class="sheet-head"><h3>Open incidents</h3><span class="n">{{ hv.waiting.incidents.len() }}</span>{% if let Some(note) = hv.waiting.incidents_note %}<span class="l">{{ note }}</span>{% endif %}</div>
     {% if hv.waiting.incidents.is_empty() %}
-    <p class="empty lone">No open incidents.</p>
+    <p class="empty lone">{% if hv.waiting.incidents_note.is_some() %}None waiting for an appointment.{% else %}No open incidents.{% endif %}</p>
     {% else %}
     <div class="cols cols--wait" aria-hidden="true"><span class="at-key">Incident</span><span class="at-wide">Kind</span><span class="at-date">Date</span><span class="at-job">Job</span></div>
     <ul class="needs">

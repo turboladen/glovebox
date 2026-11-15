@@ -49,8 +49,10 @@ an incident stay with Claude.
 
 - `checklist::home` calls `waiting` once per vehicle, so the home page costs a handful of
   queries per vehicle that is not archived.
-- Maintenance is judged against today's estimated mileage, and the sheet says which reading it
-  used, so a stale odometer reading is visible.
+- Maintenance is judged against today's mileage, and the sheet prints that mileage and says when
+  it is an estimate.
+- A list that leaves items out says how many ("plus 2 on an appointment"), so an empty list
+  does not read as "nothing is due".
 - `get_checklist` with no appointment still lists only jobs that have needs, because that view
   is about deciding, ordering and receiving parts.
 - An incident whose job was dropped shows as not planned until the incident is resolved.

@@ -247,10 +247,10 @@
   .notice { padding-top: 1rem; }
   .appt > p { margin-top: 0.75rem; }
 
-  /* Home rows: appointments and unscheduled jobs share one set of columns. */
+  /* Home rows: the appointments list. */
   .cols--home, .row--home { grid-template-columns: minmax(0, 1fr) 8rem 8rem minmax(0, 14rem) 4rem 7rem 7rem; }
   .cols--home { border-bottom: 1px solid var(--rule); }
-  /* Waiting rows: the first two columns line up with the home rows. */
+  /* Waiting rows: the four lists of what is not yet on an appointment share one set of columns. */
   .cols--wait, .row--wait { grid-template-columns: minmax(0, 1fr) 8rem minmax(0, 13rem) minmax(0, 15rem) 8rem 7rem; }
   .cols--wait { border-bottom: 1px solid var(--rule); }
   .cols--wait > .at-key, .row--wait > .at-key { grid-column: 1 / 3; }
