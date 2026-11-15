@@ -17,6 +17,7 @@ use crate::{
     },
     error::{DomainError, DomainResult},
     services::incident::ServiceRef,
+    vocab::Vocabulary,
 };
 
 crate::vocab::vocabulary! {
@@ -45,12 +46,17 @@ impl RecallStatus {
     /// The status a recall with no service reads from a stored finding
     /// status. Any text `stored` does not give reads as open.
     fn from_stored(text: &str) -> Self {
-        [RecallStatus::Done, RecallStatus::NotApplicable]
-            .into_iter()
+        Self::ALL
+            .iter()
+            .copied()
             .find(|status| status.stored() == text)
             .unwrap_or(RecallStatus::Open)
     }
 }
+
+/// The status a recall reads while a planned job addresses it and nothing
+/// has marked it done or not applicable. No caller can set it.
+pub(crate) const PLANNED: &str = "planned";
 
 /// A recall as the owner sees it.
 #[derive(Debug, Serialize)]
@@ -193,7 +199,7 @@ async fn with_status(
                 RecallStatus::from_stored(&f.status)
             };
             let status = if set == RecallStatus::Open && planned_work_item_id.is_some() {
-                "planned"
+                PLANNED
             } else {
                 set.as_str()
             };
@@ -814,6 +820,18 @@ mod tests {
                 .await
                 .unwrap(),
             1
+        );
+    }
+
+    #[test]
+    fn a_stored_status_reads_back_as_the_status_that_wrote_it() {
+        for status in RecallStatus::ALL.iter().copied() {
+            assert_eq!(RecallStatus::from_stored(status.stored()), status);
+        }
+        // A finding status that no recall status writes reads as open.
+        assert_eq!(
+            RecallStatus::from_stored("acknowledged"),
+            RecallStatus::Open
         );
     }
 

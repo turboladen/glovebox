@@ -109,7 +109,7 @@ pub(crate) async fn open_recalls(
     Ok(recall::list(db, vehicle_id)
         .await?
         .into_iter()
-        .filter(|r| r.status == recall::RecallStatus::Open.as_str() || r.status == "planned")
+        .filter(|r| r.status == recall::RecallStatus::Open.as_str() || r.status == recall::PLANNED)
         .collect())
 }
 
