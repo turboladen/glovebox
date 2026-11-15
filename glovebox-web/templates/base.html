@@ -253,6 +253,17 @@
   .cap::first-letter { text-transform: uppercase; }
   .step--todo > .drawer, .step--todo > .drawer[open] { grid-column: 2 / -1; }
   .notice { padding-top: 1rem; }
+  .appt > p { margin-top: 0.75rem; }
+  .step--home { grid-template-columns: minmax(0, 1.4fr) 10rem minmax(0, 1fr) minmax(0, 1fr); }
+  .step--home a { text-underline-offset: 0.2em; }
+  @media (max-width: 68rem) {
+    .step--home { grid-template-columns: minmax(0, 1fr); }
+    .step > .drawer.act:not([open]) { justify-self: start; }
+    .row > .key { display: block; }
+    .row > .key::before { content: none; }
+    .row > [data-l] > .pill { justify-self: start; }
+    .opt--does_not_fit .pn { text-decoration: none; }
+  }
   .row .span::first-letter, .step .say::first-letter { text-transform: uppercase; }
 </style>
 </head>

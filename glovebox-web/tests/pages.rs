@@ -112,6 +112,12 @@ async fn home_lists_open_appointments_and_unscheduled_jobs() {
     assert!(body.contains("1 need open"), "{body}");
     assert!(body.contains("Wash the car"), "{body}");
     assert!(
+        body.contains(r#"<span class="l">Date </span>2026-12-01"#),
+        "{body}"
+    );
+    assert_eq!(body.matches(">Add a to-do<").count(), 2, "{body}");
+    assert!(!body.contains(">Add to-do<"), "{body}");
+    assert!(
         !body.contains("Brake job"),
         "a job on an appointment is not unscheduled: {body}"
     );
