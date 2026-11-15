@@ -6,6 +6,9 @@
       {% if let Some(c) = n.chosen %}
       {% let o = c %}{% include "part_cells.html" %}
       <span data-l="Fit"><span class="pill fit--{{ c.fit_class }}">{{ c.fit_text }}</span></span>
+      {% else if let Some(p) = n.linked %}
+      {% let o = p %}{% include "part_cells.html" %}
+      <span></span>
       {% else %}
       <span class="span{% if n.stage_class == "undecided" %} empty{% endif %}">{{ n.status_line }}</span>
       {% endif %}

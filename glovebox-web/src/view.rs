@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use glovebox_shared::{
-    entities::{need_option, todo},
+    entities::{need_option, part, todo},
     money::format_cents,
     services::{
         checklist::{self, Checklist, HomeAppointment, JobView, NeedView, StepRow},
@@ -135,6 +135,34 @@ impl OptionCard {
     }
 }
 
+/// The part linked to a need, as the row's part columns show it.
+#[derive(Clone)]
+pub struct LinkedPart {
+    pub manufacturer: Option<String>,
+    /// The part number, or the part's name when it has no number.
+    pub title: String,
+    /// The part's name, when `title` is the part number.
+    pub description: Option<String>,
+    pub seller: Option<String>,
+    /// What the whole purchase cost.
+    pub price: Option<String>,
+}
+
+impl LinkedPart {
+    fn new(part: &part::Model) -> Self {
+        Self {
+            manufacturer: part.manufacturer.clone(),
+            title: part
+                .part_number
+                .clone()
+                .unwrap_or_else(|| part.name.clone()),
+            description: part.part_number.is_some().then(|| part.name.clone()),
+            seller: part.seller.clone(),
+            price: part.cost_cents.map(format_cents),
+        }
+    }
+}
+
 // Only a web address becomes a link, so a stored `javascript:` or `data:`
 // value is never something the owner can click.
 fn is_web_address(url: &str) -> bool {
@@ -173,13 +201,16 @@ pub struct NeedCard {
     pub back: String,
     pub stage_class: &'static str,
     pub stage_text: &'static str,
-    /// What a row with no chosen option shows in place of the part: the
-    /// sentence the need's row under Next steps shows, then the options note
-    /// when the need has options.
+    /// What a row with no chosen option and no linked part shows in place of
+    /// the part: the sentence the need's row under Next steps shows, then the
+    /// options note when the need has options.
     pub status_line: String,
     /// Whether the need's details start open.
     pub open: bool,
     pub chosen: Option<OptionCard>,
+    /// The linked part, when the need has one and no chosen option. The row
+    /// then shows the part where it would show the option.
+    pub linked: Option<LinkedPart>,
     /// Every option, the chosen one included, for the decision form.
     pub options: Vec<OptionCard>,
     pub none_checked: bool,
@@ -590,6 +621,11 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
         open: failure.is_some() || ctx.open == Some(need.id),
         none_checked: !options.iter().any(|o| o.checked),
         can_decide: view.part.is_none() && !options.is_empty(),
+        linked: view
+            .part
+            .as_ref()
+            .filter(|_| chosen.is_none())
+            .map(LinkedPart::new),
         chosen,
         options,
         supplier: typed("supplied_by").map_or_else(
