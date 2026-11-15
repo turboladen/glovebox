@@ -175,11 +175,14 @@ async fn remove_defaults(txn: &impl ConnectionTrait) -> Result<(), DbErr> {
 
 #[cfg(test)]
 mod tests {
-    use sea_orm::{ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement};
+    use sea_orm::{ConnectionTrait, DatabaseConnection};
     use sea_orm_migration::MigratorTrait;
 
     use super::STAMPS;
-    use crate::{db::connect_options, migration::Migrator};
+    use crate::migration::{
+        Migrator,
+        schema::testing::{count, migrated_to, text},
+    };
 
     // The number of migrations that run before this one.
     const BEFORE: u32 = 5;
@@ -187,8 +190,7 @@ mod tests {
     // A database as the previous migration leaves it, holding the seeded
     // rows and one vehicle with a service, each stamped by its default.
     async fn db_before() -> DatabaseConnection {
-        let db = Database::connect(connect_options(None)).await.unwrap();
-        Migrator::up(&db, Some(BEFORE)).await.unwrap();
+        let db = migrated_to(BEFORE).await;
         db.execute_unprepared(
             "INSERT INTO vehicles (id, name, created_at, updated_at, archived_at)
                  VALUES (1, 'Golf', '2024-01-02 03:04:05', '2025-06-07 08:09:10', NULL);
@@ -198,24 +200,6 @@ mod tests {
         .await
         .unwrap();
         db
-    }
-
-    async fn text(db: &DatabaseConnection, sql: &str) -> String {
-        db.query_one_raw(Statement::from_string(DatabaseBackend::Sqlite, sql))
-            .await
-            .unwrap()
-            .unwrap()
-            .try_get_by_index::<String>(0)
-            .unwrap()
-    }
-
-    async fn count(db: &DatabaseConnection, sql: &str) -> i64 {
-        db.query_one_raw(Statement::from_string(DatabaseBackend::Sqlite, sql))
-            .await
-            .unwrap()
-            .unwrap()
-            .try_get_by_index::<i64>(0)
-            .unwrap()
     }
 
     // How many stamps across the database are not whole-second RFC 3339 in

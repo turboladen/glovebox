@@ -2,7 +2,8 @@
 //! `incident_id` an `ON DELETE SET NULL` foreign key and an index each.
 //!
 //! A job whose column names a row that does not exist has the column set to
-//! NULL first, and the count is logged as a warning. The job itself is kept.
+//! NULL first and its `updated_at` stamped, and the count is logged as a
+//! warning. The job itself is kept.
 //!
 //! The whole change runs in one transaction, and a failure leaves the
 //! database as it was. Running it again finds the keys in place and edits
@@ -74,15 +75,16 @@ impl MigrationTrait for Migration {
 }
 
 /// Sets to NULL every linking column of `work_items` that names a row that
-/// does not exist, and returns each column that held one with the number of
-/// jobs cleared.
+/// does not exist, stamps `updated_at` on each job it changes, and returns
+/// each column that held one with the number of jobs cleared.
 async fn clear_dangling(db: &impl ConnectionTrait) -> Result<Vec<(&'static str, u64)>, DbErr> {
     let mut cleared = Vec::new();
     for (column, parent, _) in LINKS {
         let rows = db
             .execute_unprepared(&format!(
-                "UPDATE work_items SET {column} = NULL WHERE {column} IS NOT NULL AND {column} \
-                 NOT IN (SELECT id FROM {parent})"
+                "UPDATE work_items SET {column} = NULL, updated_at = \
+                 strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now') WHERE {column} IS NOT NULL AND \
+                 {column} NOT IN (SELECT id FROM {parent})"
             ))
             .await?
             .rows_affected();
@@ -193,11 +195,14 @@ async fn foreign_keys(db: &impl ConnectionTrait) -> Result<Vec<Key>, DbErr> {
 
 #[cfg(test)]
 mod tests {
-    use sea_orm::{ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement};
+    use sea_orm::{ConnectionTrait, DatabaseConnection};
     use sea_orm_migration::MigratorTrait;
 
     use super::{clear_dangling, foreign_keys};
-    use crate::{db::connect_options, migration::Migrator};
+    use crate::migration::{
+        Migrator,
+        schema::testing::{count, migrated_to, text},
+    };
 
     // The number of migrations that run before this one.
     const BEFORE: u32 = 6;
@@ -206,8 +211,7 @@ mod tests {
     // schedule item 9001 and has a need, job 2 from research finding 9002 and
     // job 3 from incident 9003.
     async fn db_before() -> DatabaseConnection {
-        let db = Database::connect(connect_options(None)).await.unwrap();
-        Migrator::up(&db, Some(BEFORE)).await.unwrap();
+        let db = migrated_to(BEFORE).await;
         let sql = "
             INSERT INTO vehicles (id, name, created_at, updated_at) VALUES (1, 'Golf', S, S);
             INSERT INTO maintenance_schedule_items (id, vehicle_id, name, created_at, updated_at)
@@ -244,24 +248,6 @@ mod tests {
         )
         .await
         .unwrap();
-    }
-
-    async fn text(db: &DatabaseConnection, sql: &str) -> String {
-        db.query_one_raw(Statement::from_string(DatabaseBackend::Sqlite, sql))
-            .await
-            .unwrap()
-            .unwrap()
-            .try_get_by_index::<String>(0)
-            .unwrap()
-    }
-
-    async fn count(db: &DatabaseConnection, sql: &str) -> i64 {
-        db.query_one_raw(Statement::from_string(DatabaseBackend::Sqlite, sql))
-            .await
-            .unwrap()
-            .unwrap()
-            .try_get_by_index::<i64>(0)
-            .unwrap()
     }
 
     // The three linking columns of every job, in id order.
@@ -361,6 +347,27 @@ mod tests {
         assert_eq!(
             text(&db, "SELECT title FROM work_items WHERE id = 4").await,
             "Orphaned job"
+        );
+        // Only the job that changed is stamped, in the form every stamp has.
+        let seeded = "2026-11-14T12:00:00+00:00";
+        assert_eq!(
+            count(
+                &db,
+                &format!(
+                    "SELECT count(*) FROM work_items WHERE id = 4 AND updated_at > '{seeded}' AND \
+                     updated_at GLOB '????-??-??T??:??:??+00:00' AND created_at = '{seeded}'"
+                )
+            )
+            .await,
+            1
+        );
+        assert_eq!(
+            count(
+                &db,
+                &format!("SELECT count(*) FROM work_items WHERE updated_at = '{seeded}'")
+            )
+            .await,
+            3
         );
         assert_eq!(
             count(&db, "SELECT count(*) FROM pragma_foreign_key_check").await,

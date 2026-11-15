@@ -111,3 +111,39 @@ pub(super) async fn scalar<T: sea_orm::TryGetable>(
         .ok_or_else(|| DbErr::Migration(format!("`{sql}` returned no row")))?;
     row.try_get_by_index::<T>(0)
 }
+
+/// What the migration test modules share.
+#[cfg(test)]
+pub(super) mod testing {
+    use sea_orm::{ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement};
+    use sea_orm_migration::MigratorTrait;
+
+    use crate::{db::connect_options, migration::Migrator};
+
+    /// An in-memory database with the first `count` migrations applied.
+    /// Panics if one fails.
+    pub async fn migrated_to(count: u32) -> DatabaseConnection {
+        let db = Database::connect(connect_options(None)).await.unwrap();
+        Migrator::up(&db, Some(count)).await.unwrap();
+        db
+    }
+
+    /// The first column of the first row of `sql`, as text. Panics if the
+    /// query fails or returns no row.
+    pub async fn text(db: &DatabaseConnection, sql: &str) -> String {
+        first_row(db, sql).await.try_get_by_index(0).unwrap()
+    }
+
+    /// The first column of the first row of `sql`, as an integer. Panics if
+    /// the query fails or returns no row.
+    pub async fn count(db: &DatabaseConnection, sql: &str) -> i64 {
+        first_row(db, sql).await.try_get_by_index(0).unwrap()
+    }
+
+    async fn first_row(db: &DatabaseConnection, sql: &str) -> sea_orm::QueryResult {
+        db.query_one_raw(Statement::from_string(DatabaseBackend::Sqlite, sql))
+            .await
+            .unwrap()
+            .unwrap()
+    }
+}

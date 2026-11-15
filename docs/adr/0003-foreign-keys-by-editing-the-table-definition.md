@@ -5,9 +5,11 @@
 
 ## Context
 
-`work_items.schedule_item_id`, `research_finding_id` and `incident_id` were plain integer columns.
-Deleting the schedule item, research finding or incident left the job naming a row that was gone,
-and the home page links a due item, recall or incident to its planned job through these ids.
+A job names the schedule item, research finding or incident it comes from in
+`work_items.schedule_item_id`, `research_finding_id` and `incident_id`, and the home page links a
+due item, recall or incident to its planned job through these ids. Each column needs a foreign
+key: a plain integer column keeps the id of a row after that row is deleted, and the home page
+then shows a link to the wrong job.
 
 SQLite cannot add a foreign key to an existing column with `ALTER TABLE`. It offers two ways to
 change a table's constraints: rebuild the table, or edit the `CREATE TABLE` text it stores in
@@ -36,7 +38,8 @@ and does not rebuild the table**, when the table has dependents that a rebuild w
 
 1. Runs in one transaction that takes the write lock first.
 2. Makes the stored rows satisfy the new key before adding it, because SQLite does not check
-   them. A dangling id is set to NULL, the row is kept, and the count is logged as a warning.
+   them. A dangling id is set to NULL, the row is kept and its `updated_at` is stamped, and the
+   count is logged as a warning.
 3. Edits `sqlite_schema` with `PRAGMA writable_schema` on, turns the pragma off whether or not
    the edit worked, and raises `PRAGMA schema_version` so every connection reloads the schema.
 4. Judges the edit by what SQLite reads back (`pragma_foreign_key_list`), and by
@@ -48,13 +51,13 @@ and does not rebuild the table**, when the table has dependents that a rebuild w
 
 - **Rebuild the table** (the twelve-step procedure in SQLite's `ALTER TABLE` documentation). It is
   the procedure SQLite documents for adding a constraint, and it does not depend on how the stored
-  definition is spelled. It was rejected for this table because a mistake in the foreign-key
+  definition is spelled. It is rejected for this table because a mistake in the foreign-key
   pragma handling deletes the owner's needs, and because it replaces the triggers and indexes
   that the edit leaves alone. It stays the right choice for a change that alters stored rows,
   such as dropping or retyping a column.
-- **Keep the columns plain and clear them in each delete function.** `incident::delete` did this
-  and `schedule::delete` did not, and a cascade from a vehicle, platform or report delete reaches
-  none of those functions.
+- **Keep the columns plain and clear them in each delete function.** Every function that deletes
+  a schedule item, finding or incident has to remember the cleanup, and a cascade from a vehicle,
+  platform or report delete reaches none of those functions.
 
 ## Consequences
 
