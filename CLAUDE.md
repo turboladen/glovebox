@@ -121,7 +121,7 @@ Alltrack templates and their schedule items), the job checklist migration
 (`m20261113_000001_job_checklist`: appointments, needs, options and to-dos, additive only),
 `m20261113_000002_option_choice_history` (an option's `chosen_reason` and `chosen_on`),
 `m20261114_000001_typed_dates`, which refuses to finish while a date column holds a value that is
-not a real `YYYY-MM-DD`, because such a row could not be read, and
+not a real `YYYY-MM-DD`, because such a row could not be read,
 `m20261114_000002_utc_timestamps`, which rewrites every stamp as RFC 3339 and removes the
 `datetime('now')` column defaults by editing the stored table definitions, and
 `m20261114_000003_work_item_link_foreign_keys`, which gives a job's `schedule_item_id`,

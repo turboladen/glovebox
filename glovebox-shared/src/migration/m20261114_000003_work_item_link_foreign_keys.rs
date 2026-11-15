@@ -46,13 +46,7 @@ impl MigrationTrait for Migration {
 
         // SQLite does not check the stored rows against a key added to the
         // table's definition, so the rows are made to satisfy it first.
-        for (column, cleared) in clear_dangling(&txn).await? {
-            tracing::warn!(
-                column,
-                cleared,
-                "cleared work_items ids that named a row that does not exist; the jobs are kept"
-            );
-        }
+        let cleared = clear_dangling(&txn).await?;
         add_foreign_keys(&txn).await?;
         for (column, _, index) in LINKS {
             txn.execute_unprepared(&format!(
@@ -60,7 +54,17 @@ impl MigrationTrait for Migration {
             ))
             .await?;
         }
-        txn.commit().await
+        txn.commit().await?;
+        // A failure above rolls the clearing back, so it is reported only
+        // once it is committed.
+        for (column, cleared) in cleared {
+            tracing::warn!(
+                column,
+                cleared,
+                "cleared work_items ids that named a row that does not exist; the jobs are kept"
+            );
+        }
+        Ok(())
     }
 
     async fn down(&self, _manager: &SchemaManager) -> Result<(), DbErr> {
@@ -439,6 +443,55 @@ mod tests {
 
         assert_eq!(definition(&db).await, once);
         assert_eq!(links(&db).await, "1:9001,-,- 2:-,9002,- 3:-,-,9003");
+        assert_eq!(text(&db, "PRAGMA integrity_check").await, "ok");
+    }
+
+    // A database where one key is already present gets the other two.
+    #[tokio::test]
+    async fn a_table_that_already_has_one_key_gets_the_others() {
+        let db = db_before().await;
+        db.execute_unprepared(
+            "PRAGMA writable_schema = ON;
+             UPDATE sqlite_schema SET sql = replace(sql, '\"incident_id\" integer,', \
+             '\"incident_id\" integer REFERENCES \"incidents\" (\"id\") ON DELETE SET NULL,') \
+             WHERE name = 'work_items';
+             PRAGMA writable_schema = OFF;",
+        )
+        .await
+        .unwrap();
+
+        Migrator::up(&db, Some(1)).await.unwrap();
+
+        let stored = definition(&db).await;
+        assert_eq!(stored.matches("ON DELETE SET NULL").count(), 5, "{stored}");
+        assert_eq!(foreign_keys(&db).await.unwrap().len(), 6);
+    }
+
+    // A vehicle's jobs and the rows they name are all deleted with it, and
+    // the search index is left holding nothing.
+    #[tokio::test]
+    async fn deleting_the_vehicle_removes_its_jobs_and_their_search_rows() {
+        let db = db_before().await;
+        Migrator::up(&db, Some(1)).await.unwrap();
+
+        db.execute_unprepared("DELETE FROM vehicles WHERE id = 1")
+            .await
+            .unwrap();
+
+        assert_eq!(count(&db, "SELECT count(*) FROM work_items").await, 0);
+        assert_eq!(
+            count(
+                &db,
+                "SELECT count(*) FROM fts_work_items WHERE fts_work_items MATCH 'rattle'"
+            )
+            .await,
+            0
+        );
+        db.execute_unprepared(
+            "INSERT INTO fts_work_items(fts_work_items) VALUES ('integrity-check')",
+        )
+        .await
+        .unwrap();
         assert_eq!(text(&db, "PRAGMA integrity_check").await, "ok");
     }
 

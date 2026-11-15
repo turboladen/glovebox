@@ -495,7 +495,8 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
 /// Incidents that pointed at this one via `recurrence_of_id` are unlinked
 /// (the DB FK is ON DELETE SET NULL, but explicit keeps the behavior
 /// pragma-independent and inside the same transaction). A job planned for
-/// the incident is kept and stops naming it.
+/// the incident is kept and stops naming it, without a change to its
+/// `updated_at`.
 pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -524,7 +525,8 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .exec(&txn)
         .await?;
     // The foreign key of `work_items.incident_id` clears the column of every
-    // job planned for this incident.
+    // job planned for this incident. Every connection enforces foreign keys
+    // (`db::connect_options`).
     existing.delete(&txn).await?;
 
     txn.commit().await?;
@@ -1419,6 +1421,10 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(wi.incident_id, None);
+        assert_eq!(
+            wi.updated_at,
+            date::<chrono::DateTime<chrono::Utc>>("2024-01-01T00:00:00Z")
+        );
     }
 
     #[tokio::test]
