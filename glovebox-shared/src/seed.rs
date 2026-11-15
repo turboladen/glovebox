@@ -191,9 +191,7 @@ async fn build(db: &(impl ConnectionTrait + TransactionTrait)) -> DomainResult<(
         NewAppointment {
             purpose: "60k service + loose ends".into(),
             shop_name: Some("Demo Auto Works".into()),
-            planned_date: Some(services::date_label(
-                services::today() + chrono::Duration::days(14),
-            )),
+            planned_date: Some(services::today() + chrono::Duration::days(14)),
             ..Default::default()
         },
     )
@@ -373,7 +371,7 @@ async fn oil_change(
         db,
         v,
         NewServiceRecord {
-            service_date: services::today_label(),
+            service_date: services::today(),
             performed_by: Some("self".into()),
             mileage: Some(59_900),
             description: Some("Oil and filter change".into()),

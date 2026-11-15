@@ -7,7 +7,7 @@ pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
     pub vehicle_id: i32,
-    pub service_date: String,
+    pub service_date: chrono::NaiveDate,
     pub mileage: Option<i32>,
     pub description: Option<String>,
     pub parts_cost_cents: Option<i32>,
@@ -29,7 +29,7 @@ pub struct Model {
     /// Who did the work: `shop` or `self`.
     pub performed_by: String,
     /// Last day of a multi-day job; `service_date` is the first day.
-    pub end_date: Option<String>,
+    pub end_date: Option<chrono::NaiveDate>,
     pub appointment_id: Option<i32>,
 }
 

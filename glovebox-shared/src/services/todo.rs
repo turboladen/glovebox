@@ -125,20 +125,18 @@ pub async fn update_with_done<C: ConnectionTrait + TransactionTrait>(
     Ok(result)
 }
 
-/// Marks a to-do done on `on` (`YYYY-MM-DD`), or today when `on` is absent.
+/// Marks a to-do done on `on`, or today when `on` is absent.
 ///
 /// # Errors
-/// `NotFound` for a to-do that is not the vehicle's; `Invalid` for a
-/// malformed date.
+/// `NotFound` for a to-do that is not the vehicle's.
 pub async fn complete(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     id: i32,
-    on: Option<String>,
+    on: Option<chrono::NaiveDate>,
 ) -> DomainResult<todo::Model> {
-    super::validate_optional_date("done_on", on.as_deref())?;
     let existing = require(db, vehicle_id, id).await?;
-    let done_on = on.unwrap_or_else(crate::services::today_label);
+    let done_on = on.unwrap_or_else(crate::services::today);
     let mut active: todo::ActiveModel = existing.into();
     active.done_on = Set(Some(done_on));
     active.updated_at = Set(super::now_stamp());
@@ -224,7 +222,7 @@ mod tests {
             todo::{NewTodo, UpdateTodo},
         },
         services::appointment,
-        test_support::{VehicleFixture, test_db},
+        test_support::{VehicleFixture, date, test_db},
     };
 
     fn new_todo(title: &str, appointment_id: Option<i32>) -> NewTodo {
@@ -241,16 +239,12 @@ mod tests {
         let v = VehicleFixture::new().insert_id(&db).await;
         let t = add(&db, v, new_todo("Wash car", None)).await.unwrap();
         assert!(t.done_on.is_none());
-        let done = complete(&db, v, t.id, Some("2026-11-10".into()))
+        let done = complete(&db, v, t.id, Some(date("2026-11-10")))
             .await
             .unwrap();
-        assert_eq!(done.done_on.as_deref(), Some("2026-11-10"));
+        assert_eq!(done.done_on, Some(date("2026-11-10")));
         let today = complete(&db, v, t.id, None).await.unwrap();
-        assert_eq!(today.done_on, Some(crate::services::today_label()));
-        let bad = complete(&db, v, t.id, Some("11/10".into()))
-            .await
-            .unwrap_err();
-        assert!(matches!(bad, DomainError::Invalid { ref field, .. } if field == "done_on"));
+        assert_eq!(today.done_on, Some(crate::services::today()));
         let reopened = reopen(&db, v, t.id).await.unwrap();
         assert!(reopened.done_on.is_none());
         assert!(list(&db, v, None, false).await.unwrap().len() == 1);
@@ -264,14 +258,14 @@ mod tests {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
         let t = add(&db, v, new_todo("Wash", None)).await.unwrap();
-        complete(&db, v, t.id, Some("2026-11-10".into()))
+        complete(&db, v, t.id, Some(date("2026-11-10")))
             .await
             .unwrap();
 
         let again = update_with_done(&db, v, t.id, UpdateTodo::default(), Some(true))
             .await
             .unwrap();
-        assert_eq!(again.done_on.as_deref(), Some("2026-11-10"));
+        assert_eq!(again.done_on, Some(date("2026-11-10")));
 
         let open = update_with_done(
             &db,
@@ -291,7 +285,7 @@ mod tests {
         let ticked = update_with_done(&db, v, t.id, UpdateTodo::default(), Some(true))
             .await
             .unwrap();
-        assert_eq!(ticked.done_on, Some(crate::services::today_label()));
+        assert_eq!(ticked.done_on, Some(crate::services::today()));
         let untouched = update_with_done(&db, v, t.id, UpdateTodo::default(), None)
             .await
             .unwrap();

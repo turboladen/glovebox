@@ -216,7 +216,7 @@ mod tests {
     use crate::{
         inputs::service_record::NewServiceRecord,
         services::{schedule, service_record},
-        test_support::VehicleFixture,
+        test_support::{VehicleFixture, date},
     };
 
     async fn scalar(db: &DatabaseConnection, sql: &str) -> i32 {
@@ -401,7 +401,7 @@ mod tests {
             &db,
             v.id,
             NewServiceRecord {
-                service_date: "2026-01-01".into(),
+                service_date: date("2026-01-01"),
                 mileage: None,
                 description: Some("Oil change".into()),
                 parts_cost_cents: None,

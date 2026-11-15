@@ -57,8 +57,8 @@ pub struct UpdateOption {
 #[derive(Default)]
 pub struct OrderDetails {
     pub seller: Option<String>,
-    /// The order's date, `YYYY-MM-DD`; defaults to today.
-    pub purchase_date: Option<String>,
+    /// The order's date; defaults to today.
+    pub purchase_date: Option<chrono::NaiveDate>,
     pub cost_cents: Option<i32>,
     pub order_ref: Option<String>,
 }

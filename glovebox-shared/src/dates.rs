@@ -36,6 +36,19 @@ impl DayOrTime {
         }
     }
 
+    /// The moment the value stands for when it is ordered among times: its
+    /// own time, or the last second of the day for a bare day. A service
+    /// dated only to the day then reads as newer than that day's timed
+    /// incidents, which fits "noticed it in the morning, fixed it that
+    /// afternoon".
+    #[must_use]
+    pub fn or_end_of_day(self) -> NaiveDateTime {
+        match self {
+            Self::Day(day) => day.and_hms_opt(23, 59, 59).unwrap_or_default(),
+            Self::Time(at) => at,
+        }
+    }
+
     fn time(self) -> Option<NaiveTime> {
         match self {
             Self::Day(_) => None,
@@ -138,6 +151,42 @@ pub fn parse_day_or_time(field: &str, value: &str) -> DomainResult<DayOrTime> {
             "must be a date like 2027-05-01 or a date and time like 2027-05-01 14:30:00",
         )
     })
+}
+
+/// [`parse_date`] for a date the owner may leave out.
+///
+/// # Errors
+/// As for [`parse_date`], when a value is present.
+pub fn parse_optional_date<S: AsRef<str>>(
+    field: &str,
+    value: Option<S>,
+) -> DomainResult<Option<NaiveDate>> {
+    value.map(|v| parse_date(field, v.as_ref())).transpose()
+}
+
+/// [`parse_date`] for an edit to a date that can be cleared: `None` leaves the
+/// stored date alone, `Some(None)` clears it and `Some(Some(text))` sets it.
+///
+/// # Errors
+/// As for [`parse_date`], when a new value is present.
+pub fn parse_date_change<S: AsRef<str>>(
+    field: &str,
+    value: Option<Option<S>>,
+) -> DomainResult<Option<Option<NaiveDate>>> {
+    value.map(|v| parse_optional_date(field, v)).transpose()
+}
+
+/// [`parse_day_or_time`] for an event time the owner may leave out.
+///
+/// # Errors
+/// As for [`parse_day_or_time`], when a value is present.
+pub fn parse_optional_day_or_time<S: AsRef<str>>(
+    field: &str,
+    value: Option<S>,
+) -> DomainResult<Option<DayOrTime>> {
+    value
+        .map(|v| parse_day_or_time(field, v.as_ref()))
+        .transpose()
 }
 
 /// The date and time on the server's clock, to the second, for an event time

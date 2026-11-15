@@ -26,7 +26,7 @@ impl GloveboxMcp {
         params: Parameters<RecordPartInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "record_part");
-        let (vehicle_id, input) = p.into_domain();
+        let (vehicle_id, input) = domain_input!(p.into_domain());
         domain_result(part::create(&*self.db, vehicle_id, input).await)
     }
 
@@ -62,7 +62,7 @@ impl GloveboxMcp {
         params: Parameters<CorrectPartInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "correct_part");
-        let (vehicle_id, part_id, input) = p.into_domain();
+        let (vehicle_id, part_id, input) = domain_input!(p.into_domain());
         domain_result(part::update(&*self.db, vehicle_id, part_id, input).await)
     }
 

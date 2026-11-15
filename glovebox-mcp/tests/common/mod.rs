@@ -164,9 +164,9 @@ pub fn new_vehicle(name: &str) -> NewVehicle {
     }
 }
 
-pub fn minimal_service(date: &str, description: &str) -> NewServiceRecord {
+pub fn minimal_service(date: impl ToString, description: &str) -> NewServiceRecord {
     NewServiceRecord {
-        service_date: date.into(),
+        service_date: glovebox_shared::test_support::date(&date.to_string()),
         mileage: None,
         description: Some(description.into()),
         parts_cost_cents: None,

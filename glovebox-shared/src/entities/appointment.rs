@@ -12,10 +12,10 @@ pub struct Model {
     pub purpose: String,
     pub shop_name: Option<String>,
     pub shop_id: Option<i32>,
-    pub planned_date: Option<String>,
+    pub planned_date: Option<chrono::NaiveDate>,
     pub notes: Option<String>,
-    pub cancelled_on: Option<String>,
-    pub closed_on: Option<String>,
+    pub cancelled_on: Option<chrono::NaiveDate>,
+    pub closed_on: Option<chrono::NaiveDate>,
     pub created_at: String,
     pub updated_at: String,
 }

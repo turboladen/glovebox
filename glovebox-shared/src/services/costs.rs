@@ -53,9 +53,9 @@ pub struct CostSummary {
     /// record minus the mileage of the earliest-dated service or reading.
     /// `None` when no such reading exists or the difference is not positive.
     pub miles_covered: Option<i64>,
-    /// The date (`YYYY-MM-DD`) of the earliest-dated service or odometer
+    /// The date of the earliest-dated service or odometer
     /// reading that starts `miles_covered`, or `None` when there is none.
-    pub history_starts_on: Option<String>,
+    pub history_starts_on: Option<chrono::NaiveDate>,
     /// `total_cost_cents` per 1000 of `miles_covered`, rounded to the nearest
     /// cent; `None` when `miles_covered` is, or is under
     /// [`MIN_MILES_FOR_COST_PER_1000`], since a short history makes the rate
@@ -75,7 +75,7 @@ pub const MIN_MILES_FOR_COST_PER_1000: i64 = 1_000;
 #[derive(Serialize)]
 pub struct CoveredWork {
     pub service_id: i32,
-    pub service_date: String,
+    pub service_date: chrono::NaiveDate,
     pub description: Option<String>,
     /// Who paid the invoice overall.
     pub paid_by: String,
@@ -119,12 +119,9 @@ fn sum_present(values: impl Iterator<Item = Option<i32>>) -> Option<i64> {
         .fold(None, |acc, v| Some(acc.unwrap_or(0) + v))
 }
 
-fn day_of(date: &str) -> String {
-    date.get(..10).unwrap_or(date).to_string()
-}
-
-fn month_of(date: &str) -> String {
-    date.get(..7).unwrap_or(date).to_string()
+/// The `YYYY-MM` label of the month `date` falls in.
+fn month_of(date: chrono::NaiveDate) -> String {
+    date.format("%Y-%m").to_string()
 }
 
 type LinesByService = HashMap<i32, Vec<service_record_line_item::Model>>;
@@ -202,7 +199,7 @@ async fn covered_work(
                 })
         })
         .collect();
-    covered.sort_by(|a, b| (&b.service_date, b.id).cmp(&(&a.service_date, a.id)));
+    covered.sort_by_key(|s| std::cmp::Reverse((s.service_date, s.id)));
     let ids: Vec<i32> = covered.iter().map(|s| s.id).collect();
     let mut recalls_by_service = recall::load_performed(db, &ids).await?;
     Ok(covered
@@ -211,7 +208,7 @@ async fn covered_work(
             let out_of_pocket = out_of_pocket_by_service.get(&s.id).copied().unwrap_or(0);
             CoveredWork {
                 service_id: s.id,
-                service_date: s.service_date.clone(),
+                service_date: s.service_date,
                 description: s.description.clone(),
                 paid_by: s.paid_by.clone(),
                 payer_note: s.payer_note.clone(),
@@ -245,15 +242,15 @@ async fn recorded_miles(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     services: &[service_record::Model],
-) -> DomainResult<(Option<i64>, Option<String>)> {
+) -> DomainResult<(Option<i64>, Option<chrono::NaiveDate>)> {
     let readings = mileage_log::Entity::find()
         .filter(mileage_log::Column::VehicleId.eq(vehicle_id))
         .all(db)
         .await?;
-    let points: Vec<(String, i32)> = services
+    let points: Vec<(chrono::NaiveDate, i32)> = services
         .iter()
-        .filter_map(|s| Some((day_of(&s.service_date), s.mileage?)))
-        .chain(readings.iter().map(|r| (day_of(&r.recorded_at), r.mileage)))
+        .filter_map(|s| Some((s.service_date, s.mileage?)))
+        .chain(readings.iter().map(|r| (r.recorded_at.day(), r.mileage)))
         .collect();
     let start = points.iter().min();
     let end = points.iter().map(|(_, m)| *m).max();
@@ -261,7 +258,7 @@ async fn recorded_miles(
         .zip(end)
         .map(|((_, from), to)| i64::from(to) - i64::from(*from))
         .filter(|miles| *miles > 0);
-    Ok((miles, start.map(|(date, _)| date.clone())))
+    Ok((miles, start.map(|(date, _)| *date)))
 }
 
 /// Aggregate cost totals for a vehicle. Currency is always `i32`/`i64` cents;
@@ -316,7 +313,7 @@ pub async fn summary(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult
         std::collections::BTreeMap::new();
     for svc in &services {
         let entry = monthly_map
-            .entry(month_of(&svc.service_date))
+            .entry(month_of(svc.service_date))
             .or_insert((0, 0, 0));
         entry.0 += i64::from(svc.total_cost_cents.unwrap_or(0));
         entry.2 += covered_by_service.get(&svc.id).copied().unwrap_or(0);
@@ -324,7 +321,7 @@ pub async fn summary(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult
     let mut unbucketed_parts_cents = 0;
     for p in self_parts {
         let cents = i64::from(p.cost_cents.unwrap_or(0));
-        match p.purchase_date.as_ref().or(p.installed_date.as_ref()) {
+        match p.purchase_date.or(p.installed_date) {
             Some(date) => monthly_map.entry(month_of(date)).or_insert((0, 0, 0)).1 += cents,
             None => unbucketed_parts_cents += cents,
         }
@@ -367,7 +364,7 @@ mod tests {
     use super::*;
     use crate::{
         entities::{mileage_log, service_recall_link, service_record_line_item},
-        test_support::{VehicleFixture, test_db},
+        test_support::{VehicleFixture, date, test_db},
     };
 
     async fn seed_vehicle(db: &impl ConnectionTrait, purchase_mileage: Option<i32>) -> i32 {
@@ -402,7 +399,7 @@ mod tests {
         // Two services on the vehicle.
         service_record::ActiveModel {
             vehicle_id: Set(vid),
-            service_date: Set("2024-01-15".into()),
+            service_date: Set(date("2024-01-15")),
             mileage: Set(Some(2000)),
             total_cost_cents: Set(Some(10_000)),
             labor_cost_cents: Set(Some(4_000)),
@@ -414,7 +411,7 @@ mod tests {
         .unwrap();
         service_record::ActiveModel {
             vehicle_id: Set(vid),
-            service_date: Set("2024-02-20".into()),
+            service_date: Set(date("2024-02-20")),
             mileage: Set(Some(3000)),
             total_cost_cents: Set(Some(5_000)),
             labor_cost_cents: Set(Some(1_000)),
@@ -431,7 +428,7 @@ mod tests {
             name: Set("Filter".into()),
             status: Set("purchased".into()),
             cost_cents: Set(Some(20_000)),
-            purchase_date: Set(Some("2024-01-10".into())),
+            purchase_date: Set(Some(date("2024-01-10"))),
             ..Default::default()
         }
         .insert(&db)
@@ -450,7 +447,7 @@ mod tests {
         // 35_000 cents over the 1000 miles from the first service (2000) to the
         // latest reading (3000) is 35_000 cents per 1000 miles.
         assert_eq!(s.miles_covered, Some(1_000));
-        assert_eq!(s.history_starts_on.as_deref(), Some("2024-01-15"));
+        assert_eq!(s.history_starts_on, Some(date("2024-01-15")));
         assert_eq!(s.cost_per_1000_miles_cents, Some(35_000));
         // two service months + one part month (Jan overlaps a service month)
         assert_eq!(s.monthly_costs.len(), 2);
@@ -467,7 +464,7 @@ mod tests {
         // $100 self-paid service in January.
         service_record::ActiveModel {
             vehicle_id: Set(vid),
-            service_date: Set("2024-01-15".into()),
+            service_date: Set(date("2024-01-15")),
             total_cost_cents: Set(Some(10_000)),
             ..Default::default()
         }
@@ -477,7 +474,7 @@ mod tests {
         // $150 insurance-paid service in February.
         service_record::ActiveModel {
             vehicle_id: Set(vid),
-            service_date: Set("2024-02-20".into()),
+            service_date: Set(date("2024-02-20")),
             total_cost_cents: Set(Some(15_000)),
             paid_by: Set("insurance".into()),
             payer_note: Set(Some("claim #123".into())),
@@ -492,7 +489,7 @@ mod tests {
             name: Set("Wiper blades".into()),
             status: Set("purchased".into()),
             cost_cents: Set(Some(2_000)),
-            purchase_date: Set(Some("2024-01-10".into())),
+            purchase_date: Set(Some(date("2024-01-10"))),
             ..Default::default()
         }
         .insert(&db)
@@ -528,7 +525,7 @@ mod tests {
         let vid = seed_vehicle(&db, None).await;
         let service_id = service_record::ActiveModel {
             vehicle_id: Set(vid),
-            service_date: Set("2024-03-01".into()),
+            service_date: Set(date("2024-03-01")),
             total_cost_cents: Set(Some(20_000)),
             ..Default::default()
         }
@@ -543,7 +540,7 @@ mod tests {
                 status: Set("installed".into()),
                 supplied_by: Set(supplied_by.into()),
                 cost_cents: Set(Some(cents)),
-                purchase_date: Set(Some("2024-03-01".into())),
+                purchase_date: Set(Some(date("2024-03-01"))),
                 installed_service_id: Set(Some(service_id)),
                 ..Default::default()
             }
@@ -583,7 +580,7 @@ mod tests {
     ) -> i32 {
         service_record::ActiveModel {
             vehicle_id: Set(vid),
-            service_date: Set(date.into()),
+            service_date: Set(crate::test_support::date(date)),
             total_cost_cents: Set(total),
             paid_by: Set(paid_by.into()),
             ..Default::default()
@@ -608,8 +605,8 @@ mod tests {
             status: Set("installed".into()),
             supplied_by: Set(supplied_by.into()),
             cost_cents: Set(Some(cents)),
-            purchase_date: Set(purchase_date.map(Into::into)),
-            installed_date: Set(installed_date.map(Into::into)),
+            purchase_date: Set(purchase_date.map(date)),
+            installed_date: Set(installed_date.map(date)),
             ..Default::default()
         }
         .insert(db)
@@ -689,7 +686,7 @@ mod tests {
             status: Set(status.into()),
             supplied_by: Set("self".into()),
             cost_cents: Set(Some(cents)),
-            purchase_date: Set(Some(purchase_date.into())),
+            purchase_date: Set(Some(date(purchase_date))),
             ..Default::default()
         }
         .insert(db)
@@ -732,7 +729,7 @@ mod tests {
         let vid = seed_vehicle(&db, Some(5_000)).await;
         service_record::ActiveModel {
             vehicle_id: Set(vid),
-            service_date: Set("2026-11-03".into()),
+            service_date: Set(date("2026-11-03")),
             mileage: Set(Some(5_000)),
             total_cost_cents: Set(Some(10_000)),
             ..Default::default()
@@ -749,7 +746,7 @@ mod tests {
         mileage_log::ActiveModel {
             vehicle_id: Set(vid),
             mileage: Set(miles),
-            recorded_at: Set(date.into()),
+            recorded_at: Set(crate::test_support::date(date)),
             source: Set(Some("manual".into())),
             ..Default::default()
         }
@@ -787,7 +784,7 @@ mod tests {
         let s = summary(&db, vid).await.unwrap();
         assert_eq!(s.total_cost_cents, 66_400);
         assert_eq!(s.miles_covered, Some(1_200));
-        assert_eq!(s.history_starts_on.as_deref(), Some("2026-10-01"));
+        assert_eq!(s.history_starts_on, Some(date("2026-10-01")));
         // 66_400 cents over 1200 miles is 55_333 cents per 1000 miles.
         assert_eq!(s.cost_per_1000_miles_cents, Some(55_333));
     }
@@ -1007,7 +1004,7 @@ mod tests {
     async fn the_cost_per_1000_miles_is_withheld_below_1000_recorded_miles() {
         let short = history_of_miles(999).await;
         assert_eq!(short.miles_covered, Some(999));
-        assert_eq!(short.history_starts_on.as_deref(), Some("2026-11-01"));
+        assert_eq!(short.history_starts_on, Some(date("2026-11-01")));
         assert_eq!(short.cost_per_1000_miles_cents, None);
 
         let enough = history_of_miles(1_000).await;

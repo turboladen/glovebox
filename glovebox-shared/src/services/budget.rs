@@ -71,8 +71,8 @@ pub struct UnestimatedWork {
 #[derive(Debug, Serialize)]
 pub struct ForecastLine {
     pub label: String,
-    /// Projected date, `YYYY-MM-DD` (today for overdue items).
-    pub when: String,
+    /// Projected date (today for overdue items).
+    pub when: chrono::NaiveDate,
     pub est_cents: i64,
 }
 
@@ -196,9 +196,7 @@ pub async fn forecast_from(
         loop {
             lines.push(ForecastLine {
                 label: item.name.clone(),
-                when: (today + chrono::Duration::days(day))
-                    .format("%Y-%m-%d")
-                    .to_string(),
+                when: today + chrono::Duration::days(day),
                 est_cents: cost,
             });
             let Some(cycle) = cycle_days else { break };
@@ -309,7 +307,7 @@ mod tests {
             mileage_log::ActiveModel {
                 vehicle_id: Set(vid),
                 mileage: Set(miles),
-                recorded_at: Set(days_ago(age)),
+                recorded_at: Set(days_ago(age).into()),
                 ..Default::default()
             }
             .insert(&db)
@@ -403,7 +401,7 @@ mod tests {
 
         // Overdue occurrences land today; lines are date-ordered.
         assert_eq!(f.lines[0].when, days_ago(0));
-        let whens: Vec<&str> = f.lines.iter().map(|l| l.when.as_str()).collect();
+        let whens: Vec<chrono::NaiveDate> = f.lines.iter().map(|l| l.when).collect();
         let mut sorted = whens.clone();
         sorted.sort_unstable();
         assert_eq!(whens, sorted);
@@ -427,7 +425,7 @@ mod tests {
             mileage_log::ActiveModel {
                 vehicle_id: Set(vid),
                 mileage: Set(miles),
-                recorded_at: Set(days_ago(age)),
+                recorded_at: Set(days_ago(age).into()),
                 ..Default::default()
             }
             .insert(&db)
@@ -496,7 +494,7 @@ mod tests {
             mileage_log::ActiveModel {
                 vehicle_id: Set(vid),
                 mileage: Set(64_000),
-                recorded_at: Set(days_ago(age)),
+                recorded_at: Set(days_ago(age).into()),
                 ..Default::default()
             }
             .insert(&db)
@@ -527,9 +525,7 @@ mod tests {
         let first_in_days = (6_000.0 / rems.avg_daily_miles).ceil() as i64;
         assert_eq!(
             f.lines[0].when,
-            (crate::services::today() + chrono::Duration::days(first_in_days))
-                .format("%Y-%m-%d")
-                .to_string()
+            crate::services::today() + chrono::Duration::days(first_in_days)
         );
     }
 

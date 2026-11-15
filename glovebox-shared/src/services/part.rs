@@ -29,7 +29,7 @@ pub(crate) async fn mark_returned(
 ) -> DomainResult<part::Model> {
     let mut active: part::ActiveModel = p.into();
     active.status = Set(RETURNED.to_string());
-    active.returned_on = Set(Some(super::today_label()));
+    active.returned_on = Set(Some(super::today()));
     active.return_reason = Set(Some(reason));
     active.returned_from_need_id = Set(Some(need_id));
     active.updated_at = Set(super::now_stamp());
@@ -132,9 +132,6 @@ pub async fn create(
     if let Some(status) = &input.status {
         validate_requested_status(status)?;
     }
-    super::validate_optional_date("purchase_date", input.purchase_date.as_deref())?;
-    super::validate_optional_date("installed_date", input.installed_date.as_deref())?;
-    super::validate_optional_date("warranty_expires_on", input.warranty_expires_on.as_deref())?;
     if let Some(service_id) = input.installed_service_id {
         super::service_record::require(db, vehicle_id, service_id).await?;
     }
@@ -185,15 +182,6 @@ pub async fn update(
         validate_status_change(&existing, status)?;
     }
     validate_install_details(&existing, &input)?;
-    for (field, value) in [
-        ("purchase_date", &input.purchase_date),
-        ("installed_date", &input.installed_date),
-        ("replaced_date", &input.replaced_date),
-        ("received_on", &input.received_on),
-        ("warranty_expires_on", &input.warranty_expires_on),
-    ] {
-        super::validate_optional_date(field, value.as_ref().and_then(|v| v.as_deref()))?;
-    }
 
     let existing_returned = is_returned(&existing);
     let mut active: part::ActiveModel = existing.into();
@@ -297,7 +285,7 @@ pub(crate) async fn install(
     let mut active: part::ActiveModel = existing.into();
     active.status = Set("installed".to_string());
     active.installed_service_id = Set(Some(record.id));
-    active.installed_date = Set(Some(record.service_date.clone()));
+    active.installed_date = Set(Some(record.service_date));
     active.installed_odometer = odometer;
     active.updated_at = Set(super::now_stamp());
     active.update(db).await?;
@@ -312,7 +300,7 @@ pub(crate) async fn follow_service(
     record: &service_record::Model,
 ) -> DomainResult<()> {
     let mut changes = part::ActiveModel {
-        installed_date: Set(Some(record.service_date.clone())),
+        installed_date: Set(Some(record.service_date)),
         updated_at: Set(super::now_stamp()),
         ..Default::default()
     };
@@ -370,7 +358,7 @@ pub async fn delete(db: &impl ConnectionTrait, vehicle_id: i32, id: i32) -> Doma
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{VehicleFixture, row_count, test_db};
+    use crate::test_support::{VehicleFixture, date, row_count, test_db};
 
     async fn seed_vehicle(db: &impl ConnectionTrait) -> i32 {
         VehicleFixture::new().insert_id(db).await
@@ -380,7 +368,7 @@ mod tests {
         use crate::entities::service_record;
         service_record::ActiveModel {
             vehicle_id: Set(vehicle_id),
-            service_date: Set("2024-01-01".into()),
+            service_date: Set(date("2024-01-01")),
             ..Default::default()
         }
         .insert(db)
@@ -733,27 +721,15 @@ mod tests {
             vid,
             p.id,
             UpdatePart {
-                received_on: Some(Some("2026-11-05".into())),
+                received_on: Some(Some(date("2026-11-05"))),
                 order_ref: Some(None),
                 ..Default::default()
             },
         )
         .await
         .unwrap();
-        assert_eq!(updated.received_on.as_deref(), Some("2026-11-05"));
+        assert_eq!(updated.received_on, Some(date("2026-11-05")));
         assert_eq!(updated.order_ref, None);
-        let err = update(
-            &db,
-            vid,
-            p.id,
-            UpdatePart {
-                received_on: Some(Some("yesterday".into())),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, DomainError::Invalid { .. }), "{err:?}");
     }
 
     async fn seed_returned(db: &impl ConnectionTrait, vid: i32) -> part::Model {
@@ -762,7 +738,7 @@ mod tests {
             name: Set("Rotors".into()),
             status: Set("returned".into()),
             supplied_by: Set("self".into()),
-            returned_on: Set(Some("2026-11-06".into())),
+            returned_on: Set(Some(date("2026-11-06"))),
             return_reason: Set(Some("wrong size".into())),
             ..Default::default()
         }
@@ -915,7 +891,7 @@ mod tests {
             .unwrap();
         let after = get(&db, vid, p.id).await.unwrap();
         assert_eq!(after.status, "returned");
-        assert_eq!(after.returned_on.as_deref(), Some("2026-11-06"));
+        assert_eq!(after.returned_on, Some(date("2026-11-06")));
         assert_eq!(after.return_reason.as_deref(), Some("wrong size"));
         assert_eq!(after.installed_service_id, None);
     }
@@ -932,7 +908,7 @@ mod tests {
                 ..Default::default()
             },
             UpdatePart {
-                installed_date: Some(Some("2026-11-10".into())),
+                installed_date: Some(Some(date("2026-11-10"))),
                 ..Default::default()
             },
             UpdatePart {

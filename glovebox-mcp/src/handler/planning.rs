@@ -35,7 +35,7 @@ impl GloveboxMcp {
         params: Parameters<PlanWorkInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "plan_work");
-        let (vehicle_id, input) = p.into_domain();
+        let (vehicle_id, input) = domain_input!(p.into_domain());
         domain_result(work_item_svc::create(&*self.db, vehicle_id, input).await)
     }
 
@@ -119,7 +119,7 @@ impl GloveboxMcp {
         params: Parameters<UpdatePlannedWorkInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "update_planned_work");
-        let (vehicle_id, work_item_id, input) = p.into_domain();
+        let (vehicle_id, work_item_id, input) = domain_input!(p.into_domain());
         domain_result(work_item_svc::update(&*self.db, vehicle_id, work_item_id, input).await)
     }
 

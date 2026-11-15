@@ -292,7 +292,10 @@ pub async fn add_option(
 async fn clear_choice(db: &impl ConnectionTrait, need_id: i32, option_id: i32) -> DomainResult<()> {
     job_need::Entity::update_many()
         .col_expr(job_need::Column::ChosenOptionId, Expr::value(None::<i32>))
-        .col_expr(job_need::Column::DecidedOn, Expr::value(None::<String>))
+        .col_expr(
+            job_need::Column::DecidedOn,
+            Expr::value(None::<chrono::NaiveDate>),
+        )
         .col_expr(
             job_need::Column::DecisionReason,
             Expr::value(None::<String>),
@@ -390,7 +393,7 @@ pub async fn update_option<C: ConnectionTrait + TransactionTrait>(
         active.fitment_note = Set(value.as_deref().and_then(super::trim_to_none));
     }
     if let Some(reason) = &input.rejected_reason {
-        active.rejected_on = Set(reason.is_some().then(crate::services::today_label));
+        active.rejected_on = Set(reason.is_some().then(crate::services::today));
         active.rejected_reason = Set(reason.clone());
     }
     active.updated_at = Set(super::now_stamp());
@@ -503,9 +506,9 @@ pub async fn decide(
         }
     }
     let decided_on = if option_id.is_some() && option_id == need.chosen_option_id {
-        need.decided_on.clone()
+        need.decided_on
     } else {
-        option_id.map(|_| crate::services::today_label())
+        option_id.map(|_| crate::services::today())
     };
     let mut active: job_need::ActiveModel = need.into();
     active.chosen_option_id = Set(option_id);
@@ -604,14 +607,13 @@ pub fn order_cost_cents(need: &job_need::Model, option: &need_option::Model) -> 
 /// # Errors
 /// `NotFound` for a need that is not the vehicle's; `BadRequest` when the
 /// need has no chosen option, already has a part or is supplied by the shop;
-/// `Invalid` for a malformed date or a negative cost.
+/// `Invalid` for a negative cost.
 pub async fn mark_ordered<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
     need_id: i32,
     details: OrderDetails,
 ) -> DomainResult<NeedPurchase> {
-    super::validate_optional_date("purchase_date", details.purchase_date.as_deref())?;
     validate_price(details.cost_cents)?;
     let txn = db.begin().await?;
     // The claim is the transaction's first statement and a write, so SQLite
@@ -645,9 +647,7 @@ pub async fn mark_ordered<C: ConnectionTrait + TransactionTrait>(
             "Need {need_id} has no chosen option; choose one before ordering"
         ))
     })?;
-    let purchase_date = details
-        .purchase_date
-        .unwrap_or_else(crate::services::today_label);
+    let purchase_date = details.purchase_date.unwrap_or_else(crate::services::today);
     let cost_cents = details.cost_cents.or(order_cost_cents(&need, &option));
     let created = super::part::create(
         &txn,
@@ -677,15 +677,14 @@ pub async fn mark_ordered<C: ConnectionTrait + TransactionTrait>(
 /// # Errors
 /// `NotFound` for a need or part that is not the vehicle's; `BadRequest` for
 /// a returned part, a part linked to another need or a need that already has
-/// a part; `Invalid` for a malformed date.
+/// a part.
 pub async fn link_part<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
     need_id: i32,
     part_id: i32,
-    received_on: Option<String>,
+    received_on: Option<chrono::NaiveDate>,
 ) -> DomainResult<NeedPurchase> {
-    super::validate_optional_date("received_on", received_on.as_deref())?;
     let need = require(db, vehicle_id, need_id).await?;
     let found = super::part::get(db, vehicle_id, part_id).await?;
     if super::part::is_returned(&found) {
@@ -747,7 +746,7 @@ async fn set_received(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     need_id: i32,
-    on: Option<String>,
+    on: Option<chrono::NaiveDate>,
 ) -> DomainResult<NeedPurchase> {
     let need = require(db, vehicle_id, need_id).await?;
     let found = linked_part(db, &need).await?;
@@ -762,15 +761,14 @@ async fn set_received(
 ///
 /// # Errors
 /// `NotFound` for a need that is not the vehicle's; `BadRequest` when it has
-/// no part; `Invalid` for a malformed date.
+/// no part.
 pub async fn mark_received(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     need_id: i32,
-    on: Option<String>,
+    on: Option<chrono::NaiveDate>,
 ) -> DomainResult<NeedPurchase> {
-    super::validate_optional_date("received_on", on.as_deref())?;
-    let on = on.unwrap_or_else(crate::services::today_label);
+    let on = on.unwrap_or_else(crate::services::today);
     set_received(db, vehicle_id, need_id, Some(on)).await
 }
 
@@ -857,7 +855,7 @@ pub async fn return_part<C: ConnectionTrait + TransactionTrait>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{VehicleFixture, add_job, row_count, test_db};
+    use crate::test_support::{VehicleFixture, add_job, date, row_count, test_db};
 
     async fn seed_job(db: &DatabaseConnection) -> (i32, i32) {
         let vehicle_id = VehicleFixture::new().insert_id(db).await;
@@ -923,7 +921,7 @@ mod tests {
             warranty_expires_on: None,
             warranty_expires_miles: None,
             supplied_by: "self".into(),
-            received_on: received_on.map(String::from),
+            received_on: received_on.map(date),
             returned_on: None,
             return_reason: None,
             order_ref: None,
@@ -1226,10 +1224,10 @@ mod tests {
         )
         .await
         .unwrap();
-        let today = crate::services::today_label();
+        let today = crate::services::today();
         assert_eq!(decided.chosen_option_id, Some(o.id));
         assert_eq!(decided.decision_reason.as_deref(), Some("best reviews"));
-        assert_eq!(decided.decided_on.as_deref(), Some(today.as_str()));
+        assert_eq!(decided.decided_on, Some(today));
 
         let cleared = decide(&db, vehicle_id, n.id, None, None).await.unwrap();
         assert_eq!(cleared.chosen_option_id, None);
@@ -1534,7 +1532,7 @@ mod tests {
         let bought = mark_ordered(&db, vehicle_id, n.id, OrderDetails::default())
             .await
             .unwrap();
-        let today = crate::services::today_label();
+        let today = crate::services::today();
         assert_eq!(bought.part.name, o.description);
         assert_eq!(bought.part.manufacturer.as_deref(), Some("Zimmermann"));
         assert_eq!(bought.part.part_number.as_deref(), Some("100.3394.20"));
@@ -1544,7 +1542,7 @@ mod tests {
             bought.part.retailer_url.as_deref(),
             Some("https://example.com/rotors")
         );
-        assert_eq!(bought.part.purchase_date.as_deref(), Some(today.as_str()));
+        assert_eq!(bought.part.purchase_date, Some(today));
         assert_eq!(bought.part.supplied_by, "self");
         assert_eq!(bought.part.status, "purchased");
         assert_eq!(bought.need.part_id, Some(bought.part.id));
@@ -1566,7 +1564,7 @@ mod tests {
             n2.id,
             OrderDetails {
                 seller: Some("Amazon".into()),
-                purchase_date: Some("2026-11-02".into()),
+                purchase_date: Some(date("2026-11-02")),
                 cost_cents: Some(8_500),
                 order_ref: Some("112-445".into()),
             },
@@ -1574,7 +1572,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(bought.part.seller.as_deref(), Some("Amazon"));
-        assert_eq!(bought.part.purchase_date.as_deref(), Some("2026-11-02"));
+        assert_eq!(bought.part.purchase_date, Some(date("2026-11-02")));
         assert_eq!(bought.part.cost_cents, Some(8_500));
         assert_eq!(bought.part.order_ref.as_deref(), Some("112-445"));
     }
@@ -1636,7 +1634,7 @@ mod tests {
         let same = decide(&db, vehicle_id, n.id, Some(o.id), Some("quieter".into()))
             .await
             .unwrap();
-        assert_eq!(same.decided_on.as_deref(), Some("2026-01-02"));
+        assert_eq!(same.decided_on, Some(date("2026-01-02")));
         assert_eq!(same.decision_reason.as_deref(), Some("quieter"));
 
         let other = add_option(&db, vehicle_id, n.id, option("Other pads"))
@@ -1645,8 +1643,8 @@ mod tests {
         let changed = decide(&db, vehicle_id, n.id, Some(other.id), None)
             .await
             .unwrap();
-        let today = crate::services::today_label();
-        assert_eq!(changed.decided_on.as_deref(), Some(today.as_str()));
+        let today = crate::services::today();
+        assert_eq!(changed.decided_on, Some(today));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1759,10 +1757,10 @@ mod tests {
         let (vehicle_id, job_id) = seed_job(&db).await;
         let n = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
         let p = new_part(&db, vehicle_id, "Pads").await;
-        let linked = link_part(&db, vehicle_id, n.id, p.id, Some("2026-11-05".into()))
+        let linked = link_part(&db, vehicle_id, n.id, p.id, Some(date("2026-11-05")))
             .await
             .unwrap();
-        assert_eq!(linked.part.received_on.as_deref(), Some("2026-11-05"));
+        assert_eq!(linked.part.received_on, Some(date("2026-11-05")));
         assert_eq!(linked.stage, Stage::Received);
         assert_eq!(linked.need.supplied_by.as_deref(), Some("self"));
 
@@ -1771,13 +1769,6 @@ mod tests {
         let linked = link_part(&db, vehicle_id, m.id, q.id, None).await.unwrap();
         assert_eq!(linked.part.received_on, None);
         assert_eq!(linked.stage, Stage::Ordered);
-
-        let bad = add(&db, vehicle_id, job_id, need("Fluid")).await.unwrap();
-        let r = new_part(&db, vehicle_id, "Fluid").await;
-        let err = link_part(&db, vehicle_id, bad.id, r.id, Some("11/5".into()))
-            .await
-            .unwrap_err();
-        assert!(matches!(err, DomainError::Invalid { .. }), "{err:?}");
     }
 
     #[tokio::test]
@@ -1785,17 +1776,17 @@ mod tests {
         let db = test_db().await;
         let (vehicle_id, job_id) = seed_job(&db).await;
         let (n, _) = ordered_need(&db, vehicle_id, job_id).await;
-        let got = mark_received(&db, vehicle_id, n.id, Some("2026-11-07".into()))
+        let got = mark_received(&db, vehicle_id, n.id, Some(date("2026-11-07")))
             .await
             .unwrap();
-        assert_eq!(got.part.received_on.as_deref(), Some("2026-11-07"));
+        assert_eq!(got.part.received_on, Some(date("2026-11-07")));
         assert_eq!(got.stage, Stage::Received);
         let cleared = clear_received(&db, vehicle_id, n.id).await.unwrap();
         assert_eq!(cleared.part.received_on, None);
         assert_eq!(cleared.stage, Stage::Ordered);
-        let today = crate::services::today_label();
+        let today = crate::services::today();
         let got = mark_received(&db, vehicle_id, n.id, None).await.unwrap();
-        assert_eq!(got.part.received_on.as_deref(), Some(today.as_str()));
+        assert_eq!(got.part.received_on, Some(today));
 
         let bare = add(&db, vehicle_id, job_id, need("Fluid")).await.unwrap();
         let err = mark_received(&db, vehicle_id, bare.id, None)
@@ -1832,16 +1823,13 @@ mod tests {
         )
         .await
         .unwrap();
-        let today = crate::services::today_label();
+        let today = crate::services::today();
         assert_eq!(out.returned_part.status, "returned");
         assert_eq!(
             out.returned_part.return_reason.as_deref(),
             Some("wrong diameter")
         );
-        assert_eq!(
-            out.returned_part.returned_on.as_deref(),
-            Some(today.as_str())
-        );
+        assert_eq!(out.returned_part.returned_on, Some(today));
         assert_eq!(out.returned_part.returned_from_need_id, Some(n.id));
         assert_eq!(out.need.part_id, None);
         assert_eq!(out.need.chosen_option_id, Some(o.id));
@@ -1996,9 +1984,9 @@ mod tests {
             Some("does not fit the GTI")
         );
         // The reason the owner chose it survives on the rejected option.
-        let today = crate::services::today_label();
+        let today = crate::services::today();
         assert_eq!(rejected.chosen_reason.as_deref(), Some("fits"));
-        assert_eq!(rejected.chosen_on.as_deref(), Some(today.as_str()));
+        assert_eq!(rejected.chosen_on, Some(today));
     }
 
     #[tokio::test]

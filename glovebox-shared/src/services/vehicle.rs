@@ -72,8 +72,6 @@ pub async fn create(
     db: &impl ConnectionTrait,
     mut input: NewVehicle,
 ) -> DomainResult<vehicle::Model> {
-    super::validate_optional_date("purchase_date", input.purchase_date.as_deref())?;
-    super::validate_optional_date("warranty_expires_on", input.warranty_expires_on.as_deref())?;
     fill_new_from_template(db, &mut input).await?;
     let model = vehicle::ActiveModel {
         name: Set(input.name),
@@ -180,13 +178,6 @@ pub async fn update(
     input: UpdateVehicle,
 ) -> DomainResult<vehicle::Model> {
     let existing = require(db, id).await?;
-    for (field, value) in [
-        ("purchase_date", &input.purchase_date),
-        ("sold_date", &input.sold_date),
-        ("warranty_expires_on", &input.warranty_expires_on),
-    ] {
-        super::validate_optional_date(field, value.as_ref().and_then(|v| v.as_deref()))?;
-    }
     let template = require_template(db, input.model_template_id.flatten()).await?;
     let mut input = input;
     if let Some(t) = template {

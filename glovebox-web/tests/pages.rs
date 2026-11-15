@@ -5,7 +5,7 @@ use common::{app, app_with_file, db, get, page, request, send, send_bytes};
 use glovebox_shared::{
     inputs::{appointment::NewAppointment, need::NewNeed, todo::NewTodo, work_item::NewWorkItem},
     services::{appointment, need, todo, work_item},
-    test_support::VehicleFixture,
+    test_support::{VehicleFixture, date},
 };
 
 const CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; form-action \
@@ -20,7 +20,7 @@ async fn home_lists_open_appointments_and_unscheduled_jobs() {
         v,
         NewAppointment {
             purpose: "60k service".into(),
-            planned_date: Some("2026-12-01".into()),
+            planned_date: Some(date("2026-12-01")),
             ..Default::default()
         },
     )

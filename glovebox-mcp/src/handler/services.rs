@@ -3,7 +3,10 @@
 use rmcp::{ErrorData as McpError, model::CallToolResult, tool, tool_router};
 
 use super::{GloveboxMcp, Parameters, domain_error, domain_result};
-use glovebox_shared::services::service_record::{self, LinkMode};
+use glovebox_shared::{
+    dates,
+    services::service_record::{self, LinkMode},
+};
 
 use crate::schemas::{
     CorrectServiceInput, DeleteServiceInput, LinkServiceToMaintenanceInput, ListServicesInput,
@@ -76,7 +79,7 @@ impl GloveboxMcp {
         params: Parameters<RecordServiceInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "record_service");
-        let (vehicle_id, input) = p.into_domain();
+        let (vehicle_id, input) = domain_input!(p.into_domain());
         domain_result(service_record::create(&*self.db, vehicle_id, input).await)
     }
 
@@ -125,15 +128,9 @@ impl GloveboxMcp {
         params: Parameters<ListServicesInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "list_services");
-        domain_result(
-            service_record::list_between(
-                &*self.db,
-                p.vehicle_id,
-                p.from.as_deref(),
-                p.to.as_deref(),
-            )
-            .await,
-        )
+        let from = domain_input!(dates::parse_optional_date("from", p.from));
+        let to = domain_input!(dates::parse_optional_date("to", p.to));
+        domain_result(service_record::list_between(&*self.db, p.vehicle_id, from, to).await)
     }
 
     #[tool(
@@ -158,7 +155,7 @@ impl GloveboxMcp {
         params: Parameters<CorrectServiceInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "correct_service");
-        let (vehicle_id, service_id, input) = p.into_domain();
+        let (vehicle_id, service_id, input) = domain_input!(p.into_domain());
         domain_result(service_record::update(&*self.db, vehicle_id, service_id, input).await)
     }
 

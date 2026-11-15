@@ -4,6 +4,7 @@
 use rmcp::{ErrorData as McpError, model::CallToolResult, tool, tool_router};
 
 use glovebox_shared::{
+    dates,
     error::DomainError,
     services::{appointment, checklist, need, todo},
 };
@@ -32,7 +33,7 @@ impl GloveboxMcp {
         params: Parameters<PlanAppointmentInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "plan_appointment");
-        let (vehicle_id, input) = p.into_domain();
+        let (vehicle_id, input) = domain_input!(p.into_domain());
         domain_result(appointment::create(&*self.db, vehicle_id, input).await)
     }
 
@@ -53,7 +54,7 @@ impl GloveboxMcp {
         params: Parameters<UpdateAppointmentInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "update_appointment");
-        let (vehicle_id, appointment_id, input, change) = p.into_domain();
+        let (vehicle_id, appointment_id, input, change) = domain_input!(p.into_domain());
         domain_result(
             appointment::update_with_status(&*self.db, vehicle_id, appointment_id, input, change)
                 .await,
@@ -279,7 +280,7 @@ impl GloveboxMcp {
         params: Parameters<MarkNeedOrderedInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "mark_need_ordered");
-        let (vehicle_id, need_id, details) = p.into_domain();
+        let (vehicle_id, need_id, details) = domain_input!(p.into_domain());
         domain_result(need::mark_ordered(&*self.db, vehicle_id, need_id, details).await)
     }
 
@@ -310,9 +311,13 @@ impl GloveboxMcp {
             Some(None) => {
                 domain_result(need::unlink_part(&*self.db, p.vehicle_id, p.need_id).await)
             }
-            Some(Some(part_id)) => domain_result(
-                need::link_part(&*self.db, p.vehicle_id, p.need_id, part_id, p.received_on).await,
-            ),
+            Some(Some(part_id)) => {
+                let received_on =
+                    domain_input!(dates::parse_optional_date("received_on", p.received_on));
+                domain_result(
+                    need::link_part(&*self.db, p.vehicle_id, p.need_id, part_id, received_on).await,
+                )
+            }
         }
     }
 
@@ -330,8 +335,10 @@ impl GloveboxMcp {
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "mark_need_received");
         if p.received.unwrap_or(true) {
+            let received_on =
+                domain_input!(dates::parse_optional_date("received_on", p.received_on));
             domain_result(
-                need::mark_received(&*self.db, p.vehicle_id, p.need_id, p.received_on).await,
+                need::mark_received(&*self.db, p.vehicle_id, p.need_id, received_on).await,
             )
         } else if p.received_on.is_some() {
             domain_error(DomainError::invalid(

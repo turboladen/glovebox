@@ -8,7 +8,7 @@ pub struct Model {
     pub id: i32,
     pub vehicle_id: i32,
     pub mileage: i32,
-    pub recorded_at: String,
+    pub recorded_at: crate::dates::DayOrTime,
     pub source: Option<String>,
     pub notes: Option<String>,
     pub created_at: String,

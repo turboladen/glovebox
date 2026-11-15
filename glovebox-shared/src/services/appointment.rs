@@ -104,14 +104,13 @@ pub fn status(a: &appointment::Model, job_statuses: &[&str]) -> &'static str {
 ///
 /// # Errors
 /// `NotFound` for a vehicle or shop that does not exist; `Invalid` for a
-/// blank purpose or a malformed date.
+/// blank purpose.
 pub async fn create(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     input: NewAppointment,
 ) -> DomainResult<appointment::Model> {
     super::validate_not_blank("purpose", &input.purpose)?;
-    super::validate_optional_date("planned_date", input.planned_date.as_deref())?;
     super::vehicle::require(db, vehicle_id).await?;
     validate_shop(db, input.shop_id).await?;
     let model = appointment::ActiveModel {
@@ -141,10 +140,6 @@ pub async fn update(
     if let Some(purpose) = &input.purpose {
         super::validate_not_blank("purpose", purpose)?;
     }
-    super::validate_optional_date(
-        "planned_date",
-        input.planned_date.as_ref().and_then(|d| d.as_deref()),
-    )?;
     validate_shop(db, input.shop_id.flatten()).await?;
     let mut active: appointment::ActiveModel = existing.into();
     if let Some(v) = input.purpose {
@@ -436,7 +431,7 @@ async fn summaries(
         let key = |s: &AppointmentSummary| {
             (
                 s.appointment.planned_date.is_none(),
-                s.appointment.planned_date.clone(),
+                s.appointment.planned_date,
                 s.appointment.id,
             )
         };
@@ -493,7 +488,7 @@ async fn put_away(
             current.label()
         )));
     }
-    let today = crate::services::today_label();
+    let today = crate::services::today();
     let unassigned_job_ids: Vec<i32> = work_item::Entity::find()
         .filter(work_item::Column::AppointmentId.eq(id))
         .filter(work_item::Column::Status.eq("planned"))
@@ -559,7 +554,10 @@ pub(crate) async fn settle_reopened_jobs(
             .partition(|a| Ending::of(a) == Some(Ending::Cancelled));
     if !closed.is_empty() {
         appointment::Entity::update_many()
-            .col_expr(appointment::Column::ClosedOn, Expr::value(None::<String>))
+            .col_expr(
+                appointment::Column::ClosedOn,
+                Expr::value(None::<chrono::NaiveDate>),
+            )
             .col_expr(
                 appointment::Column::UpdatedAt,
                 Expr::value(super::now_stamp()),
@@ -624,7 +622,7 @@ mod tests {
             work_item::{NewWorkItem, UpdateWorkItem},
         },
         services::{need, todo as todo_svc, work_item as job},
-        test_support::{VehicleFixture, add_job, set_job_status, test_db},
+        test_support::{VehicleFixture, add_job, date, set_job_status, test_db},
     };
 
     fn appt(purpose: &str) -> NewAppointment {
@@ -643,8 +641,8 @@ mod tests {
             shop_id: None,
             planned_date: None,
             notes: None,
-            cancelled_on: cancelled_on.map(Into::into),
-            closed_on: closed_on.map(Into::into),
+            cancelled_on: cancelled_on.map(date),
+            closed_on: closed_on.map(date),
             created_at: String::new(),
             updated_at: String::new(),
         }
@@ -684,25 +682,13 @@ mod tests {
             NewAppointment {
                 purpose: "Brakes".into(),
                 shop_name: Some("Example VW".into()),
-                planned_date: Some("2026-12-01".into()),
+                planned_date: Some(date("2026-12-01")),
                 ..Default::default()
             },
         )
         .await
         .unwrap();
         assert_eq!(made.shop_name.as_deref(), Some("Example VW"));
-        let bad = create(
-            &db,
-            v,
-            NewAppointment {
-                purpose: "x".into(),
-                planned_date: Some("2026-1-1".into()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(bad, DomainError::Invalid { ref field, .. } if field == "planned_date"));
         let missing_shop = create(
             &db,
             v,
@@ -1017,7 +1003,7 @@ mod tests {
             &db,
             v,
             NewServiceRecord {
-                service_date: "2026-11-01".into(),
+                service_date: date("2026-11-01"),
                 ..Default::default()
             },
         )
@@ -1067,7 +1053,7 @@ mod tests {
             v,
             NewAppointment {
                 purpose: "Brakes".into(),
-                planned_date: Some("2026-12-01".into()),
+                planned_date: Some(date("2026-12-01")),
                 ..Default::default()
             },
         )

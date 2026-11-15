@@ -37,7 +37,7 @@ pub struct ReminderStatus {
     pub baseline: Baseline,
     pub last_service: Option<LastServiceInfo>,
     pub due_at_miles: Option<i32>,
-    pub due_at_date: Option<String>,
+    pub due_at_date: Option<NaiveDate>,
     pub miles_remaining: Option<i32>,
     pub days_remaining: Option<i64>,
     pub trigger: Option<String>,
@@ -52,7 +52,7 @@ pub struct ScheduleItemSummary {
 #[derive(Debug, Serialize, Clone)]
 pub struct LastServiceInfo {
     pub id: i32,
-    pub date: String,
+    pub date: NaiveDate,
     pub odometer: Option<i32>,
 }
 
@@ -78,7 +78,7 @@ pub struct BundleItem {
 // covered" errs toward telling the owner to check.
 #[derive(Debug, Serialize, Clone)]
 pub struct WarrantyStatus {
-    pub expires_on: Option<String>,
+    pub expires_on: Option<NaiveDate>,
     pub expires_miles: Option<i32>,
     pub possibly_covered: bool,
 }
@@ -88,7 +88,7 @@ pub struct RemindersResponse {
     pub vehicle_id: i32,
     pub estimated_mileage: i32,
     pub mileage_is_estimate: bool,
-    pub mileage_as_of: String,
+    pub mileage_as_of: NaiveDate,
     /// Miles driven per day, measured as [`estimate_mileage`] describes.
     pub avg_daily_miles: f64,
     /// `None` when the vehicle has no warranty fields set.
@@ -106,14 +106,12 @@ fn warranty_status(v: &vehicle::Model, estimated_mileage: i32) -> Option<Warrant
     let today = crate::services::today();
     let date_covers = v
         .warranty_expires_on
-        .as_deref()
-        .and_then(parse_date)
         .is_some_and(|expires| today <= expires);
     let miles_cover = v
         .warranty_expires_miles
         .is_some_and(|expires| estimated_mileage <= expires);
     Some(WarrantyStatus {
-        expires_on: v.warranty_expires_on.clone(),
+        expires_on: v.warranty_expires_on,
         expires_miles: v.warranty_expires_miles,
         possibly_covered: date_covers || miles_cover,
     })
@@ -152,12 +150,11 @@ async fn earlier_rate_anchor(
             .order_by_asc(mileage_log::Column::RecordedAt)
             .one(db)
             .await?;
-        if let Some(point) = oldest.and_then(|r| Some((parse_date(&r.recorded_at)?, r.mileage))) {
+        if let Some(point) = oldest.map(|r| (r.recorded_at.day(), r.mileage)) {
             return Ok(Some(point));
         }
     }
-    let purchased_on = v.purchase_date.as_deref().and_then(parse_date);
-    Ok(purchased_on.zip(v.purchase_mileage))
+    Ok(v.purchase_date.zip(v.purchase_mileage))
 }
 
 /// Estimate current mileage from `mileage_log` entries.
@@ -172,7 +169,7 @@ pub(crate) async fn estimate_mileage(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     v: &vehicle::Model,
-) -> DomainResult<(i32, String, f64, bool)> {
+) -> DomainResult<(i32, NaiveDate, f64, bool)> {
     let entries = mileage_log::Entity::find()
         .filter(mileage_log::Column::VehicleId.eq(vehicle_id))
         .order_by_desc(mileage_log::Column::RecordedAt)
@@ -181,22 +178,18 @@ pub(crate) async fn estimate_mileage(
         .await?;
 
     let today = crate::services::today();
-    let now_str = today.format("%Y-%m-%d").to_string();
 
     if entries.is_empty() {
         let mileage = v.purchase_mileage.unwrap_or(0);
-        return Ok((mileage, now_str, 0.0, true));
+        return Ok((mileage, today, 0.0, true));
     }
 
     let latest = &entries[0];
-    let latest_date = parse_date(&latest.recorded_at).unwrap_or(today);
+    let latest_date = latest.recorded_at.day();
     let latest_point = (latest_date, latest.mileage);
 
     let oldest = entries.last().unwrap();
-    let window_start = (
-        parse_date(&oldest.recorded_at).unwrap_or(latest_date),
-        oldest.mileage,
-    );
+    let window_start = (oldest.recorded_at.day(), oldest.mileage);
     let avg_daily = if (latest_date - window_start.0).num_days() >= RATE_MIN_SPAN_DAYS {
         daily_rate(window_start, latest_point)
     } else {
@@ -214,9 +207,7 @@ pub(crate) async fn estimate_mileage(
 
     // When estimated, show the date of the last actual reading (what we extrapolated from).
     // When exact, the date is today (same as latest_date).
-    let as_of = latest_date.format("%Y-%m-%d").to_string();
-
-    Ok((estimated, as_of, avg_daily, is_estimate))
+    Ok((estimated, latest_date, avg_daily, is_estimate))
 }
 
 /// Calculate reminders for a vehicle.
@@ -283,12 +274,12 @@ pub async fn calculate_reminders(
         let last_service = all_services
             .iter()
             .filter(|s| item_service_ids.contains(&s.id))
-            .max_by(|a, b| a.service_date.cmp(&b.service_date));
+            .max_by_key(|s| s.service_date);
 
         // Baseline: last service or vehicle purchase
         let (baseline_miles, baseline_date) = match &last_service {
             Some(svc) => {
-                let date = parse_date(&svc.service_date).unwrap_or(today);
+                let date = svc.service_date;
                 let miles = svc
                     .mileage
                     .or_else(|| odometer_on(date, &readings, avg_daily_miles))
@@ -297,10 +288,7 @@ pub async fn calculate_reminders(
             }
             None => (
                 v.purchase_mileage.unwrap_or(0),
-                v.purchase_date
-                    .as_deref()
-                    .and_then(parse_date)
-                    .unwrap_or(today),
+                v.purchase_date.unwrap_or(today),
             ),
         };
 
@@ -362,11 +350,11 @@ pub async fn calculate_reminders(
             },
             last_service: last_service.map(|s| LastServiceInfo {
                 id: s.id,
-                date: s.service_date.clone(),
+                date: s.service_date,
                 odometer: s.mileage,
             }),
             due_at_miles,
-            due_at_date: due_at_date.map(|d| d.format("%Y-%m-%d").to_string()),
+            due_at_date,
             miles_remaining,
             days_remaining,
             trigger: trigger.map(std::string::ToString::to_string),
@@ -411,10 +399,9 @@ async fn dated_readings(
         .all(db)
         .await?
         .into_iter()
-        .filter_map(|log| Some((parse_date(&log.recorded_at)?, log.mileage)))
+        .map(|log| (log.recorded_at.day(), log.mileage))
         .collect();
-    let purchased_on = v.purchase_date.as_deref().and_then(parse_date);
-    if let (Some(date), Some(miles)) = (purchased_on, v.purchase_mileage) {
+    if let (Some(date), Some(miles)) = (v.purchase_date, v.purchase_mileage) {
         readings.push((date, miles));
     }
     readings.sort_unstable();
@@ -521,12 +508,6 @@ fn calculate_bundles(reminders: &[ReminderStatus]) -> Vec<BundleSuggestion> {
     }]
 }
 
-fn parse_date(s: &str) -> Option<NaiveDate> {
-    // Extract just the date portion (handles "2024-01-15", "2024-01-15 10:30:00", "2024-01-15T10:30:00")
-    let date_part = s.split([' ', 'T']).next().unwrap_or(s);
-    NaiveDate::parse_from_str(date_part, "%Y-%m-%d").ok()
-}
-
 #[allow(clippy::cast_sign_loss, clippy::cast_possible_wrap)]
 fn add_months(date: NaiveDate, months: i32) -> NaiveDate {
     if months <= 0 {
@@ -557,7 +538,7 @@ fn days_in_month(year: i32, month: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{VehicleFixture, days_ago, test_db};
+    use crate::test_support::{VehicleFixture, date, days_ago, test_db};
 
     async fn seed_vehicle(
         db: &impl ConnectionTrait,
@@ -605,7 +586,7 @@ mod tests {
             .warranty
             .unwrap();
         assert!(w.possibly_covered);
-        assert_eq!(w.expires_on.as_deref(), Some("2099-01-01"));
+        assert_eq!(w.expires_on, Some(date("2099-01-01")));
 
         // Date bound in the past, no mileage bound → not covered.
         let expired = seed_vehicle(&db, Some("2020-01-01"), None).await;
@@ -626,7 +607,7 @@ mod tests {
         mileage_log::ActiveModel {
             vehicle_id: Set(vid),
             mileage: Set(50_000),
-            recorded_at: Set(now),
+            recorded_at: Set(now.into()),
             ..Default::default()
         }
         .insert(&db)
@@ -643,7 +624,7 @@ mod tests {
         mileage_log::ActiveModel {
             vehicle_id: Set(past),
             mileage: Set(50_000),
-            recorded_at: Set(now),
+            recorded_at: Set(now.into()),
             ..Default::default()
         }
         .insert(&db)
@@ -677,9 +658,7 @@ mod tests {
         // Serviced 350 days ago: due in about 15 days, inside the 30-day default.
         let svc = service_record::ActiveModel {
             vehicle_id: Set(vid),
-            service_date: Set((today - chrono::Duration::days(350))
-                .format("%Y-%m-%d")
-                .to_string()),
+            service_date: Set(today - chrono::Duration::days(350)),
             ..Default::default()
         }
         .insert(&db)
@@ -733,7 +712,7 @@ mod tests {
         mileage_log::ActiveModel {
             vehicle_id: Set(vid),
             mileage: Set(64_000),
-            recorded_at: Set(days_ago(0)),
+            recorded_at: Set(days_ago(0).into()),
             ..Default::default()
         }
         .insert(&db)
@@ -780,7 +759,7 @@ mod tests {
         mileage_log::ActiveModel {
             vehicle_id: Set(vehicle_id),
             mileage: Set(miles),
-            recorded_at: Set(days_ago(age_days)),
+            recorded_at: Set(days_ago(age_days).into()),
             ..Default::default()
         }
         .insert(db)

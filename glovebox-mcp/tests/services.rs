@@ -48,7 +48,7 @@ async fn record_service_schedule_item_ids_clears_the_overdue_reminder() {
     let v = vehicle::create(
         &t.db,
         NewVehicle {
-            purchase_date: Some("2020-01-01".into()),
+            purchase_date: Some(glovebox_shared::test_support::date("2020-01-01")),
             ..new_vehicle("Daily")
         },
     )
@@ -192,7 +192,7 @@ async fn link_service_to_maintenance_add_defaults_and_replace_overwrites() {
     let v = vehicle::create(
         &t.db,
         NewVehicle {
-            purchase_date: Some("2020-01-01".into()),
+            purchase_date: Some(glovebox_shared::test_support::date("2020-01-01")),
             ..new_vehicle("Daily")
         },
     )
@@ -211,7 +211,7 @@ async fn link_service_to_maintenance_add_defaults_and_replace_overwrites() {
     let imported = svc_svc::create(
         &t.db,
         v.id,
-        minimal_service(&days_ago(0), "Oil + brake fluid service"),
+        minimal_service(days_ago(0), "Oil + brake fluid service"),
     )
     .await
     .unwrap();
@@ -868,6 +868,100 @@ async fn malformed_dates_are_refused_naming_the_field() {
             "log_mileage",
             json!({ "vehicle_id": id, "mileage": 1, "recorded_at": "2026-11-10 25:00:00" }),
             "recorded_at",
+        ),
+        (
+            "list_services",
+            json!({ "vehicle_id": id, "to": "2026-02-30" }),
+            "to",
+        ),
+        (
+            "record_service",
+            json!({
+                "vehicle_id": id,
+                "service_date": "2026-11-10",
+                "parts": [{ "name": "Pads", "warranty_expires_on": "2030" }]
+            }),
+            "warranty_expires_on",
+        ),
+        (
+            "correct_service",
+            json!({ "vehicle_id": id, "service_id": service["id"], "end_date": "soon" }),
+            "end_date",
+        ),
+        (
+            "add_vehicle",
+            json!({ "name": "Other", "purchase_date": "3/4/2020" }),
+            "purchase_date",
+        ),
+        (
+            "update_vehicle",
+            json!({ "vehicle_id": id, "sold_date": "2026-1-1" }),
+            "sold_date",
+        ),
+        (
+            "record_part",
+            json!({ "vehicle_id": id, "name": "Pads", "installed_date": "today" }),
+            "installed_date",
+        ),
+        (
+            "correct_part",
+            json!({ "vehicle_id": id, "part_id": 999, "replaced_date": "2026-11-31" }),
+            "replaced_date",
+        ),
+        (
+            "correct_part",
+            json!({ "vehicle_id": id, "part_id": 999, "received_on": "yesterday" }),
+            "received_on",
+        ),
+        (
+            "update_incident",
+            json!({ "vehicle_id": id, "incident_id": 999, "occurred_at": "2026-11-10 8:30" }),
+            "occurred_at",
+        ),
+        (
+            "add_incident_followup",
+            json!({
+                "vehicle_id": id,
+                "incident_id": 999,
+                "occurred_at": "11/10",
+                "summary": "Still squeaks"
+            }),
+            "occurred_at",
+        ),
+        (
+            "plan_work",
+            json!({ "vehicle_id": id, "title": "Brakes", "revisit_by_date": "soon" }),
+            "revisit_by_date",
+        ),
+        (
+            "update_planned_work",
+            json!({ "vehicle_id": id, "work_item_id": 999, "revisit_by_date": "2027-5-1" }),
+            "revisit_by_date",
+        ),
+        (
+            "plan_appointment",
+            json!({ "vehicle_id": id, "purpose": "60k", "planned_date": "2026-1-1" }),
+            "planned_date",
+        ),
+        (
+            "update_appointment",
+            json!({ "vehicle_id": id, "appointment_id": 999, "planned_date": "next week" }),
+            "planned_date",
+        ),
+        (
+            "mark_need_ordered",
+            json!({ "vehicle_id": id, "need_id": 999, "purchase_date": "11/5" }),
+            "purchase_date",
+        ),
+        (
+            "link_part_to_need",
+            json!({ "vehicle_id": id, "need_id": 999, "part_id": 999, "received_on": "11/5" }),
+            "received_on",
+        ),
+        (
+            "mark_need_received",
+            json!({ "vehicle_id": id, "need_id": 999, "received_on": "11/10" }),
+            "received_on",
         ),
     ];
     for (tool, args, field) in cases {

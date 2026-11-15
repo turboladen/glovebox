@@ -11,6 +11,7 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
 };
 use glovebox_shared::{
+    dates,
     entities::{self, job_need},
     error::{DomainError, DomainResult},
     inputs::{
@@ -349,13 +350,15 @@ async fn order(
     let cost_cents = trim_to_none(&form.cost)
         .map(|text| money::parse_dollars(&text))
         .transpose()?;
+    let purchase_date =
+        dates::parse_optional_date("purchase_date", trim_to_none(&form.purchase_date))?;
     need::mark_ordered(
         &state.db,
         vid,
         id,
         OrderDetails {
             seller: trim_to_none(&form.seller),
-            purchase_date: trim_to_none(&form.purchase_date),
+            purchase_date,
             cost_cents,
             order_ref: trim_to_none(&form.order_ref),
         },

@@ -13,7 +13,7 @@ async fn dismiss_schedule_item_hides_it_and_rejects_wrong_vehicle() {
     let v = vehicle::create(
         &t.db,
         NewVehicle {
-            purchase_date: Some("2020-01-01".into()),
+            purchase_date: Some(glovebox_shared::test_support::date("2020-01-01")),
             ..new_vehicle("Daily")
         },
     )
@@ -73,7 +73,7 @@ async fn add_and_update_schedule_items_round_trip() {
     let v = vehicle::create(
         &t.db,
         NewVehicle {
-            purchase_date: Some("2020-01-01".into()),
+            purchase_date: Some(glovebox_shared::test_support::date("2020-01-01")),
             ..new_vehicle("Daily")
         },
     )
@@ -162,7 +162,7 @@ async fn changing_an_inherited_item_keeps_its_service_history_and_plans() {
         &t.db,
         NewVehicle {
             model_template_id: Some(template),
-            purchase_date: Some("2017-03-05".into()),
+            purchase_date: Some(glovebox_shared::test_support::date("2017-03-05")),
             purchase_mileage: Some(40),
             ..new_vehicle("Golf")
         },

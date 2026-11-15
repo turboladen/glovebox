@@ -32,8 +32,7 @@ fn validate_status(status: &str) -> DomainResult<()> {
 const DUE_SOON_DAYS: i32 = DEFAULT_WARNING_DAYS;
 const DUE_SOON_MILES: i32 = DEFAULT_WARNING_MILES;
 
-fn validate_revisit(date: Option<&str>, miles: Option<i32>) -> DomainResult<()> {
-    super::validate_optional_date("revisit_by_date", date)?;
+fn validate_revisit(miles: Option<i32>) -> DomainResult<()> {
     if miles.is_some_and(|m| m < 0) {
         return Err(DomainError::invalid(
             "revisit_by_miles",
@@ -54,18 +53,14 @@ pub fn revisit_status(
     today: chrono::NaiveDate,
     estimated_mileage: Option<i32>,
 ) -> Option<&'static str> {
-    let by_date = item
-        .revisit_by_date
-        .as_deref()
-        .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
-        .map(|due| {
-            let days = (due - today).num_days();
-            if days < 0 {
-                2
-            } else {
-                i32::from(days <= i64::from(DUE_SOON_DAYS))
-            }
-        });
+    let by_date = item.revisit_by_date.map(|due| {
+        let days = (due - today).num_days();
+        if days < 0 {
+            2
+        } else {
+            i32::from(days <= i64::from(DUE_SOON_DAYS))
+        }
+    });
     let by_miles = item
         .revisit_by_miles
         .zip(estimated_mileage)
@@ -323,7 +318,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     if input.title.trim().is_empty() {
         return Err(DomainError::invalid("title", "must not be blank"));
     }
-    validate_revisit(input.revisit_by_date.as_deref(), input.revisit_by_miles)?;
+    validate_revisit(input.revisit_by_miles)?;
     let txn = db.begin().await?;
     let db = &txn;
     // The claim comes before any read, so the appointment cannot be closed or
@@ -392,10 +387,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     if let Some(status) = &input.status {
         validate_status(status)?;
     }
-    validate_revisit(
-        input.revisit_by_date.as_ref().and_then(|d| d.as_deref()),
-        input.revisit_by_miles.flatten(),
-    )?;
+    validate_revisit(input.revisit_by_miles.flatten())?;
     // Same guards as create, on the links this update actually changes.
     let schedule_item_id = require_links_owned(
         db,
@@ -481,7 +473,7 @@ mod tests {
             service_record::{NewLineItem, NewServiceRecord},
         },
         services::{reminders, service_record as service_svc},
-        test_support::{VehicleFixture, row_count, test_db},
+        test_support::{VehicleFixture, date, row_count, test_db},
     };
     use chrono::NaiveDate;
 
@@ -564,7 +556,7 @@ mod tests {
             status: "planned".into(),
             created_at: String::new(),
             updated_at: String::new(),
-            revisit_by_date: date.map(Into::into),
+            revisit_by_date: date.map(crate::test_support::date),
             revisit_by_miles: miles,
             completed_service_id: None,
             appointment_id: None,
@@ -573,7 +565,7 @@ mod tests {
 
     fn service_on(date: &str, work_item_ids: Vec<i32>) -> NewServiceRecord {
         NewServiceRecord {
-            service_date: date.into(),
+            service_date: crate::test_support::date(date),
             work_item_ids: Some(work_item_ids),
             ..Default::default()
         }
@@ -754,29 +746,15 @@ mod tests {
             &db,
             v,
             NewWorkItem {
-                revisit_by_date: Some("2027-05-01".into()),
+                revisit_by_date: Some(date("2027-05-01")),
                 revisit_by_miles: Some(70_000),
                 ..item("watch the seep")
             },
         )
         .await
         .unwrap();
-        assert_eq!(created.revisit_by_date.as_deref(), Some("2027-05-01"));
+        assert_eq!(created.revisit_by_date, Some(date("2027-05-01")));
         assert_eq!(created.revisit_by_miles, Some(70_000));
-
-        assert!(matches!(
-            create(
-                &db,
-                v,
-                NewWorkItem {
-                    revisit_by_date: Some("soon".into()),
-                    ..item("bad")
-                }
-            )
-            .await
-            .unwrap_err(),
-            DomainError::Invalid { field, .. } if field == "revisit_by_date"
-        ));
 
         let cleared = update(
             &db,
@@ -801,7 +779,7 @@ mod tests {
             &db,
             v,
             NewWorkItem {
-                revisit_by_date: Some("2000-01-01".into()),
+                revisit_by_date: Some(date("2000-01-01")),
                 revisit_by_miles: Some(10),
                 ..item("late")
             },
@@ -1116,7 +1094,7 @@ mod tests {
             &db,
             v,
             NewServiceRecord {
-                service_date: "2024-01-01".into(),
+                service_date: date("2024-01-01"),
                 work_item_ids: Some(vec![created.id]),
                 ..Default::default()
             },

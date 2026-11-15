@@ -1,6 +1,8 @@
 use sea_orm::*;
 use serde::Serialize;
 
+use crate::dates::DayOrTime;
+
 use crate::{
     entities::{
         incident, incident_service_link, job_need, mileage_log, part, service_recall_link,
@@ -56,17 +58,14 @@ fn validate_line_items(items: &[NewLineItem]) -> DomainResult<()> {
     })
 }
 
-/// Checks the dates are `YYYY-MM-DD`, the range runs forward, and a
-/// self-performed job has no shop. Dates compare as `YYYY-MM-DD` text.
+/// Checks the date range runs forward and a self-performed job has no shop.
 fn validate_who_and_when(
-    service_date: &str,
-    end_date: Option<&str>,
+    service_date: chrono::NaiveDate,
+    end_date: Option<chrono::NaiveDate>,
     performed_by: &str,
     shop_name: Option<&str>,
 ) -> DomainResult<()> {
     validate_choice("performed_by", performed_by, &VALID_PERFORMED_BY)?;
-    super::validate_date("service_date", service_date)?;
-    super::validate_optional_date("end_date", end_date)?;
     if end_date.is_some_and(|end| end < service_date) {
         return Err(DomainError::invalid(
             "end_date",
@@ -247,7 +246,7 @@ async fn load_incident_links(
             .iter()
             .filter(|l| l.incident_id == incident_id && l.role == role)
             .filter_map(|l| services.get(&l.service_record_id))
-            .max_by(|a, b| (&a.service_date, a.id).cmp(&(&b.service_date, b.id)))
+            .max_by_key(|s| (s.service_date, s.id))
             .cloned()
             .map(ServiceRef::from)
     };
@@ -282,7 +281,7 @@ async fn load_incident_links(
 #[derive(Debug, Serialize)]
 pub struct PossibleDuplicate {
     pub id: i32,
-    pub service_date: String,
+    pub service_date: chrono::NaiveDate,
     pub description: Option<String>,
     pub total_cost_cents: Option<i32>,
 }
@@ -474,7 +473,7 @@ async fn insert_auto_mileage_log(
     let mileage_entry = mileage_log::ActiveModel {
         vehicle_id: Set(vehicle_id),
         mileage: Set(miles),
-        recorded_at: Set(record.service_date.clone()),
+        recorded_at: Set(record.service_date.into()),
         source: Set(Some("service".to_string())),
         notes: Set(None),
         service_record_id: Set(Some(record.id)),
@@ -500,10 +499,10 @@ async fn sync_auto_mileage_log(
 
     match (record.mileage, existing_log) {
         (Some(miles), Some(log)) => {
-            if log.mileage != miles || log.recorded_at != record.service_date {
+            if log.mileage != miles || log.recorded_at != DayOrTime::Day(record.service_date) {
                 let mut active_log: mileage_log::ActiveModel = log.into();
                 active_log.mileage = Set(miles);
-                active_log.recorded_at = Set(record.service_date.clone());
+                active_log.recorded_at = Set(record.service_date.into());
                 active_log.update(txn).await?;
             }
         }
@@ -529,17 +528,15 @@ pub async fn list(
 }
 
 /// Lists a vehicle's services newest first, keeping those whose service date
-/// falls on or after `from` and on or before `to` (both `YYYY-MM-DD`; either
-/// bound may be omitted).
+/// falls on or after `from` and on or before `to` (either bound may be
+/// omitted).
 pub async fn list_between(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
-    from: Option<&str>,
-    to: Option<&str>,
+    from: Option<chrono::NaiveDate>,
+    to: Option<chrono::NaiveDate>,
 ) -> DomainResult<Vec<ServiceRecordWithLinks>> {
     super::vehicle::require(db, vehicle_id).await?;
-    super::validate_optional_date("from", from)?;
-    super::validate_optional_date("to", to)?;
     let mut query =
         service_record::Entity::find().filter(service_record::Column::VehicleId.eq(vehicle_id));
     if let Some(from) = from {
@@ -676,7 +673,7 @@ async fn install_parts(
     for mut new_part in new_parts {
         new_part.status = Some("installed".into());
         new_part.installed_service_id = Some(record.id);
-        new_part.installed_date = Some(record.service_date.clone());
+        new_part.installed_date = Some(record.service_date);
         new_part.installed_odometer = record.mileage;
         let need_id = new_part.need_id;
         let created = part_svc::create(txn, vehicle_id, new_part).await?;
@@ -695,7 +692,7 @@ async fn same_day_peers(
 ) -> DomainResult<Vec<PossibleDuplicate>> {
     Ok(service_record::Entity::find()
         .filter(service_record::Column::VehicleId.eq(vehicle_id))
-        .filter(service_record::Column::ServiceDate.eq(record.service_date.clone()))
+        .filter(service_record::Column::ServiceDate.eq(record.service_date))
         .filter(service_record::Column::Id.ne(record.id))
         .order_by_asc(service_record::Column::Id)
         .all(db)
@@ -786,8 +783,8 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
 
     let performed_by = input.performed_by.unwrap_or_else(|| "shop".into());
     validate_who_and_when(
-        &input.service_date,
-        input.end_date.as_deref(),
+        input.service_date,
+        input.end_date,
         &performed_by,
         input.shop_name.as_deref(),
     )?;
@@ -810,7 +807,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
 
     let record = service_record::ActiveModel {
         vehicle_id: Set(vehicle_id),
-        service_date: Set(input.service_date.clone()),
+        service_date: Set(input.service_date),
         end_date: Set(input.end_date),
         performed_by: Set(performed_by),
         mileage: Set(input.mileage),
@@ -906,15 +903,8 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     let existing = require(db, vehicle_id, id).await?;
 
     validate_who_and_when(
-        input
-            .service_date
-            .as_ref()
-            .unwrap_or(&existing.service_date),
-        input
-            .end_date
-            .as_ref()
-            .unwrap_or(&existing.end_date)
-            .as_deref(),
+        input.service_date.unwrap_or(existing.service_date),
+        input.end_date.unwrap_or(existing.end_date),
         input
             .performed_by
             .as_ref()
@@ -944,7 +934,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
 
     let txn = db.begin().await?;
 
-    let (date_before, mileage_before) = (existing.service_date.clone(), existing.mileage);
+    let (date_before, mileage_before) = (existing.service_date, existing.mileage);
     let mut active: service_record::ActiveModel = existing.into();
     if let Some(v) = invoice_ref {
         active.invoice_ref = Set(v);
@@ -1328,7 +1318,7 @@ mod tests {
     use crate::{
         inputs::{incident::NewIncident, part::NewPart},
         services::incident,
-        test_support::{VehicleFixture, row_count, test_db},
+        test_support::{VehicleFixture, date, row_count, test_db},
     };
 
     async fn seed_vehicle(db: &impl ConnectionTrait) -> i32 {
@@ -1373,7 +1363,7 @@ mod tests {
             &db,
             vid,
             NewServiceRecord {
-                service_date: "2024-03-01".into(),
+                service_date: date("2024-03-01"),
                 mileage: Some(50_000),
                 description: Some("Oil change".into()),
                 parts_cost_cents: None,
@@ -1454,7 +1444,7 @@ mod tests {
             &db,
             vid,
             NewServiceRecord {
-                service_date: "2024-03-01".into(),
+                service_date: date("2024-03-01"),
                 mileage: Some(1_000),
                 description: None,
                 parts_cost_cents: None,
@@ -1544,7 +1534,7 @@ mod tests {
             &db,
             vid,
             NewServiceRecord {
-                service_date: "2024-03-01".into(),
+                service_date: date("2024-03-01"),
                 mileage: None,
                 description: None,
                 parts_cost_cents: None,
@@ -1610,7 +1600,7 @@ mod tests {
         let vid = seed_vehicle(&db).await;
         let svc_id = service_record::ActiveModel {
             vehicle_id: Set(vid),
-            service_date: Set("2024-03-01".into()),
+            service_date: Set(date("2024-03-01")),
             paid_by: Set("self".into()),
             ..Default::default()
         }
@@ -1624,7 +1614,7 @@ mod tests {
             vehicle_id: Set(vid),
             category: Set("noise".into()),
             title: Set("Rattle".into()),
-            occurred_at: Set("2024-02-01".into()),
+            occurred_at: Set(date("2024-02-01")),
             resolved: Set(false),
             ..Default::default()
         }
@@ -1705,7 +1695,7 @@ mod tests {
         let manual = mileage_log::ActiveModel {
             vehicle_id: Set(vid),
             mileage: Set(47_000),
-            recorded_at: Set("2024-02-01 09:00:00".into()),
+            recorded_at: Set(date("2024-02-01 09:00:00")),
             source: Set(Some("manual".into())),
             ..Default::default()
         }
@@ -1750,7 +1740,7 @@ mod tests {
             created.record.id,
             UpdateServiceRecord {
                 mileage: Some(Some(51_000)),
-                service_date: Some("2024-04-01".into()),
+                service_date: Some(date("2024-04-01")),
                 ..Default::default()
             },
         )
@@ -1763,7 +1753,7 @@ mod tests {
             .unwrap();
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].mileage, 51_000);
-        assert_eq!(logs[0].recorded_at, "2024-04-01");
+        assert_eq!(logs[0].recorded_at, date("2024-04-01"));
 
         // Clearing the mileage removes the auto-log.
         update(
@@ -1820,7 +1810,7 @@ mod tests {
 
     fn minimal_record(schedule_item_ids: Option<Vec<i32>>) -> NewServiceRecord {
         NewServiceRecord {
-            service_date: "2024-03-01".into(),
+            service_date: date("2024-03-01"),
             mileage: None,
             description: None,
             parts_cost_cents: None,
@@ -2023,7 +2013,7 @@ mod tests {
             let reference = reference.to_string();
             service_record::ActiveModel {
                 vehicle_id: Set(vid),
-                service_date: Set("2024-03-01".into()),
+                service_date: Set(date("2024-03-01")),
                 paid_by: Set("self".into()),
                 invoice_ref: Set(Some(reference)),
                 ..Default::default()
@@ -2040,7 +2030,7 @@ mod tests {
         for _ in 0..2 {
             service_record::ActiveModel {
                 vehicle_id: Set(vid),
-                service_date: Set("2024-03-01".into()),
+                service_date: Set(date("2024-03-01")),
                 paid_by: Set("self".into()),
                 ..Default::default()
             }
@@ -2436,7 +2426,7 @@ mod tests {
             &db,
             vid,
             NewServiceRecord {
-                service_date: "2026-11-03".into(),
+                service_date: date("2026-11-03"),
                 line_items: Some(vec![
                     line("Oil change", "maintenance"),
                     NewLineItem {
@@ -2462,7 +2452,7 @@ mod tests {
             &db,
             vid,
             NewServiceRecord {
-                service_date: "2026-11-04".into(),
+                service_date: date("2026-11-04"),
                 line_items: Some(vec![NewLineItem {
                     paid_by: Some("my neighbor".into()),
                     ..line("Oil change", "maintenance")
@@ -2498,8 +2488,8 @@ mod tests {
             &db,
             vid,
             NewServiceRecord {
-                service_date: "2025-03-24".into(),
-                end_date: Some("2025-03-25".into()),
+                service_date: date("2025-03-24"),
+                end_date: Some(date("2025-03-25")),
                 performed_by: Some("shop".into()),
                 line_items: Some(vec![
                     line("Replace suction jet pump", "repair"),
@@ -2511,7 +2501,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(got.record.performed_by, "shop");
-        assert_eq!(got.record.end_date.as_deref(), Some("2025-03-25"));
+        assert_eq!(got.record.end_date, Some(date("2025-03-25")));
         assert_eq!(kinds(&got), vec!["repair", "mod"]);
     }
 
@@ -2523,8 +2513,8 @@ mod tests {
             &db,
             vid,
             NewServiceRecord {
-                service_date: "2025-03-25".into(),
-                end_date: Some("2025-03-24".into()),
+                service_date: date("2025-03-25"),
+                end_date: Some(date("2025-03-24")),
                 ..Default::default()
             },
         )
@@ -2542,7 +2532,7 @@ mod tests {
             &db,
             vid,
             NewServiceRecord {
-                service_date: "2025-03-24".into(),
+                service_date: date("2025-03-24"),
                 line_items: Some(vec![line("Upgrade", "upgrade")]),
                 ..Default::default()
             },
@@ -2555,7 +2545,7 @@ mod tests {
             &db,
             vid,
             NewServiceRecord {
-                service_date: "2025-03-24".into(),
+                service_date: date("2025-03-24"),
                 performed_by: Some("dealer".into()),
                 ..Default::default()
             },
@@ -2574,7 +2564,7 @@ mod tests {
             &db,
             vid,
             NewServiceRecord {
-                service_date: "2025-03-24".into(),
+                service_date: date("2025-03-24"),
                 performed_by: Some("self".into()),
                 shop_name: Some("Example VW".into()),
                 ..Default::default()
@@ -2593,7 +2583,7 @@ mod tests {
             &db,
             vid,
             NewServiceRecord {
-                service_date: "2025-03-24".into(),
+                service_date: date("2025-03-24"),
                 mileage: Some(52_747),
                 parts: Some(vec![
                     NewPart {
@@ -2612,7 +2602,7 @@ mod tests {
         assert_eq!(got.parts[0].supplied_by, "self");
         assert_eq!(got.parts[0].installed_service_id, Some(got.record.id));
         assert_eq!(got.parts[0].installed_odometer, Some(52_747));
-        assert_eq!(got.parts[0].installed_date.as_deref(), Some("2025-03-24"));
+        assert_eq!(got.parts[0].installed_date, Some(date("2025-03-24")));
         assert_eq!(got.parts[0].status, "installed");
         assert_eq!(got.parts[1].supplied_by, "shop");
     }
@@ -2635,7 +2625,7 @@ mod tests {
             &db,
             vid,
             NewServiceRecord {
-                service_date: "2026-11-10".into(),
+                service_date: date("2026-11-10"),
                 part_ids: Some(vec![returned.id]),
                 ..Default::default()
             },
@@ -2660,7 +2650,7 @@ mod tests {
             &db,
             vid,
             NewServiceRecord {
-                service_date: "2025-03-24".into(),
+                service_date: date("2025-03-24"),
                 invoice_ref: Some("07447".into()),
                 line_items: Some(vec![line("Oil change", "maintenance")]),
                 parts: Some(vec![inline_part("Oil filter", "shop")]),
@@ -2676,7 +2666,7 @@ mod tests {
             &db,
             vid,
             NewServiceRecord {
-                service_date: "2025-03-24".into(),
+                service_date: date("2025-03-24"),
                 invoice_ref: Some("07447".into()),
                 line_items: Some(vec![line("Other", "repair"), line("Another", "mod")]),
                 parts: Some(vec![inline_part("A", "self"), inline_part("B", "self")]),
@@ -2707,7 +2697,7 @@ mod tests {
             &db,
             vid,
             NewServiceRecord {
-                service_date: "2025-03-24".into(),
+                service_date: date("2025-03-24"),
                 mileage: Some(50_000),
                 line_items: Some(vec![line("Oil change", "maintenance")]),
                 parts: Some(vec![inline_part("Filter", "dealer")]),
@@ -2733,7 +2723,7 @@ mod tests {
             &db,
             vid,
             NewServiceRecord {
-                service_date: "2025-03-24".into(),
+                service_date: date("2025-03-24"),
                 performed_by: Some("self".into()),
                 line_items: Some(vec![line("IE Stage 1 tune flash", "mod")]),
                 ..Default::default()
@@ -2757,7 +2747,7 @@ mod tests {
             made.record.id,
             UpdateServiceRecord {
                 performed_by: Some("self".into()),
-                end_date: Some(Some("2024-03-02".into())),
+                end_date: Some(Some(date("2024-03-02"))),
                 line_items: Some(vec![line("Flash", "mod")]),
                 ..Default::default()
             },
@@ -2765,7 +2755,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(updated.record.performed_by, "self");
-        assert_eq!(updated.record.end_date.as_deref(), Some("2024-03-02"));
+        assert_eq!(updated.record.end_date, Some(date("2024-03-02")));
         assert_eq!(kinds(&updated), vec!["mod"]);
 
         let err = update(
@@ -2773,7 +2763,7 @@ mod tests {
             vid,
             made.record.id,
             UpdateServiceRecord {
-                end_date: Some(Some("2024-02-01".into())),
+                end_date: Some(Some(date("2024-02-01"))),
                 ..Default::default()
             },
         )
@@ -2801,7 +2791,7 @@ mod tests {
             db,
             vehicle_id,
             NewServiceRecord {
-                service_date: date.into(),
+                service_date: crate::test_support::date(date),
                 ..Default::default()
             },
         )
@@ -2842,7 +2832,7 @@ mod tests {
             &db,
             v,
             NewServiceRecord {
-                service_date: "2024-06-12".into(),
+                service_date: date("2024-06-12"),
                 resolved_incident_ids: Some(vec![incident_id]),
                 ..Default::default()
             },
@@ -2861,7 +2851,7 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .service_date,
-            "2024-06-12"
+            date("2024-06-12")
         );
         let s24 = get(&db, v, svc_2024).await.unwrap();
         assert_eq!(
@@ -2870,7 +2860,7 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .service_date,
-            "2023-05-03"
+            date("2023-05-03")
         );
         let inc = incident::get(&db, v, incident_id).await.unwrap();
         assert_eq!(inc.noticed_during.unwrap().id, svc_2023);
@@ -2905,7 +2895,7 @@ mod tests {
             &db,
             v,
             NewServiceRecord {
-                service_date: "2023-05-03".into(),
+                service_date: date("2023-05-03"),
                 noticed_incident_ids: Some(vec![incident_id]),
                 recall_finding_ids: None,
                 ..Default::default()
@@ -2923,7 +2913,7 @@ mod tests {
             &db,
             v,
             NewServiceRecord {
-                service_date: "2023-06-01".into(),
+                service_date: date("2023-06-01"),
                 noticed_incident_ids: Some(vec![incident_id]),
                 recall_finding_ids: None,
                 ..Default::default()
@@ -2964,7 +2954,7 @@ mod tests {
             &db,
             v,
             NewServiceRecord {
-                service_date: "2024-06-12".into(),
+                service_date: date("2024-06-12"),
                 work_item_ids: Some(vec![planned.id]),
                 resolved_incident_ids: Some(vec![incident_id]),
                 ..Default::default()
@@ -3032,7 +3022,7 @@ mod tests {
         let full = |as_resolved: bool, id: i32| {
             let ids = Some(vec![id]);
             NewServiceRecord {
-                service_date: "2024-06-12".into(),
+                service_date: date("2024-06-12"),
                 mileage: Some(50_000),
                 line_items: Some(vec![line("Oil", "maintenance")]),
                 parts: Some(vec![NewPart {
@@ -3143,7 +3133,7 @@ mod tests {
             &db,
             v,
             NewServiceRecord {
-                service_date: "2024-06-01".into(),
+                service_date: date("2024-06-01"),
                 work_item_ids: Some(vec![work_item.id]),
                 resolved_incident_ids: Some(vec![incident_a, incident_b]),
                 recall_finding_ids: Some(vec![finding_id]),
@@ -3197,7 +3187,7 @@ mod tests {
             db,
             v,
             NewServiceRecord {
-                service_date: "2024-06-01".into(),
+                service_date: date("2024-06-01"),
                 recall_finding_ids: Some(vec![finding_id]),
                 ..Default::default()
             },
@@ -3246,7 +3236,7 @@ mod tests {
             &db,
             v,
             NewServiceRecord {
-                service_date: "2024-06-01".into(),
+                service_date: date("2024-06-01"),
                 recall_finding_ids: Some(vec![finding_id]),
                 work_item_ids: Some(vec![work_item.id]),
                 resolved_incident_ids: Some(vec![incident_id]),
@@ -3360,7 +3350,7 @@ mod tests {
             &db,
             v,
             NewServiceRecord {
-                service_date: "2024-06-01".into(),
+                service_date: date("2024-06-01"),
                 mileage: Some(40_000),
                 parts: Some(vec![NewPart {
                     name: "Brake pads".into(),
@@ -3388,7 +3378,7 @@ mod tests {
             &db,
             v,
             NewServiceRecord {
-                service_date: "2024-03-01".into(),
+                service_date: date("2024-03-01"),
                 mileage: Some(50_000),
                 parts: Some(vec![inline_part("Pads", "shop")]),
                 ..Default::default()
@@ -3402,17 +3392,14 @@ mod tests {
             v,
             svc.record.id,
             UpdateServiceRecord {
-                service_date: Some("2024-03-10".into()),
+                service_date: Some(date("2024-03-10")),
                 mileage: Some(Some(50_500)),
                 ..Default::default()
             },
         )
         .await
         .unwrap();
-        assert_eq!(
-            corrected.parts[0].installed_date.as_deref(),
-            Some("2024-03-10")
-        );
+        assert_eq!(corrected.parts[0].installed_date, Some(date("2024-03-10")));
         assert_eq!(corrected.parts[0].installed_odometer, Some(50_500));
 
         // Clearing the service's mileage leaves the part its own reading.
@@ -3428,10 +3415,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(cleared.parts[0].installed_odometer, Some(50_500));
-        assert_eq!(
-            cleared.parts[0].installed_date.as_deref(),
-            Some("2024-03-10")
-        );
+        assert_eq!(cleared.parts[0].installed_date, Some(date("2024-03-10")));
     }
 
     #[tokio::test]
@@ -3443,12 +3427,12 @@ mod tests {
         }
         let dates = |rows: Vec<ServiceRecordWithLinks>| {
             rows.into_iter()
-                .map(|r| r.record.service_date)
+                .map(|r| r.record.service_date.to_string())
                 .collect::<Vec<_>>()
         };
         assert_eq!(
             dates(
-                list_between(&db, v, Some("2024-01-01"), None)
+                list_between(&db, v, Some(date("2024-01-01")), None)
                     .await
                     .unwrap()
             ),
@@ -3456,7 +3440,7 @@ mod tests {
         );
         assert_eq!(
             dates(
-                list_between(&db, v, None, Some("2024-03-01"))
+                list_between(&db, v, None, Some(date("2024-03-01")))
                     .await
                     .unwrap()
             ),
@@ -3537,7 +3521,7 @@ mod tests {
         // A recorded part linked to the need, as the owner's own purchase.
         async fn link_new_part(f: &Fixture, need_id: i32, received: bool) -> i32 {
             let part_id = seed_part(&f.db, f.vehicle, "Pads").await;
-            let received_on = received.then(|| "2026-11-01".to_string());
+            let received_on = received.then(|| date("2026-11-01"));
             need::link_part(&f.db, f.vehicle, need_id, part_id, received_on)
                 .await
                 .unwrap();
@@ -3575,7 +3559,7 @@ mod tests {
 
         fn invoice(f: &Fixture) -> NewServiceRecord {
             NewServiceRecord {
-                service_date: "2026-11-10".into(),
+                service_date: date("2026-11-10"),
                 appointment_id: Some(f.appointment),
                 ..Default::default()
             }
@@ -3752,7 +3736,7 @@ mod tests {
                 f.vehicle,
                 NewServiceRecord {
                     work_item_ids: Some(vec![second]),
-                    service_date: "2026-11-11".into(),
+                    service_date: date("2026-11-11"),
                     ..invoice(&f)
                 },
             )

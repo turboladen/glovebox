@@ -64,7 +64,7 @@ pub(crate) async fn require_incident(
 #[derive(Clone, Debug, Serialize)]
 pub struct ServiceRef {
     pub id: i32,
-    pub service_date: String,
+    pub service_date: chrono::NaiveDate,
     pub description: Option<String>,
 }
 
@@ -280,9 +280,6 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
 ) -> DomainResult<IncidentWithDetails> {
     super::vehicle::require(db, vehicle_id).await?;
     validate_category(&input.category)?;
-    if let Some(at) = &input.occurred_at {
-        super::validate_datetime("occurred_at", at)?;
-    }
     require_links_owned(db, vehicle_id, input.recurrence_of_id).await?;
 
     let txn = db.begin().await?;
@@ -305,7 +302,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
         insurance_adjuster: Set(input.insurance_adjuster),
         insurance_adjuster_phone: Set(input.insurance_adjuster_phone),
         recurrence_of_id: Set(input.recurrence_of_id),
-        occurred_at: Set(input.occurred_at.unwrap_or_else(super::local_now_stamp)),
+        occurred_at: Set(input.occurred_at.unwrap_or_else(crate::dates::local_now)),
         ..Default::default()
     };
     let inc = model.insert(&txn).await?;
@@ -335,9 +332,6 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
 
     if let Some(category) = &input.category {
         validate_category(category)?;
-    }
-    if let Some(at) = &input.occurred_at {
-        super::validate_datetime("occurred_at", at)?;
     }
     require_links_owned(db, vehicle_id, input.recurrence_of_id.flatten()).await?;
     // An incident cannot be a recurrence of itself — directly or through a
@@ -571,7 +565,6 @@ pub async fn create_followup(
 ) -> DomainResult<incident_followup::Model> {
     // Verify the incident belongs to this vehicle before attaching a followup.
     require_incident(db, vehicle_id, incident_id).await?;
-    super::validate_datetime("occurred_at", &input.occurred_at)?;
 
     let model = incident_followup::ActiveModel {
         incident_id: Set(incident_id),
@@ -588,7 +581,7 @@ pub async fn create_followup(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{VehicleFixture, test_db};
+    use crate::test_support::{VehicleFixture, date, test_db};
 
     async fn seed_vehicle(db: &impl ConnectionTrait) -> i32 {
         VehicleFixture::new().insert_id(db).await
@@ -598,7 +591,7 @@ mod tests {
         use crate::entities::service_record;
         service_record::ActiveModel {
             vehicle_id: Set(vehicle_id),
-            service_date: Set("2024-01-01".into()),
+            service_date: Set(date("2024-01-01")),
             ..Default::default()
         }
         .insert(db)
@@ -675,7 +668,7 @@ mod tests {
                 &db,
                 vid,
                 NewIncident {
-                    occurred_at: Some(at.into()),
+                    occurred_at: Some(date(at)),
                     ..new_incident(title, "note")
                 },
             )
@@ -1200,7 +1193,7 @@ mod tests {
             vid,
             inc.incident.id,
             NewFollowup {
-                occurred_at: "2024-05-02".into(),
+                occurred_at: date("2024-05-02"),
                 contact_method: Some("phone".into()),
                 contact_with: Some("Adjuster".into()),
                 summary: "Filed claim".into(),
@@ -1230,7 +1223,7 @@ mod tests {
                 vid,
                 999,
                 NewFollowup {
-                    occurred_at: "2024-05-02".into(),
+                    occurred_at: date("2024-05-02"),
                     contact_method: None,
                     contact_with: None,
                     summary: "x".into(),
@@ -1256,7 +1249,7 @@ mod tests {
             owner,
             inc.incident.id,
             NewFollowup {
-                occurred_at: "2024-05-02".into(),
+                occurred_at: date("2024-05-02"),
                 contact_method: None,
                 contact_with: None,
                 summary: "private".into(),
@@ -1291,7 +1284,7 @@ mod tests {
                 other,
                 inc.incident.id,
                 NewFollowup {
-                    occurred_at: "2024-05-02".into(),
+                    occurred_at: date("2024-05-02"),
                     contact_method: None,
                     contact_with: None,
                     summary: "intruder".into(),
@@ -1334,7 +1327,7 @@ mod tests {
             vid,
             inc.incident.id,
             NewFollowup {
-                occurred_at: "2026-03-15".into(),
+                occurred_at: date("2026-03-15"),
                 contact_method: Some("phone".into()),
                 contact_with: Some("insurance_adjuster".into()),
                 summary: "Claim opened".into(),
@@ -1373,7 +1366,7 @@ mod tests {
             vid,
             doomed.incident.id,
             NewFollowup {
-                occurred_at: "2024-02-01".into(),
+                occurred_at: date("2024-02-01"),
                 contact_method: None,
                 contact_with: None,
                 summary: "called shop".into(),
@@ -1397,8 +1390,8 @@ mod tests {
             title: Set("Chase the rattle".into()),
             status: Set("todo".into()),
             incident_id: Set(Some(doomed.incident.id)),
-            created_at: Set("2024-01-01 00:00:00".into()),
-            updated_at: Set("2024-01-01 00:00:00".into()),
+            created_at: Set(date("2024-01-01 00:00:00")),
+            updated_at: Set(date("2024-01-01 00:00:00")),
             ..Default::default()
         }
         .insert(&db)

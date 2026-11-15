@@ -19,14 +19,14 @@ pub struct Model {
     pub fitment: String,
     pub fitment_note: Option<String>,
     pub rejected_reason: Option<String>,
-    pub rejected_on: Option<String>,
+    pub rejected_on: Option<chrono::NaiveDate>,
     pub created_at: String,
     pub updated_at: String,
     /// The reason a need gave when it chose this option, kept after the
     /// choice is cleared by a rejection.
     pub chosen_reason: Option<String>,
     /// The date that choice was made.
-    pub chosen_on: Option<String>,
+    pub chosen_on: Option<chrono::NaiveDate>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

@@ -11,7 +11,7 @@ use glovebox_shared::{
         work_item::NewWorkItem,
     },
     services::{appointment, need, part, todo, work_item},
-    test_support::{self, VehicleFixture},
+    test_support::{self, VehicleFixture, date},
 };
 
 // Everything the tests share: one vehicle with a booked appointment, one job
@@ -37,7 +37,7 @@ impl World {
             NewAppointment {
                 purpose: "60k service".into(),
                 shop_name: Some("Demo Auto Works".into()),
-                planned_date: Some("2026-12-01".into()),
+                planned_date: Some(date("2026-12-01")),
                 ..Default::default()
             },
         )
@@ -141,7 +141,7 @@ impl World {
             self.need,
             OrderDetails {
                 seller: Some("FCP Euro".into()),
-                purchase_date: Some("2026-11-13".into()),
+                purchase_date: Some(date("2026-11-13")),
                 cost_cents: Some(7_499),
                 ..Default::default()
             },
@@ -497,7 +497,7 @@ async fn editing_only_the_reason_keeps_the_decision_date() {
 
     assert_eq!(status, StatusCode::SEE_OTHER);
     let stored = need::require(&w.db, w.vehicle, w.need).await.unwrap();
-    assert_eq!(stored.decided_on.as_deref(), Some("2026-01-02"));
+    assert_eq!(stored.decided_on, Some(date("2026-01-02")));
     assert_eq!(
         stored.decision_reason.as_deref(),
         Some("Quiet and low dust.")
@@ -1396,7 +1396,7 @@ async fn a_need_ordered_without_an_option_shows_its_step_sentence() {
         NewPart {
             name: "Brake fluid".into(),
             seller: Some("FCP Euro".into()),
-            purchase_date: Some("2026-11-13".into()),
+            purchase_date: Some(date("2026-11-13")),
             ..Default::default()
         },
     )
@@ -1542,7 +1542,7 @@ async fn a_done_step_row_keeps_its_stage_pill() {
     let w = World::new().await;
     w.choose_good().await;
     w.order_it().await;
-    need::mark_received(&w.db, w.vehicle, w.need, Some("2026-11-14".into()))
+    need::mark_received(&w.db, w.vehicle, w.need, Some(date("2026-11-14")))
         .await
         .unwrap();
 

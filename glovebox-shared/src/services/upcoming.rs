@@ -110,7 +110,7 @@ mod tests {
             appointment, incident as incident_svc, mileage, need, nhtsa::RecallInfo, recall,
             research, todo, work_item as work_item_svc,
         },
-        test_support::{VehicleFixture, test_db},
+        test_support::{VehicleFixture, date, test_db},
     };
 
     fn titles(items: &[PlannedItem]) -> Vec<&str> {
@@ -164,7 +164,7 @@ mod tests {
             v,
             NewAppointment {
                 purpose: "60k service".into(),
-                planned_date: Some("2026-12-01".into()),
+                planned_date: Some(date("2026-12-01")),
                 ..Default::default()
             },
         )
@@ -219,7 +219,7 @@ mod tests {
         let a = &got.appointments[0];
         assert_eq!(a.appointment.id, open.id);
         assert_eq!(a.appointment.purpose, "60k service");
-        assert_eq!(a.appointment.planned_date.as_deref(), Some("2026-12-01"));
+        assert_eq!(a.appointment.planned_date, Some(date("2026-12-01")));
         assert_eq!((a.jobs, a.needs_open, a.todos_open), (1, 1, 1));
         assert_eq!(
             serde_json::to_value(&got).unwrap()["appointments"][0]["needs_open"],
@@ -237,13 +237,13 @@ mod tests {
             .purchase_mileage(40)
             .insert_id(&db)
             .await;
-        let today = crate::services::today_label();
+        let today = crate::services::today();
         mileage::create(
             &db,
             v,
             NewMileageEntry {
                 mileage: 64000,
-                recorded_at: Some(today),
+                recorded_at: Some(today.into()),
                 source: None,
                 notes: None,
             },
@@ -337,15 +337,13 @@ mod tests {
     async fn planned_work_sorts_by_urgency_then_creation_order() {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
-        let far =
-            crate::services::date_label(crate::services::today() + chrono::Duration::days(400));
-        let soon =
-            crate::services::date_label(crate::services::today() + chrono::Duration::days(10));
+        let far = crate::services::today() + chrono::Duration::days(400);
+        let soon = crate::services::today() + chrono::Duration::days(10);
         for (title, date) in [
             ("no revisit", None),
             ("ok", Some(far)),
             ("soon", Some(soon)),
-            ("late", Some("2020-01-01".to_string())),
+            ("late", Some(date("2020-01-01"))),
             ("also no revisit", None),
         ] {
             work_item_svc::create(
@@ -385,7 +383,7 @@ mod tests {
             &db,
             v,
             NewWorkItem {
-                revisit_by_date: Some("2020-01-01".into()),
+                revisit_by_date: Some(date("2020-01-01")),
                 revisit_by_miles: Some(50000),
                 ..work("Check mount")
             },

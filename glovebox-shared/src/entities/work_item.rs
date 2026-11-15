@@ -20,7 +20,7 @@ pub struct Model {
     pub status: String,
     pub created_at: String,
     pub updated_at: String,
-    pub revisit_by_date: Option<String>,
+    pub revisit_by_date: Option<chrono::NaiveDate>,
     pub revisit_by_miles: Option<i32>,
     pub completed_service_id: Option<i32>,
     pub appointment_id: Option<i32>,
