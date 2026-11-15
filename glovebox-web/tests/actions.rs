@@ -1410,8 +1410,98 @@ async fn a_need_ordered_without_an_option_shows_its_step_sentence() {
     let (_, body) = w.get(&w.job_path()).await;
 
     let row = need_summary(&body, need_id);
-    assert!(row.contains("ordered from FCP Euro on 2026-11-13"), "{row}");
+    assert!(row.contains("Bought from FCP Euro on 2026-11-13"), "{row}");
     assert!(!row.contains("No part chosen"), "{row}");
+}
+
+#[tokio::test]
+async fn a_linked_part_with_no_chosen_option_fills_the_part_columns() {
+    let w = World::new().await;
+    let need_id = need::add(
+        &w.db,
+        w.vehicle,
+        w.job,
+        NewNeed {
+            name: "Front rotors".into(),
+            quantity: Some(2),
+            supplied_by: Some("self".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    let part_id = part::create(
+        &w.db,
+        w.vehicle,
+        NewPart {
+            name: "Coat Z front rotors 340x30".into(),
+            manufacturer: Some("Zimmermann".into()),
+            part_number: Some("1K0615301AD".into()),
+            seller: Some("FCP Euro".into()),
+            cost_cents: Some(19_198),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    need::link_part(&w.db, w.vehicle, need_id, part_id, None)
+        .await
+        .unwrap();
+
+    let (_, body) = w.get(&w.job_path()).await;
+
+    let row = need_summary(&body, need_id);
+    for cell in [
+        r#"<span data-l="Brand">Zimmermann</span>"#,
+        r#"<span class="pn" data-l="Part number">1K0615301AD</span>"#,
+        r#"<span data-l="Description">Coat Z front rotors 340x30</span>"#,
+        r#"<span data-l="Seller">FCP Euro</span>"#,
+        r#"<span class="num" data-l="Price">$191.98</span>"#,
+    ] {
+        assert!(row.contains(cell), "{cell}: {row}");
+    }
+}
+
+#[tokio::test]
+async fn a_linked_part_with_no_number_shows_its_name_as_the_part() {
+    let w = World::new().await;
+    let need_id = need::add(
+        &w.db,
+        w.vehicle,
+        w.job,
+        NewNeed {
+            name: "Brake fluid".into(),
+            supplied_by: Some("self".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    let part_id = part::create(
+        &w.db,
+        w.vehicle,
+        NewPart {
+            name: "ESI6-32N brake fluid".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    need::link_part(&w.db, w.vehicle, need_id, part_id, None)
+        .await
+        .unwrap();
+
+    let (_, body) = w.get(&w.job_path()).await;
+
+    let row = need_summary(&body, need_id);
+    assert!(
+        row.contains(r#"<span class="pn span2" data-l="Part">ESI6-32N brake fluid</span>"#),
+        "{row}"
+    );
 }
 
 #[tokio::test]
