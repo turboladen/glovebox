@@ -76,7 +76,7 @@ impl GloveboxMcp {
         params: Parameters<SetRecallStatusInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "set_recall_status");
-        domain_result(recall::set_status(&*self.db, p.vehicle_id, p.finding_id, &p.status).await)
+        domain_result(recall::set_status(&*self.db, p.vehicle_id, p.finding_id, p.status).await)
     }
 
     #[tool(

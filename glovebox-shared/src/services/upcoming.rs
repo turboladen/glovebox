@@ -321,7 +321,7 @@ mod tests {
             .await
             .unwrap()
             .recalls;
-        recall::set_status(&db, v, recalls[1].finding_id, "done")
+        recall::set_status(&db, v, recalls[1].finding_id, recall::RecallStatus::Done)
             .await
             .unwrap();
 

@@ -22,7 +22,7 @@ use glovebox_shared::{
         service_record::{NewLineItem, NewServiceRecord},
         work_item::NewWorkItem,
     },
-    services::research::NewFiledFinding,
+    services::{recall::RecallStatus, research::NewFiledFinding},
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -254,7 +254,7 @@ pub struct SetRecallStatusInput {
     pub finding_id: i32,
     /// `done` (the work was done and left no paperwork), `not_applicable`
     /// (the recall does not apply to this car), or `open` (undo either).
-    pub status: String,
+    pub status: RecallStatus,
 }
 
 #[derive(Deserialize, JsonSchema)]

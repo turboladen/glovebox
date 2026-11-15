@@ -344,14 +344,21 @@ opens a form and the button that submits it carry the same words. Every date is 
   seconds (`2026-11-14T12:00:00+00:00`) and printed in tool output as `2026-11-14T12:00:00Z`.
   `docs/adr/0001-typed-dates-and-timestamps.md` records why.
 - **Vocabularies**: a value from a fixed list is an enum made by `vocabulary!` (`vocab.rs`) in
-  the entity module that owns its column, such as `incident::IncidentCategory` and
-  `incident_service_link::LinkRole`. The enum is stored, serialized and printed as one text. A
-  tool argument names the enum, so its schema lists the values, and a web form reads text through
-  `vocab::parse`. Explain a variant in a `//` comment or in the argument's description, because a
-  doc comment on a variant turns the schema's `enum` list into `oneOf`. Adding
-  a value is one line in the macro call. Removing or renaming one needs a migration that rewrites
-  the rows, placed after `m20261115_000001_vocabulary_values`, whose lists stay as written.
-  The lists still held as `VALID_*` strings in `services/` are tracked in glovebox-nd5i.
+  the entity module that owns its column: `incident::IncidentCategory`,
+  `incident_service_link::LinkRole`, `service_record::{Payer, Performer}`,
+  `service_record_line_item::WorkKind`, `part::{PartStatus, Supplier}`, `work_item::JobStatus`,
+  `job_need::Approach` and `need_option::Fitment`. The stored text `self` is the variant `Owner`.
+  `services::recall::RecallStatus` is the one with no column: it is what `set_recall_status`
+  takes, and the recall service maps it to the stored finding status. The enum is stored,
+  serialized and printed as one text. A tool argument names the enum, so its schema lists the
+  values, and a web form reads text through `vocab::parse`. Explain a variant in a `//` comment
+  or in the argument's description: the macro refuses a doc comment on a variant, because one
+  turns the schema's `enum` list into `oneOf`. A query filter takes a variant
+  (`Column::Status.eq(JobStatus::Planned)`), because a string literal there compiles against any
+  column. Adding a value is one line in the macro call, and every program must be rebuilt with
+  it, because an older binary cannot read a row that holds the new value. Removing or renaming
+  one needs a migration that rewrites the rows, placed after
+  `m20261115_000001_vocabulary_values`, whose lists stay as written.
   `docs/adr/0004-typed-vocabularies.md` records why.
 - **Migrations**: new migrations go after `m20261115_000001_vocabulary_values`; the
   `new-migration` skill has the templates. Use `Expr::cust()` for expressions inside builder queries; raw

@@ -3134,9 +3134,14 @@ mod tests {
         let v = seed_vehicle(&db).await;
         let finding_id = seed_recall(&db, v, "24V999").await;
         let svc = service_with_recall(&db, v, finding_id).await;
-        crate::services::recall::set_status(&db, v, finding_id, "done")
-            .await
-            .unwrap();
+        crate::services::recall::set_status(
+            &db,
+            v,
+            finding_id,
+            crate::services::recall::RecallStatus::Done,
+        )
+        .await
+        .unwrap();
 
         let out = delete(&db, v, svc, Some(RecallsOnDelete::Reopen))
             .await
