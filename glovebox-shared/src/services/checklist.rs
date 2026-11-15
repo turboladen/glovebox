@@ -18,6 +18,7 @@ use crate::{
         appointment::{self, AppointmentSummary},
         need::{self, Stage, stage},
         todo as todo_svc,
+        waiting::{self, Waiting},
     },
 };
 
@@ -217,6 +218,18 @@ async fn unscheduled_jobs(
     let mut views = job_views(db, jobs).await?;
     views.retain(|j| !j.needs.is_empty());
     Ok(views)
+}
+
+/// Counts, for each of `jobs`, the needs that are still open.
+pub(crate) async fn open_needs_by_job(
+    db: &impl ConnectionTrait,
+    jobs: Vec<work_item::Model>,
+) -> DomainResult<HashMap<i32, usize>> {
+    Ok(job_views(db, jobs)
+        .await?
+        .iter()
+        .map(|view| (view.job.id, view.open_needs()))
+        .collect())
 }
 
 /// One job with its needs.
@@ -595,8 +608,9 @@ pub struct VehicleHome {
     pub vehicle: vehicle::Model,
     /// Lists the open appointments, soonest planned date first, unbooked ones last.
     pub appointments: Vec<HomeAppointment>,
-    /// Lists the planned jobs that are on no appointment and have needs.
-    pub unscheduled_jobs: Vec<HomeJob>,
+    /// Holds what is not yet on an appointment: due maintenance, planned
+    /// jobs, open recalls and open incidents.
+    pub waiting: Waiting,
     /// Lists the open to-dos that are on no appointment.
     pub todos: Vec<todo::Model>,
 }
@@ -621,18 +635,9 @@ pub struct HomeAppointment {
     pub todos_open: usize,
 }
 
-/// Describes an unscheduled job and how many of its needs are open.
-#[derive(Debug, Serialize)]
-pub struct HomeJob {
-    pub id: i32,
-    pub title: String,
-    /// Counts the needs that are still open.
-    pub needs_open: usize,
-}
-
-/// What the home page shows for every vehicle that is not archived: its open
-/// appointments, its unscheduled jobs and its to-dos that are on no
-/// appointment. An appointment whose jobs are all done stays listed while it
+/// What the home page shows for every vehicle that is not archived: what is
+/// waiting for an appointment, its open appointments and its to-dos that are
+/// on no appointment. An appointment whose jobs are all done stays listed while it
 /// has an open to-do.
 ///
 /// # Errors
@@ -647,32 +652,25 @@ pub async fn home(db: &impl ConnectionTrait) -> DomainResult<Vec<VehicleHome>> {
         .collect();
     let ids: Vec<i32> = vehicles.iter().map(|v| v.id).collect();
     let mut appointments = appointment::open_by_vehicle(db, &ids).await?;
-    let mut jobs: HashMap<i32, Vec<HomeJob>> = HashMap::new();
-    for view in unscheduled_jobs(db, &ids).await? {
-        jobs.entry(view.job.vehicle_id).or_default().push(HomeJob {
-            id: view.job.id,
-            needs_open: view.open_needs(),
-            title: view.job.title,
-        });
-    }
     let mut todos: HashMap<i32, Vec<todo::Model>> = HashMap::new();
     for open in todo_svc::list_unchecked(db, &ids, Some(None), false).await? {
         todos.entry(open.vehicle_id).or_default().push(open);
     }
-    Ok(vehicles
-        .into_iter()
-        .map(|vehicle| VehicleHome {
+    let mut homes = Vec::with_capacity(vehicles.len());
+    for vehicle in vehicles {
+        homes.push(VehicleHome {
+            waiting: waiting::waiting(db, vehicle.id).await?,
             appointments: appointments
                 .remove(&vehicle.id)
                 .unwrap_or_default()
                 .into_iter()
                 .map(home_appointment)
                 .collect(),
-            unscheduled_jobs: jobs.remove(&vehicle.id).unwrap_or_default(),
             todos: todos.remove(&vehicle.id).unwrap_or_default(),
             vehicle,
-        })
-        .collect())
+        });
+    }
+    Ok(homes)
 }
 
 fn home_appointment(s: AppointmentSummary) -> HomeAppointment {
@@ -1803,11 +1801,16 @@ mod tests {
         let state: Vec<(&str, usize)> = g.appointments.iter().map(|a| (a.status, a.jobs)).collect();
         assert_eq!(state, [("planning", 1), ("planning", 0)]);
         let jobs: Vec<(&str, usize)> = g
-            .unscheduled_jobs
+            .waiting
+            .jobs
             .iter()
             .map(|j| (j.title.as_str(), j.needs_open))
             .collect();
-        assert_eq!(jobs, [("Wiper blades", 1)]);
+        assert_eq!(
+            jobs,
+            [("Wiper blades", 1), ("Needless job", 0)],
+            "a job with no needs waits too, and a booked job does not"
+        );
         let todos: Vec<&str> = g.todos.iter().map(|t| t.title.as_str()).collect();
         assert_eq!(
             todos,
@@ -1815,7 +1818,7 @@ mod tests {
             "done and appointment to-dos are left out"
         );
         let a = &home[1];
-        assert!(a.appointments.is_empty() && a.unscheduled_jobs.is_empty());
+        assert!(a.appointments.is_empty() && a.waiting.jobs.is_empty());
         assert_eq!(a.todos.len(), 1);
     }
 }

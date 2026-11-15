@@ -483,6 +483,42 @@ async fn resolve_schedule(
     Ok(schedule.into_values().filter(|i| i.enabled).collect())
 }
 
+/// Writes a mileage with a comma between thousands, such as `61,200`.
+#[must_use]
+pub fn miles_label(miles: i32) -> String {
+    let digits = miles.unsigned_abs().to_string();
+    let mut out = String::from(if miles < 0 { "-" } else { "" });
+    for (i, digit) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
+}
+
+/// Says how far past or short of due a schedule item is, from its
+/// `miles_remaining` and `days_remaining`: `1,200 mi over`, `in 800 mi`,
+/// `45 days over`, `in 1 day`, or `due now` at exactly zero. An item judged
+/// on both reads as both, mileage first.
+#[must_use]
+pub fn how_far(miles_remaining: Option<i32>, days_remaining: Option<i64>) -> String {
+    let miles = miles_remaining.map(|r| match r {
+        0 => "due now".to_owned(),
+        r if r < 0 => format!("{} mi over", miles_label(-r)),
+        r => format!("in {} mi", miles_label(r)),
+    });
+    let days = days_remaining.map(|r| {
+        let noun = if r.abs() == 1 { "day" } else { "days" };
+        match r {
+            0 => "due today".to_owned(),
+            r if r < 0 => format!("{} {noun} over", -r),
+            r => format!("in {r} {noun}"),
+        }
+    });
+    miles.into_iter().chain(days).collect::<Vec<_>>().join(", ")
+}
+
 /// One shop-trip suggestion listing every overdue or due-soon item, or none
 /// when fewer than two items are due.
 fn calculate_bundles(reminders: &[ReminderStatus]) -> Vec<BundleSuggestion> {
@@ -538,6 +574,37 @@ fn days_in_month(year: i32, month: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn miles_label_puts_a_comma_between_thousands() {
+        for (miles, text) in [
+            (0, "0"),
+            (999, "999"),
+            (1000, "1,000"),
+            (61200, "61,200"),
+            (1_234_567, "1,234,567"),
+            (-1500, "-1,500"),
+        ] {
+            assert_eq!(miles_label(miles), text);
+        }
+    }
+
+    #[test]
+    fn how_far_words_each_reading_and_joins_both() {
+        for (miles, days, text) in [
+            (Some(-1200), None, "1,200 mi over"),
+            (Some(800), None, "in 800 mi"),
+            (Some(0), None, "due now"),
+            (None, Some(-45), "45 days over"),
+            (None, Some(1), "in 1 day"),
+            (None, Some(-1), "1 day over"),
+            (None, Some(0), "due today"),
+            (Some(-3960), Some(30), "3,960 mi over, in 30 days"),
+            (None, None, ""),
+        ] {
+            assert_eq!(how_far(miles, days), text);
+        }
+    }
     use crate::test_support::{VehicleFixture, date, days_ago, test_db};
 
     async fn seed_vehicle(

@@ -21,6 +21,7 @@ pub mod todo;
 pub mod upcoming;
 pub mod vehicle;
 pub mod vin_decode;
+pub mod waiting;
 pub mod work_item;
 
 /// The current instant in UTC, to the second, for a bookkeeping stamp
