@@ -27,6 +27,7 @@ pub mod migration;
 pub mod money;
 pub mod seed;
 pub mod services;
+pub mod vocab;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

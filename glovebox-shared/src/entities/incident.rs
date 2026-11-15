@@ -1,13 +1,31 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
+crate::vocab::vocabulary! {
+    /// What kind of thing an incident is.
+    pub enum IncidentCategory {
+        General => "general",
+        Noise => "noise",
+        Leak => "leak",
+        WarningLight => "warning_light",
+        Cosmetic => "cosmetic",
+        Performance => "performance",
+        ObdCode => "obd_code",
+        Damage => "damage",
+        Accident => "accident",
+        Note => "note",
+        // Something a shop flagged during a service but did not fix.
+        ShopObservation => "shop_observation",
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "incidents")]
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
     pub vehicle_id: i32,
-    pub category: String,
+    pub category: IncidentCategory,
     pub title: String,
     pub description: Option<String>,
     pub odometer: Option<i32>,

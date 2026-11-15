@@ -6,6 +6,7 @@
 
 use glovebox_shared::{
     dates,
+    entities::incident::IncidentCategory,
     error::DomainResult,
     inputs::{
         incident::{NewFollowup, UpdateIncident},
@@ -630,8 +631,8 @@ pub struct UpdateIncidentInput {
     pub vehicle_id: i32,
     /// Incident id, from `list_incidents` or `log_incident`.
     pub incident_id: i32,
-    /// New category (see `log_incident` for the values).
-    pub category: Option<String>,
+    /// New category.
+    pub category: Option<IncidentCategory>,
     /// New title.
     pub title: Option<String>,
     /// When it happened, `YYYY-MM-DD HH:MM:SS` or just `YYYY-MM-DD`.

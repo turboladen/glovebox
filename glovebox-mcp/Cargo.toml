@@ -12,17 +12,18 @@ name = "glovebox-mcp"
 path = "src/main.rs"
 
 [dependencies]
-glovebox-shared = { path = "../glovebox-shared" }
+glovebox-shared = { path = "../glovebox-shared", features = ["schemars"] }
 rmcp = { version = "3.9", features = [
     "server",
     "macros",
     "transport-io",
     "schemars",
 ] }
-schemars = "1.2"
+schemars.workspace = true
 sea-orm.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_path_to_error = "0.1"
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

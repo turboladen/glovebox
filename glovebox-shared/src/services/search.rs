@@ -281,6 +281,7 @@ mod tests {
     use super::*;
     use crate::{
         entities,
+        entities::incident::IncidentCategory,
         test_support::{VehicleFixture, date, test_db},
     };
 
@@ -333,7 +334,7 @@ mod tests {
         entities::incident::ActiveModel {
             vehicle_id: Set(vid),
             occurred_at: Set(crate::dates::local_now()),
-            category: Set("noise".into()),
+            category: Set(IncidentCategory::Noise),
             title: Set("Brake squeal".into()),
             ..Default::default()
         }
@@ -373,7 +374,7 @@ mod tests {
         entities::incident::ActiveModel {
             vehicle_id: Set(vid),
             occurred_at: Set(crate::dates::local_now()),
-            category: Set("noise".into()),
+            category: Set(IncidentCategory::Noise),
             title: Set("Brake squeal".into()),
             ..Default::default()
         }
@@ -546,7 +547,7 @@ mod tests {
         entities::incident::ActiveModel {
             vehicle_id: Set(vid),
             occurred_at: Set(crate::dates::local_now()),
-            category: Set("noise".into()),
+            category: Set(IncidentCategory::Noise),
             title: Set("Turbo whistle".into()),
             description: Set(Some("whistle under boost".into())),
             ..Default::default()
@@ -556,7 +557,7 @@ mod tests {
         .unwrap();
         let crash = entities::incident::ActiveModel {
             vehicle_id: Set(vid),
-            category: Set("accident".into()),
+            category: Set(IncidentCategory::Accident),
             title: Set("rear-ended at a stoplight".into()),
             description: Set(Some("rear-ended at a stoplight".into())),
             occurred_at: Set(date("2026-02-01")),

@@ -55,7 +55,7 @@ MCP server, and its `--open` flag opens the browser.
 ### Workspace layout
 
 - **`glovebox-shared/`** (lib crate `glovebox_shared`) — the transport-agnostic domain:
-  `src/{db.rs,env.rs,dates.rs,seed.rs,entities,migration,services,inputs,error.rs,test_support.rs}`. All SQL, validation
+  `src/{db.rs,env.rs,dates.rs,vocab.rs,seed.rs,entities,migration,services,inputs,error.rs,test_support.rs}`. All SQL, validation
   and business logic live here. It never depends on axum or rmcp.
 - **`glovebox-mcp/`** (lib crate `glovebox_mcp` plus the `glovebox-mcp` binary) — the thin MCP
   surface. Every tool body is argument struct → shared-service call → serialize, with one
@@ -126,7 +126,9 @@ not a real `YYYY-MM-DD`, because such a row could not be read,
 `datetime('now')` column defaults by editing the stored table definitions, and
 `m20261114_000003_work_item_link_foreign_keys`, which gives a job's `schedule_item_id`,
 `research_finding_id` and `incident_id` an `ON DELETE SET NULL` foreign key the same way, after
-clearing any id that names a missing row. They run on startup.
+clearing any id that names a missing row, and `m20261115_000001_vocabulary_values`, which changes
+nothing and refuses to finish while a vocabulary column holds a value outside its list. They run
+on startup.
 
 **Test harness** (`test_support.rs`): `test_db()` is an in-memory SQLite database with migrations
 applied. It is compiled under `#[cfg(any(test, feature = "test-support"))]`; `glovebox-mcp` uses it
@@ -165,7 +167,8 @@ named as things a person would say:
 Inputs are schemars-derived structs in `src/schemas.rs`, `src/schemas/corrections.rs` and
 `src/schemas/checklist.rs`; their doc
 comments become the LLM-visible field descriptions. `Parameters<T>` defers deserialize errors
-so malformed arguments come back as actionable tool errors, not bare JSON-RPC `-32602`s. The
+so malformed arguments come back as actionable tool errors, not bare JSON-RPC `-32602`s, and
+reads them through `serde_path_to_error`, so the error names the argument at fault. The
 wrapper is named `Parameters` so the `#[tool]` macro derives the input schema from it; do not add
 an `input_schema` attribute. The wrapper's `JsonSchema` impl inlines every subschema, because Claude
 Desktop does not resolve `$ref` (it hides the nested fields from the model and sends the object as
@@ -340,7 +343,17 @@ opens a form and the button that submits it carry the same words. Every date is 
   `updated_at`, `archived_at`, `generated_at`) is `DateTime<Utc>`, stored as RFC 3339 with whole
   seconds (`2026-11-14T12:00:00+00:00`) and printed in tool output as `2026-11-14T12:00:00Z`.
   `docs/adr/0001-typed-dates-and-timestamps.md` records why.
-- **Migrations**: new migrations go after `m20261114_000003_work_item_link_foreign_keys`; the
+- **Vocabularies**: a value from a fixed list is an enum made by `vocabulary!` (`vocab.rs`) in
+  the entity module that owns its column, such as `incident::IncidentCategory` and
+  `incident_service_link::LinkRole`. The enum is stored, serialized and printed as one text. A
+  tool argument names the enum, so its schema lists the values, and a web form reads text through
+  `vocab::parse`. Explain a variant in a `//` comment or in the argument's description, because a
+  doc comment on a variant turns the schema's `enum` list into `oneOf`. Adding
+  a value is one line in the macro call. Removing or renaming one needs a migration that rewrites
+  the rows, placed after `m20261115_000001_vocabulary_values`, whose lists stay as written.
+  The lists still held as `VALID_*` strings in `services/` are tracked in glovebox-nd5i.
+  `docs/adr/0004-typed-vocabularies.md` records why.
+- **Migrations**: new migrations go after `m20261115_000001_vocabulary_values`; the
   `new-migration` skill has the templates. Use `Expr::cust()` for expressions inside builder queries; raw
   `execute_unprepared` only where no builder form exists (FTS5 DDL, cross-table copies).
 - **Migrations are not transactional on SQLite** (sea-orm-migration only wraps Postgres), so write

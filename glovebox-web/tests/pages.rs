@@ -4,6 +4,7 @@ use axum::{body::Body, http::StatusCode};
 use common::{app, app_with_file, db, get, page, request, send, send_bytes};
 use glovebox_shared::{
     db::DatabaseConnection,
+    entities::incident::IncidentCategory,
     inputs::{
         appointment::NewAppointment, incident::NewIncident, mileage::NewMileageEntry,
         need::NewNeed, todo::NewTodo, work_item::NewWorkItem,
@@ -267,7 +268,7 @@ async fn home_shows_what_is_waiting_before_the_appointments() {
         &db,
         v,
         NewIncident {
-            category: "shop_observation".into(),
+            category: IncidentCategory::ShopObservation,
             title: "Seeping valve cover".into(),
             occurred_at: Some(date("2026-10-02 09:30:00")),
             ..Default::default()

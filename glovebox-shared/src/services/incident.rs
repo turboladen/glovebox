@@ -7,43 +7,13 @@ use sea_orm::*;
 use serde::Serialize;
 
 use crate::{
-    entities::{incident, incident_followup, incident_service_link, service_record},
+    entities::{
+        incident, incident_followup, incident_service_link, incident_service_link::LinkRole,
+        service_record,
+    },
     error::{DomainError, DomainResult},
     inputs::incident::{NewFollowup, NewIncident, UpdateIncident},
 };
-
-/// Category whitelist: the categories an incident may carry. `shop_observation`
-/// is something a shop flagged during a service but did not fix.
-pub const VALID_CATEGORIES: [&str; 11] = [
-    "general",
-    "noise",
-    "leak",
-    "warning_light",
-    "cosmetic",
-    "performance",
-    "obd_code",
-    "damage",
-    "accident",
-    "note",
-    "shop_observation",
-];
-
-/// Roles an `incident_service_links` row can carry.
-pub const VALID_LINK_ROLES: [&str; 2] = ["noticed", "resolved"];
-
-const ROLE_NOTICED: &str = "noticed";
-pub(crate) const ROLE_RESOLVED: &str = "resolved";
-
-fn validate_category(category: &str) -> DomainResult<()> {
-    if VALID_CATEGORIES.contains(&category) {
-        return Ok(());
-    }
-    Err(DomainError::BadRequest(format!(
-        "Invalid category '{}'. Must be one of: {}",
-        category,
-        VALID_CATEGORIES.join(", ")
-    )))
-}
 
 /// Fetch an incident scoped to its owning vehicle. A wrong-vehicle lookup is
 /// indistinguishable from a nonexistent incident.
@@ -126,7 +96,7 @@ async fn with_details(
     Ok(incidents
         .into_iter()
         .map(|inc| {
-            let service_for = |role: &str| {
+            let service_for = |role: LinkRole| {
                 links
                     .iter()
                     .filter(|l| l.incident_id == inc.id && l.role == role)
@@ -135,8 +105,8 @@ async fn with_details(
                     .map(ServiceRef::from)
                     .collect::<Vec<_>>()
             };
-            let noticed_during = service_for(ROLE_NOTICED).into_iter().next();
-            let mut resolved_by = service_for(ROLE_RESOLVED);
+            let noticed_during = service_for(LinkRole::Noticed).into_iter().next();
+            let mut resolved_by = service_for(LinkRole::Resolved);
             resolved_by.sort_by(|a, b| (&a.service_date, a.id).cmp(&(&b.service_date, b.id)));
             IncidentWithDetails {
                 followups: followups
@@ -152,9 +122,9 @@ async fn with_details(
         .collect())
 }
 
-/// Links an incident to a service record in the given role (`noticed` or
-/// `resolved`), inside the caller's transaction when there is one. Both ids
-/// must belong to the vehicle; a wrong-vehicle id reads as nonexistent.
+/// Links an incident to a service record in the given role, inside the
+/// caller's transaction when there is one. Both ids must belong to the
+/// vehicle; a wrong-vehicle id reads as nonexistent.
 ///
 /// The `resolved` role also marks the incident resolved, and linking the same
 /// service twice is a no-op. An incident can be noticed during only one
@@ -164,14 +134,8 @@ pub(crate) async fn link_service(
     vehicle_id: i32,
     incident_id: i32,
     service_record_id: i32,
-    role: &str,
+    role: LinkRole,
 ) -> DomainResult<()> {
-    if !VALID_LINK_ROLES.contains(&role) {
-        return Err(DomainError::BadRequest(format!(
-            "Invalid link role '{role}'. Must be one of: {}",
-            VALID_LINK_ROLES.join(", ")
-        )));
-    }
     let inc = require_incident(db, vehicle_id, incident_id).await?;
     super::service_record::require(db, vehicle_id, service_record_id).await?;
 
@@ -186,7 +150,7 @@ pub(crate) async fn link_service(
     {
         return Ok(());
     }
-    if role == ROLE_NOTICED && !existing.is_empty() {
+    if role == LinkRole::Noticed && !existing.is_empty() {
         return Err(DomainError::BadRequest(format!(
             "Incident {incident_id} was already noticed during another service"
         )));
@@ -195,12 +159,12 @@ pub(crate) async fn link_service(
     incident_service_link::ActiveModel {
         incident_id: Set(incident_id),
         service_record_id: Set(service_record_id),
-        role: Set(role.to_string()),
+        role: Set(role),
     }
     .insert(db)
     .await?;
 
-    if role == ROLE_RESOLVED && !inc.resolved {
+    if role == LinkRole::Resolved && !inc.resolved {
         let mut active: incident::ActiveModel = inc.into();
         active.resolved = Set(true);
         active.updated_at = Set(super::now());
@@ -279,7 +243,6 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     input: NewIncident,
 ) -> DomainResult<IncidentWithDetails> {
     super::vehicle::require(db, vehicle_id).await?;
-    validate_category(&input.category)?;
     require_links_owned(db, vehicle_id, input.recurrence_of_id).await?;
 
     let txn = db.begin().await?;
@@ -308,10 +271,10 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     let inc = model.insert(&txn).await?;
 
     if let Some(sid) = input.noticed_during_service_id {
-        link_service(&txn, vehicle_id, inc.id, sid, ROLE_NOTICED).await?;
+        link_service(&txn, vehicle_id, inc.id, sid, LinkRole::Noticed).await?;
     }
     for sid in super::dedup_ids(&input.resolved_by_service_ids.unwrap_or_default()) {
-        link_service(&txn, vehicle_id, inc.id, sid, ROLE_RESOLVED).await?;
+        link_service(&txn, vehicle_id, inc.id, sid, LinkRole::Resolved).await?;
     }
 
     let inc = require_incident(&txn, vehicle_id, inc.id).await?;
@@ -330,9 +293,6 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
 ) -> DomainResult<IncidentWithDetails> {
     let existing = require_incident(db, vehicle_id, id).await?;
 
-    if let Some(category) = &input.category {
-        validate_category(category)?;
-    }
     require_links_owned(db, vehicle_id, input.recurrence_of_id.flatten()).await?;
     // An incident cannot be a recurrence of itself — directly or through a
     // chain. Walk the proposed target's ancestors; if `id` appears, linking
@@ -456,22 +416,22 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     if let Some(sids) = input.resolved_by_service_ids {
         incident_service_link::Entity::delete_many()
             .filter(incident_service_link::Column::IncidentId.eq(inc.id))
-            .filter(incident_service_link::Column::Role.eq(ROLE_RESOLVED))
+            .filter(incident_service_link::Column::Role.eq(LinkRole::Resolved))
             .exec(&txn)
             .await?;
         for sid in super::dedup_ids(&sids) {
-            link_service(&txn, vehicle_id, inc.id, sid, ROLE_RESOLVED).await?;
+            link_service(&txn, vehicle_id, inc.id, sid, LinkRole::Resolved).await?;
         }
     }
 
     if let Some(noticed) = input.noticed_during_service_id {
         incident_service_link::Entity::delete_many()
             .filter(incident_service_link::Column::IncidentId.eq(inc.id))
-            .filter(incident_service_link::Column::Role.eq(ROLE_NOTICED))
+            .filter(incident_service_link::Column::Role.eq(LinkRole::Noticed))
             .exec(&txn)
             .await?;
         if let Some(sid) = noticed {
-            link_service(&txn, vehicle_id, inc.id, sid, ROLE_NOTICED).await?;
+            link_service(&txn, vehicle_id, inc.id, sid, LinkRole::Noticed).await?;
         }
     }
 
@@ -574,8 +534,9 @@ pub async fn create_followup(
 mod tests {
     use super::*;
     use crate::{
-        entities::work_item,
+        entities::{incident::IncidentCategory, work_item},
         test_support::{VehicleFixture, date, test_db},
+        vocab::Vocabulary,
     };
 
     async fn seed_vehicle(db: &impl ConnectionTrait) -> i32 {
@@ -595,9 +556,9 @@ mod tests {
         .id
     }
 
-    fn new_incident(title: &str, category: &str) -> NewIncident {
+    fn new_incident(title: &str, category: IncidentCategory) -> NewIncident {
         NewIncident {
-            category: category.into(),
+            category,
             title: title.into(),
             ..Default::default()
         }
@@ -615,14 +576,14 @@ mod tests {
             NewIncident {
                 description: Some("front left".into()),
                 odometer: Some(50_000),
-                ..new_incident("Squeaky brakes", "noise")
+                ..new_incident("Squeaky brakes", IncidentCategory::Noise)
             },
         )
         .await
         .unwrap();
         let fetched = get(&db, vid, created.incident.id).await.unwrap();
         assert_eq!(fetched.incident.title, "Squeaky brakes");
-        assert_eq!(fetched.incident.category, "noise");
+        assert_eq!(fetched.incident.category, IncidentCategory::Noise);
         assert!(!fetched.incident.resolved);
         assert!(fetched.followups.is_empty());
         assert!(fetched.resolved_by.is_empty() && fetched.noticed_during.is_none());
@@ -639,13 +600,13 @@ mod tests {
                 fault: Some("other".into()),
                 other_party_name: Some("J. Doe".into()),
                 insurance_claim_number: Some("CLM-1".into()),
-                ..new_incident("Rear-ended at a stoplight", "accident")
+                ..new_incident("Rear-ended at a stoplight", IncidentCategory::Accident)
             },
         )
         .await
         .unwrap();
         let fetched = get(&db, vid, created.incident.id).await.unwrap();
-        assert_eq!(fetched.incident.category, "accident");
+        assert_eq!(fetched.incident.category, IncidentCategory::Accident);
         assert_eq!(fetched.incident.fault.as_deref(), Some("other"));
         assert_eq!(fetched.incident.other_party_name.as_deref(), Some("J. Doe"));
         assert_eq!(
@@ -664,7 +625,7 @@ mod tests {
                 vid,
                 NewIncident {
                     occurred_at: Some(date(at)),
-                    ..new_incident(title, "note")
+                    ..new_incident(title, IncidentCategory::Note)
                 },
             )
             .await
@@ -691,71 +652,29 @@ mod tests {
         let db = test_db().await;
         let v1 = seed_vehicle(&db).await;
         let v2 = seed_vehicle(&db).await;
-        let inc = create(&db, v1, new_incident("t", "general")).await.unwrap();
+        let inc = create(&db, v1, new_incident("t", IncidentCategory::General))
+            .await
+            .unwrap();
         assert!(matches!(
             get(&db, v2, inc.incident.id).await.unwrap_err(),
             DomainError::NotFound(_)
         ));
     }
 
-    // --- category whitelist ----------------------------------------------
-
     #[tokio::test]
-    async fn create_rejects_unknown_category_with_steering_message() {
+    async fn every_category_is_stored_and_read_back() {
         let db = test_db().await;
         let vid = seed_vehicle(&db).await;
-        let err = create(&db, vid, new_incident("t", "bogus"))
-            .await
-            .unwrap_err();
-        match err {
-            DomainError::BadRequest(msg) => {
-                assert!(
-                    msg.contains("Invalid category 'bogus'") && msg.contains("warning_light"),
-                    "message must name the bad value and list valid ones: {msg}"
-                );
-            }
-            other => panic!("expected BadRequest, got {other:?}"),
-        }
-        assert!(list(&db, vid).await.unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn update_rejects_unknown_category_and_mutates_nothing() {
-        let db = test_db().await;
-        let vid = seed_vehicle(&db).await;
-        let inc = create(&db, vid, new_incident("t", "noise")).await.unwrap();
-        assert!(matches!(
-            update(
-                &db,
-                vid,
-                inc.incident.id,
-                UpdateIncident {
-                    category: Some("bogus".into()),
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap_err(),
-            DomainError::BadRequest(_)
-        ));
-        assert_eq!(
-            get(&db, vid, inc.incident.id)
+        for category in IncidentCategory::ALL {
+            let made = create(&db, vid, new_incident("t", *category))
                 .await
-                .unwrap()
-                .incident
-                .category,
-            "noise"
-        );
-    }
-
-    #[tokio::test]
-    async fn every_whitelisted_category_is_accepted() {
-        let db = test_db().await;
-        let vid = seed_vehicle(&db).await;
-        for category in VALID_CATEGORIES {
-            create(&db, vid, new_incident("t", category)).await.unwrap();
+                .unwrap();
+            assert_eq!(made.incident.category, *category);
         }
-        assert_eq!(list(&db, vid).await.unwrap().len(), VALID_CATEGORIES.len());
+        assert_eq!(
+            list(&db, vid).await.unwrap().len(),
+            IncidentCategory::ALL.len()
+        );
     }
 
     // --- update ------------------------------------------------------------
@@ -769,7 +688,7 @@ mod tests {
             vid,
             NewIncident {
                 description: Some("d".into()),
-                ..new_incident("T", "noise")
+                ..new_incident("T", IncidentCategory::Noise)
             },
         )
         .await
@@ -807,7 +726,7 @@ mod tests {
     async fn update_sets_insurance_costs() {
         let db = test_db().await;
         let vid = seed_vehicle(&db).await;
-        let inc = create(&db, vid, new_incident("crash", "accident"))
+        let inc = create(&db, vid, new_incident("crash", IncidentCategory::Accident))
             .await
             .unwrap();
         let updated = update(
@@ -841,7 +760,7 @@ mod tests {
             vid,
             NewIncident {
                 resolved_by_service_ids: Some(vec![svc_id]),
-                ..new_incident("Rear-ended", "accident")
+                ..new_incident("Rear-ended", IncidentCategory::Accident)
             },
         )
         .await
@@ -872,7 +791,7 @@ mod tests {
                 owner,
                 NewIncident {
                     resolved_by_service_ids: Some(vec![foreign_svc]),
-                    ..new_incident("t", "general")
+                    ..new_incident("t", IncidentCategory::General)
                 },
             )
             .await
@@ -894,7 +813,7 @@ mod tests {
             owner,
             NewIncident {
                 resolved_by_service_ids: Some(vec![own_svc]),
-                ..new_incident("t", "general")
+                ..new_incident("t", IncidentCategory::General)
             },
         )
         .await
@@ -933,7 +852,7 @@ mod tests {
             vid,
             NewIncident {
                 resolved_by_service_ids: Some(vec![svc_a]),
-                ..new_incident("t", "general")
+                ..new_incident("t", IncidentCategory::General)
             },
         )
         .await
@@ -968,7 +887,7 @@ mod tests {
             vid,
             NewIncident {
                 resolved_by_service_ids: Some(vec![svc]),
-                ..new_incident("t", "general")
+                ..new_incident("t", IncidentCategory::General)
             },
         )
         .await
@@ -1024,7 +943,7 @@ mod tests {
     async fn recurrence_chain_round_trips() {
         let db = test_db().await;
         let vid = seed_vehicle(&db).await;
-        let first = create(&db, vid, new_incident("Squeak", "noise"))
+        let first = create(&db, vid, new_incident("Squeak", IncidentCategory::Noise))
             .await
             .unwrap();
         let second = create(
@@ -1032,7 +951,7 @@ mod tests {
             vid,
             NewIncident {
                 recurrence_of_id: Some(first.incident.id),
-                ..new_incident("Squeak is back", "noise")
+                ..new_incident("Squeak is back", IncidentCategory::Noise)
             },
         )
         .await
@@ -1077,7 +996,7 @@ mod tests {
         let db = test_db().await;
         let owner = seed_vehicle(&db).await;
         let other = seed_vehicle(&db).await;
-        let foreign = create(&db, other, new_incident("theirs", "noise"))
+        let foreign = create(&db, other, new_incident("theirs", IncidentCategory::Noise))
             .await
             .unwrap();
 
@@ -1088,7 +1007,7 @@ mod tests {
                 owner,
                 NewIncident {
                     recurrence_of_id: Some(foreign.incident.id),
-                    ..new_incident("mine", "noise")
+                    ..new_incident("mine", IncidentCategory::Noise)
                 },
             )
             .await
@@ -1098,7 +1017,7 @@ mod tests {
         assert!(list(&db, owner).await.unwrap().is_empty());
 
         // Update referencing a foreign incident must 404 and mutate nothing.
-        let mine = create(&db, owner, new_incident("mine", "noise"))
+        let mine = create(&db, owner, new_incident("mine", IncidentCategory::Noise))
             .await
             .unwrap();
         assert!(matches!(
@@ -1135,7 +1054,7 @@ mod tests {
                 vid,
                 NewIncident {
                     recurrence_of_id: Some(999),
-                    ..new_incident("t", "noise")
+                    ..new_incident("t", IncidentCategory::Noise)
                 },
             )
             .await
@@ -1148,7 +1067,9 @@ mod tests {
     async fn incident_cannot_be_recurrence_of_itself() {
         let db = test_db().await;
         let vid = seed_vehicle(&db).await;
-        let inc = create(&db, vid, new_incident("t", "noise")).await.unwrap();
+        let inc = create(&db, vid, new_incident("t", IncidentCategory::Noise))
+            .await
+            .unwrap();
         assert!(matches!(
             update(
                 &db,
@@ -1179,7 +1100,7 @@ mod tests {
     async fn followup_create_and_list_relate_to_incident() {
         let db = test_db().await;
         let vid = seed_vehicle(&db).await;
-        let inc = create(&db, vid, new_incident("crash", "accident"))
+        let inc = create(&db, vid, new_incident("crash", IncidentCategory::Accident))
             .await
             .unwrap();
 
@@ -1236,9 +1157,13 @@ mod tests {
         let db = test_db().await;
         let owner = seed_vehicle(&db).await;
         let other = seed_vehicle(&db).await;
-        let inc = create(&db, owner, new_incident("crash", "accident"))
-            .await
-            .unwrap();
+        let inc = create(
+            &db,
+            owner,
+            new_incident("crash", IncidentCategory::Accident),
+        )
+        .await
+        .unwrap();
         create_followup(
             &db,
             owner,
@@ -1269,9 +1194,13 @@ mod tests {
         let db = test_db().await;
         let owner = seed_vehicle(&db).await;
         let other = seed_vehicle(&db).await;
-        let inc = create(&db, owner, new_incident("crash", "accident"))
-            .await
-            .unwrap();
+        let inc = create(
+            &db,
+            owner,
+            new_incident("crash", IncidentCategory::Accident),
+        )
+        .await
+        .unwrap();
 
         assert!(matches!(
             create_followup(
@@ -1312,7 +1241,7 @@ mod tests {
                 description: Some("Sideswiped while parked".into()),
                 fault: Some("other".into()),
                 resolved_by_service_ids: Some(vec![svc]),
-                ..new_incident("Sideswiped while parked", "accident")
+                ..new_incident("Sideswiped while parked", IncidentCategory::Accident)
             },
         )
         .await
@@ -1351,7 +1280,7 @@ mod tests {
             vid,
             NewIncident {
                 resolved_by_service_ids: Some(vec![svc]),
-                ..new_incident("Original rattle", "noise")
+                ..new_incident("Original rattle", IncidentCategory::Noise)
             },
         )
         .await
@@ -1375,7 +1304,7 @@ mod tests {
             vid,
             NewIncident {
                 recurrence_of_id: Some(doomed.incident.id),
-                ..new_incident("Rattle is back", "noise")
+                ..new_incident("Rattle is back", IncidentCategory::Noise)
             },
         )
         .await
@@ -1432,7 +1361,7 @@ mod tests {
         let db = test_db().await;
         let vid = seed_vehicle(&db).await;
         let other_vid = seed_vehicle(&db).await;
-        let inc = create(&db, vid, new_incident("Mine", "noise"))
+        let inc = create(&db, vid, new_incident("Mine", IncidentCategory::Noise))
             .await
             .unwrap();
 

@@ -155,6 +155,7 @@ fn sort_newest_first(items: &mut [ActivityItem]) {
 mod tests {
     use super::*;
     use crate::{
+        entities::incident::IncidentCategory,
         error::DomainError,
         inputs::{
             incident::NewIncident, mileage::NewMileageEntry, service_record::NewServiceRecord,
@@ -200,7 +201,7 @@ mod tests {
 
     fn incident(title: &str, occurred_at: &str) -> NewIncident {
         NewIncident {
-            category: "note".into(),
+            category: IncidentCategory::Note,
             title: title.into(),
             occurred_at: Some(date(occurred_at)),
             ..Default::default()

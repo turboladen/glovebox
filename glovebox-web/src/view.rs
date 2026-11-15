@@ -530,7 +530,7 @@ impl From<&Waiting> for WaitingRows {
                 .iter()
                 .map(|i| IncidentRow {
                     title: i.title.clone(),
-                    category: sentence_case(&i.category.replace('_', " ")),
+                    category: sentence_case(&i.category.as_str().replace('_', " ")),
                     date: date_label(i.occurred_at.day()),
                     job_id: i.job_id,
                 })

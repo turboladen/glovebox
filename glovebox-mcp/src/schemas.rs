@@ -7,7 +7,7 @@
 
 use glovebox_shared::{
     dates,
-    entities::vehicle,
+    entities::{incident::IncidentCategory, vehicle},
     error::DomainResult,
     inputs::{
         incident::NewIncident,
@@ -217,12 +217,10 @@ pub struct LogIncidentInput {
     pub vehicle_id: i32,
     /// Short title, e.g. "Squeak from front left on braking".
     pub title: String,
-    /// One of: `general`, `noise`, `leak`, `warning_light`, `cosmetic`,
-    /// `performance`, `obd_code`, `damage`, `accident`, `note`,
-    /// `shop_observation`. Defaults to `general`. Collisions/crashes with
-    /// another party belong under category `accident`; anything a shop flagged
-    /// but did not fix belongs under `shop_observation`.
-    pub category: Option<String>,
+    /// Defaults to `general`. Collisions/crashes with another party belong
+    /// under category `accident`; anything a shop flagged but did not fix
+    /// belongs under `shop_observation`.
+    pub category: Option<IncidentCategory>,
     /// Longer description of what happened or was noticed.
     pub description: Option<String>,
     /// Odometer reading when it happened.
@@ -276,7 +274,7 @@ impl LogIncidentInput {
         Ok((
             self.vehicle_id,
             NewIncident {
-                category: self.category.unwrap_or_else(|| "general".to_string()),
+                category: self.category.unwrap_or(IncidentCategory::General),
                 title: self.title,
                 description: self.description,
                 odometer: self.odometer,
@@ -308,7 +306,7 @@ impl SaveNoteInput {
         (
             self.vehicle_id,
             NewIncident {
-                category: "note".to_string(),
+                category: IncidentCategory::Note,
                 title,
                 description: Some(self.note),
                 ..Default::default()

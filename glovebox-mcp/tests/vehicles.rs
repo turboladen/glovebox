@@ -423,3 +423,55 @@ async fn record_service_schema_exposes_nested_fields_with_descriptions() {
         }
     }
 }
+
+// An argument that takes a value from a fixed list says so in its schema, so
+// the model sees the list without reading the description.
+#[tokio::test]
+async fn a_vocabulary_argument_lists_its_values_in_the_schema() {
+    let t = connect().await;
+    let tools = t.tools().await;
+    let categories = json!([
+        "general",
+        "noise",
+        "leak",
+        "warning_light",
+        "cosmetic",
+        "performance",
+        "obd_code",
+        "damage",
+        "accident",
+        "note",
+        "shop_observation"
+    ]);
+    for (tool, argument, values) in [
+        ("log_incident", "category", &categories),
+        ("update_incident", "category", &categories),
+    ] {
+        let schema = tools
+            .iter()
+            .find(|t| t["name"] == tool)
+            .map(|t| &t["inputSchema"]["properties"][argument])
+            .unwrap_or_else(|| panic!("{tool} must be listed"));
+        assert_eq!(
+            listed_values(schema).as_ref(),
+            Some(values),
+            "{tool}.{argument} must list its values; got: {schema}"
+        );
+    }
+}
+
+// The `enum` list of a schema, looking through the `anyOf` an optional
+// argument is wrapped in and leaving out its `null`.
+fn listed_values(schema: &serde_json::Value) -> Option<serde_json::Value> {
+    let own = schema.get("enum").and_then(|e| e.as_array()).map(|values| {
+        let named = values.iter().filter(|v| !v.is_null()).cloned().collect();
+        serde_json::Value::Array(named)
+    });
+    own.or_else(|| {
+        schema
+            .get("anyOf")?
+            .as_array()?
+            .iter()
+            .find_map(listed_values)
+    })
+}

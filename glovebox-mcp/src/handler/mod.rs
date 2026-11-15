@@ -377,7 +377,9 @@ where
 {
     fn from_context_part(context: &mut ToolCallContext<S>) -> Result<Self, McpError> {
         let arguments = context.arguments.take().unwrap_or_default();
-        let parsed = serde_json::from_value::<T>(serde_json::Value::Object(arguments))
+        // The path names the argument at fault, such as `line_items[0].paid_by`, which
+        // serde's own message for a value outside an enum leaves out.
+        let parsed = serde_path_to_error::deserialize(serde_json::Value::Object(arguments))
             .map_err(|e| e.to_string());
         Ok(Self(parsed))
     }

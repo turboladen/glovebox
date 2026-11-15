@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::{
     dates::DayOrTime,
-    entities::work_item,
+    entities::{incident::IncidentCategory, work_item},
     error::DomainResult,
     services::{checklist, reminders, upcoming, work_item::PlannedItem},
 };
@@ -98,7 +98,7 @@ pub struct WaitingRecall {
 pub struct WaitingIncident {
     pub id: i32,
     pub title: String,
-    pub category: String,
+    pub category: IncidentCategory,
     pub occurred_at: DayOrTime,
     /// The planned job that covers this incident.
     pub job_id: Option<i32>,
@@ -335,12 +335,17 @@ mod tests {
         .id
     }
 
-    async fn incident(db: &DatabaseConnection, v: i32, category: &str, title: &str) -> i32 {
+    async fn incident(
+        db: &DatabaseConnection,
+        v: i32,
+        category: IncidentCategory,
+        title: &str,
+    ) -> i32 {
         incident_svc::create(
             db,
             v,
             NewIncident {
-                category: category.into(),
+                category,
                 title: title.into(),
                 ..Default::default()
             },
@@ -476,8 +481,14 @@ mod tests {
         recall::set_status(&db, v, recalls[1].finding_id, "done")
             .await
             .unwrap();
-        let leak = incident(&db, v, "shop_observation", "Seeping valve cover").await;
-        incident(&db, v, "note", "Fact").await;
+        let leak = incident(
+            &db,
+            v,
+            IncidentCategory::ShopObservation,
+            "Seeping valve cover",
+        )
+        .await;
+        incident(&db, v, IncidentCategory::Note, "Fact").await;
 
         let plug_job = job(
             &db,
