@@ -1,7 +1,7 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-crate::vocabulary! {
+crate::vocab::vocabulary! {
     /// What kind of thing an incident is.
     pub enum IncidentCategory {
         General => "general",

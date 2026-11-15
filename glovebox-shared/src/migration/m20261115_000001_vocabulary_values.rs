@@ -138,7 +138,11 @@ mod tests {
     use sea_orm_migration::MigratorTrait;
 
     use super::COLUMNS;
-    use crate::migration::{Migrator, schema::testing::migrated_to};
+    use crate::{
+        entities::{incident::IncidentCategory, incident_service_link::LinkRole},
+        migration::{Migrator, schema::testing::migrated_to},
+        vocab::{self, Vocabulary},
+    };
 
     // The number of migrations that run before this one.
     const BEFORE: u32 = 7;
@@ -228,5 +232,27 @@ mod tests {
             "{err}"
         );
         assert!(err.contains("maintenance, mod, repair"), "{err}");
+    }
+
+    // Each text the guard lets through must be one the column's enum reads. A
+    // misspelled text in an enum passes its own round-trip tests and fails
+    // only on rows that already hold the listed spelling.
+    #[test]
+    fn the_enum_of_a_column_reads_every_value_the_guard_allows() {
+        fn check<V: Vocabulary>(table: &str, column: &str) {
+            let (_, _, allowed) = COLUMNS
+                .iter()
+                .find(|(t, c, _)| (*t, *c) == (table, column))
+                .unwrap_or_else(|| panic!("{table}.{column} must be guarded"));
+            for text in *allowed {
+                assert!(
+                    vocab::parse::<V>(column, text).is_ok(),
+                    "{table}.{column} allows '{text}', which its enum does not read"
+                );
+            }
+        }
+
+        check::<IncidentCategory>("incidents", "category");
+        check::<LinkRole>("incident_service_links", "role");
     }
 }

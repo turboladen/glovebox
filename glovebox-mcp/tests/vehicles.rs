@@ -460,8 +460,8 @@ async fn a_vocabulary_argument_lists_its_values_in_the_schema() {
     }
 }
 
-/// The `enum` list of a schema, looking through the `anyOf` an optional
-/// argument is wrapped in and leaving out its `null`.
+// The `enum` list of a schema, looking through the `anyOf` an optional
+// argument is wrapped in and leaving out its `null`.
 fn listed_values(schema: &serde_json::Value) -> Option<serde_json::Value> {
     let own = schema.get("enum").and_then(|e| e.as_array()).map(|values| {
         let named = values.iter().filter(|v| !v.is_null()).cloned().collect();

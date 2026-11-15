@@ -1,4 +1,3 @@
-use crate::entities::{incident::IncidentCategory, incident_service_link::LinkRole};
 use sea_orm::*;
 use serde::Serialize;
 
@@ -6,8 +5,10 @@ use crate::dates::DayOrTime;
 
 use crate::{
     entities::{
-        incident, incident_service_link, job_need, mileage_log, part, service_recall_link,
-        service_record, service_record_line_item, service_schedule_link,
+        incident::{self, IncidentCategory},
+        incident_service_link::{self, LinkRole},
+        job_need, mileage_log, part, service_recall_link, service_record, service_record_line_item,
+        service_schedule_link,
     },
     error::{DomainError, DomainResult},
     inputs::{

@@ -1,7 +1,7 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-crate::vocabulary! {
+crate::vocab::vocabulary! {
     /// What a service did for an incident it is linked to.
     pub enum LinkRole {
         Noticed => "noticed",

@@ -3,14 +3,13 @@
 
 use std::collections::HashMap;
 
-use crate::entities::incident::IncidentCategory;
 use chrono::NaiveDate;
 use sea_orm::*;
 use serde::Serialize;
 
 use crate::{
     dates::DayOrTime,
-    entities::work_item,
+    entities::{incident::IncidentCategory, work_item},
     error::DomainResult,
     services::{checklist, reminders, upcoming, work_item::PlannedItem},
 };

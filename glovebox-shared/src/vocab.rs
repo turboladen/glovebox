@@ -1,6 +1,6 @@
 //! Vocabularies: values a column takes from a fixed list.
 //!
-//! [`vocabulary!`] defines one as an enum whose variants each carry the text
+//! `vocabulary!` defines one as an enum whose variants each carry the text
 //! that is stored, sent in tool arguments and printed in tool output.
 //! [`parse`] is the only reader of a vocabulary value typed as text.
 
@@ -27,8 +27,7 @@ pub struct Unlisted {
 /// The value written as `text`. The match is exact: case and spaces count.
 // `parse` is the reader for text someone typed. This one exists for the
 // `FromStr` that reading a column needs, where no field name applies.
-#[doc(hidden)]
-pub fn from_text<V: Vocabulary>(text: &str) -> Result<V, Unlisted> {
+pub(crate) fn from_text<V: Vocabulary>(text: &str) -> Result<V, Unlisted> {
     let found = V::ALL.iter().copied().find(|v| v.as_str() == text);
     found.ok_or_else(|| {
         let texts: Vec<&str> = V::ALL.iter().map(|v| v.as_str()).collect();
@@ -67,12 +66,15 @@ pub fn parse_optional<V: Vocabulary>(field: &str, text: Option<&str>) -> DomainR
 // `"self"`, which three vocabularies store. A stored value outside the list
 // fails the read of its row, so the vocabulary_values migration refuses to
 // finish while a column holds one.
-#[macro_export]
+//
+// A variant takes no attribute, because a doc comment on one would turn the
+// schema's `enum` list into `oneOf`. The macro stays inside this crate: it
+// names `sea_orm`, `serde` and the `schemars` feature as this crate sees them.
 macro_rules! vocabulary {
     (
         $(#[$meta:meta])*
         $vis:vis enum $name:ident {
-            $( $(#[$vmeta:meta])* $variant:ident => $text:literal ),+ $(,)?
+            $( $variant:ident => $text:literal ),+ $(,)?
         }
     ) => {
         $(#[$meta])*
@@ -83,7 +85,7 @@ macro_rules! vocabulary {
         #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
         #[sea_orm(value_type = "String")]
         $vis enum $name {
-            $( $(#[$vmeta])* #[serde(rename = $text)] $variant, )+
+            $( #[serde(rename = $text)] $variant, )+
         }
 
         impl $name {
@@ -126,6 +128,7 @@ macro_rules! vocabulary {
         }
     };
 }
+pub(crate) use vocabulary;
 
 #[cfg(test)]
 mod tests {

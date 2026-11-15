@@ -19,7 +19,7 @@ rmcp = { version = "3.9", features = [
     "transport-io",
     "schemars",
 ] }
-schemars = "1.2"
+schemars.workspace = true
 sea-orm.workspace = true
 serde.workspace = true
 serde_json.workspace = true
