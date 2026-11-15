@@ -1,6 +1,16 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use super::part::Supplier;
+
+crate::vocab::vocabulary! {
+    /// Whether a need is filled like for like or with something better.
+    pub enum Approach {
+        Replacement => "replacement",
+        Upgrade => "upgrade",
+    }
+}
+
 /// Something a work item needs, such as a part or a tool, with the options
 /// being weighed for it and the one chosen.
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
@@ -11,8 +21,8 @@ pub struct Model {
     pub work_item_id: i32,
     pub name: String,
     pub quantity: i32,
-    pub supplied_by: Option<String>,
-    pub approach: Option<String>,
+    pub supplied_by: Option<Supplier>,
+    pub approach: Option<Approach>,
     pub chosen_option_id: Option<i32>,
     pub decision_reason: Option<String>,
     pub decided_on: Option<chrono::NaiveDate>,

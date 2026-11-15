@@ -763,6 +763,52 @@ async fn a_returned_part_is_not_a_settable_status() {
         .await;
     assert!(err.contains("return_part"), "got: {err}");
 
+    // A value outside a list is refused with the argument's name.
+    for (tool, args, argument, listed) in [
+        (
+            "record_part",
+            json!({ "vehicle_id": v, "name": "Rotors", "status": "lost" }),
+            "status",
+            "`purchased`",
+        ),
+        (
+            "correct_part",
+            json!({ "vehicle_id": v, "part_id": part, "supplied_by": "dealer" }),
+            "supplied_by",
+            "`self`",
+        ),
+        (
+            "list_parts",
+            json!({ "vehicle_id": v, "status": "lost" }),
+            "status",
+            "`returned`",
+        ),
+        (
+            "update_planned_work",
+            json!({ "vehicle_id": v, "work_item_id": 1, "status": "scheduled" }),
+            "status",
+            "`dropped`",
+        ),
+        (
+            "add_need",
+            json!({ "vehicle_id": v, "work_item_id": 1, "name": "Pads", "approach": "rebuild" }),
+            "approach",
+            "`upgrade`",
+        ),
+        (
+            "add_need_option",
+            json!({ "vehicle_id": v, "need_id": 1, "description": "Pads", "fitment": "maybe" }),
+            "fitment",
+            "`does_not_fit`",
+        ),
+    ] {
+        let err = t.call_err(tool, args).await;
+        assert!(
+            err.contains(&format!("{argument}: unknown variant")) && err.contains(listed),
+            "{tool}: {err}"
+        );
+    }
+
     // The order number and arrival date are editable on a part with no need.
     let corrected = t
         .call(

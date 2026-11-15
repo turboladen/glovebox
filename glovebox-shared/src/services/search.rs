@@ -281,7 +281,9 @@ mod tests {
     use super::*;
     use crate::{
         entities,
-        entities::{incident::IncidentCategory, service_record_line_item::WorkKind},
+        entities::{
+            incident::IncidentCategory, service_record_line_item::WorkKind, work_item::JobStatus,
+        },
         test_support::{VehicleFixture, date, test_db},
     };
 
@@ -641,7 +643,7 @@ mod tests {
         entities::work_item::ActiveModel {
             vehicle_id: Set(vehicle_id),
             title: Set(title.into()),
-            status: Set("planned".into()),
+            status: Set(JobStatus::Planned),
             ..Default::default()
         }
         .insert(db)

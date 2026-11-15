@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use glovebox_shared::{
-    entities::{need_option, part, todo},
+    entities::{need_option, need_option::Fitment, part, todo},
     money::format_cents,
     services::{
         checklist::{self, Checklist, HomeAppointment, JobView, NeedView, StepRow},
@@ -91,7 +91,7 @@ pub struct OptionCard {
     pub price: Option<String>,
     /// The option's listing, when it is an `http` or `https` address.
     pub link: Option<String>,
-    pub fit_class: String,
+    pub fit_class: &'static str,
     pub fit_text: &'static str,
     pub fit_note: Option<String>,
     pub rejected_reason: Option<String>,
@@ -105,10 +105,10 @@ impl OptionCard {
     fn new(option: &need_option::Model, checked: bool) -> Self {
         let rejected = need::is_rejected(option);
         let has_number = option.part_number.is_some();
-        let fit_text = match option.fitment.as_str() {
-            "confirmed" => "Confirmed",
-            "does_not_fit" => "Does not fit",
-            _ => "Unconfirmed",
+        let fit_text = match option.fitment {
+            Fitment::Confirmed => "Confirmed",
+            Fitment::DoesNotFit => "Does not fit",
+            Fitment::Unconfirmed => "Unconfirmed",
         };
         Self {
             id: option.id,
@@ -125,12 +125,12 @@ impl OptionCard {
                 .as_deref()
                 .filter(|u| is_web_address(u))
                 .map(str::to_owned),
-            fit_class: option.fitment.clone(),
+            fit_class: option.fitment.as_str(),
             fit_text,
             fit_note: option.fitment_note.clone(),
             rejected_reason: rejected.then(|| option.rejected_reason.clone().unwrap_or_default()),
             checked,
-            blocked: !checked && (rejected || option.fitment == "does_not_fit"),
+            blocked: !checked && (rejected || option.fitment == Fitment::DoesNotFit),
         }
     }
 }
@@ -361,7 +361,7 @@ pub struct JobCard {
     pub vid: i32,
     pub id: i32,
     pub title: String,
-    pub status_class: String,
+    pub status_class: &'static str,
     pub status_text: String,
     pub open: Count,
     pub needs: Vec<NeedCard>,
@@ -583,6 +583,12 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
     let need = &view.need;
     let failure = ctx.failure.filter(|f| f.target == Target::Need(need.id));
     let typed = |key: &str| failure.and_then(|f| f.value(key));
+    let supplier = need
+        .supplied_by
+        .map(glovebox_shared::entities::part::Supplier::as_str);
+    let approach = need
+        .approach
+        .map(glovebox_shared::entities::job_need::Approach::as_str);
 
     let chosen_id = need.chosen_option_id;
     let selected: Option<i32> = match typed("option_id") {
@@ -647,14 +653,10 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
         linked: LinkedPart::of(view),
         chosen,
         options,
-        supplier: typed("supplied_by").map_or_else(
-            || need.supplied_by.clone().unwrap_or_default(),
-            str::to_owned,
-        ),
-        approach: typed("approach")
-            .map_or_else(|| need.approach.clone().unwrap_or_default(), str::to_owned),
-        supplier_kind: need.supplied_by.as_deref().map(sentence_case),
-        approach_kind: need.approach.as_deref().map(sentence_case),
+        supplier: form_text(typed("supplied_by"), supplier),
+        approach: form_text(typed("approach"), approach),
+        supplier_kind: supplier.map(sentence_case),
+        approach_kind: approach.map(sentence_case),
         decision_reason: need.decision_reason.clone(),
         // The return form also has a `reason` input, so only a failed
         // decision brings back what was typed here.
@@ -685,6 +687,12 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
     }
 }
 
+/// What a select shows: the text the owner sent when the form failed, else
+/// the stored value, else nothing.
+fn form_text(typed: Option<&str>, stored: Option<&str>) -> String {
+    typed.or(stored).unwrap_or_default().to_owned()
+}
+
 /// Builds the card of a job from its view.
 pub fn job_card(job: &JobView, ctx: &CardContext<'_>) -> JobCard {
     let needs: Vec<NeedCard> = job.needs.iter().map(|n| need_card(n, ctx)).collect();
@@ -693,8 +701,8 @@ pub fn job_card(job: &JobView, ctx: &CardContext<'_>) -> JobCard {
         vid: ctx.vid,
         id: job.job.id,
         title: job.job.title.clone(),
-        status_class: job.job.status.clone(),
-        status_text: sentence_case(&job.job.status),
+        status_class: job.job.status.as_str(),
+        status_text: sentence_case(job.job.status.as_str()),
         open: Count::new(open, "need open", "needs open"),
         needs,
     }

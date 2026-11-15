@@ -6,6 +6,7 @@
 
 use glovebox_shared::{
     dates,
+    entities::{job_need::Approach, need_option::Fitment, part::Supplier},
     error::DomainResult,
     inputs::{
         appointment::{NewAppointment, StatusChange, UpdateAppointment},
@@ -163,10 +164,10 @@ pub struct AddNeedInput {
     pub quantity: Option<i32>,
     /// Who supplies it: `self` or `shop`. Leave it out until the owner has
     /// said; do not choose for them.
-    pub supplied_by: Option<String>,
+    pub supplied_by: Option<Supplier>,
     /// `replacement` (the same part as the car has) or `upgrade`. Leave it out
     /// until the owner has said.
-    pub approach: Option<String>,
+    pub approach: Option<Approach>,
 }
 
 impl AddNeedInput {
@@ -199,14 +200,14 @@ pub struct UpdateNeedInput {
     ///
     /// Send `null` to clear it; omit the key to leave it unchanged.
     #[serde(default, deserialize_with = "nullable")]
-    #[schemars(with = "Option<String>")]
-    pub supplied_by: Option<Option<String>>,
+    #[schemars(with = "Option<Supplier>")]
+    pub supplied_by: Option<Option<Supplier>>,
     /// `replacement` or `upgrade`.
     ///
     /// Send `null` to clear it; omit the key to leave it unchanged.
     #[serde(default, deserialize_with = "nullable")]
-    #[schemars(with = "Option<String>")]
-    pub approach: Option<Option<String>>,
+    #[schemars(with = "Option<Approach>")]
+    pub approach: Option<Option<Approach>>,
     /// The option the owner chose (an id from `add_need_option` or
     /// `get_checklist`). Choosing a different option stamps the decision date;
     /// choosing the option already chosen keeps the date. Either way the
@@ -280,7 +281,7 @@ pub struct AddNeedOptionInput {
     /// Whether it fits this car: `confirmed`, `unconfirmed` (the default) or
     /// `does_not_fit`. Record every option researched, including ones that do
     /// not fit, so the same mistake is not made twice.
-    pub fitment: Option<String>,
+    pub fitment: Option<Fitment>,
     /// The evidence for the fitment verdict, e.g. "340 x 30 mm, Performance
     /// Pack, checked against sales code AU16X2".
     pub fitment_note: Option<String>,
@@ -316,7 +317,7 @@ pub struct UpdateNeedOptionInput {
     pub description: Option<String>,
     /// `confirmed`, `unconfirmed` or `does_not_fit`. Marking the chosen option
     /// `does_not_fit` clears the choice.
-    pub fitment: Option<String>,
+    pub fitment: Option<Fitment>,
     /// Brand.
     ///
     /// Send `null` to clear it; omit the key to leave it unchanged.

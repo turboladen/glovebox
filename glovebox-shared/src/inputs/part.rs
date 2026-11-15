@@ -1,3 +1,5 @@
+use crate::entities::part::{PartStatus, Supplier};
+
 #[derive(Default)]
 pub struct NewPart {
     pub name: String,
@@ -10,7 +12,7 @@ pub struct NewPart {
     pub cost_currency: Option<String>,
     pub manufacturer_url: Option<String>,
     pub retailer_url: Option<String>,
-    pub status: Option<String>,
+    pub status: Option<PartStatus>,
     pub installed_date: Option<chrono::NaiveDate>,
     pub installed_odometer: Option<i32>,
     pub installed_service_id: Option<i32>,
@@ -20,7 +22,7 @@ pub struct NewPart {
     pub warranty_expires_on: Option<chrono::NaiveDate>,
     pub warranty_expires_miles: Option<i32>,
     /// `self` (default) or `shop`.
-    pub supplied_by: Option<String>,
+    pub supplied_by: Option<Supplier>,
     /// The seller's order or confirmation number.
     pub order_ref: Option<String>,
     /// A need this part fills, honored only for a part created inline on a
@@ -42,7 +44,7 @@ pub struct UpdatePart {
     pub cost_currency: Option<Option<String>>,
     pub manufacturer_url: Option<Option<String>>,
     pub retailer_url: Option<Option<String>>,
-    pub status: Option<String>,
+    pub status: Option<PartStatus>,
     pub installed_date: Option<Option<chrono::NaiveDate>>,
     pub installed_odometer: Option<Option<i32>>,
     pub installed_service_id: Option<Option<i32>>,
@@ -53,7 +55,7 @@ pub struct UpdatePart {
     pub warranty_expires_on: Option<Option<chrono::NaiveDate>>,
     pub warranty_expires_miles: Option<Option<i32>>,
     /// Plain option: the column is non-nullable, so there is no "clear" case.
-    pub supplied_by: Option<String>,
+    pub supplied_by: Option<Supplier>,
     pub order_ref: Option<Option<String>>,
     /// The date the part arrived.
     pub received_on: Option<Option<chrono::NaiveDate>>,
@@ -62,5 +64,5 @@ pub struct UpdatePart {
 /// Filter for listing parts within a vehicle.
 #[derive(Default)]
 pub struct PartFilter {
-    pub status: Option<String>,
+    pub status: Option<PartStatus>,
 }

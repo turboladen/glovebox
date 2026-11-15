@@ -446,6 +446,11 @@ async fn a_vocabulary_argument_lists_its_values_in_the_schema() {
         "recall",
         "fee"
     ]);
+    let suppliers = json!(["self", "shop"]);
+    let part_statuses = json!(["purchased", "installed", "replaced", "returned"]);
+    let job_statuses = json!(["planned", "done", "dropped"]);
+    let approaches = json!(["replacement", "upgrade"]);
+    let fitments = json!(["confirmed", "unconfirmed", "does_not_fit"]);
     // `[]` in a path steps into the items of a list.
     for (tool, path, values) in [
         ("log_incident", "category", &categories),
@@ -458,6 +463,19 @@ async fn a_vocabulary_argument_lists_its_values_in_the_schema() {
         ("correct_service", "performed_by", &performers),
         ("correct_service", "line_items.[].work_kind", &work_kinds),
         ("correct_service", "line_items.[].paid_by", &payers),
+        ("record_service", "parts.[].supplied_by", &suppliers),
+        ("record_part", "supplied_by", &suppliers),
+        ("record_part", "status", &part_statuses),
+        ("correct_part", "supplied_by", &suppliers),
+        ("correct_part", "status", &part_statuses),
+        ("list_parts", "status", &part_statuses),
+        ("update_planned_work", "status", &job_statuses),
+        ("add_need", "supplied_by", &suppliers),
+        ("add_need", "approach", &approaches),
+        ("update_need", "supplied_by", &suppliers),
+        ("update_need", "approach", &approaches),
+        ("add_need_option", "fitment", &fitments),
+        ("update_need_option", "fitment", &fitments),
     ] {
         let input = tools
             .iter()

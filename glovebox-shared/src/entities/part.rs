@@ -1,6 +1,26 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
+crate::vocab::vocabulary! {
+    /// Where a part stands, from bought to off the car.
+    pub enum PartStatus {
+        Purchased => "purchased",
+        Installed => "installed",
+        Replaced => "replaced",
+        // Sent back to the seller.
+        Returned => "returned",
+    }
+}
+
+crate::vocab::vocabulary! {
+    /// Who brings a part to the job.
+    pub enum Supplier {
+        // The owner.
+        Owner => "self",
+        Shop => "shop",
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "parts")]
 pub struct Model {
@@ -15,7 +35,7 @@ pub struct Model {
     pub purchase_date: Option<chrono::NaiveDate>,
     pub cost_cents: Option<i32>,
     pub cost_currency: Option<String>,
-    pub status: String,
+    pub status: PartStatus,
     pub installed_date: Option<chrono::NaiveDate>,
     pub installed_odometer: Option<i32>,
     pub installed_service_id: Option<i32>,
@@ -30,7 +50,7 @@ pub struct Model {
     pub warranty_expires_on: Option<chrono::NaiveDate>,
     pub warranty_expires_miles: Option<i32>,
     /// Who bought the part: `self` or `shop`.
-    pub supplied_by: String,
+    pub supplied_by: Supplier,
     pub received_on: Option<chrono::NaiveDate>,
     pub returned_on: Option<chrono::NaiveDate>,
     pub return_reason: Option<String>,

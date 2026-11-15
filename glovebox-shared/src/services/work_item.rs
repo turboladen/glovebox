@@ -3,6 +3,7 @@
 //! finding (recall), or an incident. Every source link is vehicle-scoped: a
 //! cross-vehicle reference is indistinguishable from a nonexistent one.
 
+use crate::entities::work_item::JobStatus;
 use sea_orm::*;
 use serde::Serialize;
 
@@ -12,20 +13,6 @@ use crate::{
     inputs::work_item::{NewWorkItem, UpdateWorkItem},
     services::schedule::{DEFAULT_WARNING_DAYS, DEFAULT_WARNING_MILES},
 };
-
-/// Lifecycle whitelist for `work_items.status`.
-pub const VALID_STATUSES: [&str; 3] = ["planned", "done", "dropped"];
-
-fn validate_status(status: &str) -> DomainResult<()> {
-    if VALID_STATUSES.contains(&status) {
-        return Ok(());
-    }
-    Err(DomainError::BadRequest(format!(
-        "Invalid status '{}'. Must be one of: {}",
-        status,
-        VALID_STATUSES.join(", ")
-    )))
-}
 
 /// Days before a revisit date, and miles before a revisit odometer reading,
 /// at which an item counts as due soon.
@@ -149,7 +136,8 @@ pub async fn list(
     crate::services::vehicle::require(db, vehicle_id).await?;
     let mut query = work_item::Entity::find().filter(work_item::Column::VehicleId.eq(vehicle_id));
     if !include_done {
-        query = query.filter(work_item::Column::Status.is_not_in(["done", "dropped"]));
+        query = query
+            .filter(work_item::Column::Status.is_not_in([JobStatus::Done, JobStatus::Dropped]));
     }
     Ok(query
         .order_by_desc(work_item::Column::CreatedAt)
@@ -209,7 +197,7 @@ pub(crate) async fn complete_with_service(
     let mut completed = Vec::new();
     for id in super::dedup_ids(ids) {
         let existing = get(db, vehicle_id, id).await?;
-        if existing.status != "planned" {
+        if existing.status != JobStatus::Planned {
             return Err(DomainError::BadRequest(format!(
                 "Work item {id} is already {}",
                 existing.status
@@ -217,7 +205,7 @@ pub(crate) async fn complete_with_service(
         }
         let schedule_item_id = existing.schedule_item_id;
         let mut active: work_item::ActiveModel = existing.into();
-        active.status = Set("done".to_string());
+        active.status = Set(JobStatus::Done);
         active.completed_service_id = Set(Some(service_record_id));
         active.updated_at = Set(super::now());
         completed.push(active.update(db).await?);
@@ -287,7 +275,7 @@ pub(crate) async fn reopen_completed_by(
         .collect();
     work_item::Entity::update_many()
         .set(work_item::ActiveModel {
-            status: Set("planned".to_string()),
+            status: Set(JobStatus::Planned),
             completed_service_id: Set(None),
             updated_at: Set(super::now()),
             ..Default::default()
@@ -346,7 +334,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
         revisit_by_date: Set(input.revisit_by_date),
         revisit_by_miles: Set(input.revisit_by_miles),
         appointment_id: Set(input.appointment_id),
-        status: Set("planned".to_string()),
+        status: Set(JobStatus::Planned),
         ..Default::default()
     };
     let created = model.insert(db).await?;
@@ -377,15 +365,12 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         .exec(db)
         .await?;
     let existing = get(db, vehicle_id, id).await?;
-    let reopens = existing.status != "planned" && input.status.as_deref() == Some("planned");
+    let reopens = existing.status != JobStatus::Planned && input.status == Some(JobStatus::Planned);
 
     if let Some(title) = &input.title
         && title.trim().is_empty()
     {
         return Err(DomainError::invalid("title", "must not be blank"));
-    }
-    if let Some(status) = &input.status {
-        validate_status(status)?;
     }
     validate_revisit(input.revisit_by_miles.flatten())?;
     // Same guards as create, on the links this update actually changes.
@@ -436,7 +421,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     }
     if let Some(v) = input.status {
         // A completing service link is kept only while the item is done.
-        if v != "done" {
+        if v != JobStatus::Done {
             active.completed_service_id = Set(None);
         }
         active.status = Set(v);
@@ -606,7 +591,7 @@ mod tests {
             research_finding_id: None,
             incident_id: None,
             est_cost_cents: None,
-            status: "planned".into(),
+            status: JobStatus::Planned,
             created_at: chrono::DateTime::default(),
             updated_at: chrono::DateTime::default(),
             revisit_by_date: date.map(crate::test_support::date),
@@ -728,7 +713,7 @@ mod tests {
             .unwrap();
 
         let item_after = get(&db, v, planned.id).await.unwrap();
-        assert_eq!(item_after.status, "done");
+        assert_eq!(item_after.status, JobStatus::Done);
         assert_eq!(item_after.completed_service_id, Some(svc.record.id));
         assert_eq!(reminder_status(&db, v, "Brake fluid flush").await, "ok");
     }
@@ -772,7 +757,10 @@ mod tests {
         assert_eq!(row_count::<part::Entity>(&db).await, 0);
         assert_eq!(row_count::<mileage_log::Entity>(&db).await, 0);
         assert_eq!(row_count::<service_schedule_link::Entity>(&db).await, 0);
-        assert_eq!(get(&db, v2, foreign.id).await.unwrap().status, "planned");
+        assert_eq!(
+            get(&db, v2, foreign.id).await.unwrap().status,
+            JobStatus::Planned
+        );
     }
 
     #[tokio::test]
@@ -875,7 +863,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(created.status, "planned");
+        assert_eq!(created.status, JobStatus::Planned);
         assert_eq!(created.est_cost_cents, Some(12_500));
 
         let fetched = get(&db, vid, created.id).await.unwrap();
@@ -1025,7 +1013,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_status_whitelist_and_double_option_clear() {
+    async fn update_sets_a_status_and_clears_a_double_option() {
         let db = test_db().await;
         let vid = seed_vehicle(&db).await;
         let created = create(
@@ -1039,50 +1027,21 @@ mod tests {
         .await
         .unwrap();
 
-        // Bogus status rejected with the house message shape; nothing mutated.
-        let err = update(
-            &db,
-            vid,
-            created.id,
-            UpdateWorkItem {
-                status: Some("bogus".into()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap_err();
-        match err {
-            DomainError::BadRequest(msg) => {
-                assert!(
-                    msg.contains("Invalid status 'bogus'") && msg.contains("dropped"),
-                    "message must name the bad value and list valid ones: {msg}"
-                );
-            }
-            other => panic!("expected BadRequest, got {other:?}"),
-        }
-        assert_eq!(get(&db, vid, created.id).await.unwrap().status, "planned");
-
-        // Valid status applies; explicit null clears est_cost_cents.
+        // An explicit null clears est_cost_cents.
         let updated = update(
             &db,
             vid,
             created.id,
             UpdateWorkItem {
-                status: Some("done".into()),
+                status: Some(JobStatus::Done),
                 est_cost_cents: Some(None),
                 ..Default::default()
             },
         )
         .await
         .unwrap();
-        assert_eq!(updated.status, "done");
+        assert_eq!(updated.status, JobStatus::Done);
         assert_eq!(updated.est_cost_cents, None);
-    }
-
-    #[test]
-    fn status_whitelist_has_no_scheduled_state() {
-        assert_eq!(VALID_STATUSES, ["planned", "done", "dropped"]);
-        assert!(validate_status("scheduled").is_err());
     }
 
     #[tokio::test]
@@ -1098,7 +1057,7 @@ mod tests {
                 vid,
                 id,
                 UpdateWorkItem {
-                    status: Some(status.into()),
+                    status: Some(status.parse().unwrap()),
                     ..Default::default()
                 },
             )
@@ -1164,13 +1123,13 @@ mod tests {
             v,
             created.id,
             UpdateWorkItem {
-                status: Some("planned".into()),
+                status: Some(JobStatus::Planned),
                 ..Default::default()
             },
         )
         .await
         .unwrap();
-        assert_eq!(reopened.status, "planned");
+        assert_eq!(reopened.status, JobStatus::Planned);
         assert_eq!(reopened.completed_service_id, None);
     }
 }

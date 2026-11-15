@@ -1,3 +1,5 @@
+use crate::entities::{job_need::Approach, need_option::Fitment, part::Supplier};
+
 /// A need to add to a job.
 #[derive(Default)]
 pub struct NewNeed {
@@ -5,9 +7,9 @@ pub struct NewNeed {
     /// How many are needed; defaults to 1 and must be at least 1.
     pub quantity: Option<i32>,
     /// `self` or `shop`; absent while undecided.
-    pub supplied_by: Option<String>,
+    pub supplied_by: Option<Supplier>,
     /// `replacement` or `upgrade`; absent while undecided.
-    pub approach: Option<String>,
+    pub approach: Option<Approach>,
 }
 
 /// Changes to a need. An absent field is left alone; an explicit `None` in a
@@ -16,8 +18,8 @@ pub struct NewNeed {
 pub struct UpdateNeed {
     pub name: Option<String>,
     pub quantity: Option<i32>,
-    pub supplied_by: Option<Option<String>>,
-    pub approach: Option<Option<String>>,
+    pub supplied_by: Option<Option<Supplier>>,
+    pub approach: Option<Option<Approach>>,
     pub decision_reason: Option<Option<String>>,
 }
 
@@ -31,7 +33,7 @@ pub struct NewOption {
     pub price_cents: Option<i32>,
     pub url: Option<String>,
     /// `confirmed`, `unconfirmed` (the default) or `does_not_fit`.
-    pub fitment: Option<String>,
+    pub fitment: Option<Fitment>,
     pub fitment_note: Option<String>,
 }
 
@@ -45,7 +47,7 @@ pub struct UpdateOption {
     pub seller: Option<Option<String>>,
     pub price_cents: Option<Option<i32>>,
     pub url: Option<Option<String>>,
-    pub fitment: Option<String>,
+    pub fitment: Option<Fitment>,
     pub fitment_note: Option<Option<String>>,
     /// Setting a reason rejects the option and stamps the rejection date;
     /// clearing it un-rejects the option.

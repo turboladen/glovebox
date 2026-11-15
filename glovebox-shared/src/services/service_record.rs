@@ -1,3 +1,4 @@
+use crate::entities::part::{PartStatus, Supplier};
 use sea_orm::*;
 use serde::Serialize;
 
@@ -313,7 +314,7 @@ async fn unfitted_needs(
         .into_iter()
         .filter_map(|n| {
             let part_id = n.part_id?;
-            if parts.get(&part_id)?.status == "installed" {
+            if parts.get(&part_id)?.status == PartStatus::Installed {
                 return None;
             }
             Some(UnfittedNeed {
@@ -622,7 +623,7 @@ async fn install_parts(
     }
 
     for mut new_part in new_parts {
-        new_part.status = Some("installed".into());
+        new_part.status = Some(PartStatus::Installed);
         new_part.installed_service_id = Some(record.id);
         new_part.installed_date = Some(record.service_date);
         new_part.installed_odometer = record.mileage;
@@ -1012,7 +1013,7 @@ async fn unlink_shop_parts_from_needs(
 ) -> DomainResult<()> {
     let shop_part_ids: Vec<i32> = parts
         .iter()
-        .filter(|p| p.supplied_by == "shop")
+        .filter(|p| p.supplied_by == Supplier::Shop)
         .map(|p| p.id)
         .collect();
     if shop_part_ids.is_empty() {
@@ -1260,7 +1261,7 @@ async fn reopen_resolved_incidents(
 mod tests {
     use super::*;
     use crate::{
-        entities::service_record_line_item::WorkKind,
+        entities::{service_record_line_item::WorkKind, work_item::JobStatus},
         inputs::{incident::NewIncident, part::NewPart},
         services::incident,
         test_support::{VehicleFixture, date, row_count, test_db},
@@ -1274,7 +1275,7 @@ mod tests {
         part::ActiveModel {
             vehicle_id: Set(vehicle_id),
             name: Set(name.into()),
-            status: Set("purchased".into()),
+            status: Set(PartStatus::Purchased),
             ..Default::default()
         }
         .insert(db)
@@ -1358,7 +1359,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(p.status, "installed");
+        assert_eq!(p.status, PartStatus::Installed);
         assert_eq!(p.installed_service_id, Some(created.record.id));
         assert_eq!(p.installed_odometer, Some(50_000));
 
@@ -1457,14 +1458,14 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(a.status, "purchased");
+        assert_eq!(a.status, PartStatus::Purchased);
         assert_eq!(a.installed_service_id, None);
         let b = part::Entity::find_by_id(part_b)
             .one(&db)
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(b.status, "installed");
+        assert_eq!(b.status, PartStatus::Installed);
         assert_eq!(b.installed_service_id, Some(created.record.id));
     }
 
@@ -1527,7 +1528,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(p.status, "purchased");
+        assert_eq!(p.status, PartStatus::Purchased);
         assert_eq!(p.installed_service_id, None);
         // Schedule links removed
         let links = service_schedule_link::Entity::find()
@@ -2348,7 +2349,7 @@ mod tests {
     fn inline_part(name: &str, supplied_by: &str) -> NewPart {
         NewPart {
             name: name.into(),
-            supplied_by: Some(supplied_by.into()),
+            supplied_by: Some(supplied_by.parse().unwrap()),
             ..Default::default()
         }
     }
@@ -2444,12 +2445,12 @@ mod tests {
         .unwrap();
         assert_eq!(got.parts.len(), 2);
         assert_eq!(got.part_ids.len(), 2);
-        assert_eq!(got.parts[0].supplied_by, "self");
+        assert_eq!(got.parts[0].supplied_by, Supplier::Owner);
         assert_eq!(got.parts[0].installed_service_id, Some(got.record.id));
         assert_eq!(got.parts[0].installed_odometer, Some(52_747));
         assert_eq!(got.parts[0].installed_date, Some(date("2025-03-24")));
-        assert_eq!(got.parts[0].status, "installed");
-        assert_eq!(got.parts[1].supplied_by, "shop");
+        assert_eq!(got.parts[0].status, PartStatus::Installed);
+        assert_eq!(got.parts[1].supplied_by, Supplier::Shop);
     }
 
     #[tokio::test]
@@ -2459,8 +2460,8 @@ mod tests {
         let returned = part::ActiveModel {
             vehicle_id: Set(vid),
             name: Set("Rotors".into()),
-            status: Set("returned".into()),
-            supplied_by: Set("self".into()),
+            status: Set(PartStatus::Returned),
+            supplied_by: Set(Supplier::Owner),
             ..Default::default()
         }
         .insert(&db)
@@ -2484,7 +2485,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(after.status, "returned");
+        assert_eq!(after.status, PartStatus::Returned);
     }
 
     #[tokio::test]
@@ -2538,7 +2539,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_bad_part_supplier_rolls_back_the_whole_service() {
+    async fn a_refused_inline_part_rolls_back_the_whole_service() {
         let db = test_db().await;
         let vid = seed_vehicle(&db).await;
         let result = create(
@@ -2548,15 +2549,15 @@ mod tests {
                 service_date: date("2025-03-24"),
                 mileage: Some(50_000),
                 line_items: Some(vec![line("Oil change", WorkKind::Maintenance)]),
-                parts: Some(vec![inline_part("Filter", "dealer")]),
+                parts: Some(vec![NewPart {
+                    need_id: Some(99_999),
+                    ..inline_part("Filter", "self")
+                }]),
                 ..Default::default()
             },
         )
         .await;
-        assert!(matches!(
-            result,
-            Err(DomainError::Invalid { ref field, .. }) if field == "supplied_by"
-        ));
+        assert!(matches!(result, Err(DomainError::NotFound(_))));
         assert_eq!(row_count::<service_record::Entity>(&db).await, 0);
         assert_eq!(row_count::<service_record_line_item::Entity>(&db).await, 0);
         assert_eq!(row_count::<part::Entity>(&db).await, 0);
@@ -2991,7 +2992,7 @@ mod tests {
         .await
         .unwrap();
         let work_item_before = work_item_svc::get(&db, v, work_item.id).await.unwrap();
-        assert_eq!(work_item_before.status, "done");
+        assert_eq!(work_item_before.status, JobStatus::Done);
         assert_eq!(recall::list(&db, v).await.unwrap()[0].status, "done");
 
         delete(&db, v, closing.record.id, Some(RecallsOnDelete::Reopen))
@@ -2999,7 +3000,7 @@ mod tests {
             .unwrap();
 
         let work_item_after = work_item_svc::get(&db, v, work_item.id).await.unwrap();
-        assert_eq!(work_item_after.status, "planned");
+        assert_eq!(work_item_after.status, JobStatus::Planned);
         assert_eq!(work_item_after.completed_service_id, None);
         let incident_a_after = incident::get(&db, v, incident_a).await.unwrap();
         let incident_b_after = incident::get(&db, v, incident_b).await.unwrap();
@@ -3112,7 +3113,7 @@ mod tests {
                 .await
                 .unwrap()
                 .status,
-            "done"
+            JobStatus::Done
         );
         assert!(
             incident::get(&db, v, incident_id)
@@ -3214,7 +3215,7 @@ mod tests {
         delete(&db, v, svc.record.id, None).await.unwrap();
 
         let kept = part_svc::get(&db, v, part_id).await.unwrap();
-        assert_eq!(kept.status, "purchased");
+        assert_eq!(kept.status, PartStatus::Purchased);
         assert_eq!(kept.installed_service_id, None);
     }
 
@@ -3357,7 +3358,7 @@ mod tests {
                 job_id,
                 NewNeed {
                     name: name.into(),
-                    supplied_by: supplied_by.map(String::from),
+                    supplied_by: supplied_by.map(|s| s.parse().unwrap()),
                     ..Default::default()
                 },
             )
@@ -3389,7 +3390,7 @@ mod tests {
             need::stage(&n, p.as_ref())
         }
 
-        async fn job_status(f: &Fixture, job_id: i32) -> String {
+        async fn job_status(f: &Fixture, job_id: i32) -> JobStatus {
             work_item::Entity::find_by_id(job_id)
                 .one(&f.db)
                 .await
@@ -3423,9 +3424,9 @@ mod tests {
             let created = create(&f.db, f.vehicle, invoice(&f)).await.unwrap();
 
             assert_eq!(created.record.appointment_id, Some(f.appointment));
-            assert_eq!(job_status(&f, job_id).await, "planned");
+            assert_eq!(job_status(&f, job_id).await, JobStatus::Planned);
             let part = part_svc::get(&f.db, f.vehicle, part_id).await.unwrap();
-            assert_eq!(part.status, "purchased");
+            assert_eq!(part.status, PartStatus::Purchased);
             assert_eq!(stage_of(&f, need_id).await, need::Stage::Ordered);
             assert!(created.unfitted_needs.is_empty());
             assert!(created.completed_work_items.is_empty());
@@ -3451,7 +3452,7 @@ mod tests {
             .unwrap();
 
             assert_eq!(stage_of(&f, need_id).await, need::Stage::Installed);
-            assert_eq!(job_status(&f, job_id).await, "done");
+            assert_eq!(job_status(&f, job_id).await, JobStatus::Done);
             assert!(created.unfitted_needs.is_empty());
         }
 
@@ -3468,7 +3469,7 @@ mod tests {
                     work_item_ids: Some(vec![job_id]),
                     parts: Some(vec![NewPart {
                         name: "Shop pads".into(),
-                        supplied_by: Some("shop".into()),
+                        supplied_by: Some(Supplier::Shop),
                         need_id: Some(need_id),
                         ..Default::default()
                     }]),
@@ -3618,7 +3619,7 @@ mod tests {
                 .unwrap();
 
             assert_eq!(appointment_status(&f).await, "planning");
-            assert_eq!(job_status(&f, job_id).await, "planned");
+            assert_eq!(job_status(&f, job_id).await, JobStatus::Planned);
             assert_eq!(stage_of(&f, need_id).await, need::Stage::Received);
         }
 
@@ -3649,7 +3650,7 @@ mod tests {
             assert_eq!(summary.appointment.closed_on, None);
             let open = appointment::list(&f.db, f.vehicle, false).await.unwrap();
             assert_eq!(open.len(), 1);
-            assert_eq!(job_status(&f, job_id).await, "planned");
+            assert_eq!(job_status(&f, job_id).await, JobStatus::Planned);
             // Re-recording the corrected invoice against the appointment works.
             create(&f.db, f.vehicle, filed()).await.unwrap();
             assert_eq!(appointment_status(&f).await, "done");
@@ -3684,7 +3685,7 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-            assert_eq!(job.status, "planned");
+            assert_eq!(job.status, JobStatus::Planned);
             assert_eq!(job.appointment_id, None);
         }
 
@@ -3697,7 +3698,7 @@ mod tests {
                 work_item_ids: Some(vec![job_id]),
                 parts: Some(vec![NewPart {
                     name: "DOT4 fluid".into(),
-                    supplied_by: Some("shop".into()),
+                    supplied_by: Some(Supplier::Shop),
                     need_id: Some(need_id),
                     ..Default::default()
                 }]),
@@ -3737,7 +3738,7 @@ mod tests {
                     part_ids: Some(vec![own_part]),
                     parts: Some(vec![NewPart {
                         name: "DOT4 fluid".into(),
-                        supplied_by: Some("shop".into()),
+                        supplied_by: Some(Supplier::Shop),
                         need_id: Some(fluid),
                         ..Default::default()
                     }]),
@@ -3936,7 +3937,7 @@ mod tests {
                 }
                 assert_eq!(row_count::<service_record::Entity>(&f.db).await, 0);
                 assert_eq!(row_count::<part::Entity>(&f.db).await, parts_before);
-                assert_eq!(job_status(&f, job_id).await, "planned");
+                assert_eq!(job_status(&f, job_id).await, JobStatus::Planned);
                 let n = job_need::Entity::find_by_id(good)
                     .one(&f.db)
                     .await
@@ -4030,7 +4031,7 @@ mod tests {
                 .unwrap();
 
             assert_eq!(stage_of(&f, need_id).await, need::Stage::Ordered);
-            assert_eq!(job_status(&f, job_id).await, "planned");
+            assert_eq!(job_status(&f, job_id).await, JobStatus::Planned);
         }
 
         #[tokio::test]

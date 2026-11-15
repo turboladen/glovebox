@@ -1,3 +1,4 @@
+use crate::entities::part::Supplier;
 use std::collections::HashMap;
 
 use sea_orm::*;
@@ -15,9 +16,6 @@ use crate::{
         service_record::effective_payer,
     },
 };
-
-/// The `parts.supplied_by` value of a part the shop sourced and billed for.
-const SUPPLIED_BY_SHOP: &str = "shop";
 
 #[derive(Serialize)]
 pub struct CostSummary {
@@ -276,7 +274,7 @@ pub async fn summary(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult
     // A returned part went back to the seller, so it is no spend at all.
     let parts = part::Entity::find()
         .filter(part::Column::VehicleId.eq(vehicle_id))
-        .filter(part::Column::Status.ne("returned"))
+        .filter(part::Column::Status.ne(part::PartStatus::Returned))
         .all(db)
         .await?;
 
@@ -287,7 +285,7 @@ pub async fn summary(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult
     // spend beyond the invoices.
     let self_parts: Vec<&part::Model> = parts
         .iter()
-        .filter(|p| p.supplied_by != SUPPLIED_BY_SHOP)
+        .filter(|p| p.supplied_by != Supplier::Shop)
         .collect();
     let self_supplied_parts_cents =
         sum_present(self_parts.iter().map(|p| p.cost_cents)).unwrap_or(0);
@@ -365,7 +363,7 @@ pub async fn summary(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult
 mod tests {
     use super::*;
     use crate::{
-        entities::{mileage_log, service_recall_link, service_record_line_item},
+        entities::{mileage_log, part::PartStatus, service_recall_link, service_record_line_item},
         test_support::{VehicleFixture, date, test_db},
     };
 
@@ -428,7 +426,7 @@ mod tests {
         part::ActiveModel {
             vehicle_id: Set(vid),
             name: Set("Filter".into()),
-            status: Set("purchased".into()),
+            status: Set(PartStatus::Purchased),
             cost_cents: Set(Some(20_000)),
             purchase_date: Set(Some(date("2024-01-10"))),
             ..Default::default()
@@ -489,7 +487,7 @@ mod tests {
         part::ActiveModel {
             vehicle_id: Set(vid),
             name: Set("Wiper blades".into()),
-            status: Set("purchased".into()),
+            status: Set(PartStatus::Purchased),
             cost_cents: Set(Some(2_000)),
             purchase_date: Set(Some(date("2024-01-10"))),
             ..Default::default()
@@ -539,8 +537,8 @@ mod tests {
             part::ActiveModel {
                 vehicle_id: Set(vid),
                 name: Set(name.into()),
-                status: Set("installed".into()),
-                supplied_by: Set(supplied_by.into()),
+                status: Set(PartStatus::Installed),
+                supplied_by: Set(supplied_by.parse().unwrap()),
                 cost_cents: Set(Some(cents)),
                 purchase_date: Set(Some(date("2024-03-01"))),
                 installed_service_id: Set(Some(service_id)),
@@ -604,8 +602,8 @@ mod tests {
         part::ActiveModel {
             vehicle_id: Set(vid),
             name: Set("Part".into()),
-            status: Set("installed".into()),
-            supplied_by: Set(supplied_by.into()),
+            status: Set(PartStatus::Installed),
+            supplied_by: Set(supplied_by.parse().unwrap()),
             cost_cents: Set(Some(cents)),
             purchase_date: Set(purchase_date.map(date)),
             installed_date: Set(installed_date.map(date)),
@@ -685,8 +683,8 @@ mod tests {
         part::ActiveModel {
             vehicle_id: Set(vid),
             name: Set("Part".into()),
-            status: Set(status.into()),
-            supplied_by: Set("self".into()),
+            status: Set(status.parse().unwrap()),
+            supplied_by: Set(Supplier::Owner),
             cost_cents: Set(Some(cents)),
             purchase_date: Set(Some(date(purchase_date))),
             ..Default::default()

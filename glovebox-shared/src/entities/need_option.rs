@@ -1,6 +1,15 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
+crate::vocab::vocabulary! {
+    /// Whether an option is known to fit the car.
+    pub enum Fitment {
+        Confirmed => "confirmed",
+        Unconfirmed => "unconfirmed",
+        DoesNotFit => "does_not_fit",
+    }
+}
+
 /// One candidate for a job need: a specific part or approach with its price,
 /// source and fitment status.
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
@@ -16,7 +25,7 @@ pub struct Model {
     pub price_cents: Option<i32>,
     pub url: Option<String>,
     /// Whether the option is known to fit; `unconfirmed` until someone checks.
-    pub fitment: String,
+    pub fitment: Fitment,
     pub fitment_note: Option<String>,
     pub rejected_reason: Option<String>,
     pub rejected_on: Option<chrono::NaiveDate>,

@@ -129,7 +129,7 @@ pub async fn forecast_from(
     // schedule links suppress first occurrences ("already planned").
     let backlog: Vec<work_item::Model> = work_item::Entity::find()
         .filter(work_item::Column::VehicleId.eq(vehicle_id))
-        .filter(work_item::Column::Status.eq("planned"))
+        .filter(work_item::Column::Status.eq(work_item::JobStatus::Planned))
         .all(db)
         .await?;
 
@@ -228,7 +228,7 @@ pub async fn forecast_from(
 mod tests {
     use super::*;
     use crate::{
-        entities::{mileage_log, service_record, service_schedule_link},
+        entities::{mileage_log, service_record, service_schedule_link, work_item::JobStatus},
         error::DomainError,
         inputs::work_item::{NewWorkItem, UpdateWorkItem},
         services::{reminders, work_item as work_item_svc},
@@ -379,7 +379,7 @@ mod tests {
             vid,
             dead_item.id,
             UpdateWorkItem {
-                status: Some("dropped".into()),
+                status: Some(JobStatus::Dropped),
                 ..Default::default()
             },
         )

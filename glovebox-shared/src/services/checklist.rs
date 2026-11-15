@@ -2,6 +2,7 @@
 //! grouped into the next steps the owner takes, the same needs grouped by
 //! job, and the decisions made before for a kind of part.
 
+use crate::entities::{need_option::Fitment, part::Supplier, work_item::JobStatus};
 use std::collections::HashMap;
 
 use sea_orm::{
@@ -113,7 +114,7 @@ impl JobView {
     pub fn open_needs(&self) -> usize {
         self.needs
             .iter()
-            .filter(|n| need::counts_as_open(&self.job.status, n.stage))
+            .filter(|n| need::counts_as_open(self.job.status, n.stage))
             .count()
     }
 }
@@ -185,7 +186,7 @@ pub async fn for_appointment(
     let views = job_views(db, jobs).await?;
     // The counts come from the rows the checklist shows, the same way
     // `appointment::summary` counts them.
-    let job_statuses: Vec<&str> = views.iter().map(|j| j.job.status.as_str()).collect();
+    let job_statuses: Vec<JobStatus> = views.iter().map(|j| j.job.status).collect();
     let needs_open = views.iter().map(JobView::open_needs).sum();
     let todos_open = todos.iter().filter(|t| t.done_on.is_none()).count();
     let summary = appointment::summarize(found, &job_statuses, needs_open, todos_open);
@@ -215,7 +216,7 @@ async fn unscheduled_jobs(
     let jobs = work_item::Entity::find()
         .filter(work_item::Column::VehicleId.is_in(vehicle_ids.iter().copied()))
         .filter(work_item::Column::AppointmentId.is_null())
-        .filter(work_item::Column::Status.eq("planned"))
+        .filter(work_item::Column::Status.eq(JobStatus::Planned))
         .order_by_asc(work_item::Column::Id)
         .all(db)
         .await?;
@@ -345,7 +346,7 @@ pub async fn past_decisions(
         // one, and it keeps the reason of a choice the same way.
         let rejected = all
             .into_iter()
-            .filter(|o| need::is_rejected(o) || o.fitment == "does_not_fit")
+            .filter(|o| need::is_rejected(o) || o.fitment == Fitment::DoesNotFit)
             .collect();
         out.push(PastDecision {
             vehicle_id: job.vehicle_id,
@@ -428,7 +429,10 @@ fn need_view(
         .partition(|o| Some(o.id) == need.chosen_option_id);
     let chosen = chosen.into_iter().next();
     let mut notes = Vec::new();
-    if chosen.as_ref().is_some_and(|c| c.fitment == "unconfirmed") {
+    if chosen
+        .as_ref()
+        .is_some_and(|c| c.fitment == Fitment::Unconfirmed)
+    {
         notes.push("Fitment of the chosen option is not confirmed.".to_string());
     }
     if let (Some(part), Some(chosen)) = (&part, &chosen)
@@ -440,7 +444,7 @@ fn need_view(
         ));
     }
     // A shop-supplied need asks no decision of the owner.
-    if part.is_some() && chosen.is_none() && need.supplied_by.as_deref() != Some("shop") {
+    if part.is_some() && chosen.is_none() && need.supplied_by != Some(Supplier::Shop) {
         notes.push(NO_DECISION_NOTE.to_string());
     }
     NeedView {
@@ -482,7 +486,7 @@ fn assemble(
     let next_steps = next_steps(&jobs, &todos);
     let checks: Vec<Check> = jobs
         .iter()
-        .filter(|j| j.job.status != "dropped")
+        .filter(|j| j.job.status != JobStatus::Dropped)
         .flat_map(|j| j.needs.iter().map(move |n| (j, n)))
         .flat_map(|(j, n)| {
             n.notes.iter().map(move |note| Check {
@@ -515,9 +519,10 @@ fn next_steps(jobs: &[JobView], todos: &[todo::Model]) -> NextSteps {
         done: Vec::new(),
     };
     for job in jobs {
-        let job_done = match job.job.status.as_str() {
-            "dropped" => continue,
-            status => status == "done",
+        let job_done = match job.job.status {
+            JobStatus::Dropped => continue,
+            JobStatus::Done => true,
+            JobStatus::Planned => false,
         };
         for view in &job.needs {
             // Every need of a done job is done; one still open says so.
@@ -698,6 +703,7 @@ fn home_appointment(s: AppointmentSummary) -> HomeAppointment {
 mod tests {
     use super::*;
     use crate::{
+        entities::part::PartStatus,
         inputs::{
             appointment::NewAppointment,
             need::{NewNeed, NewOption, OrderDetails, ReturnInput, UpdateNeed, UpdateOption},
@@ -790,7 +796,7 @@ mod tests {
             vehicle_id,
             need_id,
             UpdateNeed {
-                supplied_by: Some(Some(who.into())),
+                supplied_by: Some(Some(who.parse().unwrap())),
                 ..Default::default()
             },
         )
@@ -843,7 +849,7 @@ mod tests {
             purchase_date: date.map(crate::test_support::date),
             cost_cents: cost,
             cost_currency: None,
-            status: "purchased".into(),
+            status: PartStatus::Purchased,
             installed_date: None,
             installed_odometer: None,
             installed_service_id: None,
@@ -857,7 +863,7 @@ mod tests {
             location: None,
             warranty_expires_on: None,
             warranty_expires_miles: None,
-            supplied_by: "self".into(),
+            supplied_by: Supplier::Owner,
             received_on: None,
             returned_on: None,
             return_reason: None,
@@ -1200,7 +1206,7 @@ mod tests {
             v,
             NewPart {
                 name: "DOT4".into(),
-                supplied_by: Some("shop".into()),
+                supplied_by: Some(Supplier::Shop),
                 ..Default::default()
             },
         )
@@ -1298,7 +1304,7 @@ mod tests {
             .unwrap()
             .unwrap()
             .into();
-        part.status = Set("installed".into());
+        part.status = Set(PartStatus::Installed);
         part.update(&db).await.unwrap();
         let list = for_appointment(&db, v, a).await.unwrap();
         assert_eq!(
@@ -1372,7 +1378,7 @@ mod tests {
             v,
             option_id,
             UpdateOption {
-                fitment: Some("confirmed".into()),
+                fitment: Some(Fitment::Confirmed),
                 ..Default::default()
             },
         )
@@ -1686,7 +1692,7 @@ mod tests {
             v,
             first,
             UpdateOption {
-                fitment: Some("does_not_fit".into()),
+                fitment: Some(Fitment::DoesNotFit),
                 fitment_note: Some(Some("The car has the 310 mm brakes.".into())),
                 ..Default::default()
             },
@@ -1699,7 +1705,7 @@ mod tests {
         assert!(d.chosen.is_none());
         assert_eq!(d.rejected.len(), 1, "{d:?}");
         assert_eq!(d.rejected[0].id, first);
-        assert_eq!(d.rejected[0].fitment, "does_not_fit");
+        assert_eq!(d.rejected[0].fitment, Fitment::DoesNotFit);
         assert_eq!(
             d.rejected[0].chosen_reason.as_deref(),
             Some("cheapest OE size")

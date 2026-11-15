@@ -61,7 +61,7 @@ pub async fn set_job_status(db: &DatabaseConnection, vehicle_id: i32, job_id: i3
         vehicle_id,
         job_id,
         crate::inputs::work_item::UpdateWorkItem {
-            status: Some(status.into()),
+            status: Some(status.parse().unwrap()),
             ..Default::default()
         },
     )

@@ -20,6 +20,7 @@ use glovebox_shared::{
     },
     money,
     services::{need, todo, trim_to_none},
+    vocab,
 };
 use serde::Deserialize;
 
@@ -256,18 +257,26 @@ pub async fn post_supplier(
         ("supplied_by", &form.supplied_by),
         ("approach", &form.approach),
     ]);
-    let result = need::update(
-        &state.db,
-        vid,
-        id,
-        UpdateNeed {
-            supplied_by: Some(trim_to_none(&form.supplied_by)),
-            approach: Some(trim_to_none(&form.approach)),
-            ..Default::default()
-        },
-    )
-    .await;
+    let input = supplier_input(&form);
+    let result = match input {
+        Ok(input) => need::update(&state.db, vid, id, input).await,
+        Err(e) => Err(e),
+    };
     post.answer(result).await
+}
+
+/// Reads the supplier form. An empty field clears the stored value.
+fn supplier_input(form: &SupplierForm) -> DomainResult<UpdateNeed> {
+    let supplied_by = trim_to_none(&form.supplied_by);
+    let approach = trim_to_none(&form.approach);
+    Ok(UpdateNeed {
+        supplied_by: Some(vocab::parse_optional(
+            "supplied_by",
+            supplied_by.as_deref(),
+        )?),
+        approach: Some(vocab::parse_optional("approach", approach.as_deref())?),
+        ..Default::default()
+    })
 }
 
 #[derive(Deserialize)]

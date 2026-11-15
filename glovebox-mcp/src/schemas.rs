@@ -9,6 +9,7 @@ use glovebox_shared::{
     dates,
     entities::{
         incident::IncidentCategory,
+        part::{PartStatus, Supplier},
         service_record::{Payer, Performer},
         service_record_line_item::WorkKind,
         vehicle,
@@ -343,7 +344,7 @@ pub struct InlinePartInput {
     /// Who supplied the part: `self` (the owner bought it, the default; its
     /// cost is added to the total) or `shop` (the shop sourced and billed it;
     /// its cost is already inside the invoice total).
-    pub supplied_by: Option<String>,
+    pub supplied_by: Option<Supplier>,
     /// Where it goes on the car (free text), e.g. "Front brakes".
     pub location: Option<String>,
     /// Free-form notes.
@@ -403,10 +404,10 @@ pub struct RecordPartInput {
     pub cost_cents: Option<i32>,
     /// Who supplied the part: `self` (the owner bought it, the default) or
     /// `shop` (the shop sourced it and billed for it).
-    pub supplied_by: Option<String>,
+    pub supplied_by: Option<Supplier>,
     /// Lifecycle status: `purchased`, `installed` or `replaced`. Defaults to
     /// `purchased`. A return is made on the need, not here.
-    pub status: Option<String>,
+    pub status: Option<PartStatus>,
     /// Where it goes on the car (free text), e.g. "Front brakes".
     pub location: Option<String>,
     /// Date it was installed, `YYYY-MM-DD`.

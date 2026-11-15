@@ -1,6 +1,7 @@
 //! Appointments: a visit that groups jobs and to-dos. Every function scopes
 //! its ids to a vehicle, so another vehicle's id reads as a missing one.
 
+use crate::entities::work_item::JobStatus;
 use std::collections::HashMap;
 
 use sea_orm::{sea_query::Expr, *};
@@ -85,14 +86,14 @@ impl Ending {
 /// when cancelled, `done` when closed by hand or when it has jobs and every
 /// one is done or dropped, otherwise `planning`.
 #[must_use]
-pub fn status(a: &appointment::Model, job_statuses: &[&str]) -> &'static str {
+pub fn status(a: &appointment::Model, job_statuses: &[JobStatus]) -> &'static str {
     match Ending::of(a) {
         Some(Ending::Cancelled) => "cancelled",
         Some(Ending::Closed) => "done",
         None if !job_statuses.is_empty()
             && job_statuses
                 .iter()
-                .all(|s| matches!(*s, "done" | "dropped")) =>
+                .all(|s| matches!(s, JobStatus::Done | JobStatus::Dropped)) =>
         {
             "done"
         }
@@ -338,7 +339,7 @@ pub async fn summary(
 /// of open needs and open to-dos.
 pub(crate) fn summarize(
     appointment: appointment::Model,
-    job_statuses: &[&str],
+    job_statuses: &[JobStatus],
     needs_open: usize,
     todos_open: usize,
 ) -> AppointmentSummary {
@@ -390,22 +391,19 @@ async fn summaries(
         .await?;
 
     let mut job_appointment: HashMap<i32, i32> = HashMap::new();
-    let job_status: HashMap<i32, &str> = jobs.iter().map(|j| (j.id, j.status.as_str())).collect();
-    let mut statuses: HashMap<i32, Vec<&str>> = HashMap::new();
+    let job_status: HashMap<i32, JobStatus> = jobs.iter().map(|j| (j.id, j.status)).collect();
+    let mut statuses: HashMap<i32, Vec<JobStatus>> = HashMap::new();
     for job in &jobs {
         if let Some(appointment_id) = job.appointment_id {
             job_appointment.insert(job.id, appointment_id);
-            statuses
-                .entry(appointment_id)
-                .or_default()
-                .push(&job.status);
+            statuses.entry(appointment_id).or_default().push(job.status);
         }
     }
     let mut needs_open: HashMap<i32, usize> = HashMap::new();
     for need in &needs {
         let current = stage(need, need.part_id.and_then(|id| parts.get(&id)));
-        let on_job = job_status.get(&need.work_item_id).copied().unwrap_or("");
-        if counts_as_open(on_job, current)
+        let on_job = job_status.get(&need.work_item_id);
+        if on_job.is_some_and(|status| counts_as_open(*status, current))
             && let Some(appointment_id) = job_appointment.get(&need.work_item_id)
         {
             *needs_open.entry(*appointment_id).or_default() += 1;
@@ -491,7 +489,7 @@ async fn put_away(
     let today = crate::services::today();
     let unassigned_job_ids: Vec<i32> = work_item::Entity::find()
         .filter(work_item::Column::AppointmentId.eq(id))
-        .filter(work_item::Column::Status.eq("planned"))
+        .filter(work_item::Column::Status.eq(JobStatus::Planned))
         .order_by_asc(work_item::Column::Id)
         .all(db)
         .await?
@@ -643,14 +641,23 @@ mod tests {
     fn status_table() {
         let open = model(None, None);
         assert_eq!(status(&open, &[]), "planning");
-        assert_eq!(status(&open, &["done", "dropped"]), "done");
-        assert_eq!(status(&open, &["done", "planned"]), "planning");
         assert_eq!(
-            status(&model(Some("2026-11-01"), Some("2026-11-02")), &["done"]),
+            status(&open, &[JobStatus::Done, JobStatus::Dropped]),
+            "done"
+        );
+        assert_eq!(
+            status(&open, &[JobStatus::Done, JobStatus::Planned]),
+            "planning"
+        );
+        assert_eq!(
+            status(
+                &model(Some("2026-11-01"), Some("2026-11-02")),
+                &[JobStatus::Done]
+            ),
             "cancelled"
         );
         assert_eq!(
-            status(&model(None, Some("2026-11-02")), &["planned"]),
+            status(&model(None, Some("2026-11-02")), &[JobStatus::Planned]),
             "done"
         );
     }
@@ -1064,7 +1071,7 @@ mod tests {
                 job_id,
                 NewNeed {
                     name: name.into(),
-                    supplied_by: supplied_by.map(Into::into),
+                    supplied_by: supplied_by.map(|v| v.parse().unwrap()),
                     ..Default::default()
                 },
             )
@@ -1191,7 +1198,7 @@ mod tests {
                 v,
                 job_id,
                 UpdateWorkItem {
-                    status: Some(status.into()),
+                    status: Some(status.parse().unwrap()),
                     ..Default::default()
                 },
             )
@@ -1332,7 +1339,7 @@ mod tests {
             vehicle_id: Set(v),
             title: Set("Pads".into()),
             appointment_id: Set(Some(a)),
-            status: Set("planned".into()),
+            status: Set(JobStatus::Planned),
             ..Default::default()
         }
         .insert(&txn)

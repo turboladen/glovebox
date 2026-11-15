@@ -534,7 +534,7 @@ pub async fn create_followup(
 mod tests {
     use super::*;
     use crate::{
-        entities::{incident::IncidentCategory, work_item},
+        entities::{incident::IncidentCategory, work_item, work_item::JobStatus},
         test_support::{VehicleFixture, date, test_db},
         vocab::Vocabulary,
     };
@@ -1312,7 +1312,7 @@ mod tests {
         let work_item = work_item::ActiveModel {
             vehicle_id: Set(vid),
             title: Set("Chase the rattle".into()),
-            status: Set("todo".into()),
+            status: Set(JobStatus::Planned),
             incident_id: Set(Some(doomed.incident.id)),
             created_at: Set(date("2024-01-01T00:00:00Z")),
             updated_at: Set(date("2024-01-01T00:00:00Z")),

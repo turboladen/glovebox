@@ -2,6 +2,11 @@
 //! work item, and its vehicle is the work item's vehicle. A wrong-vehicle id
 //! reads exactly like a nonexistent one.
 
+use crate::entities::{
+    need_option::Fitment,
+    part::{PartStatus, Supplier},
+    work_item::JobStatus,
+};
 use sea_orm::{sea_query::Expr, *};
 use serde::Serialize;
 
@@ -13,13 +18,6 @@ use crate::{
         part::NewPart,
     },
 };
-
-/// Allowed values for `job_needs.supplied_by`.
-pub const VALID_SUPPLIERS: [&str; 2] = ["self", "shop"];
-/// Allowed values for `job_needs.approach`.
-pub const VALID_APPROACHES: [&str; 2] = ["replacement", "upgrade"];
-/// Allowed values for `need_options.fitment`.
-pub const VALID_FITMENTS: [&str; 3] = ["confirmed", "unconfirmed", "does_not_fit"];
 
 /// Where a need stands, from "nobody has decided" to "on the car".
 #[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -71,8 +69,8 @@ impl Stage {
 /// open: the stage is open and the job is still planned. Every count of open
 /// needs uses this.
 #[must_use]
-pub fn counts_as_open(job_status: &str, stage: Stage) -> bool {
-    job_status == "planned" && stage.is_open()
+pub fn counts_as_open(job_status: JobStatus, stage: Stage) -> bool {
+    job_status == JobStatus::Planned && stage.is_open()
 }
 
 /// Derives a need's stage. The first matching row wins, so a linked part
@@ -81,7 +79,7 @@ pub fn counts_as_open(job_status: &str, stage: Stage) -> bool {
 #[must_use]
 pub fn stage(need: &job_need::Model, part: Option<&part::Model>) -> Stage {
     if let Some(part) = part {
-        return if part.status == "installed" {
+        return if part.status == PartStatus::Installed {
             Stage::Installed
         } else if part.received_on.is_some() {
             Stage::Received
@@ -89,32 +87,11 @@ pub fn stage(need: &job_need::Model, part: Option<&part::Model>) -> Stage {
             Stage::Ordered
         };
     }
-    match need.supplied_by.as_deref() {
-        Some("shop") => Stage::ShopSupplies,
-        Some("self") if need.chosen_option_id.is_some() => Stage::ToOrder,
+    match need.supplied_by {
+        Some(Supplier::Shop) => Stage::ShopSupplies,
+        Some(Supplier::Owner) if need.chosen_option_id.is_some() => Stage::ToOrder,
         _ => Stage::Undecided,
     }
-}
-
-fn validate_vocabulary(field: &str, value: &str, allowed: &[&str]) -> DomainResult<()> {
-    if allowed.contains(&value) {
-        return Ok(());
-    }
-    Err(DomainError::invalid(
-        field,
-        format!(
-            "'{value}' is not valid. Must be one of: {}",
-            allowed.join(", ")
-        ),
-    ))
-}
-
-fn validate_optional_vocabulary(
-    field: &str,
-    value: Option<&str>,
-    allowed: &[&str],
-) -> DomainResult<()> {
-    value.map_or(Ok(()), |v| validate_vocabulary(field, v, allowed))
 }
 
 fn validate_quantity(quantity: i32) -> DomainResult<()> {
@@ -186,12 +163,6 @@ pub async fn add(
     super::validate_not_blank("name", &input.name)?;
     let quantity = input.quantity.unwrap_or(1);
     validate_quantity(quantity)?;
-    validate_optional_vocabulary(
-        "supplied_by",
-        input.supplied_by.as_deref(),
-        &VALID_SUPPLIERS,
-    )?;
-    validate_optional_vocabulary("approach", input.approach.as_deref(), &VALID_APPROACHES)?;
     super::work_item::get(db, vehicle_id, work_item_id).await?;
     let model = job_need::ActiveModel {
         work_item_id: Set(work_item_id),
@@ -220,12 +191,6 @@ pub async fn update(
     }
     if let Some(quantity) = input.quantity {
         validate_quantity(quantity)?;
-    }
-    if let Some(value) = &input.supplied_by {
-        validate_optional_vocabulary("supplied_by", value.as_deref(), &VALID_SUPPLIERS)?;
-    }
-    if let Some(value) = &input.approach {
-        validate_optional_vocabulary("approach", value.as_deref(), &VALID_APPROACHES)?;
     }
     let mut active: job_need::ActiveModel = existing.into();
     if let Some(name) = input.name {
@@ -269,7 +234,6 @@ pub async fn add_option(
 ) -> DomainResult<need_option::Model> {
     super::validate_not_blank("description", &input.description)?;
     validate_price(input.price_cents)?;
-    validate_optional_vocabulary("fitment", input.fitment.as_deref(), &VALID_FITMENTS)?;
     require(db, vehicle_id, need_id).await?;
     let model = need_option::ActiveModel {
         need_id: Set(need_id),
@@ -279,7 +243,7 @@ pub async fn add_option(
         seller: Set(input.seller.as_deref().and_then(super::trim_to_none)),
         price_cents: Set(input.price_cents),
         url: Set(input.url.as_deref().and_then(super::trim_to_none)),
-        fitment: Set(input.fitment.unwrap_or_else(|| "unconfirmed".to_string())),
+        fitment: Set(input.fitment.unwrap_or(Fitment::Unconfirmed)),
         fitment_note: Set(input.fitment_note.as_deref().and_then(super::trim_to_none)),
         ..Default::default()
     };
@@ -356,7 +320,6 @@ pub async fn update_option<C: ConnectionTrait + TransactionTrait>(
     if let Some(price) = input.price_cents {
         validate_price(price)?;
     }
-    validate_optional_vocabulary("fitment", input.fitment.as_deref(), &VALID_FITMENTS)?;
     // A caller may send "" where it means no reason. Storing that would reject
     // the option and clear the need's choice, so only real text rejects.
     if let Some(Some(reason)) = &input.rejected_reason
@@ -387,7 +350,7 @@ pub async fn update_option<C: ConnectionTrait + TransactionTrait>(
         active.url = Set(value.as_deref().and_then(super::trim_to_none));
     }
     if let Some(value) = &input.fitment {
-        active.fitment = Set(value.clone());
+        active.fitment = Set(*value);
     }
     if let Some(value) = input.fitment_note {
         active.fitment_note = Set(value.as_deref().and_then(super::trim_to_none));
@@ -398,7 +361,7 @@ pub async fn update_option<C: ConnectionTrait + TransactionTrait>(
     }
     active.updated_at = Set(super::now());
 
-    let now_unusable = input.fitment.as_deref() == Some("does_not_fit")
+    let now_unusable = input.fitment == Some(Fitment::DoesNotFit)
         || input.rejected_reason.as_ref().is_some_and(Option::is_some);
     // The option write and the choice clearing commit together, so a need
     // never keeps a choice that was just rejected.
@@ -494,7 +457,7 @@ pub async fn decide(
                     "Option {option_id} does not belong to need {need_id}"
                 ))
             })?;
-        if option.fitment == "does_not_fit" {
+        if option.fitment == Fitment::DoesNotFit {
             return Err(DomainError::BadRequest(format!(
                 "Option {option_id} does not fit; change its fitment first"
             )));
@@ -573,12 +536,12 @@ async fn set_need_part(
     db: &impl ConnectionTrait,
     need: job_need::Model,
     part_id: Option<i32>,
-    supplied_by: Option<&str>,
+    supplied_by: Option<Supplier>,
 ) -> DomainResult<job_need::Model> {
     let mut active: job_need::ActiveModel = need.into();
     active.part_id = Set(part_id);
     if let Some(supplier) = supplied_by {
-        active.supplied_by = Set(Some(supplier.to_string()));
+        active.supplied_by = Set(Some(supplier));
     }
     active.updated_at = Set(super::now());
     Ok(active.update(db).await?)
@@ -633,7 +596,7 @@ pub async fn mark_ordered<C: ConnectionTrait + TransactionTrait>(
             "Need {need_id} already has a part linked"
         )));
     }
-    if need.supplied_by.as_deref() == Some("shop") {
+    if need.supplied_by == Some(Supplier::Shop) {
         return Err(DomainError::BadRequest(format!(
             "Need {need_id} is supplied by the shop, so there is nothing to order"
         )));
@@ -660,13 +623,13 @@ pub async fn mark_ordered<C: ConnectionTrait + TransactionTrait>(
             purchase_date: Some(purchase_date),
             cost_cents,
             retailer_url: option.url,
-            supplied_by: Some("self".to_string()),
+            supplied_by: Some(Supplier::Owner),
             order_ref: details.order_ref,
             ..Default::default()
         },
     )
     .await?;
-    let need = set_need_part(&txn, need, Some(created.id), Some("self")).await?;
+    let need = set_need_part(&txn, need, Some(created.id), Some(Supplier::Owner)).await?;
     txn.commit().await?;
     Ok(purchase(need, created))
 }
@@ -708,10 +671,7 @@ pub async fn link_part<C: ConnectionTrait + TransactionTrait>(
             "Need {need_id} already has part {current} linked; unlink it first"
         )));
     }
-    let supplier = need
-        .supplied_by
-        .is_none()
-        .then_some(found.supplied_by.clone());
+    let supplier = need.supplied_by.is_none().then_some(found.supplied_by);
     let txn = db.begin().await?;
     let found = match received_on {
         Some(date) => {
@@ -722,7 +682,7 @@ pub async fn link_part<C: ConnectionTrait + TransactionTrait>(
         }
         None => found,
     };
-    let need = set_need_part(&txn, need, Some(part_id), supplier.as_deref()).await?;
+    let need = set_need_part(&txn, need, Some(part_id), supplier).await?;
     txn.commit().await?;
     Ok(purchase(need, found))
 }
@@ -883,7 +843,7 @@ mod tests {
             work_item_id: 1,
             name: "Pads".into(),
             quantity: 1,
-            supplied_by: supplied_by.map(String::from),
+            supplied_by: supplied_by.map(|s| s.parse().unwrap()),
             approach: None,
             chosen_option_id: chosen,
             decision_reason: None,
@@ -906,7 +866,7 @@ mod tests {
             purchase_date: None,
             cost_cents: None,
             cost_currency: None,
-            status: status.into(),
+            status: status.parse().unwrap(),
             installed_date: None,
             installed_odometer: None,
             installed_service_id: None,
@@ -920,7 +880,7 @@ mod tests {
             location: None,
             warranty_expires_on: None,
             warranty_expires_miles: None,
-            supplied_by: "self".into(),
+            supplied_by: Supplier::Owner,
             received_on: received_on.map(date),
             returned_on: None,
             return_reason: None,
@@ -976,7 +936,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn add_rejects_zero_quantity_and_unknown_supplier() {
+    async fn add_rejects_zero_quantity() {
         let db = test_db().await;
         let (vehicle_id, job_id) = seed_job(&db).await;
         let zero = NewNeed {
@@ -985,18 +945,6 @@ mod tests {
         };
         let err = add(&db, vehicle_id, job_id, zero).await.unwrap_err();
         assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "quantity"));
-        let bad = NewNeed {
-            supplied_by: Some("neighbor".into()),
-            ..need("Pads")
-        };
-        let err = add(&db, vehicle_id, job_id, bad).await.unwrap_err();
-        assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "supplied_by"));
-        let bad = NewNeed {
-            approach: Some("rebuild".into()),
-            ..need("Pads")
-        };
-        let err = add(&db, vehicle_id, job_id, bad).await.unwrap_err();
-        assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "approach"));
         let added = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
         assert_eq!(added.quantity, 1);
     }
@@ -1011,7 +959,7 @@ mod tests {
             vehicle_id,
             n.id,
             NewOption {
-                fitment: Some("does_not_fit".into()),
+                fitment: Some(Fitment::DoesNotFit),
                 ..option("Wrong pads")
             },
         )
@@ -1128,7 +1076,7 @@ mod tests {
             vehicle_id,
             o.id,
             UpdateOption {
-                fitment: Some("does_not_fit".into()),
+                fitment: Some(Fitment::DoesNotFit),
                 ..Default::default()
             },
         )
@@ -1247,7 +1195,7 @@ mod tests {
             vehicle_id,
             n.id,
             UpdateNeed {
-                supplied_by: Some(Some("self".into())),
+                supplied_by: Some(Some(Supplier::Owner)),
                 decision_reason: Some(Some("best reviews".into())),
                 ..Default::default()
             },
@@ -1255,7 +1203,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(updated.supplied_by.as_deref(), Some("self"));
+        assert_eq!(updated.supplied_by, Some(Supplier::Owner));
         assert_eq!(updated.chosen_option_id, Some(o.id));
         assert_eq!(updated.decision_reason.as_deref(), Some("best reviews"));
         assert!(updated.decided_on.is_some());
@@ -1267,7 +1215,7 @@ mod tests {
         assert_eq!(cleared.chosen_option_id, None);
         assert_eq!(cleared.decision_reason, None);
         assert_eq!(cleared.decided_on, None);
-        assert_eq!(cleared.supplied_by.as_deref(), Some("self"));
+        assert_eq!(cleared.supplied_by, Some(Supplier::Owner));
     }
 
     #[tokio::test]
@@ -1307,7 +1255,7 @@ mod tests {
             vehicle_id,
             n.id,
             NewOption {
-                fitment: Some("does_not_fit".into()),
+                fitment: Some(Fitment::DoesNotFit),
                 ..option("Wrong pads")
             },
         )
@@ -1319,7 +1267,7 @@ mod tests {
             n.id,
             UpdateNeed {
                 name: Some("Renamed".into()),
-                supplied_by: Some(Some("self".into())),
+                supplied_by: Some(Some(Supplier::Owner)),
                 ..Default::default()
             },
             Some(Some(bad.id)),
@@ -1543,10 +1491,10 @@ mod tests {
             Some("https://example.com/rotors")
         );
         assert_eq!(bought.part.purchase_date, Some(today));
-        assert_eq!(bought.part.supplied_by, "self");
-        assert_eq!(bought.part.status, "purchased");
+        assert_eq!(bought.part.supplied_by, Supplier::Owner);
+        assert_eq!(bought.part.status, PartStatus::Purchased);
         assert_eq!(bought.need.part_id, Some(bought.part.id));
-        assert_eq!(bought.need.supplied_by.as_deref(), Some("self"));
+        assert_eq!(bought.need.supplied_by, Some(Supplier::Owner));
         assert_eq!(bought.stage, Stage::Ordered);
 
         let (n2, _) = chosen_need(
@@ -1700,7 +1648,7 @@ mod tests {
             vehicle_id,
             n.id,
             UpdateNeed {
-                supplied_by: Some(Some("shop".into())),
+                supplied_by: Some(Some(Supplier::Shop)),
                 ..Default::default()
             },
         )
@@ -1739,7 +1687,7 @@ mod tests {
         let p = new_part(&db, vehicle_id, "Pads").await;
         part::ActiveModel {
             id: Unchanged(p.id),
-            status: Set("returned".into()),
+            status: Set(PartStatus::Returned),
             ..Default::default()
         }
         .update(&db)
@@ -1762,7 +1710,7 @@ mod tests {
             .unwrap();
         assert_eq!(linked.part.received_on, Some(date("2026-11-05")));
         assert_eq!(linked.stage, Stage::Received);
-        assert_eq!(linked.need.supplied_by.as_deref(), Some("self"));
+        assert_eq!(linked.need.supplied_by, Some(Supplier::Owner));
 
         let m = add(&db, vehicle_id, job_id, need("Rotors")).await.unwrap();
         let q = new_part(&db, vehicle_id, "Rotors").await;
@@ -1824,7 +1772,7 @@ mod tests {
         .await
         .unwrap();
         let today = crate::services::today();
-        assert_eq!(out.returned_part.status, "returned");
+        assert_eq!(out.returned_part.status, PartStatus::Returned);
         assert_eq!(
             out.returned_part.return_reason.as_deref(),
             Some("wrong diameter")
@@ -2009,7 +1957,7 @@ mod tests {
             vehicle_id,
             part_id,
             crate::inputs::part::UpdatePart {
-                status: Some("installed".into()),
+                status: Some(PartStatus::Installed),
                 ..Default::default()
             },
         )

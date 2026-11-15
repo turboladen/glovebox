@@ -8,7 +8,9 @@ use glovebox_shared::{
     dates,
     entities::{
         incident::IncidentCategory,
+        part::{PartStatus, Supplier},
         service_record::{Payer, Performer},
+        work_item::JobStatus,
     },
     error::DomainResult,
     inputs::{
@@ -296,7 +298,7 @@ pub struct ListPartsInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
     /// Only parts with this status: `purchased`, `installed`, `replaced` or `returned`.
-    pub status: Option<String>,
+    pub status: Option<PartStatus>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -475,9 +477,9 @@ pub struct CorrectPartInput {
     pub name: Option<String>,
     /// `purchased`, `installed` or `replaced`. A return is made on the need,
     /// not here; a returned part can only be set back to `purchased`.
-    pub status: Option<String>,
+    pub status: Option<PartStatus>,
     /// `self` or `shop`.
-    pub supplied_by: Option<String>,
+    pub supplied_by: Option<Supplier>,
     /// Manufacturer/brand.
     ///
     /// Send `null` to clear it; omit the key to leave it unchanged.
@@ -843,7 +845,7 @@ pub struct UpdatePlannedWorkInput {
     /// New title.
     pub title: Option<String>,
     /// `planned`, `done` or `dropped`. Use `done` only for work that left no paperwork (otherwise `record_service` with `work_item_ids`), `dropped` for work the owner has decided against, and `planned` to reopen an item.
-    pub status: Option<String>,
+    pub status: Option<JobStatus>,
     /// Free-form notes.
     ///
     /// Send `null` to clear it; omit the key to leave it unchanged.

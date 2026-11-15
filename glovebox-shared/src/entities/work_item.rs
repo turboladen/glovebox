@@ -1,6 +1,16 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
+crate::vocab::vocabulary! {
+    /// Where a job stands.
+    pub enum JobStatus {
+        Planned => "planned",
+        Done => "done",
+        // The owner decided not to do it.
+        Dropped => "dropped",
+    }
+}
+
 /// A planned piece of work. It can come from a schedule item, a research
 /// finding (such as a recall), an incident, or be ad hoc. The service layer
 /// checks each source id against the vehicle. A source id,
@@ -18,7 +28,7 @@ pub struct Model {
     pub research_finding_id: Option<i32>,
     pub incident_id: Option<i32>,
     pub est_cost_cents: Option<i32>,
-    pub status: String,
+    pub status: JobStatus,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
     pub revisit_by_date: Option<chrono::NaiveDate>,

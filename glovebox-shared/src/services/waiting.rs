@@ -242,7 +242,7 @@ pub async fn waiting(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult
 mod tests {
     use super::*;
     use crate::{
-        entities::model_template,
+        entities::{model_template, work_item::JobStatus},
         error::DomainError,
         inputs::{
             appointment::NewAppointment,
@@ -432,7 +432,7 @@ mod tests {
             v,
             finished,
             UpdateWorkItem {
-                status: Some("done".into()),
+                status: Some(JobStatus::Done),
                 ..Default::default()
             },
         )

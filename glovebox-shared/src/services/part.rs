@@ -1,3 +1,4 @@
+use crate::entities::part::{PartStatus, Supplier};
 use sea_orm::*;
 
 use crate::{
@@ -6,17 +7,9 @@ use crate::{
     inputs::part::{NewPart, PartFilter, UpdatePart},
 };
 
-/// Allowed values for `parts.supplied_by`.
-pub const VALID_SUPPLIED_BY: [&str; 2] = ["self", "shop"];
-
-/// Allowed values for `parts.status`.
-pub const VALID_STATUSES: [&str; 4] = ["purchased", "installed", "replaced", "returned"];
-
-const RETURNED: &str = "returned";
-
 /// Whether `p` was sent back from its need.
 pub(crate) fn is_returned(p: &part::Model) -> bool {
-    p.status == RETURNED
+    p.status == PartStatus::Returned
 }
 
 /// Marks `p` returned today for `reason`, remembering the need it was
@@ -28,7 +21,7 @@ pub(crate) async fn mark_returned(
     need_id: i32,
 ) -> DomainResult<part::Model> {
     let mut active: part::ActiveModel = p.into();
-    active.status = Set(RETURNED.to_string());
+    active.status = Set(PartStatus::Returned);
     active.returned_on = Set(Some(super::today()));
     active.return_reason = Set(Some(reason));
     active.returned_from_need_id = Set(Some(need_id));
@@ -39,17 +32,8 @@ pub(crate) async fn mark_returned(
 // Checks a status a caller asks for. `returned` is in the vocabulary but is
 // only reachable through the return action on a need, which records the
 // reason and unlinks the part in the same write.
-fn validate_requested_status(status: &str) -> DomainResult<()> {
-    if !VALID_STATUSES.contains(&status) {
-        return Err(DomainError::Invalid {
-            field: "status".into(),
-            message: format!(
-                "'{status}' is not valid. Must be one of: {}",
-                VALID_STATUSES.join(", ")
-            ),
-        });
-    }
-    if status == RETURNED {
+fn validate_requested_status(status: PartStatus) -> DomainResult<()> {
+    if status == PartStatus::Returned {
         return Err(DomainError::BadRequest(
             "A part is marked returned by returning it from its need (return_part)".into(),
         ));
@@ -58,9 +42,9 @@ fn validate_requested_status(status: &str) -> DomainResult<()> {
 }
 
 // A returned part may only go back to `purchased`.
-fn validate_status_change(existing: &part::Model, status: &str) -> DomainResult<()> {
+fn validate_status_change(existing: &part::Model, status: PartStatus) -> DomainResult<()> {
     validate_requested_status(status)?;
-    if is_returned(existing) && status != "purchased" {
+    if is_returned(existing) && status != PartStatus::Purchased {
         return Err(DomainError::BadRequest(format!(
             "Part {} was returned; its status can only change back to purchased",
             existing.id
@@ -72,7 +56,7 @@ fn validate_status_change(existing: &part::Model, status: &str) -> DomainResult<
 // A returned part is not on the car, so it takes no install details unless the
 // same update makes it `purchased` again.
 fn validate_install_details(existing: &part::Model, input: &UpdatePart) -> DomainResult<()> {
-    let goes_back = input.status.as_deref() == Some("purchased");
+    let goes_back = input.status == Some(PartStatus::Purchased);
     let sets_install = matches!(input.installed_service_id, Some(Some(_)))
         || matches!(input.installed_date, Some(Some(_)))
         || matches!(input.installed_odometer, Some(Some(_)));
@@ -83,19 +67,6 @@ fn validate_install_details(existing: &part::Model, input: &UpdatePart) -> Domai
         )));
     }
     Ok(())
-}
-
-fn validate_supplied_by(supplied_by: &str) -> DomainResult<()> {
-    if VALID_SUPPLIED_BY.contains(&supplied_by) {
-        return Ok(());
-    }
-    Err(DomainError::Invalid {
-        field: "supplied_by".into(),
-        message: format!(
-            "'{supplied_by}' is not valid. Must be one of: {}",
-            VALID_SUPPLIED_BY.join(", ")
-        ),
-    })
 }
 
 pub async fn list(
@@ -127,9 +98,8 @@ pub async fn create(
     input: NewPart,
 ) -> DomainResult<part::Model> {
     super::vehicle::require(db, vehicle_id).await?;
-    let supplied_by = input.supplied_by.unwrap_or_else(|| "self".to_string());
-    validate_supplied_by(&supplied_by)?;
-    if let Some(status) = &input.status {
+    let supplied_by = input.supplied_by.unwrap_or(Supplier::Owner);
+    if let Some(status) = input.status {
         validate_requested_status(status)?;
     }
     if let Some(service_id) = input.installed_service_id {
@@ -148,7 +118,7 @@ pub async fn create(
         cost_currency: Set(input.cost_currency),
         manufacturer_url: Set(input.manufacturer_url),
         retailer_url: Set(input.retailer_url),
-        status: Set(input.status.unwrap_or_else(|| "purchased".to_string())),
+        status: Set(input.status.unwrap_or(PartStatus::Purchased)),
         installed_date: Set(input.installed_date),
         installed_odometer: Set(input.installed_odometer),
         installed_service_id: Set(input.installed_service_id),
@@ -175,10 +145,7 @@ pub async fn update(
         super::service_record::require(db, vehicle_id, service_id).await?;
     }
 
-    if let Some(v) = &input.supplied_by {
-        validate_supplied_by(v)?;
-    }
-    if let Some(status) = &input.status {
+    if let Some(status) = input.status {
         validate_status_change(&existing, status)?;
     }
     validate_install_details(&existing, &input)?;
@@ -283,7 +250,7 @@ pub(crate) async fn install(
         )));
     }
     let mut active: part::ActiveModel = existing.into();
-    active.status = Set("installed".to_string());
+    active.status = Set(PartStatus::Installed);
     active.installed_service_id = Set(Some(record.id));
     active.installed_date = Set(Some(record.service_date));
     active.installed_odometer = odometer;
@@ -335,11 +302,11 @@ pub(crate) async fn uninstall(
     let revert = match status {
         _ if is_returned(&p) => false,
         UninstallStatus::Purchased => true,
-        UninstallStatus::PurchasedIfInstalled => p.status == "installed",
+        UninstallStatus::PurchasedIfInstalled => p.status == PartStatus::Installed,
     };
     let mut active: part::ActiveModel = p.into();
     if revert {
-        active.status = Set("purchased".to_string());
+        active.status = Set(PartStatus::Purchased);
     }
     active.installed_service_id = Set(None);
     active.installed_date = Set(None);
@@ -417,7 +384,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(created.status, "purchased");
+        assert_eq!(created.status, PartStatus::Purchased);
         let fetched = get(&db, vid, created.id).await.unwrap();
         assert_eq!(fetched.name, "Oil filter");
         assert_eq!(fetched.cost_cents, Some(1_599));
@@ -445,7 +412,7 @@ mod tests {
             vid,
             created.id,
             UpdatePart {
-                status: Some("installed".into()),
+                status: Some(PartStatus::Installed),
                 ..Default::default()
             },
         )
@@ -484,13 +451,13 @@ mod tests {
             vid,
             p.id,
             UpdatePart {
-                status: Some("installed".into()),
+                status: Some(PartStatus::Installed),
                 ..Default::default()
             },
         )
         .await
         .unwrap();
-        assert_eq!(updated.status, "installed");
+        assert_eq!(updated.status, PartStatus::Installed);
         assert_eq!(updated.installed_service_id, Some(svc_id));
 
         // Explicitly clear the link.
@@ -567,7 +534,7 @@ mod tests {
             &db,
             vid,
             NewPart {
-                status: Some("installed".into()),
+                status: Some(PartStatus::Installed),
                 ..minimal_part("A", None)
             },
         )
@@ -577,7 +544,7 @@ mod tests {
             &db,
             vid,
             NewPart {
-                status: Some("purchased".into()),
+                status: Some(PartStatus::Purchased),
                 ..minimal_part("B", None)
             },
         )
@@ -593,7 +560,7 @@ mod tests {
                 &db,
                 vid,
                 PartFilter {
-                    status: Some("purchased".into())
+                    status: Some(PartStatus::Purchased)
                 }
             )
             .await
@@ -626,61 +593,36 @@ mod tests {
     // --- supplied_by ------------------------------------------------------
 
     #[tokio::test]
-    async fn supplied_by_defaults_to_self_and_is_validated_on_create_and_update() {
+    async fn supplied_by_defaults_to_self_and_can_be_changed() {
         let db = test_db().await;
         let vid = seed_vehicle(&db).await;
         let made = create(&db, vid, minimal_part("Pads", None)).await.unwrap();
-        assert_eq!(made.supplied_by, "self");
+        assert_eq!(made.supplied_by, Supplier::Owner);
 
         let shop_part = create(
             &db,
             vid,
             NewPart {
-                supplied_by: Some("shop".into()),
+                supplied_by: Some(Supplier::Shop),
                 ..minimal_part("Fluid", None)
             },
         )
         .await
         .unwrap();
-        assert_eq!(shop_part.supplied_by, "shop");
-
-        let err = create(
-            &db,
-            vid,
-            NewPart {
-                supplied_by: Some("dealer".into()),
-                ..minimal_part("Bad", None)
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "supplied_by"));
+        assert_eq!(shop_part.supplied_by, Supplier::Shop);
 
         let updated = update(
             &db,
             vid,
             made.id,
             UpdatePart {
-                supplied_by: Some("shop".into()),
+                supplied_by: Some(Supplier::Shop),
                 ..Default::default()
             },
         )
         .await
         .unwrap();
-        assert_eq!(updated.supplied_by, "shop");
-
-        let err = update(
-            &db,
-            vid,
-            made.id,
-            UpdatePart {
-                supplied_by: Some("dealer".into()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "supplied_by"));
+        assert_eq!(updated.supplied_by, Supplier::Shop);
     }
 
     #[tokio::test]
@@ -697,7 +639,7 @@ mod tests {
         let err = install(&db, vid, p.id, &record, NotSet).await.unwrap_err();
         assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
         let after = get(&db, vid, p.id).await.unwrap();
-        assert_eq!(after.status, "returned");
+        assert_eq!(after.status, PartStatus::Returned);
         assert_eq!(after.installed_service_id, None);
     }
 
@@ -736,8 +678,8 @@ mod tests {
         part::ActiveModel {
             vehicle_id: Set(vid),
             name: Set("Rotors".into()),
-            status: Set("returned".into()),
-            supplied_by: Set("self".into()),
+            status: Set(PartStatus::Returned),
+            supplied_by: Set(Supplier::Owner),
             returned_on: Set(Some(date("2026-11-06"))),
             return_reason: Set(Some("wrong size".into())),
             ..Default::default()
@@ -748,39 +690,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_and_update_reject_an_unknown_status() {
-        let db = test_db().await;
-        let vid = seed_vehicle(&db).await;
-        let err = create(
-            &db,
-            vid,
-            NewPart {
-                status: Some("lost".into()),
-                ..minimal_part("Rotors", None)
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "status"));
-        let p = create(&db, vid, minimal_part("Rotors", None))
-            .await
-            .unwrap();
-        let err = update(
-            &db,
-            vid,
-            p.id,
-            UpdatePart {
-                status: Some("lost".into()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "status"));
-        assert_eq!(get(&db, vid, p.id).await.unwrap().status, "purchased");
-    }
-
-    #[tokio::test]
     async fn returned_cannot_be_set_through_create_or_update() {
         let db = test_db().await;
         let vid = seed_vehicle(&db).await;
@@ -788,7 +697,7 @@ mod tests {
             &db,
             vid,
             NewPart {
-                status: Some("returned".into()),
+                status: Some(PartStatus::Returned),
                 ..minimal_part("Rotors", None)
             },
         )
@@ -806,7 +715,7 @@ mod tests {
             vid,
             p.id,
             UpdatePart {
-                status: Some("returned".into()),
+                status: Some(PartStatus::Returned),
                 ..Default::default()
             },
         )
@@ -816,7 +725,10 @@ mod tests {
             matches!(&err, DomainError::BadRequest(m) if m.contains("return_part")),
             "{err:?}"
         );
-        assert_eq!(get(&db, vid, p.id).await.unwrap().status, "purchased");
+        assert_eq!(
+            get(&db, vid, p.id).await.unwrap().status,
+            PartStatus::Purchased
+        );
         assert_eq!(row_count::<part::Entity>(&db).await, 1);
     }
 
@@ -831,7 +743,7 @@ mod tests {
                 vid,
                 p.id,
                 UpdatePart {
-                    status: Some(status.into()),
+                    status: Some(status.parse().unwrap()),
                     ..Default::default()
                 },
             )
@@ -853,20 +765,20 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(noted.status, "returned");
+        assert_eq!(noted.status, PartStatus::Returned);
         assert_eq!(noted.return_reason.as_deref(), Some("wrong size"));
         let back = update(
             &db,
             vid,
             p.id,
             UpdatePart {
-                status: Some("purchased".into()),
+                status: Some(PartStatus::Purchased),
                 ..Default::default()
             },
         )
         .await
         .unwrap();
-        assert_eq!(back.status, "purchased");
+        assert_eq!(back.status, PartStatus::Purchased);
         assert_eq!(back.returned_on, None);
         assert_eq!(back.return_reason, None);
         assert_eq!(back.returned_from_need_id, None);
@@ -890,7 +802,7 @@ mod tests {
             .await
             .unwrap();
         let after = get(&db, vid, p.id).await.unwrap();
-        assert_eq!(after.status, "returned");
+        assert_eq!(after.status, PartStatus::Returned);
         assert_eq!(after.returned_on, Some(date("2026-11-06")));
         assert_eq!(after.return_reason.as_deref(), Some("wrong size"));
         assert_eq!(after.installed_service_id, None);
@@ -931,6 +843,6 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(cleared.status, "returned");
+        assert_eq!(cleared.status, PartStatus::Returned);
     }
 }
