@@ -22,8 +22,8 @@ use crate::{
 crate::vocab::vocabulary! {
     /// The statuses a caller can set with [`set_status`].
     // A recall also reads `planned`, which comes from a planned job and is
-    // never set. No column stores these texts: `stored` gives the finding
-    // status behind each one.
+    // never set. No column stores these texts, so a filter on a finding's
+    // status takes `stored()`, never the variant.
     pub enum RecallStatus {
         Open => "open",
         Done => "done",
@@ -40,6 +40,15 @@ impl RecallStatus {
             RecallStatus::Done => "completed",
             RecallStatus::NotApplicable => "dismissed",
         }
+    }
+
+    /// The status a recall with no service reads from a stored finding
+    /// status. Any text `stored` does not give reads as open.
+    fn from_stored(text: &str) -> Self {
+        [RecallStatus::Done, RecallStatus::NotApplicable]
+            .into_iter()
+            .find(|status| status.stored() == text)
+            .unwrap_or(RecallStatus::Open)
     }
 }
 
@@ -178,14 +187,15 @@ async fn with_status(
                 .map(|s| ServiceRef::from((*s).clone()));
             let planned_work_item_id = planned.get(&f.id).copied();
             let work_item_id = planned_work_item_id.or_else(|| completed.get(&f.id).copied());
-            let status = if done_service.is_some() || f.status == "completed" {
-                "done"
-            } else if f.status == "dismissed" {
-                "not_applicable"
-            } else if planned_work_item_id.is_some() {
+            let set = if done_service.is_some() {
+                RecallStatus::Done
+            } else {
+                RecallStatus::from_stored(&f.status)
+            };
+            let status = if set == RecallStatus::Open && planned_work_item_id.is_some() {
                 "planned"
             } else {
-                "open"
+                set.as_str()
             };
             RecallWithStatus {
                 finding_id: f.id,
@@ -370,7 +380,7 @@ pub(crate) async fn release_from_deleted_service(
     let done: std::collections::HashSet<i32> = with_status(db, findings)
         .await?
         .into_iter()
-        .filter(|r| r.status == "done")
+        .filter(|r| r.status == RecallStatus::Done.as_str())
         .map(|r| r.finding_id)
         .collect();
     (out.still_done_elsewhere, out.reopened) =
