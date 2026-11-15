@@ -213,3 +213,9 @@ this.
 To change or remove a column default without rebuilding the table, follow
 `remove_defaults` in `m20261114_000002_utc_timestamps.rs`: SQLite allows editing the stored
 `CREATE TABLE` text inside a transaction for a change that does not alter stored rows.
+
+To add a foreign key to an existing column, follow `add_foreign_keys` in
+`m20261114_000003_work_item_link_foreign_keys.rs`, and read
+`docs/adr/0003-foreign-keys-by-editing-the-table-definition.md` first. SQLite does not check the
+stored rows against a key added this way, so clear the dangling ids before the edit and confirm
+the key with `pragma_foreign_key_list` after it.

@@ -121,9 +121,12 @@ Alltrack templates and their schedule items), the job checklist migration
 (`m20261113_000001_job_checklist`: appointments, needs, options and to-dos, additive only),
 `m20261113_000002_option_choice_history` (an option's `chosen_reason` and `chosen_on`),
 `m20261114_000001_typed_dates`, which refuses to finish while a date column holds a value that is
-not a real `YYYY-MM-DD`, because such a row could not be read, and
+not a real `YYYY-MM-DD`, because such a row could not be read,
 `m20261114_000002_utc_timestamps`, which rewrites every stamp as RFC 3339 and removes the
-`datetime('now')` column defaults by editing the stored table definitions. They run on startup.
+`datetime('now')` column defaults by editing the stored table definitions, and
+`m20261114_000003_work_item_link_foreign_keys`, which gives a job's `schedule_item_id`,
+`research_finding_id` and `incident_id` an `ON DELETE SET NULL` foreign key the same way, after
+clearing any id that names a missing row. They run on startup.
 
 **Test harness** (`test_support.rs`): `test_db()` is an in-memory SQLite database with migrations
 applied. It is compiled under `#[cfg(any(test, feature = "test-support"))]`; `glovebox-mcp` uses it
@@ -337,13 +340,15 @@ opens a form and the button that submits it carry the same words. Every date is 
   `updated_at`, `archived_at`, `generated_at`) is `DateTime<Utc>`, stored as RFC 3339 with whole
   seconds (`2026-11-14T12:00:00+00:00`) and printed in tool output as `2026-11-14T12:00:00Z`.
   `docs/adr/0001-typed-dates-and-timestamps.md` records why.
-- **Migrations**: new migrations go after `m20261114_000002_utc_timestamps`; the `new-migration` skill
-  has the templates. Use `Expr::cust()` for expressions inside builder queries; raw
+- **Migrations**: new migrations go after `m20261114_000003_work_item_link_foreign_keys`; the
+  `new-migration` skill has the templates. Use `Expr::cust()` for expressions inside builder queries; raw
   `execute_unprepared` only where no builder form exists (FTS5 DDL, cross-table copies).
 - **Migrations are not transactional on SQLite** (sea-orm-migration only wraps Postgres), so write
   them rerun-safe: `IF NOT EXISTS` DDL, `INSERT OR IGNORE` or `NOT EXISTS`-gated DML,
   pragma-guarded ALTERs.
-- **SQLite cannot `DROP COLUMN` named in an FK clause**; use the table-rebuild pattern. For FTS5,
+- **SQLite cannot `DROP COLUMN` named in an FK clause**; use the table-rebuild pattern. To add a
+  foreign key to an existing column, edit the stored table definition as
+  `docs/adr/0003-foreign-keys-by-editing-the-table-definition.md` describes. For FTS5,
   copy the external-content trigger trio in the initial schema migration; aggregating over `bm25()`
   arms needs a `MATERIALIZED` CTE because query flattening breaks `bm25`.
 - **Verify data-moving migrations against a populated copy of `data/glovebox.db`**, not just

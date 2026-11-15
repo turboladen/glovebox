@@ -7,7 +7,7 @@ use sea_orm::*;
 use serde::Serialize;
 
 use crate::{
-    entities::{incident, incident_followup, incident_service_link, service_record, work_item},
+    entities::{incident, incident_followup, incident_service_link, service_record},
     error::{DomainError, DomainResult},
     inputs::incident::{NewFollowup, NewIncident, UpdateIncident},
 };
@@ -491,11 +491,10 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     Ok(updated.pop().expect("one incident in, one detail out"))
 }
 
-/// Delete an incident and its owned rows (followups, service links).
-/// Incidents that pointed at this one via `recurrence_of_id` are unlinked
-/// (the DB FK is ON DELETE SET NULL, but explicit keeps the behavior
-/// pragma-independent and inside the same transaction), as are work items
-/// referencing it (soft link, no FK).
+/// Delete an incident and its owned rows (followups, service links). An
+/// incident that recurs from this one is kept and stops naming it. A job
+/// planned for the incident is kept and stops naming it, without a change to
+/// its `updated_at`.
 pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -513,6 +512,8 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .filter(incident_service_link::Column::IncidentId.eq(existing.id))
         .exec(&txn)
         .await?;
+    // The foreign key of `recurrence_of_id` would clear the column as well.
+    // This update also moves the recurrence's `updated_at`.
     let stamp = super::now();
     incident::Entity::update_many()
         .set(incident::ActiveModel {
@@ -523,18 +524,9 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .filter(incident::Column::RecurrenceOfId.eq(existing.id))
         .exec(&txn)
         .await?;
-    // Work items reference incidents through a plain integer column, so clear
-    // it here or planning rows point at a deleted incident.
-    work_item::Entity::update_many()
-        .set(work_item::ActiveModel {
-            incident_id: Set(None),
-            updated_at: Set(stamp),
-            ..Default::default()
-        })
-        .filter(work_item::Column::IncidentId.eq(existing.id))
-        .exec(&txn)
-        .await?;
-
+    // The foreign key of `work_items.incident_id` clears the column of every
+    // job planned for this incident. Every connection enforces foreign keys
+    // (`db::connect_options`).
     existing.delete(&txn).await?;
 
     txn.commit().await?;
@@ -581,7 +573,10 @@ pub async fn create_followup(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{VehicleFixture, date, test_db};
+    use crate::{
+        entities::work_item,
+        test_support::{VehicleFixture, date, test_db},
+    };
 
     async fn seed_vehicle(db: &impl ConnectionTrait) -> i32 {
         VehicleFixture::new().insert_id(db).await
@@ -1419,14 +1414,14 @@ mod tests {
         // The recurrence survives, unchained.
         let recur = get(&db, vid, recurrence.incident.id).await.unwrap();
         assert_eq!(recur.incident.recurrence_of_id, None);
-        // Work items are soft-linked (no FK) — the link must be cleared too.
+        // The job planned for the incident survives and stops naming it.
         let wi = work_item::Entity::find_by_id(work_item.id)
             .one(&db)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(wi.incident_id, None);
-        assert_ne!(
+        assert_eq!(
             wi.updated_at,
             date::<chrono::DateTime<chrono::Utc>>("2024-01-01T00:00:00Z")
         );

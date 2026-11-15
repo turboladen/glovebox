@@ -750,9 +750,10 @@ async fn create_incident_tables(manager: &SchemaManager<'_>) -> Result<(), DbErr
 }
 
 async fn create_planning_tables(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
-    // The schedule, finding and incident ids are plain integers checked by the
-    // service layer. `completed_service_id` is a real foreign key so that
-    // deleting the service returns the item to the plan.
+    // The schedule, finding and incident ids are created here as plain
+    // integers, and `m20261114_000003_work_item_link_foreign_keys` gives them
+    // foreign keys. `completed_service_id` is a foreign key so that deleting
+    // the service returns the item to the plan.
     manager
         .create_table(
             Table::create()

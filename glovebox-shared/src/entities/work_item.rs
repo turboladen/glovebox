@@ -2,9 +2,10 @@ use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
 /// A planned piece of work. It can come from a schedule item, a research
-/// finding (such as a recall), an incident, or be ad hoc. The source ids are
-/// plain nullable integers that the service layer checks against the vehicle;
-/// `completed_service_id` is a real foreign key that clears when the service goes.
+/// finding (such as a recall), an incident, or be ad hoc. The service layer
+/// checks each source id against the vehicle. A source id,
+/// `completed_service_id` and `appointment_id` each clear when the row they
+/// name is deleted.
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "work_items")]
 pub struct Model {

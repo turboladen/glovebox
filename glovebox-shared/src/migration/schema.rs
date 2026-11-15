@@ -1,5 +1,7 @@
-//! Column, foreign-key and index builders shared by the schema migrations.
+//! Column, foreign-key and index builders and the whole-database checks
+//! shared by the migrations.
 
+use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 use sea_orm_migration::prelude::*;
 
 pub(super) fn c(name: &str) -> ColumnDef {
@@ -83,4 +85,65 @@ pub(super) fn partial_index(
     }
     idx.and_where(Expr::col(Alias::new(predicate_col)).is_not_null())
         .to_owned()
+}
+
+/// The result of `PRAGMA integrity_check` and the number of rows
+/// `PRAGMA foreign_key_check` reports.
+pub(super) async fn soundness(db: &impl ConnectionTrait) -> Result<(String, usize), DbErr> {
+    let integrity = scalar::<String>(db, "PRAGMA integrity_check").await?;
+    let broken_links = db
+        .query_all_raw(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "PRAGMA foreign_key_check",
+        ))
+        .await?
+        .len();
+    Ok((integrity, broken_links))
+}
+
+pub(super) async fn scalar<T: sea_orm::TryGetable>(
+    db: &impl ConnectionTrait,
+    sql: &str,
+) -> Result<T, DbErr> {
+    let row = db
+        .query_one_raw(Statement::from_string(DatabaseBackend::Sqlite, sql))
+        .await?
+        .ok_or_else(|| DbErr::Migration(format!("`{sql}` returned no row")))?;
+    row.try_get_by_index::<T>(0)
+}
+
+/// What the migration test modules share.
+#[cfg(test)]
+pub(super) mod testing {
+    use sea_orm::{ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement};
+    use sea_orm_migration::MigratorTrait;
+
+    use crate::{db::connect_options, migration::Migrator};
+
+    /// An in-memory database with the first `count` migrations applied.
+    /// Panics if one fails.
+    pub async fn migrated_to(count: u32) -> DatabaseConnection {
+        let db = Database::connect(connect_options(None)).await.unwrap();
+        Migrator::up(&db, Some(count)).await.unwrap();
+        db
+    }
+
+    /// The first column of the first row of `sql`, as text. Panics if the
+    /// query fails or returns no row.
+    pub async fn text(db: &DatabaseConnection, sql: &str) -> String {
+        first_row(db, sql).await.try_get_by_index(0).unwrap()
+    }
+
+    /// The first column of the first row of `sql`, as an integer. Panics if
+    /// the query fails or returns no row.
+    pub async fn count(db: &DatabaseConnection, sql: &str) -> i64 {
+        first_row(db, sql).await.try_get_by_index(0).unwrap()
+    }
+
+    async fn first_row(db: &DatabaseConnection, sql: &str) -> sea_orm::QueryResult {
+        db.query_one_raw(Statement::from_string(DatabaseBackend::Sqlite, sql))
+            .await
+            .unwrap()
+            .unwrap()
+    }
 }
