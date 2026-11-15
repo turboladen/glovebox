@@ -94,18 +94,14 @@ async fn clear_dangling(db: &impl ConnectionTrait) -> Result<Vec<(&'static str, 
 }
 
 /// Adds the foreign key of every link that lacks one by editing the stored
-/// definition of `work_items`.
-///
-/// A foreign key lives only in the table's stored `CREATE TABLE` text, so no
-/// row moves and the table's triggers, indexes and search index are not
-/// touched. `docs/adr/0003-foreign-keys-by-editing-the-table-definition.md`
-/// records why the table is not rebuilt.
+/// definition of `work_items`. No row moves. It returns an error when a key
+/// is still absent afterwards or the database's soundness checks changed.
 async fn add_foreign_keys(txn: &impl ConnectionTrait) -> Result<(), DbErr> {
-    let present = foreign_keys(txn).await?;
-    let missing: Vec<_> = LINKS
-        .iter()
-        .filter(|(column, parent, _)| !present.contains(&set_null_key(column, parent)))
-        .collect();
+    // A foreign key lives only in the table's stored `CREATE TABLE` text, so
+    // the edit leaves the table's triggers, indexes and search index alone.
+    // `docs/adr/0003-foreign-keys-by-editing-the-table-definition.md` records
+    // why the table is not rebuilt.
+    let missing = links_without_key(txn).await?;
     if missing.is_empty() {
         return Ok(());
     }
@@ -140,10 +136,9 @@ async fn add_foreign_keys(txn: &impl ConnectionTrait) -> Result<(), DbErr> {
 
     // The edit is judged by what SQLite reads back, because a definition
     // spelled another way would leave the replacement with nothing to match.
-    let present = foreign_keys(txn).await?;
-    let absent: Vec<_> = LINKS
+    let absent: Vec<_> = links_without_key(txn)
+        .await?
         .iter()
-        .filter(|(column, parent, _)| !present.contains(&set_null_key(column, parent)))
         .map(|(column, ..)| *column)
         .collect();
     // Both checks cover the whole database, so a fault that was already there
@@ -165,6 +160,18 @@ type Key = (String, String, String);
 
 fn set_null_key(column: &str, parent: &str) -> Key {
     (column.into(), parent.into(), "SET NULL".into())
+}
+
+/// The entries of `LINKS` whose `ON DELETE SET NULL` key `work_items` does
+/// not have.
+async fn links_without_key(
+    db: &impl ConnectionTrait,
+) -> Result<Vec<&'static (&'static str, &'static str, &'static str)>, DbErr> {
+    let present = foreign_keys(db).await?;
+    Ok(LINKS
+        .iter()
+        .filter(|(column, parent, _)| !present.contains(&set_null_key(column, parent)))
+        .collect())
 }
 
 async fn foreign_keys(db: &impl ConnectionTrait) -> Result<Vec<Key>, DbErr> {

@@ -491,12 +491,10 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     Ok(updated.pop().expect("one incident in, one detail out"))
 }
 
-/// Delete an incident and its owned rows (followups, service links).
-/// Incidents that pointed at this one via `recurrence_of_id` are unlinked
-/// (the DB FK is ON DELETE SET NULL, but explicit keeps the behavior
-/// pragma-independent and inside the same transaction). A job planned for
-/// the incident is kept and stops naming it, without a change to its
-/// `updated_at`.
+/// Delete an incident and its owned rows (followups, service links). An
+/// incident that recurs from this one is kept and stops naming it. A job
+/// planned for the incident is kept and stops naming it, without a change to
+/// its `updated_at`.
 pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -514,6 +512,8 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .filter(incident_service_link::Column::IncidentId.eq(existing.id))
         .exec(&txn)
         .await?;
+    // The foreign key of `recurrence_of_id` would clear the column as well.
+    // This update also moves the recurrence's `updated_at`.
     let stamp = super::now();
     incident::Entity::update_many()
         .set(incident::ActiveModel {
