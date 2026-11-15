@@ -5,7 +5,8 @@ use serde::Serialize;
 
 use crate::{
     entities::{
-        mileage_log, part,
+        mileage_log,
+        part::{self, PartStatus, Supplier},
         service_record::{self, Payer},
         service_record_line_item::{self, WorkKind},
     },
@@ -15,9 +16,6 @@ use crate::{
         service_record::effective_payer,
     },
 };
-
-/// The `parts.supplied_by` value of a part the shop sourced and billed for.
-const SUPPLIED_BY_SHOP: &str = "shop";
 
 #[derive(Serialize)]
 pub struct CostSummary {
@@ -276,7 +274,7 @@ pub async fn summary(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult
     // A returned part went back to the seller, so it is no spend at all.
     let parts = part::Entity::find()
         .filter(part::Column::VehicleId.eq(vehicle_id))
-        .filter(part::Column::Status.ne("returned"))
+        .filter(part::Column::Status.ne(PartStatus::Returned))
         .all(db)
         .await?;
 
@@ -287,7 +285,7 @@ pub async fn summary(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult
     // spend beyond the invoices.
     let self_parts: Vec<&part::Model> = parts
         .iter()
-        .filter(|p| p.supplied_by != SUPPLIED_BY_SHOP)
+        .filter(|p| p.supplied_by != Supplier::Shop)
         .collect();
     let self_supplied_parts_cents =
         sum_present(self_parts.iter().map(|p| p.cost_cents)).unwrap_or(0);
@@ -428,7 +426,7 @@ mod tests {
         part::ActiveModel {
             vehicle_id: Set(vid),
             name: Set("Filter".into()),
-            status: Set("purchased".into()),
+            status: Set(PartStatus::Purchased),
             cost_cents: Set(Some(20_000)),
             purchase_date: Set(Some(date("2024-01-10"))),
             ..Default::default()
@@ -489,7 +487,7 @@ mod tests {
         part::ActiveModel {
             vehicle_id: Set(vid),
             name: Set("Wiper blades".into()),
-            status: Set("purchased".into()),
+            status: Set(PartStatus::Purchased),
             cost_cents: Set(Some(2_000)),
             purchase_date: Set(Some(date("2024-01-10"))),
             ..Default::default()
@@ -535,12 +533,15 @@ mod tests {
         .await
         .unwrap()
         .id;
-        for (name, supplied_by, cents) in [("Plugs", "shop", 6_000), ("Pads", "self", 9_000)] {
+        for (name, supplied_by, cents) in [
+            ("Plugs", Supplier::Shop, 6_000),
+            ("Pads", Supplier::Owner, 9_000),
+        ] {
             part::ActiveModel {
                 vehicle_id: Set(vid),
                 name: Set(name.into()),
-                status: Set("installed".into()),
-                supplied_by: Set(supplied_by.into()),
+                status: Set(PartStatus::Installed),
+                supplied_by: Set(supplied_by),
                 cost_cents: Set(Some(cents)),
                 purchase_date: Set(Some(date("2024-03-01"))),
                 installed_service_id: Set(Some(service_id)),
@@ -596,7 +597,7 @@ mod tests {
     async fn insert_part(
         db: &impl ConnectionTrait,
         vid: i32,
-        supplied_by: &str,
+        supplied_by: Supplier,
         cents: i32,
         purchase_date: Option<&str>,
         installed_date: Option<&str>,
@@ -604,8 +605,8 @@ mod tests {
         part::ActiveModel {
             vehicle_id: Set(vid),
             name: Set("Part".into()),
-            status: Set("installed".into()),
-            supplied_by: Set(supplied_by.into()),
+            status: Set(PartStatus::Installed),
+            supplied_by: Set(supplied_by),
             cost_cents: Set(Some(cents)),
             purchase_date: Set(purchase_date.map(date)),
             installed_date: Set(installed_date.map(date)),
@@ -621,8 +622,8 @@ mod tests {
         let db = test_db().await;
         let vid = seed_vehicle(&db, None).await;
         insert_service(&db, vid, "2026-11-03", Some(56_900), Payer::Owner).await;
-        insert_part(&db, vid, "shop", 2_200, None, Some("2026-11-03")).await;
-        insert_part(&db, vid, "self", 8_900, Some("2026-10-20"), None).await;
+        insert_part(&db, vid, Supplier::Shop, 2_200, None, Some("2026-11-03")).await;
+        insert_part(&db, vid, Supplier::Owner, 8_900, Some("2026-10-20"), None).await;
 
         let s = summary(&db, vid).await.unwrap();
         assert_eq!(s.service_totals_cents, 56_900);
@@ -637,9 +638,9 @@ mod tests {
         insert_service(&db, vid, "2026-11-03", Some(57_500), Payer::Owner).await;
         insert_service(&db, vid, "2026-11-10", None, Payer::Owner).await;
         insert_service(&db, vid, "2026-11-12", None, Payer::Owner).await;
-        insert_part(&db, vid, "shop", 2_200, None, Some("2026-11-03")).await;
+        insert_part(&db, vid, Supplier::Shop, 2_200, None, Some("2026-11-03")).await;
         // No purchase date, so the install date places it in a month.
-        insert_part(&db, vid, "self", 8_900, None, Some("2026-10-30")).await;
+        insert_part(&db, vid, Supplier::Owner, 8_900, None, Some("2026-10-30")).await;
 
         let s = summary(&db, vid).await.unwrap();
         assert_eq!(s.total_cost_cents, 66_400);
@@ -662,9 +663,10 @@ mod tests {
     async fn cost_summary_leaves_out_returned_parts() {
         let db = test_db().await;
         let vid = seed_vehicle(&db, None).await;
-        insert_part(&db, vid, "self", 8_900, Some("2026-10-20"), None).await;
+        insert_part(&db, vid, Supplier::Owner, 8_900, Some("2026-10-20"), None).await;
         let before = summary(&db, vid).await.unwrap();
-        let returned = insert_part_with_status(&db, vid, "returned", 18_000, "2026-10-21").await;
+        let returned =
+            insert_part_with_status(&db, vid, PartStatus::Returned, 18_000, "2026-10-21").await;
         assert!(returned > 0);
         let after = summary(&db, vid).await.unwrap();
         assert_eq!(after.self_supplied_parts_cents, 8_900);
@@ -678,15 +680,15 @@ mod tests {
     async fn insert_part_with_status(
         db: &impl ConnectionTrait,
         vid: i32,
-        status: &str,
+        status: PartStatus,
         cents: i32,
         purchase_date: &str,
     ) -> i32 {
         part::ActiveModel {
             vehicle_id: Set(vid),
             name: Set("Part".into()),
-            status: Set(status.into()),
-            supplied_by: Set("self".into()),
+            status: Set(status),
+            supplied_by: Set(Supplier::Owner),
             cost_cents: Set(Some(cents)),
             purchase_date: Set(Some(date(purchase_date))),
             ..Default::default()
@@ -702,7 +704,7 @@ mod tests {
         let db = test_db().await;
         let vid = seed_vehicle(&db, None).await;
         insert_service(&db, vid, "2026-11-03", Some(10_000), Payer::Owner).await;
-        insert_part(&db, vid, "self", 3_000, None, None).await;
+        insert_part(&db, vid, Supplier::Owner, 3_000, None, None).await;
 
         let s = summary(&db, vid).await.unwrap();
         assert_eq!(s.unbucketed_parts_cents, 3_000);
@@ -781,7 +783,7 @@ mod tests {
             insert_reading(&db, vid, date, miles).await;
         }
         insert_reading(&db, vid, "2026-11-12 09:00:00", 64_000).await;
-        insert_part(&db, vid, "self", 8_900, None, Some("2026-10-30")).await;
+        insert_part(&db, vid, Supplier::Owner, 8_900, None, Some("2026-10-30")).await;
 
         let s = summary(&db, vid).await.unwrap();
         assert_eq!(s.total_cost_cents, 66_400);
@@ -1105,7 +1107,7 @@ mod tests {
             Some(Payer::Owner),
         )
         .await;
-        insert_part(&db, vid, "self", 3_000, Some("2026-10-05"), None).await;
+        insert_part(&db, vid, Supplier::Owner, 3_000, Some("2026-10-05"), None).await;
 
         let s = summary(&db, vid).await.unwrap();
         assert_eq!(s.total_cost_cents, 12_000 + 90_000 + 50_000 + 3_000);

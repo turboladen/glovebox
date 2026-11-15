@@ -5,7 +5,7 @@ use sea_orm::*;
 use serde::Serialize;
 
 use crate::{
-    entities,
+    entities::{self, job_need::Approach, need_option::Fitment, part::Supplier},
     error::{DomainError, DomainResult},
     inputs::{
         appointment::NewAppointment,
@@ -68,7 +68,7 @@ fn option(description: &str, manufacturer: &str, part_number: &str, price_cents:
         part_number: Some(part_number.into()),
         seller: Some("FCP Euro".into()),
         price_cents: Some(price_cents),
-        fitment: Some("confirmed".into()),
+        fitment: Some(Fitment::Confirmed),
         ..Default::default()
     }
 }
@@ -104,8 +104,8 @@ async fn self_need(
         job_id,
         NewNeed {
             name: name.into(),
-            supplied_by: Some("self".into()),
-            approach: Some("replacement".into()),
+            supplied_by: Some(Supplier::Owner),
+            approach: Some(Approach::Replacement),
             ..Default::default()
         },
     )
@@ -221,8 +221,8 @@ async fn rear_rotors(
         NewNeed {
             name: "Rear rotors".into(),
             quantity: Some(2),
-            supplied_by: Some("self".into()),
-            approach: Some("replacement".into()),
+            supplied_by: Some(Supplier::Owner),
+            approach: Some(Approach::Replacement),
         },
     )
     .await?
@@ -244,7 +244,7 @@ async fn rear_rotors(
         v,
         rear_rotors,
         NewOption {
-            fitment: Some("does_not_fit".into()),
+            fitment: Some(Fitment::DoesNotFit),
             fitment_note: Some("272 x 10 mm, for cars without the Performance Pack".into()),
             ..option(
                 "Rear rotor, 272 x 10 mm",
@@ -305,7 +305,7 @@ async fn brakes(db: &(impl ConnectionTrait + TransactionTrait), at: &Visit) -> D
         v,
         rear_pads,
         NewOption {
-            fitment: Some("unconfirmed".into()),
+            fitment: Some(Fitment::Unconfirmed),
             ..option("Ceramic rear pads", "Akebono", "ACT1760", 5_400)
         },
     )
@@ -342,7 +342,7 @@ async fn brakes(db: &(impl ConnectionTrait + TransactionTrait), at: &Visit) -> D
         brakes,
         NewNeed {
             name: "Brake fluid".into(),
-            supplied_by: Some("shop".into()),
+            supplied_by: Some(Supplier::Shop),
             ..Default::default()
         },
     )
@@ -548,7 +548,7 @@ mod tests {
         assert!(
             options
                 .iter()
-                .any(|o| o.fitment == "does_not_fit" && o.fitment_note.is_some())
+                .any(|o| o.fitment == Fitment::DoesNotFit && o.fitment_note.is_some())
         );
         assert!(options.iter().any(|o| o.rejected_reason.is_some()));
         assert!(
@@ -562,7 +562,7 @@ mod tests {
                 .find(|o| o.part_number.as_deref() == Some(part_number))
                 .unwrap_or_else(|| panic!("no option {part_number}"))
         };
-        assert_eq!(rotor("5Q0615601E").fitment, "confirmed");
+        assert_eq!(rotor("5Q0615601E").fitment, Fitment::Confirmed);
         assert_eq!(
             rotor("600.3241.20").fitment_note.as_deref(),
             Some("272 x 10 mm, for cars without the Performance Pack")

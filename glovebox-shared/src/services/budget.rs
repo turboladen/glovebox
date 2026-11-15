@@ -14,7 +14,10 @@ use sea_orm::*;
 use serde::Serialize;
 
 use crate::{
-    entities::{maintenance_schedule_item, work_item},
+    entities::{
+        maintenance_schedule_item,
+        work_item::{self, JobStatus},
+    },
     error::DomainResult,
     services::reminders::RemindersResponse,
 };
@@ -129,7 +132,7 @@ pub async fn forecast_from(
     // schedule links suppress first occurrences ("already planned").
     let backlog: Vec<work_item::Model> = work_item::Entity::find()
         .filter(work_item::Column::VehicleId.eq(vehicle_id))
-        .filter(work_item::Column::Status.eq("planned"))
+        .filter(work_item::Column::Status.eq(JobStatus::Planned))
         .all(db)
         .await?;
 
@@ -379,7 +382,7 @@ mod tests {
             vid,
             dead_item.id,
             UpdateWorkItem {
-                status: Some("dropped".into()),
+                status: Some(JobStatus::Dropped),
                 ..Default::default()
             },
         )

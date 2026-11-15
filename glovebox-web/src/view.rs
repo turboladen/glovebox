@@ -5,7 +5,12 @@
 use std::collections::HashMap;
 
 use glovebox_shared::{
-    entities::{need_option, part, todo},
+    entities::{
+        job_need::Approach,
+        need_option::{self, Fitment},
+        part::{self, Supplier},
+        todo,
+    },
     money::format_cents,
     services::{
         checklist::{self, Checklist, HomeAppointment, JobView, NeedView, StepRow},
@@ -14,6 +19,7 @@ use glovebox_shared::{
         reminders,
         waiting::{Waiting, booked_note},
     },
+    vocab::Vocabulary,
 };
 
 /// Why a write failed, and what the owner had typed, so a page can show the
@@ -91,7 +97,7 @@ pub struct OptionCard {
     pub price: Option<String>,
     /// The option's listing, when it is an `http` or `https` address.
     pub link: Option<String>,
-    pub fit_class: String,
+    pub fit_class: &'static str,
     pub fit_text: &'static str,
     pub fit_note: Option<String>,
     pub rejected_reason: Option<String>,
@@ -105,10 +111,10 @@ impl OptionCard {
     fn new(option: &need_option::Model, checked: bool) -> Self {
         let rejected = need::is_rejected(option);
         let has_number = option.part_number.is_some();
-        let fit_text = match option.fitment.as_str() {
-            "confirmed" => "Confirmed",
-            "does_not_fit" => "Does not fit",
-            _ => "Unconfirmed",
+        let fit_text = match option.fitment {
+            Fitment::Confirmed => "Confirmed",
+            Fitment::DoesNotFit => "Does not fit",
+            Fitment::Unconfirmed => "Unconfirmed",
         };
         Self {
             id: option.id,
@@ -125,12 +131,12 @@ impl OptionCard {
                 .as_deref()
                 .filter(|u| is_web_address(u))
                 .map(str::to_owned),
-            fit_class: option.fitment.clone(),
+            fit_class: option.fitment.as_str(),
             fit_text,
             fit_note: option.fitment_note.clone(),
             rejected_reason: rejected.then(|| option.rejected_reason.clone().unwrap_or_default()),
             checked,
-            blocked: !checked && (rejected || option.fitment == "does_not_fit"),
+            blocked: !checked && need::is_ruled_out(option),
         }
     }
 }
@@ -223,8 +229,9 @@ pub struct NeedCard {
     /// Every option, the chosen one included, for the decision form.
     pub options: Vec<OptionCard>,
     pub none_checked: bool,
-    supplier: String,
-    approach: String,
+    /// The choices of the supplier and approach selects, "Not decided" first.
+    pub supplier_choices: Vec<Choice>,
+    pub approach_choices: Vec<Choice>,
     /// The stored supplier and approach as their tags read, when decided.
     pub supplier_kind: Option<String>,
     pub approach_kind: Option<String>,
@@ -247,21 +254,16 @@ pub struct NeedCard {
     error: Option<FormError>,
 }
 
+/// What a supplier or an approach reads as while the owner has not chosen one.
+const NOT_DECIDED: &str = "Not decided";
+
 impl NeedCard {
-    pub fn supplier_is(&self, value: &str) -> bool {
-        self.supplier == value
-    }
-
-    pub fn approach_is(&self, value: &str) -> bool {
-        self.approach == value
-    }
-
     pub fn supplier_text(&self) -> &str {
-        self.supplier_kind.as_deref().unwrap_or("Not decided")
+        self.supplier_kind.as_deref().unwrap_or(NOT_DECIDED)
     }
 
     pub fn approach_text(&self) -> &str {
-        self.approach_kind.as_deref().unwrap_or("Not decided")
+        self.approach_kind.as_deref().unwrap_or(NOT_DECIDED)
     }
 
     /// The message of a failure of `form`, when that is the form that failed.
@@ -361,7 +363,7 @@ pub struct JobCard {
     pub vid: i32,
     pub id: i32,
     pub title: String,
-    pub status_class: String,
+    pub status_class: &'static str,
     pub status_text: String,
     pub open: Count,
     pub needs: Vec<NeedCard>,
@@ -583,6 +585,8 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
     let need = &view.need;
     let failure = ctx.failure.filter(|f| f.target == Target::Need(need.id));
     let typed = |key: &str| failure.and_then(|f| f.value(key));
+    let supplier = need.supplied_by.map(Supplier::as_str);
+    let approach = need.approach.map(Approach::as_str);
 
     let chosen_id = need.chosen_option_id;
     let selected: Option<i32> = match typed("option_id") {
@@ -647,14 +651,10 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
         linked: LinkedPart::of(view),
         chosen,
         options,
-        supplier: typed("supplied_by").map_or_else(
-            || need.supplied_by.clone().unwrap_or_default(),
-            str::to_owned,
-        ),
-        approach: typed("approach")
-            .map_or_else(|| need.approach.clone().unwrap_or_default(), str::to_owned),
-        supplier_kind: need.supplied_by.as_deref().map(sentence_case),
-        approach_kind: need.approach.as_deref().map(sentence_case),
+        supplier_choices: choices::<Supplier>(typed("supplied_by").or(supplier)),
+        approach_choices: choices::<Approach>(typed("approach").or(approach)),
+        supplier_kind: supplier.map(sentence_case),
+        approach_kind: approach.map(sentence_case),
         decision_reason: need.decision_reason.clone(),
         // The return form also has a `reason` input, so only a failed
         // decision brings back what was typed here.
@@ -685,6 +685,33 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
     }
 }
 
+/// One choice of a select: the value it posts, its words, and whether it is
+/// the one shown.
+#[derive(Clone)]
+pub struct Choice {
+    pub value: &'static str,
+    pub label: String,
+    pub selected: bool,
+}
+
+/// The choices of a select over `V`, with "Not decided" first. `current` is
+/// the text the owner sent when the form failed, else the stored value.
+fn choices<V: Vocabulary>(current: Option<&str>) -> Vec<Choice> {
+    let current = current.unwrap_or_default();
+    let blank = std::iter::once(("", NOT_DECIDED.to_owned()));
+    let listed = V::ALL
+        .iter()
+        .map(|v| (v.as_str(), sentence_case(v.as_str())));
+    blank
+        .chain(listed)
+        .map(|(value, label)| Choice {
+            value,
+            label,
+            selected: value == current,
+        })
+        .collect()
+}
+
 /// Builds the card of a job from its view.
 pub fn job_card(job: &JobView, ctx: &CardContext<'_>) -> JobCard {
     let needs: Vec<NeedCard> = job.needs.iter().map(|n| need_card(n, ctx)).collect();
@@ -693,8 +720,8 @@ pub fn job_card(job: &JobView, ctx: &CardContext<'_>) -> JobCard {
         vid: ctx.vid,
         id: job.job.id,
         title: job.job.title.clone(),
-        status_class: job.job.status.clone(),
-        status_text: sentence_case(&job.job.status),
+        status_class: job.job.status.as_str(),
+        status_text: sentence_case(job.job.status.as_str()),
         open: Count::new(open, "need open", "needs open"),
         needs,
     }

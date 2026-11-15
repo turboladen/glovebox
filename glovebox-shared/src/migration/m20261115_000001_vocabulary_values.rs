@@ -142,8 +142,12 @@ mod tests {
         entities::{
             incident::IncidentCategory,
             incident_service_link::LinkRole,
+            job_need::Approach,
+            need_option::Fitment,
+            part::{PartStatus, Supplier},
             service_record::{Payer, Performer},
             service_record_line_item::WorkKind,
+            work_item::JobStatus,
         },
         migration::{Migrator, schema::testing::migrated_to},
         vocab::{self, Vocabulary},
@@ -263,5 +267,11 @@ mod tests {
         check::<Payer>("service_record_line_items", "paid_by");
         check::<Performer>("service_records", "performed_by");
         check::<WorkKind>("service_record_line_items", "work_kind");
+        check::<PartStatus>("parts", "status");
+        check::<Supplier>("parts", "supplied_by");
+        check::<Supplier>("job_needs", "supplied_by");
+        check::<JobStatus>("work_items", "status");
+        check::<Approach>("job_needs", "approach");
+        check::<Fitment>("need_options", "fitment");
     }
 }

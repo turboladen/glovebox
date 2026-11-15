@@ -4,6 +4,7 @@ use axum::{body::Body, http::StatusCode};
 use common::{app, db, get_page, page, post_form, request};
 use glovebox_shared::{
     db::DatabaseConnection,
+    entities::{need_option::Fitment, part::Supplier},
     inputs::{
         appointment::NewAppointment,
         need::{NewNeed, NewOption, OrderDetails, UpdateNeed},
@@ -62,7 +63,7 @@ impl World {
             job,
             NewNeed {
                 name: "Front pads".into(),
-                supplied_by: Some("self".into()),
+                supplied_by: Some(Supplier::Owner),
                 ..Default::default()
             },
         )
@@ -79,7 +80,7 @@ impl World {
                 part_number: Some("ACT1633".into()),
                 seller: Some("FCP Euro".into()),
                 price_cents: Some(7_499),
-                fitment: Some("confirmed".into()),
+                fitment: Some(Fitment::Confirmed),
                 ..Default::default()
             },
         )
@@ -95,7 +96,7 @@ impl World {
                 manufacturer: Some("Zimmermann".into()),
                 part_number: Some("WRONG-1".into()),
                 price_cents: Some(11_200),
-                fitment: Some("does_not_fit".into()),
+                fitment: Some(Fitment::DoesNotFit),
                 ..Default::default()
             },
         )
@@ -347,6 +348,7 @@ async fn supplier_and_approach_are_saved_and_cleared() {
         .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(body.contains("Not saved"), "{body}");
+    assert!(body.contains("Must be one of: self, shop"), "{body}");
 }
 
 #[tokio::test]
@@ -1022,7 +1024,7 @@ async fn a_need_name_with_a_colon_renders_whole() {
         w.job,
         NewNeed {
             name: "Oil: 5W-30".into(),
-            supplied_by: Some("self".into()),
+            supplied_by: Some(Supplier::Owner),
             ..Default::default()
         },
     )
@@ -1273,7 +1275,7 @@ async fn the_links_on_a_page_shown_after_a_failed_write_lead_back_to_that_page()
         w.vehicle,
         w.good,
         glovebox_shared::inputs::need::UpdateOption {
-            fitment: Some("unconfirmed".into()),
+            fitment: Some(Fitment::Unconfirmed),
             ..Default::default()
         },
     )
@@ -1383,7 +1385,7 @@ async fn a_need_ordered_without_an_option_shows_its_step_sentence() {
         w.job,
         NewNeed {
             name: "Brake fluid".into(),
-            supplied_by: Some("self".into()),
+            supplied_by: Some(Supplier::Owner),
             ..Default::default()
         },
     )
@@ -1424,7 +1426,7 @@ async fn a_linked_part_with_no_chosen_option_fills_the_part_columns() {
         NewNeed {
             name: "Front rotors".into(),
             quantity: Some(2),
-            supplied_by: Some("self".into()),
+            supplied_by: Some(Supplier::Owner),
             ..Default::default()
         },
     )
@@ -1473,7 +1475,7 @@ async fn a_linked_part_with_no_decision_shows_a_pill_and_no_check_row() {
         w.job,
         NewNeed {
             name: "Front rotors".into(),
-            supplied_by: Some("self".into()),
+            supplied_by: Some(Supplier::Owner),
             ..Default::default()
         },
     )
@@ -1516,7 +1518,7 @@ async fn a_linked_part_with_no_number_shows_its_name_as_the_part() {
         w.job,
         NewNeed {
             name: "Brake fluid".into(),
-            supplied_by: Some("self".into()),
+            supplied_by: Some(Supplier::Owner),
             ..Default::default()
         },
     )
@@ -1625,7 +1627,7 @@ async fn a_chosen_option_without_a_seller_or_price_keeps_its_columns() {
         NewOption {
             description: "Pads".into(),
             part_number: Some("BARE-1".into()),
-            fitment: Some("confirmed".into()),
+            fitment: Some(Fitment::Confirmed),
             ..Default::default()
         },
     )

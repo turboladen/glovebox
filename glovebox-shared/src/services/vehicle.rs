@@ -361,7 +361,7 @@ pub async fn delete_unused(db: &impl ConnectionTrait, id: i32) -> DomainResult<(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::test_db;
+    use crate::{entities::part::PartStatus, test_support::test_db};
 
     async fn seed(db: &impl ConnectionTrait, name: &str) -> vehicle::Model {
         create(
@@ -680,7 +680,7 @@ mod tests {
         part::ActiveModel {
             vehicle_id: Set(used.id),
             name: Set("Pads".into()),
-            status: Set("purchased".into()),
+            status: Set(PartStatus::Purchased),
             ..Default::default()
         }
         .insert(&db)

@@ -5,7 +5,10 @@ use sea_orm::*;
 use serde::Serialize;
 
 use crate::{
-    entities::incident::{self, IncidentCategory},
+    entities::{
+        incident::{self, IncidentCategory},
+        work_item::JobStatus,
+    },
     error::DomainResult,
     services::{
         appointment::{self, AppointmentSummary},
@@ -92,7 +95,7 @@ pub(crate) async fn planned_work(
     let mut planned: Vec<PlannedItem> = work_item::list_with_status(db, vehicle_id, false)
         .await?
         .into_iter()
-        .filter(|p| p.item.status == "planned")
+        .filter(|p| p.item.status == JobStatus::Planned)
         .collect();
     planned.sort_by_key(|p| (urgency(p.revisit_status), p.item.id));
     Ok(planned)
@@ -307,7 +310,7 @@ mod tests {
             v,
             finished.id,
             crate::inputs::work_item::UpdateWorkItem {
-                status: Some("done".into()),
+                status: Some(JobStatus::Done),
                 ..Default::default()
             },
         )

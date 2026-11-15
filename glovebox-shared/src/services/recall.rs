@@ -11,7 +11,10 @@ use sea_orm::*;
 use serde::Serialize;
 
 use crate::{
-    entities::{research_finding, research_report, service_recall_link, service_record, work_item},
+    entities::{
+        research_finding, research_report, service_recall_link, service_record,
+        work_item::{self, JobStatus},
+    },
     error::{DomainError, DomainResult},
     services::incident::ServiceRef,
 };
@@ -130,7 +133,7 @@ async fn with_status(
     let mut completed: HashMap<i32, i32> = HashMap::new();
     for item in work_item::Entity::find()
         .filter(work_item::Column::ResearchFindingId.is_in(ids))
-        .filter(work_item::Column::Status.is_in(["planned", "done"]))
+        .filter(work_item::Column::Status.is_in([JobStatus::Planned, JobStatus::Done]))
         .order_by_asc(work_item::Column::Id)
         .all(db)
         .await?
@@ -138,7 +141,7 @@ async fn with_status(
         let Some(finding_id) = item.research_finding_id else {
             continue;
         };
-        if item.status == "planned" {
+        if item.status == JobStatus::Planned {
             planned.entry(finding_id).or_insert(item.id);
         } else {
             let slot = completed.entry(finding_id).or_insert(item.id);
@@ -745,7 +748,7 @@ mod tests {
         assert!(svc.performed_recalls.is_empty());
         assert_eq!(
             work_item_svc::get(&db, v, item.id).await.unwrap().status,
-            "done"
+            JobStatus::Done
         );
         assert_eq!(
             service_recall_link::Entity::find()

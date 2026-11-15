@@ -7,7 +7,10 @@ use sea_orm::{sea_query::Expr, *};
 use serde::Serialize;
 
 use crate::{
-    entities::{appointment, job_need, part, todo, work_item},
+    entities::{
+        appointment, job_need, part, todo,
+        work_item::{self, JobStatus},
+    },
     error::{DomainError, DomainResult},
     inputs::appointment::{NewAppointment, StatusChange, UpdateAppointment},
     services::need::{counts_as_open, stage},
@@ -85,17 +88,11 @@ impl Ending {
 /// when cancelled, `done` when closed by hand or when it has jobs and every
 /// one is done or dropped, otherwise `planning`.
 #[must_use]
-pub fn status(a: &appointment::Model, job_statuses: &[&str]) -> &'static str {
+pub fn status(a: &appointment::Model, job_statuses: &[JobStatus]) -> &'static str {
     match Ending::of(a) {
         Some(Ending::Cancelled) => "cancelled",
         Some(Ending::Closed) => "done",
-        None if !job_statuses.is_empty()
-            && job_statuses
-                .iter()
-                .all(|s| matches!(*s, "done" | "dropped")) =>
-        {
-            "done"
-        }
+        None if !job_statuses.is_empty() && job_statuses.iter().all(|s| s.is_finished()) => "done",
         None => "planning",
     }
 }
@@ -338,7 +335,7 @@ pub async fn summary(
 /// of open needs and open to-dos.
 pub(crate) fn summarize(
     appointment: appointment::Model,
-    job_statuses: &[&str],
+    job_statuses: &[JobStatus],
     needs_open: usize,
     todos_open: usize,
 ) -> AppointmentSummary {
@@ -390,22 +387,19 @@ async fn summaries(
         .await?;
 
     let mut job_appointment: HashMap<i32, i32> = HashMap::new();
-    let job_status: HashMap<i32, &str> = jobs.iter().map(|j| (j.id, j.status.as_str())).collect();
-    let mut statuses: HashMap<i32, Vec<&str>> = HashMap::new();
+    let job_status: HashMap<i32, JobStatus> = jobs.iter().map(|j| (j.id, j.status)).collect();
+    let mut statuses: HashMap<i32, Vec<JobStatus>> = HashMap::new();
     for job in &jobs {
         if let Some(appointment_id) = job.appointment_id {
             job_appointment.insert(job.id, appointment_id);
-            statuses
-                .entry(appointment_id)
-                .or_default()
-                .push(&job.status);
+            statuses.entry(appointment_id).or_default().push(job.status);
         }
     }
     let mut needs_open: HashMap<i32, usize> = HashMap::new();
     for need in &needs {
         let current = stage(need, need.part_id.and_then(|id| parts.get(&id)));
-        let on_job = job_status.get(&need.work_item_id).copied().unwrap_or("");
-        if counts_as_open(on_job, current)
+        let on_job = job_status.get(&need.work_item_id);
+        if on_job.is_some_and(|status| counts_as_open(*status, current))
             && let Some(appointment_id) = job_appointment.get(&need.work_item_id)
         {
             *needs_open.entry(*appointment_id).or_default() += 1;
@@ -491,7 +485,7 @@ async fn put_away(
     let today = crate::services::today();
     let unassigned_job_ids: Vec<i32> = work_item::Entity::find()
         .filter(work_item::Column::AppointmentId.eq(id))
-        .filter(work_item::Column::Status.eq("planned"))
+        .filter(work_item::Column::Status.eq(JobStatus::Planned))
         .order_by_asc(work_item::Column::Id)
         .all(db)
         .await?
@@ -604,7 +598,7 @@ pub async fn delete(db: &impl ConnectionTrait, vehicle_id: i32, id: i32) -> Doma
 mod tests {
     use super::*;
     use crate::{
-        entities::{service_record, todo, work_item},
+        entities::{part::Supplier, service_record, todo, work_item},
         error::DomainError,
         inputs::{
             need::NewNeed,
@@ -643,14 +637,23 @@ mod tests {
     fn status_table() {
         let open = model(None, None);
         assert_eq!(status(&open, &[]), "planning");
-        assert_eq!(status(&open, &["done", "dropped"]), "done");
-        assert_eq!(status(&open, &["done", "planned"]), "planning");
         assert_eq!(
-            status(&model(Some("2026-11-01"), Some("2026-11-02")), &["done"]),
+            status(&open, &[JobStatus::Done, JobStatus::Dropped]),
+            "done"
+        );
+        assert_eq!(
+            status(&open, &[JobStatus::Done, JobStatus::Planned]),
+            "planning"
+        );
+        assert_eq!(
+            status(
+                &model(Some("2026-11-01"), Some("2026-11-02")),
+                &[JobStatus::Done]
+            ),
             "cancelled"
         );
         assert_eq!(
-            status(&model(None, Some("2026-11-02")), &["planned"]),
+            status(&model(None, Some("2026-11-02")), &[JobStatus::Planned]),
             "done"
         );
     }
@@ -928,7 +931,7 @@ mod tests {
         let a = create(&db, v, appt("Brakes")).await.unwrap();
         let planned = add_job(&db, v, "Brake pads", Some(a.id)).await;
         let finished = add_job(&db, v, "Brake pads", Some(a.id)).await;
-        set_job_status(&db, v, finished, "done").await;
+        set_job_status(&db, v, finished, JobStatus::Done).await;
         need::add(
             &db,
             v,
@@ -1055,7 +1058,7 @@ mod tests {
         let j2 = add_job(&db, v, "Brake pads", Some(a.id)).await;
         for (job_id, name, supplied_by) in [
             (j1, "Pads", None),
-            (j1, "Rotors", Some("shop")),
+            (j1, "Rotors", Some(Supplier::Shop)),
             (j2, "Fluid", None),
         ] {
             need::add(
@@ -1064,7 +1067,7 @@ mod tests {
                 job_id,
                 NewNeed {
                     name: name.into(),
-                    supplied_by: supplied_by.map(Into::into),
+                    supplied_by,
                     ..Default::default()
                 },
             )
@@ -1156,7 +1159,7 @@ mod tests {
         let v = VehicleFixture::new().insert_id(&db).await;
         let a = create(&db, v, appt("Brakes")).await.unwrap();
         let job_id = add_job(&db, v, "Brake pads", Some(a.id)).await;
-        set_job_status(&db, v, job_id, "done").await;
+        set_job_status(&db, v, job_id, JobStatus::Done).await;
         let t = todo_svc::add(
             &db,
             v,
@@ -1185,25 +1188,25 @@ mod tests {
         let cancelled = create(&db, v, appt("Wipers")).await.unwrap();
         let on_closed = add_job(&db, v, "Brake pads", Some(closed.id)).await;
         let on_cancelled = add_job(&db, v, "Brake pads", Some(cancelled.id)).await;
-        let set_status = |job_id, status: &str| {
+        let set_status = |job_id, status: JobStatus| {
             job::update(
                 &db,
                 v,
                 job_id,
                 UpdateWorkItem {
-                    status: Some(status.into()),
+                    status: Some(status),
                     ..Default::default()
                 },
             )
         };
-        set_status(on_closed, "done").await.unwrap();
-        set_status(on_cancelled, "dropped").await.unwrap();
+        set_status(on_closed, JobStatus::Done).await.unwrap();
+        set_status(on_cancelled, JobStatus::Dropped).await.unwrap();
         close(&db, v, closed.id).await.unwrap();
         cancel(&db, v, cancelled.id).await.unwrap();
 
-        set_status(on_closed, "planned").await.unwrap();
+        set_status(on_closed, JobStatus::Planned).await.unwrap();
         // The returned job says where it ended up, not where it was.
-        let returned = set_status(on_cancelled, "planned").await.unwrap();
+        let returned = set_status(on_cancelled, JobStatus::Planned).await.unwrap();
         assert_eq!(returned.appointment_id, None);
 
         let reopened = summary(&db, v, closed.id).await.unwrap();
@@ -1225,8 +1228,8 @@ mod tests {
         let other = create(&db, v, appt("Wipers")).await.unwrap();
         let on_closed = add_job(&db, v, "Brake pads", Some(closed.id)).await;
         let elsewhere = add_job(&db, v, "Wiper blades", Some(other.id)).await;
-        set_job_status(&db, v, on_closed, "done").await;
-        set_job_status(&db, v, elsewhere, "done").await;
+        set_job_status(&db, v, on_closed, JobStatus::Done).await;
+        set_job_status(&db, v, elsewhere, JobStatus::Done).await;
         close(&db, v, closed.id).await.unwrap();
 
         let kept = job::update(
@@ -1299,7 +1302,7 @@ mod tests {
             .await
             .unwrap();
         }
-        set_job_status(&db, v, dropped, "dropped").await;
+        set_job_status(&db, v, dropped, JobStatus::Dropped).await;
         let all = list(&db, v, true).await.unwrap();
         assert_eq!(all[0].needs_open, 1);
     }
@@ -1332,7 +1335,7 @@ mod tests {
             vehicle_id: Set(v),
             title: Set("Pads".into()),
             appointment_id: Set(Some(a)),
-            status: Set("planned".into()),
+            status: Set(JobStatus::Planned),
             ..Default::default()
         }
         .insert(&txn)

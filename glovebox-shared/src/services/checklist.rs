@@ -11,7 +11,13 @@ use sea_orm::{
 use serde::Serialize;
 
 use crate::{
-    entities::{job_need, need_option, part, todo, vehicle, work_item},
+    entities::{
+        job_need,
+        need_option::{self, Fitment},
+        part::{self, Supplier},
+        todo, vehicle,
+        work_item::{self, JobStatus},
+    },
     error::{DomainError, DomainResult},
     money::format_cents,
     services::{
@@ -113,7 +119,7 @@ impl JobView {
     pub fn open_needs(&self) -> usize {
         self.needs
             .iter()
-            .filter(|n| need::counts_as_open(&self.job.status, n.stage))
+            .filter(|n| need::counts_as_open(self.job.status, n.stage))
             .count()
     }
 }
@@ -185,7 +191,7 @@ pub async fn for_appointment(
     let views = job_views(db, jobs).await?;
     // The counts come from the rows the checklist shows, the same way
     // `appointment::summary` counts them.
-    let job_statuses: Vec<&str> = views.iter().map(|j| j.job.status.as_str()).collect();
+    let job_statuses: Vec<JobStatus> = views.iter().map(|j| j.job.status).collect();
     let needs_open = views.iter().map(JobView::open_needs).sum();
     let todos_open = todos.iter().filter(|t| t.done_on.is_none()).count();
     let summary = appointment::summarize(found, &job_statuses, needs_open, todos_open);
@@ -215,7 +221,7 @@ async fn unscheduled_jobs(
     let jobs = work_item::Entity::find()
         .filter(work_item::Column::VehicleId.is_in(vehicle_ids.iter().copied()))
         .filter(work_item::Column::AppointmentId.is_null())
-        .filter(work_item::Column::Status.eq("planned"))
+        .filter(work_item::Column::Status.eq(JobStatus::Planned))
         .order_by_asc(work_item::Column::Id)
         .all(db)
         .await?;
@@ -343,10 +349,7 @@ pub async fn past_decisions(
             .cloned();
         // An option marked `does_not_fit` is ruled out as surely as a rejected
         // one, and it keeps the reason of a choice the same way.
-        let rejected = all
-            .into_iter()
-            .filter(|o| need::is_rejected(o) || o.fitment == "does_not_fit")
-            .collect();
+        let rejected = all.into_iter().filter(need::is_ruled_out).collect();
         out.push(PastDecision {
             vehicle_id: job.vehicle_id,
             vehicle_name: vehicles
@@ -428,7 +431,10 @@ fn need_view(
         .partition(|o| Some(o.id) == need.chosen_option_id);
     let chosen = chosen.into_iter().next();
     let mut notes = Vec::new();
-    if chosen.as_ref().is_some_and(|c| c.fitment == "unconfirmed") {
+    if chosen
+        .as_ref()
+        .is_some_and(|c| c.fitment == Fitment::Unconfirmed)
+    {
         notes.push("Fitment of the chosen option is not confirmed.".to_string());
     }
     if let (Some(part), Some(chosen)) = (&part, &chosen)
@@ -440,7 +446,7 @@ fn need_view(
         ));
     }
     // A shop-supplied need asks no decision of the owner.
-    if part.is_some() && chosen.is_none() && need.supplied_by.as_deref() != Some("shop") {
+    if part.is_some() && chosen.is_none() && need.supplied_by != Some(Supplier::Shop) {
         notes.push(NO_DECISION_NOTE.to_string());
     }
     NeedView {
@@ -482,7 +488,7 @@ fn assemble(
     let next_steps = next_steps(&jobs, &todos);
     let checks: Vec<Check> = jobs
         .iter()
-        .filter(|j| j.job.status != "dropped")
+        .filter(|j| j.job.status != JobStatus::Dropped)
         .flat_map(|j| j.needs.iter().map(move |n| (j, n)))
         .flat_map(|(j, n)| {
             n.notes.iter().map(move |note| Check {
@@ -515,9 +521,10 @@ fn next_steps(jobs: &[JobView], todos: &[todo::Model]) -> NextSteps {
         done: Vec::new(),
     };
     for job in jobs {
-        let job_done = match job.job.status.as_str() {
-            "dropped" => continue,
-            status => status == "done",
+        let job_done = match job.job.status {
+            JobStatus::Dropped => continue,
+            JobStatus::Done => true,
+            JobStatus::Planned => false,
         };
         for view in &job.needs {
             // Every need of a done job is done; one still open says so.
@@ -698,6 +705,7 @@ fn home_appointment(s: AppointmentSummary) -> HomeAppointment {
 mod tests {
     use super::*;
     use crate::{
+        entities::part::PartStatus,
         inputs::{
             appointment::NewAppointment,
             need::{NewNeed, NewOption, OrderDetails, ReturnInput, UpdateNeed, UpdateOption},
@@ -757,7 +765,7 @@ mod tests {
     ) -> i32 {
         let id = new_need(db, vehicle_id, job_id, name).await;
         let option_id = new_option(db, vehicle_id, id, description, None).await;
-        set_supplier(db, vehicle_id, id, "self").await;
+        set_supplier(db, vehicle_id, id, Supplier::Owner).await;
         need::decide(db, vehicle_id, id, Some(option_id), Some("fits".into()))
             .await
             .unwrap();
@@ -777,20 +785,20 @@ mod tests {
             .await
             .unwrap()
             .id;
-        set_supplier(db, vehicle_id, id, "self").await;
+        set_supplier(db, vehicle_id, id, Supplier::Owner).await;
         need::decide(db, vehicle_id, id, Some(option_id), None)
             .await
             .unwrap();
         id
     }
 
-    async fn set_supplier(db: &DatabaseConnection, vehicle_id: i32, need_id: i32, who: &str) {
+    async fn set_supplier(db: &DatabaseConnection, vehicle_id: i32, need_id: i32, who: Supplier) {
         need::update(
             db,
             vehicle_id,
             need_id,
             UpdateNeed {
-                supplied_by: Some(Some(who.into())),
+                supplied_by: Some(Some(who)),
                 ..Default::default()
             },
         )
@@ -843,7 +851,7 @@ mod tests {
             purchase_date: date.map(crate::test_support::date),
             cost_cents: cost,
             cost_currency: None,
-            status: "purchased".into(),
+            status: PartStatus::Purchased,
             installed_date: None,
             installed_odometer: None,
             installed_service_id: None,
@@ -857,7 +865,7 @@ mod tests {
             location: None,
             warranty_expires_on: None,
             warranty_expires_miles: None,
-            supplied_by: "self".into(),
+            supplied_by: Supplier::Owner,
             received_on: None,
             returned_on: None,
             return_reason: None,
@@ -928,7 +936,7 @@ mod tests {
         .await
         .unwrap()
         .id;
-        set_supplier(&db, v, n, "self").await;
+        set_supplier(&db, v, n, Supplier::Owner).await;
         need::decide(&db, v, n, Some(unsure), None).await.unwrap();
 
         let list = for_unscheduled(&db, v).await.unwrap();
@@ -1047,7 +1055,7 @@ mod tests {
         let a = appointment_id(&db, v).await;
         let job = add_job(&db, v, "Brakes", Some(a)).await;
         let n = new_need(&db, v, job, "Rear pads").await;
-        set_supplier(&db, v, n, "shop").await;
+        set_supplier(&db, v, n, Supplier::Shop).await;
         let list = for_appointment(&db, v, a).await.unwrap();
         let steps = &list.next_steps;
         assert!(steps.decide.is_empty() && steps.order.is_empty() && steps.arriving.is_empty());
@@ -1063,7 +1071,7 @@ mod tests {
         let a = appointment_id(&db, v).await;
         let job = add_job(&db, v, "Brakes", Some(a)).await;
         new_need(&db, v, job, "Rear pads").await;
-        set_job_status(&db, v, job, "dropped").await;
+        set_job_status(&db, v, job, JobStatus::Dropped).await;
         let list = for_appointment(&db, v, a).await.unwrap();
         let steps = &list.next_steps;
         assert!(
@@ -1084,7 +1092,7 @@ mod tests {
         let job = add_job(&db, v, "Brakes", Some(a)).await;
         new_need(&db, v, job, "Rear pads").await;
         to_order_need(&db, v, job, "Rear rotors", "OE rotors").await;
-        set_job_status(&db, v, job, "done").await;
+        set_job_status(&db, v, job, JobStatus::Done).await;
         let list = for_appointment(&db, v, a).await.unwrap();
         let steps = &list.next_steps;
         assert!(steps.decide.is_empty() && steps.order.is_empty() && steps.arriving.is_empty());
@@ -1194,13 +1202,13 @@ mod tests {
         let v = VehicleFixture::new().insert_id(&db).await;
         let job = add_job(&db, v, "Brakes", None).await;
         let n = new_need(&db, v, job, "Brake fluid").await;
-        set_supplier(&db, v, n, "shop").await;
+        set_supplier(&db, v, n, Supplier::Shop).await;
         let fluid = part_svc::create(
             &db,
             v,
             NewPart {
                 name: "DOT4".into(),
-                supplied_by: Some("shop".into()),
+                supplied_by: Some(Supplier::Shop),
                 ..Default::default()
             },
         )
@@ -1221,10 +1229,10 @@ mod tests {
         new_need(&db, v, job, "Pads").await;
         to_order_need(&db, v, job, "Rotors", "Rotor").await;
         let shop = new_need(&db, v, job, "Fluid").await;
-        set_supplier(&db, v, shop, "shop").await;
+        set_supplier(&db, v, shop, Supplier::Shop).await;
 
         assert_eq!(for_job(&db, v, job).await.unwrap().open_needs(), 2);
-        set_job_status(&db, v, job, "done").await;
+        set_job_status(&db, v, job, JobStatus::Done).await;
         assert_eq!(for_job(&db, v, job).await.unwrap().open_needs(), 0);
     }
 
@@ -1283,7 +1291,7 @@ mod tests {
         let a = appointment_id(&db, v).await;
         let job = add_job(&db, v, "Brakes", Some(a)).await;
         let shop = new_need(&db, v, job, "Rear pads").await;
-        set_supplier(&db, v, shop, "shop").await;
+        set_supplier(&db, v, shop, Supplier::Shop).await;
         let received = to_order_need(&db, v, job, "Front pads", "Textar pads").await;
         order(&db, v, received, "2026-11-06").await;
         need::mark_received(&db, v, received, Some(date("2026-11-09")))
@@ -1298,7 +1306,7 @@ mod tests {
             .unwrap()
             .unwrap()
             .into();
-        part.status = Set("installed".into());
+        part.status = Set(PartStatus::Installed);
         part.update(&db).await.unwrap();
         let list = for_appointment(&db, v, a).await.unwrap();
         assert_eq!(
@@ -1312,7 +1320,7 @@ mod tests {
 
         let open = new_need(&db, v, job, "Wipers").await;
         let _ = open;
-        set_job_status(&db, v, job, "done").await;
+        set_job_status(&db, v, job, JobStatus::Done).await;
         let list = for_appointment(&db, v, a).await.unwrap();
         let wipers = list.next_steps.done.last().unwrap();
         assert_eq!(wipers.summary, "Wipers: the job is done");
@@ -1329,7 +1337,7 @@ mod tests {
         let job = add_job(&db, v, "Brakes", Some(a)).await;
         let n = new_need(&db, v, job, "Rear rotors").await;
         let option_id = new_option(&db, v, n, "OE rotors", Some("5Q0615601E")).await;
-        set_supplier(&db, v, n, "self").await;
+        set_supplier(&db, v, n, Supplier::Owner).await;
         need::decide(&db, v, n, Some(option_id), None)
             .await
             .unwrap();
@@ -1372,13 +1380,13 @@ mod tests {
             v,
             option_id,
             UpdateOption {
-                fitment: Some("confirmed".into()),
+                fitment: Some(Fitment::Confirmed),
                 ..Default::default()
             },
         )
         .await
         .unwrap();
-        set_supplier(&db, v, n, "self").await;
+        set_supplier(&db, v, n, Supplier::Owner).await;
         need::decide(&db, v, n, Some(option_id), None)
             .await
             .unwrap();
@@ -1467,7 +1475,7 @@ mod tests {
         new_need(&db, v, scheduled, "Pads").await;
         let done = add_job(&db, v, "Oil", None).await;
         new_need(&db, v, done, "Filter").await;
-        set_job_status(&db, v, done, "done").await;
+        set_job_status(&db, v, done, JobStatus::Done).await;
         crate::services::todo::add(
             &db,
             v,
@@ -1598,7 +1606,7 @@ mod tests {
         )
         .await
         .unwrap();
-        set_supplier(&db, v, n, "self").await;
+        set_supplier(&db, v, n, Supplier::Owner).await;
         need::decide(&db, v, n, Some(right), Some("OE-grade".into()))
             .await
             .unwrap();
@@ -1639,7 +1647,7 @@ mod tests {
         let job = add_job(&db, v, "Brakes", None).await;
         let n = new_need(&db, v, job, "Rear rotors").await;
         let first = new_option(&db, v, n, "310 mm rotors", None).await;
-        set_supplier(&db, v, n, "self").await;
+        set_supplier(&db, v, n, Supplier::Owner).await;
         need::decide(&db, v, n, Some(first), Some("cheapest OE size".into()))
             .await
             .unwrap();
@@ -1686,7 +1694,7 @@ mod tests {
             v,
             first,
             UpdateOption {
-                fitment: Some("does_not_fit".into()),
+                fitment: Some(Fitment::DoesNotFit),
                 fitment_note: Some(Some("The car has the 310 mm brakes.".into())),
                 ..Default::default()
             },
@@ -1699,7 +1707,7 @@ mod tests {
         assert!(d.chosen.is_none());
         assert_eq!(d.rejected.len(), 1, "{d:?}");
         assert_eq!(d.rejected[0].id, first);
-        assert_eq!(d.rejected[0].fitment, "does_not_fit");
+        assert_eq!(d.rejected[0].fitment, Fitment::DoesNotFit);
         assert_eq!(
             d.rejected[0].chosen_reason.as_deref(),
             Some("cheapest OE size")
