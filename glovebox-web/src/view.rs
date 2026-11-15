@@ -149,6 +149,15 @@ pub struct LinkedPart {
 }
 
 impl LinkedPart {
+    // Returns the need's part when no option is chosen, because a chosen
+    // option fills the row's part columns itself.
+    fn of(view: &NeedView) -> Option<Self> {
+        view.part
+            .as_ref()
+            .filter(|_| view.chosen.is_none())
+            .map(Self::new)
+    }
+
     fn new(part: &part::Model) -> Self {
         Self {
             manufacturer: part.manufacturer.clone(),
@@ -222,7 +231,11 @@ pub struct NeedCard {
     pub decision_reason: Option<String>,
     pub reason_value: String,
     pub purchase: Option<String>,
+    /// The need's notes, without the one `no_decision` stands for.
     pub notes: Vec<String>,
+    /// True when a part is linked and no decision is recorded. The row shows
+    /// it as a pill.
+    pub no_decision: bool,
     pub order: OrderValues,
     pub return_reason: String,
     pub option_was_wrong: bool,
@@ -556,6 +569,15 @@ pub struct CardContext<'a> {
     pub open: Option<i32>,
 }
 
+// Splits the need's notes into the missing-decision note, which the row shows
+// as a pill, and the notes it prints as sentences.
+fn split_notes(view: &NeedView) -> (Vec<String>, Vec<String>) {
+    view.notes
+        .iter()
+        .cloned()
+        .partition(|n| n == checklist::NO_DECISION_NOTE)
+}
+
 /// Builds the card of one need. `failure` applies when it names this need.
 pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
     let need = &view.need;
@@ -605,6 +627,7 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
         order_ref: typed("order_ref").unwrap_or_default().to_owned(),
     };
 
+    let (unrecorded, notes) = split_notes(view);
     let mut status_line = checklist::step_detail(view);
     if !options.is_empty() {
         status_line = format!("{status_line}, {}", view.options_note());
@@ -621,11 +644,7 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
         open: failure.is_some() || ctx.open == Some(need.id),
         none_checked: !options.iter().any(|o| o.checked),
         can_decide: view.part.is_none() && !options.is_empty(),
-        linked: view
-            .part
-            .as_ref()
-            .filter(|_| chosen.is_none())
-            .map(LinkedPart::new),
+        linked: LinkedPart::of(view),
         chosen,
         options,
         supplier: typed("supplied_by").map_or_else(
@@ -645,7 +664,8 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
             .or_else(|| need.decision_reason.clone())
             .unwrap_or_default(),
         purchase: view.purchase_summary.clone(),
-        notes: view.notes.clone(),
+        notes,
+        no_decision: !unrecorded.is_empty(),
         order,
         return_reason: if failure.is_some_and(|f| f.form == "return") {
             typed("reason").unwrap_or_default().to_owned()
@@ -721,9 +741,12 @@ pub fn steps(list: &Checklist, jobs: &[JobCard], ctx: &CardContext<'_>) -> Steps
             .collect::<Vec<_>>()
     };
 
+    // A missing decision is a fact about the record that the need's own row
+    // states, so the group keeps to what could go wrong at the shop.
     let check = list
         .checks
         .iter()
+        .filter(|c| c.note != checklist::NO_DECISION_NOTE)
         .map(|c| CheckRow {
             need_id: c.need_id,
             name: c.need_name.clone(),
