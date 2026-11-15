@@ -607,14 +607,16 @@ mod tests {
     #[tokio::test]
     async fn migration_is_rerun_safe() {
         let db = crate::test_support::test_db().await;
-        // Forgetting the two newest versions makes `up` run the job-checklist
-        // migrations again over the finished schema.
-        forget_newest_migration(&db).await;
-        forget_newest_migration(&db).await;
+        // Forgetting every version after the seed makes `up` run each later
+        // migration again over the finished schema.
+        let all = Migrator::migrations().len();
+        for _ in 2..all {
+            forget_newest_migration(&db).await;
+        }
         Migrator::up(&db, None).await.unwrap();
         assert_eq!(
             scalar(&db, "SELECT COUNT(*) FROM seaql_migrations").await,
-            4
+            i32::try_from(all).unwrap()
         );
     }
 
