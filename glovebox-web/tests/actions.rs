@@ -605,7 +605,7 @@ async fn ordering_with_bad_money_rerenders_422_and_writes_nothing() {
         // The order form is open in its step row, with the error above the fields.
         let order = group(&body, "order");
         let form = &order[order
-            .find(r#"<details class="drawer act" open>"#)
+            .find(r#"<details class="drawer drawer--end" open>"#)
             .expect("open form")..];
         let error = form
             .find(r#"<p class="error" role="alert">"#)
@@ -1550,4 +1550,54 @@ async fn a_done_step_row_keeps_its_stage_pill() {
         "{done}"
     );
     assert!(done.contains(">Return it<"), "{done}");
+}
+
+// An open form in a step row is a block under the sentence, so the drawer
+// must not take the flex layout of the action cell.
+#[tokio::test]
+async fn the_order_drawer_in_a_step_row_is_not_an_action_cell() {
+    let w = World::new().await;
+    w.choose_good().await;
+
+    let (_, body) = w.get(&w.page_path()).await;
+
+    let order = group(&body, "order");
+    assert!(
+        order.contains(r#"<details class="drawer drawer--end">"#),
+        "{order}"
+    );
+    assert!(!order.contains(r#"class="drawer act""#), "{order}");
+    assert!(
+        body.contains(".step > span.act {"),
+        "the action rule names the span"
+    );
+}
+
+// A link to a need or to one of its forms must stop below the job's sticky head.
+#[tokio::test]
+async fn a_linked_need_scrolls_clear_of_the_sticky_job_head() {
+    let w = World::new().await;
+
+    let (_, body) = w.get(&w.page_path()).await;
+
+    assert!(
+        body.contains(".need, .need [id] { scroll-margin-top: 5rem; }"),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn the_option_radios_are_one_named_group() {
+    let w = World::new().await;
+
+    let (_, body) = w.get(&w.page_path()).await;
+
+    assert!(
+        body.contains(r#"<div role="radiogroup" aria-label="Options for Front pads">"#),
+        "{body}"
+    );
+    assert!(
+        body.contains(r#"<span class="l" aria-hidden="true">Options</span>"#),
+        "{body}"
+    );
 }

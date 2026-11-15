@@ -7,7 +7,7 @@
   <p class="form-note more">No options researched yet; ask Claude to research options for this part.</p>
   {% endif %}
   {% else if s.is("order") %}
-  <details class="drawer act"{% if n.error_in("order").is_some() %} open{% endif %}>
+  <details class="drawer drawer--end"{% if n.error_in("order").is_some() %} open{% endif %}>
     <summary>Mark ordered</summary>
     {% include "order_form.html" %}
   </details>

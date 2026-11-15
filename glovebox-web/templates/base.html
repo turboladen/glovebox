@@ -135,6 +135,7 @@
   /* The job's name and its column heads stay in view while its rows scroll. */
   .sheet-top { position: sticky; top: 0; z-index: 1; background: var(--panel); border-radius: 6px 6px 0 0; border-bottom: 1px solid var(--rule); }
   .needs > li:first-child { border-top: 0; }
+  .need, .need [id] { scroll-margin-top: 5rem; }
   details.sheet > summary { list-style: none; cursor: pointer; }
   details.sheet > summary::-webkit-details-marker { display: none; }
   details.sheet > summary .sheet-head::after { content: "Show"; margin-inline-start: auto; text-decoration: underline; text-underline-offset: 0.2em; }
@@ -143,7 +144,8 @@
   /* Step rows */
   .step { display: grid; grid-template-columns: 11rem 10rem minmax(0, 1fr) 10.5rem; column-gap: var(--gap); row-gap: 0.5rem; align-items: baseline; padding: 0.5rem var(--pad); border-top: 1px solid var(--rule); }
   .step .key, .row .key { font-weight: 600; }
-  .step .act, .step > .drawer.act:not([open]) { justify-self: end; display: flex; gap: 0.5rem 1rem; align-items: baseline; }
+  .step > span.act { justify-self: end; display: flex; gap: 0.5rem 1rem; align-items: baseline; }
+  .step > .drawer--end:not([open]) { justify-self: end; }
   .step--todo { grid-template-columns: 1.375rem minmax(0, 1fr) auto; align-items: center; }
   .step > .drawer[open], .step > .formbox { grid-column: 3 / -1; }
   .step > .more { grid-column: 3 / -1; }
@@ -243,7 +245,7 @@
     .work { grid-template-columns: minmax(0, 1fr); }
     .step { grid-template-columns: minmax(0, 1fr); }
     .step--todo { grid-template-columns: 1.375rem minmax(0, 1fr); }
-    .step .act { justify-self: start; }
+    .step > span.act { justify-self: start; }
     .step > .drawer[open], .step > .formbox, .step > .more { grid-column: 1 / -1; }
   }
 
@@ -258,7 +260,7 @@
   .step--home a { text-underline-offset: 0.2em; }
   @media (max-width: 68rem) {
     .step--home { grid-template-columns: minmax(0, 1fr); }
-    .step > .drawer.act:not([open]) { justify-self: start; }
+    .step > .drawer--end:not([open]) { justify-self: start; }
     .row > .key { display: block; }
     .row > .key::before { content: none; }
     .row > [data-l] > .pill { justify-self: start; }

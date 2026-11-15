@@ -25,9 +25,10 @@
     <form method="post" action="/vehicles/{{ n.vid }}/needs/{{ n.id }}/decision" id="need-{{ n.id }}-decide">
       <input type="hidden" name="back" value="{{ n.back }}">
       {% if let Some(e) = n.error_in("decide") %}<div class="work"><p class="error" role="alert"><b>Not saved.</b> {{ e }}</p></div>{% endif %}
+      <div role="radiogroup" aria-label="Options for {{ n.name }}">
       {% for o in n.options %}
       <label class="row opt{% if o.blocked %} opt--blocked opt--{% if o.is_rejected() %}rejected{% else %}{{ o.fit_class }}{% endif %}{% endif %}">
-        <span class="l">{% if loop.first %}Options{% endif %}</span>
+        {% if loop.first %}<span class="l" aria-hidden="true">Options</span>{% else %}<span></span>{% endif %}
         <span class="pick"><input type="radio" name="option_id" value="{{ o.id }}"{% if o.checked %} checked{% endif %}{% if o.blocked %} disabled aria-describedby="opt-{{ o.id }}-why opt-{{ o.id }}-note"{% endif %}></span>
         {% include "part_cells.html" %}
         <span data-l="Fit" id="opt-{{ o.id }}-why"><span class="pill fit--{{ o.fit_class }}">{{ o.fit_text }}</span></span>
@@ -44,6 +45,7 @@
         <span class="pick"><input type="radio" name="option_id" value=""{% if n.none_checked %} checked{% endif %}></span>
         <span class="span">No part chosen yet</span>
       </label>
+      </div>
       <div class="work">
         <span class="l">Your decision</span>
         <label class="field"><span>Reason for the choice</span><textarea name="reason"{% if n.invalid("reason") %} aria-invalid="true"{% endif %}>{{ n.reason_value }}</textarea></label>
