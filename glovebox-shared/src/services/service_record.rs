@@ -7,8 +7,9 @@ use crate::{
     entities::{
         incident::{self, IncidentCategory},
         incident_service_link::{self, LinkRole},
-        job_need, mileage_log, part, service_recall_link, service_record, service_record_line_item,
-        service_schedule_link,
+        job_need, mileage_log, part, service_recall_link,
+        service_record::{self, Payer, Performer},
+        service_record_line_item, service_schedule_link,
     },
     error::{DomainError, DomainResult},
     inputs::{
@@ -25,56 +26,20 @@ use crate::{
     },
 };
 
-/// Allowed values for `service_records.performed_by`.
-pub const VALID_PERFORMED_BY: [&str; 2] = ["shop", "self"];
-
-/// Allowed values for `service_record_line_items.work_kind`. `fee` is a
-/// charge on the invoice that is not work, such as tax, shop supplies or
-/// disposal.
-pub const VALID_WORK_KINDS: [&str; 6] = [
-    "maintenance",
-    "mod",
-    "repair",
-    "inspection",
-    "recall",
-    "fee",
-];
-
-fn validate_choice(field: &str, value: &str, allowed: &[&str]) -> DomainResult<()> {
-    if allowed.contains(&value) {
-        return Ok(());
-    }
-    Err(DomainError::invalid(
-        field,
-        format!(
-            "'{value}' is not valid. Must be one of: {}",
-            allowed.join(", ")
-        ),
-    ))
-}
-
-fn validate_line_items(items: &[NewLineItem]) -> DomainResult<()> {
-    items.iter().try_for_each(|li| {
-        validate_choice("work_kind", &li.work_kind, &VALID_WORK_KINDS)?;
-        li.paid_by.as_deref().map_or(Ok(()), validate_payer)
-    })
-}
-
 /// Checks the date range runs forward and a self-performed job has no shop.
 fn validate_who_and_when(
     service_date: chrono::NaiveDate,
     end_date: Option<chrono::NaiveDate>,
-    performed_by: &str,
+    performed_by: Performer,
     shop_name: Option<&str>,
 ) -> DomainResult<()> {
-    validate_choice("performed_by", performed_by, &VALID_PERFORMED_BY)?;
     if end_date.is_some_and(|end| end < service_date) {
         return Err(DomainError::invalid(
             "end_date",
             "must not be before service_date",
         ));
     }
-    if performed_by == "self" && shop_name.is_some() {
+    if performed_by == Performer::Owner && shop_name.is_some() {
         return Err(DomainError::invalid(
             "shop_name",
             "a self-performed service has no shop",
@@ -83,28 +48,10 @@ fn validate_who_and_when(
     Ok(())
 }
 
-/// Payer whitelist for `service_records.paid_by` and
-/// `service_record_line_items.paid_by`.
-pub const VALID_PAYERS: [&str; 4] = ["self", "insurance", "third_party", "manufacturer"];
-
-/// The `paid_by` value of a payer that is the owner.
-pub const PAYER_SELF: &str = "self";
-
 /// Who paid for a line: its own `paid_by` when it has one, otherwise the
 /// service's.
-pub fn effective_payer<'a>(line_paid_by: Option<&'a str>, service_paid_by: &'a str) -> &'a str {
+pub fn effective_payer(line_paid_by: Option<Payer>, service_paid_by: Payer) -> Payer {
     line_paid_by.unwrap_or(service_paid_by)
-}
-
-fn validate_payer(paid_by: &str) -> DomainResult<()> {
-    if VALID_PAYERS.contains(&paid_by) {
-        return Ok(());
-    }
-    Err(DomainError::BadRequest(format!(
-        "Invalid paid_by '{}'. Must be one of: {}",
-        paid_by,
-        VALID_PAYERS.join(", ")
-    )))
 }
 
 #[derive(Debug, Serialize)]
@@ -172,7 +119,7 @@ pub struct LineItemView {
     pub line: service_record_line_item::Model,
     /// The line's own `paid_by` when it has one, otherwise the service's.
     /// `paid_by` itself stays null for a line that follows its service.
-    pub effective_paid_by: String,
+    pub effective_paid_by: Payer,
 }
 
 impl std::ops::Deref for LineItemView {
@@ -300,8 +247,7 @@ impl ServiceRecordWithLinks {
         let line_items: Vec<LineItemView> = line_items
             .into_iter()
             .map(|line| LineItemView {
-                effective_paid_by: effective_payer(line.paid_by.as_deref(), &record.paid_by)
-                    .to_owned(),
+                effective_paid_by: effective_payer(line.paid_by, record.paid_by),
                 line,
             })
             .collect();
@@ -763,9 +709,6 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     input: NewServiceRecord,
 ) -> DomainResult<ServiceRecordWithLinks> {
     super::vehicle::require(db, vehicle_id).await?;
-    if let Some(paid_by) = &input.paid_by {
-        validate_payer(paid_by)?;
-    }
 
     // An LLM may send "" or spaces rather than omitting the invoice number, and a
     // blank ref stored as a real one would make the partial unique index reject a
@@ -790,15 +733,14 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
         }
     }
 
-    let performed_by = input.performed_by.unwrap_or_else(|| "shop".into());
+    let performed_by = input.performed_by.unwrap_or(Performer::Shop);
     validate_who_and_when(
         input.service_date,
         input.end_date,
-        &performed_by,
+        performed_by,
         input.shop_name.as_deref(),
     )?;
     let line_items_input = input.line_items.unwrap_or_default();
-    validate_line_items(&line_items_input)?;
     if let Some(appointment_id) = input.appointment_id {
         appointment::require_assignable(db, vehicle_id, appointment_id).await?;
     }
@@ -830,7 +772,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
         shop_name: Set(input.shop_name),
         shop_id: Set(input.shop_id),
         notes: Set(input.notes),
-        paid_by: Set(input.paid_by.unwrap_or_else(|| "self".into())),
+        paid_by: Set(input.paid_by.unwrap_or(Payer::Owner)),
         payer_note: Set(input.payer_note),
         invoice_ref: Set(invoice_ref),
         appointment_id: Set(input.appointment_id),
@@ -914,19 +856,13 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     validate_who_and_when(
         input.service_date.unwrap_or(existing.service_date),
         input.end_date.unwrap_or(existing.end_date),
-        input
-            .performed_by
-            .as_ref()
-            .unwrap_or(&existing.performed_by),
+        input.performed_by.unwrap_or(existing.performed_by),
         input
             .shop_name
             .as_ref()
             .unwrap_or(&existing.shop_name)
             .as_deref(),
     )?;
-    if let Some(items) = &input.line_items {
-        validate_line_items(items)?;
-    }
     let invoice_ref = input
         .invoice_ref
         .map(|r| r.as_deref().and_then(super::trim_to_none));
@@ -992,7 +928,6 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         active.notes = Set(v);
     }
     if let Some(v) = input.paid_by {
-        validate_payer(&v)?;
         active.paid_by = Set(v);
     }
     if let Some(v) = input.payer_note {
@@ -1325,6 +1260,7 @@ async fn reopen_resolved_incidents(
 mod tests {
     use super::*;
     use crate::{
+        entities::service_record_line_item::WorkKind,
         inputs::{incident::NewIncident, part::NewPart},
         services::incident,
         test_support::{VehicleFixture, date, row_count, test_db},
@@ -1391,7 +1327,7 @@ mod tests {
                 line_items: Some(vec![NewLineItem {
                     paid_by: None,
                     description: "Synthetic oil".into(),
-                    work_kind: "maintenance".into(),
+                    work_kind: WorkKind::Maintenance,
                     quantity: Some(5.0),
                     unit_cost_cents: Some(1_000),
                     cost_cents: Some(5_000),
@@ -1472,7 +1408,7 @@ mod tests {
                 line_items: Some(vec![NewLineItem {
                     paid_by: None,
                     description: "old".into(),
-                    work_kind: "maintenance".into(),
+                    work_kind: WorkKind::Maintenance,
                     quantity: None,
                     unit_cost_cents: None,
                     cost_cents: Some(100),
@@ -1500,7 +1436,7 @@ mod tests {
                 line_items: Some(vec![NewLineItem {
                     paid_by: None,
                     description: "new".into(),
-                    work_kind: "maintenance".into(),
+                    work_kind: WorkKind::Maintenance,
                     quantity: None,
                     unit_cost_cents: None,
                     cost_cents: Some(200),
@@ -1610,7 +1546,7 @@ mod tests {
         let svc_id = service_record::ActiveModel {
             vehicle_id: Set(vid),
             service_date: Set(date("2024-03-01")),
-            paid_by: Set("self".into()),
+            paid_by: Set(Payer::Owner),
             ..Default::default()
         }
         .insert(&db)
@@ -1882,7 +1818,7 @@ mod tests {
                 line_items: Some(vec![NewLineItem {
                     paid_by: None,
                     description: "should not be added".into(),
-                    work_kind: "maintenance".into(),
+                    work_kind: WorkKind::Maintenance,
                     quantity: None,
                     unit_cost_cents: None,
                     cost_cents: Some(100),
@@ -2023,7 +1959,7 @@ mod tests {
             service_record::ActiveModel {
                 vehicle_id: Set(vid),
                 service_date: Set(date("2024-03-01")),
-                paid_by: Set("self".into()),
+                paid_by: Set(Payer::Owner),
                 invoice_ref: Set(Some(reference)),
                 ..Default::default()
             }
@@ -2040,7 +1976,7 @@ mod tests {
             service_record::ActiveModel {
                 vehicle_id: Set(vid),
                 service_date: Set(date("2024-03-01")),
-                paid_by: Set("self".into()),
+                paid_by: Set(Payer::Owner),
                 ..Default::default()
             }
             .insert(&db)
@@ -2059,20 +1995,20 @@ mod tests {
             &db,
             vid,
             NewServiceRecord {
-                paid_by: Some("insurance".into()),
+                paid_by: Some(Payer::Insurance),
                 payer_note: Some("Progressive claim #12345".into()),
                 ..minimal_record(None)
             },
         )
         .await
         .unwrap();
-        assert_eq!(insured.record.paid_by, "insurance");
+        assert_eq!(insured.record.paid_by, Payer::Insurance);
         assert_eq!(
             insured.record.payer_note.as_deref(),
             Some("Progressive claim #12345")
         );
         let fetched = get(&db, vid, insured.record.id).await.unwrap();
-        assert_eq!(fetched.record.paid_by, "insurance");
+        assert_eq!(fetched.record.paid_by, Payer::Insurance);
         assert_eq!(
             fetched.record.payer_note.as_deref(),
             Some("Progressive claim #12345")
@@ -2080,38 +2016,8 @@ mod tests {
 
         // Omitted payer defaults to self.
         let plain = create(&db, vid, minimal_record(None)).await.unwrap();
-        assert_eq!(plain.record.paid_by, "self");
+        assert_eq!(plain.record.paid_by, Payer::Owner);
         assert_eq!(plain.record.payer_note, None);
-    }
-
-    #[tokio::test]
-    async fn create_rejects_unknown_payer() {
-        let db = test_db().await;
-        let vid = seed_vehicle(&db).await;
-
-        let err = create(
-            &db,
-            vid,
-            NewServiceRecord {
-                paid_by: Some("my neighbor".into()),
-                ..minimal_record(None)
-            },
-        )
-        .await
-        .unwrap_err();
-        match err {
-            DomainError::BadRequest(msg) => {
-                // The message lists the valid values (whitelist shape).
-                assert!(
-                    msg.contains("self"),
-                    "message should list valid values: {msg}"
-                );
-                assert!(msg.contains("insurance"), "{msg}");
-                assert!(msg.contains("third_party"), "{msg}");
-            }
-            other => panic!("expected BadRequest, got {other:?}"),
-        }
-        assert!(list(&db, vid).await.unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -2119,7 +2025,7 @@ mod tests {
         let db = test_db().await;
         let vid = seed_vehicle(&db).await;
         let created = create(&db, vid, minimal_record(None)).await.unwrap();
-        assert_eq!(created.record.paid_by, "self");
+        assert_eq!(created.record.paid_by, Payer::Owner);
 
         // Change payer + set the note.
         let updated = update(
@@ -2127,14 +2033,14 @@ mod tests {
             vid,
             created.record.id,
             UpdateServiceRecord {
-                paid_by: Some("third_party".into()),
+                paid_by: Some(Payer::ThirdParty),
                 payer_note: Some(Some("Neighbor's insurance, side-swipe".into())),
                 ..Default::default()
             },
         )
         .await
         .unwrap();
-        assert_eq!(updated.record.paid_by, "third_party");
+        assert_eq!(updated.record.paid_by, Payer::ThirdParty);
         assert_eq!(
             updated.record.payer_note.as_deref(),
             Some("Neighbor's insurance, side-swipe")
@@ -2152,7 +2058,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(untouched.record.paid_by, "third_party");
+        assert_eq!(untouched.record.paid_by, Payer::ThirdParty);
         assert!(untouched.record.payer_note.is_some());
 
         // Explicit null clears the note (double-option).
@@ -2168,24 +2074,6 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(cleared.record.payer_note, None);
-
-        // Invalid payer on update is rejected and mutates nothing.
-        assert!(matches!(
-            update(
-                &db,
-                vid,
-                created.record.id,
-                UpdateServiceRecord {
-                    paid_by: Some("bogus".into()),
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap_err(),
-            DomainError::BadRequest(_)
-        ));
-        let survived = get(&db, vid, created.record.id).await.unwrap();
-        assert_eq!(survived.record.paid_by, "third_party");
     }
 
     #[tokio::test]
@@ -2416,11 +2304,11 @@ mod tests {
 
     // --- invoice detail: who did the work, date range, line kinds, parts ---
 
-    fn line(description: &str, work_kind: &str) -> NewLineItem {
+    fn line(description: &str, work_kind: WorkKind) -> NewLineItem {
         NewLineItem {
             paid_by: None,
             description: description.into(),
-            work_kind: work_kind.into(),
+            work_kind,
             quantity: None,
             unit_cost_cents: None,
             cost_cents: None,
@@ -2428,7 +2316,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_line_stores_its_own_payer_and_refuses_an_unknown_one() {
+    async fn a_line_stores_its_own_payer() {
         let db = test_db().await;
         let vid = seed_vehicle(&db).await;
         let got = create(
@@ -2437,10 +2325,10 @@ mod tests {
             NewServiceRecord {
                 service_date: date("2026-11-03"),
                 line_items: Some(vec![
-                    line("Oil change", "maintenance"),
+                    line("Oil change", WorkKind::Maintenance),
                     NewLineItem {
-                        paid_by: Some("manufacturer".into()),
-                        ..line("Water pump under warranty", "repair")
+                        paid_by: Some(Payer::Manufacturer),
+                        ..line("Water pump under warranty", WorkKind::Repair)
                     },
                 ]),
                 ..Default::default()
@@ -2448,30 +2336,13 @@ mod tests {
         )
         .await
         .unwrap();
-        let payers: Vec<Option<&str>> = got
-            .line_items
-            .iter()
-            .map(|l| l.paid_by.as_deref())
-            .collect();
-        assert_eq!(payers, vec![None, Some("manufacturer")]);
-        assert_eq!(effective_payer(None, "insurance"), "insurance");
-        assert_eq!(effective_payer(Some("self"), "insurance"), "self");
-
-        let err = create(
-            &db,
-            vid,
-            NewServiceRecord {
-                service_date: date("2026-11-04"),
-                line_items: Some(vec![NewLineItem {
-                    paid_by: Some("my neighbor".into()),
-                    ..line("Oil change", "maintenance")
-                }]),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, DomainError::BadRequest(_)), "got: {err}");
+        let payers: Vec<Option<Payer>> = got.line_items.iter().map(|l| l.paid_by).collect();
+        assert_eq!(payers, vec![None, Some(Payer::Manufacturer)]);
+        assert_eq!(effective_payer(None, Payer::Insurance), Payer::Insurance);
+        assert_eq!(
+            effective_payer(Some(Payer::Owner), Payer::Insurance),
+            Payer::Owner
+        );
     }
 
     fn inline_part(name: &str, supplied_by: &str) -> NewPart {
@@ -2482,11 +2353,8 @@ mod tests {
         }
     }
 
-    fn kinds(got: &ServiceRecordWithLinks) -> Vec<&str> {
-        got.line_items
-            .iter()
-            .map(|l| l.work_kind.as_str())
-            .collect()
+    fn kinds(got: &ServiceRecordWithLinks) -> Vec<WorkKind> {
+        got.line_items.iter().map(|l| l.work_kind).collect()
     }
 
     #[tokio::test]
@@ -2499,19 +2367,19 @@ mod tests {
             NewServiceRecord {
                 service_date: date("2025-03-24"),
                 end_date: Some(date("2025-03-25")),
-                performed_by: Some("shop".into()),
+                performed_by: Some(Performer::Shop),
                 line_items: Some(vec![
-                    line("Replace suction jet pump", "repair"),
-                    line("Intake upgrade", "mod"),
+                    line("Replace suction jet pump", WorkKind::Repair),
+                    line("Intake upgrade", WorkKind::Mod),
                 ]),
                 ..Default::default()
             },
         )
         .await
         .unwrap();
-        assert_eq!(got.record.performed_by, "shop");
+        assert_eq!(got.record.performed_by, Performer::Shop);
         assert_eq!(got.record.end_date, Some(date("2025-03-25")));
-        assert_eq!(kinds(&got), vec!["repair", "mod"]);
+        assert_eq!(kinds(&got), vec![WorkKind::Repair, WorkKind::Mod]);
     }
 
     #[tokio::test]
@@ -2534,38 +2402,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_rejects_an_unknown_work_kind_and_performer() {
-        let db = test_db().await;
-        let vid = seed_vehicle(&db).await;
-        let err = create(
-            &db,
-            vid,
-            NewServiceRecord {
-                service_date: date("2025-03-24"),
-                line_items: Some(vec![line("Upgrade", "upgrade")]),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "work_kind"));
-
-        let err = create(
-            &db,
-            vid,
-            NewServiceRecord {
-                service_date: date("2025-03-24"),
-                performed_by: Some("dealer".into()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "performed_by"));
-        assert_eq!(row_count::<service_record::Entity>(&db).await, 0);
-    }
-
-    #[tokio::test]
     async fn create_rejects_a_self_performed_service_with_a_shop_name() {
         let db = test_db().await;
         let vid = seed_vehicle(&db).await;
@@ -2574,7 +2410,7 @@ mod tests {
             vid,
             NewServiceRecord {
                 service_date: date("2025-03-24"),
-                performed_by: Some("self".into()),
+                performed_by: Some(Performer::Owner),
                 shop_name: Some("Example VW".into()),
                 ..Default::default()
             },
@@ -2661,7 +2497,7 @@ mod tests {
             NewServiceRecord {
                 service_date: date("2025-03-24"),
                 invoice_ref: Some("07447".into()),
-                line_items: Some(vec![line("Oil change", "maintenance")]),
+                line_items: Some(vec![line("Oil change", WorkKind::Maintenance)]),
                 parts: Some(vec![inline_part("Oil filter", "shop")]),
                 ..Default::default()
             },
@@ -2677,7 +2513,10 @@ mod tests {
             NewServiceRecord {
                 service_date: date("2025-03-24"),
                 invoice_ref: Some("07447".into()),
-                line_items: Some(vec![line("Other", "repair"), line("Another", "mod")]),
+                line_items: Some(vec![
+                    line("Other", WorkKind::Repair),
+                    line("Another", WorkKind::Mod),
+                ]),
                 parts: Some(vec![inline_part("A", "self"), inline_part("B", "self")]),
                 ..Default::default()
             },
@@ -2708,7 +2547,7 @@ mod tests {
             NewServiceRecord {
                 service_date: date("2025-03-24"),
                 mileage: Some(50_000),
-                line_items: Some(vec![line("Oil change", "maintenance")]),
+                line_items: Some(vec![line("Oil change", WorkKind::Maintenance)]),
                 parts: Some(vec![inline_part("Filter", "dealer")]),
                 ..Default::default()
             },
@@ -2733,14 +2572,14 @@ mod tests {
             vid,
             NewServiceRecord {
                 service_date: date("2025-03-24"),
-                performed_by: Some("self".into()),
-                line_items: Some(vec![line("IE Stage 1 tune flash", "mod")]),
+                performed_by: Some(Performer::Owner),
+                line_items: Some(vec![line("IE Stage 1 tune flash", WorkKind::Mod)]),
                 ..Default::default()
             },
         )
         .await
         .unwrap();
-        assert_eq!(got.record.performed_by, "self");
+        assert_eq!(got.record.performed_by, Performer::Owner);
         assert!(got.record.shop_name.is_none());
     }
 
@@ -2755,17 +2594,17 @@ mod tests {
             vid,
             made.record.id,
             UpdateServiceRecord {
-                performed_by: Some("self".into()),
+                performed_by: Some(Performer::Owner),
                 end_date: Some(Some(date("2024-03-02"))),
-                line_items: Some(vec![line("Flash", "mod")]),
+                line_items: Some(vec![line("Flash", WorkKind::Mod)]),
                 ..Default::default()
             },
         )
         .await
         .unwrap();
-        assert_eq!(updated.record.performed_by, "self");
+        assert_eq!(updated.record.performed_by, Performer::Owner);
         assert_eq!(updated.record.end_date, Some(date("2024-03-02")));
-        assert_eq!(kinds(&updated), vec!["mod"]);
+        assert_eq!(kinds(&updated), vec![WorkKind::Mod]);
 
         let err = update(
             &db,
@@ -3033,7 +2872,7 @@ mod tests {
             NewServiceRecord {
                 service_date: date("2024-06-12"),
                 mileage: Some(50_000),
-                line_items: Some(vec![line("Oil", "maintenance")]),
+                line_items: Some(vec![line("Oil", WorkKind::Maintenance)]),
                 parts: Some(vec![NewPart {
                     name: "Filter".into(),
                     ..Default::default()

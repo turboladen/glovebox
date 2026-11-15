@@ -281,7 +281,7 @@ mod tests {
     use super::*;
     use crate::{
         entities,
-        entities::incident::IncidentCategory,
+        entities::{incident::IncidentCategory, service_record_line_item::WorkKind},
         test_support::{VehicleFixture, date, test_db},
     };
 
@@ -445,7 +445,7 @@ mod tests {
         entities::service_record_line_item::ActiveModel {
             service_record_id: Set(sid),
             description: Set("OEM brake pad set".into()),
-            work_kind: Set("maintenance".into()),
+            work_kind: Set(WorkKind::Maintenance),
             ..Default::default()
         }
         .insert(&db)
@@ -454,7 +454,7 @@ mod tests {
         entities::service_record_line_item::ActiveModel {
             service_record_id: Set(sid),
             description: Set("brake rotor pair".into()),
-            work_kind: Set("maintenance".into()),
+            work_kind: Set(WorkKind::Maintenance),
             ..Default::default()
         }
         .insert(&db)
@@ -487,7 +487,7 @@ mod tests {
                         .map(|w| crate::inputs::service_record::NewLineItem {
                             paid_by: None,
                             description: format!("{w} work"),
-                            work_kind: "maintenance".into(),
+                            work_kind: WorkKind::Maintenance,
                             quantity: None,
                             unit_cost_cents: None,
                             cost_cents: None,
@@ -521,7 +521,7 @@ mod tests {
             entities::service_record_line_item::ActiveModel {
                 service_record_id: Set(sid_a),
                 description: Set(format!("brake part {i}")),
-                work_kind: Set("maintenance".into()),
+                work_kind: Set(WorkKind::Maintenance),
                 ..Default::default()
             }
             .insert(&db)

@@ -363,22 +363,15 @@ fn contains_ref(value: &serde_json::Value) -> bool {
     }
 }
 
-/// The `properties` of the objects inside an optional array property, however the
-/// generated schema spells the nullable array (`items` directly or under `anyOf`).
+// The `properties` of the objects inside an optional array property, however the
+// generated schema spells the nullable array (`items` directly or under `anyOf`).
 fn array_item_properties<'a>(
     schema: &'a serde_json::Value,
     property: &str,
 ) -> &'a serde_json::Map<String, serde_json::Value> {
-    let prop = &schema["properties"][property];
-    let items = if prop["items"].is_object() {
-        &prop["items"]
-    } else {
-        prop["anyOf"]
-            .as_array()
-            .and_then(|v| v.iter().find(|s| s["items"].is_object()))
-            .map(|s| &s["items"])
-            .unwrap_or_else(|| panic!("{property} has no array items: {prop}"))
-    };
+    let items = step_into(schema, property)
+        .and_then(|list| step_into(list, "[]"))
+        .unwrap_or_else(|| panic!("{property} has no array items: {schema}"));
     items["properties"]
         .as_object()
         .unwrap_or_else(|| panic!("{property} items expose no properties: {items}"))
@@ -443,21 +436,58 @@ async fn a_vocabulary_argument_lists_its_values_in_the_schema() {
         "note",
         "shop_observation"
     ]);
-    for (tool, argument, values) in [
+    let payers = json!(["self", "insurance", "third_party", "manufacturer"]);
+    let performers = json!(["shop", "self"]);
+    let work_kinds = json!([
+        "maintenance",
+        "mod",
+        "repair",
+        "inspection",
+        "recall",
+        "fee"
+    ]);
+    // `[]` in a path steps into the items of a list.
+    for (tool, path, values) in [
         ("log_incident", "category", &categories),
         ("update_incident", "category", &categories),
+        ("record_service", "paid_by", &payers),
+        ("record_service", "performed_by", &performers),
+        ("record_service", "line_items.[].work_kind", &work_kinds),
+        ("record_service", "line_items.[].paid_by", &payers),
+        ("correct_service", "paid_by", &payers),
+        ("correct_service", "performed_by", &performers),
+        ("correct_service", "line_items.[].work_kind", &work_kinds),
+        ("correct_service", "line_items.[].paid_by", &payers),
     ] {
-        let schema = tools
+        let input = tools
             .iter()
             .find(|t| t["name"] == tool)
-            .map(|t| &t["inputSchema"]["properties"][argument])
+            .map(|t| &t["inputSchema"])
             .unwrap_or_else(|| panic!("{tool} must be listed"));
+        let schema = path.split('.').try_fold(input, step_into);
         assert_eq!(
-            listed_values(schema).as_ref(),
+            schema.and_then(listed_values).as_ref(),
             Some(values),
-            "{tool}.{argument} must list its values; got: {schema}"
+            "{tool} {path} must list its values; got: {schema:?}"
         );
     }
+}
+
+// The schema of `key` inside `schema`: a property, or the items of a list
+// for `[]`, looking through the `anyOf` an optional argument is wrapped in.
+fn step_into<'a>(schema: &'a serde_json::Value, key: &str) -> Option<&'a serde_json::Value> {
+    let own = if key == "[]" {
+        schema.get("items")
+    } else {
+        schema.get("properties").and_then(|p| p.get(key))
+    };
+    own.or_else(|| {
+        schema
+            .get("anyOf")?
+            .as_array()?
+            .iter()
+            .find_map(|s| step_into(s, key))
+    })
 }
 
 // The `enum` list of a schema, looking through the `anyOf` an optional

@@ -413,7 +413,9 @@ pub(crate) async fn load_performed(
 mod tests {
     use super::*;
     use crate::{
-        entities::{mileage_log, part, service_record_line_item},
+        entities::{
+            mileage_log, part, service_record_line_item, service_record_line_item::WorkKind,
+        },
         inputs::{
             part::NewPart,
             service_record::{NewLineItem, NewServiceRecord},
@@ -659,7 +661,7 @@ mod tests {
                 line_items: Some(vec![NewLineItem {
                     paid_by: None,
                     description: "Oil".into(),
-                    work_kind: "maintenance".into(),
+                    work_kind: WorkKind::Maintenance,
                     quantity: None,
                     unit_cost_cents: None,
                     cost_cents: None,

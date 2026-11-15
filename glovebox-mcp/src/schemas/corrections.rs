@@ -6,7 +6,10 @@
 
 use glovebox_shared::{
     dates,
-    entities::incident::IncidentCategory,
+    entities::{
+        incident::IncidentCategory,
+        service_record::{Payer, Performer},
+    },
     error::DomainResult,
     inputs::{
         incident::{NewFollowup, UpdateIncident},
@@ -314,10 +317,10 @@ pub struct CorrectServiceInput {
     pub service_id: i32,
     /// New service date, `YYYY-MM-DD`.
     pub service_date: Option<String>,
-    /// `shop` or `self`. A `self` job takes no shop name.
-    pub performed_by: Option<String>,
-    /// `self`, `insurance`, `third_party` or `manufacturer`.
-    pub paid_by: Option<String>,
+    /// Who did the work. A `self` job takes no shop name.
+    pub performed_by: Option<Performer>,
+    /// Who paid the invoice overall.
+    pub paid_by: Option<Payer>,
     /// REPLACES the schedule items this service satisfies with exactly this list (ids from `list_schedule`). Omit to leave the links alone.
     pub schedule_item_ids: Option<Vec<i32>>,
     /// REPLACES the existing parts installed by this service with exactly this list (ids from `list_parts`). Omit to leave them alone.

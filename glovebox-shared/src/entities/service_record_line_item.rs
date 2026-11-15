@@ -1,6 +1,23 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use super::service_record::Payer;
+
+crate::vocab::vocabulary! {
+    /// What kind of work a line of a service is.
+    pub enum WorkKind {
+        Maintenance => "maintenance",
+        Mod => "mod",
+        Repair => "repair",
+        Inspection => "inspection",
+        // A recall line is work done under a recall campaign.
+        Recall => "recall",
+        // A fee is a charge on the invoice that is not work, such as tax,
+        // shop supplies or disposal.
+        Fee => "fee",
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "service_record_line_items")]
 pub struct Model {
@@ -13,11 +30,10 @@ pub struct Model {
     pub cost_cents: Option<i32>,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
-    /// One of `maintenance`, `mod`, `repair`, `inspection`, `recall`, `fee`.
-    pub work_kind: String,
+    pub work_kind: WorkKind,
     /// Who paid this line when it differs from the service's `paid_by`;
     /// `None` means the line follows the service.
-    pub paid_by: Option<String>,
+    pub paid_by: Option<Payer>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
