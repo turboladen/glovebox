@@ -13,17 +13,30 @@ pub trait Vocabulary: Copy + 'static {
 
     /// The text this value is stored and printed as.
     fn as_str(self) -> &'static str;
+}
 
-    /// The value written as `text`, or `None` when the list has no such value.
-    fn from_text(text: &str) -> Option<Self> {
-        Self::ALL.iter().copied().find(|v| v.as_str() == text)
-    }
-
+/// A text that is not in a vocabulary's list.
+#[derive(Debug, thiserror::Error)]
+#[error("'{text}' is not valid. Must be one of: {allowed}")]
+pub struct Unlisted {
+    text: String,
     /// The whole list as text, such as `self, shop`.
-    fn listed() -> String {
-        let texts: Vec<&str> = Self::ALL.iter().map(|v| v.as_str()).collect();
-        texts.join(", ")
-    }
+    allowed: String,
+}
+
+/// The value written as `text`. The match is exact: case and spaces count.
+// `parse` is the reader for text someone typed. This one exists for the
+// `FromStr` that reading a column needs, where no field name applies.
+#[doc(hidden)]
+pub fn from_text<V: Vocabulary>(text: &str) -> Result<V, Unlisted> {
+    let found = V::ALL.iter().copied().find(|v| v.as_str() == text);
+    found.ok_or_else(|| {
+        let texts: Vec<&str> = V::ALL.iter().map(|v| v.as_str()).collect();
+        Unlisted {
+            text: text.to_owned(),
+            allowed: texts.join(", "),
+        }
+    })
 }
 
 /// Reads the value of `field` from text someone typed.
@@ -33,12 +46,7 @@ pub trait Vocabulary: Copy + 'static {
 /// `DomainError::Invalid` naming `field` and listing the allowed values when
 /// `text` is not one of them. The match is exact: case and spaces count.
 pub fn parse<V: Vocabulary>(field: &str, text: &str) -> DomainResult<V> {
-    V::from_text(text).ok_or_else(|| {
-        DomainError::invalid(
-            field,
-            format!("'{text}' is not valid. Must be one of: {}", V::listed()),
-        )
-    })
+    from_text(text).map_err(|unlisted| DomainError::invalid(field, unlisted.to_string()))
 }
 
 /// [`parse`] for a field that may be left empty: `None` stays `None`.
@@ -110,10 +118,10 @@ macro_rules! vocabulary {
         }
 
         impl std::str::FromStr for $name {
-            type Err = $crate::error::DomainError;
+            type Err = $crate::vocab::Unlisted;
 
             fn from_str(text: &str) -> Result<Self, Self::Err> {
-                $crate::vocab::parse(stringify!($name), text)
+                $crate::vocab::from_text(text)
             }
         }
     };
@@ -138,13 +146,22 @@ mod tests {
         assert_eq!(serde_json::to_string(&Sample::Owner).unwrap(), "\"self\"");
         let read: Sample = serde_json::from_str("\"third_party\"").unwrap();
         assert_eq!(read, Sample::ThirdParty);
-        assert_eq!(Sample::listed(), "self, third_party");
     }
 
     #[test]
     fn parse_reads_a_listed_value() {
         assert_eq!(parse::<Sample>("paid_by", "self").unwrap(), Sample::Owner);
         assert_eq!(parse_optional::<Sample>("paid_by", None).unwrap(), None);
+    }
+
+    #[test]
+    fn from_str_reads_the_same_text_and_names_no_field() {
+        assert_eq!("self".parse::<Sample>().unwrap(), Sample::Owner);
+        let err = "bogus".parse::<Sample>().unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "'bogus' is not valid. Must be one of: self, third_party"
+        );
     }
 
     #[test]

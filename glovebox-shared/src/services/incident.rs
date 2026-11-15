@@ -122,8 +122,9 @@ async fn with_details(
         .collect())
 }
 
-/// Links an incident to a service record in the given role, inside the caller's transaction when there is one. Both ids
-/// must belong to the vehicle; a wrong-vehicle id reads as nonexistent.
+/// Links an incident to a service record in the given role, inside the
+/// caller's transaction when there is one. Both ids must belong to the
+/// vehicle; a wrong-vehicle id reads as nonexistent.
 ///
 /// The `resolved` role also marks the incident resolved, and linking the same
 /// service twice is a no-op. An incident can be noticed during only one

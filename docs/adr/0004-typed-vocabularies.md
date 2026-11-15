@@ -41,8 +41,9 @@ message carries the path, such as `line_items[0].paid_by`, beside serde's list o
 
 **A migration refuses a value it cannot read.** `m20261115_000001_vocabulary_values` changes
 nothing and stops, naming the table, column, count and values, while any vocabulary column holds
-a value outside its list. Its lists are written out, and a test holds each one equal to the enum
-that reads the column.
+a value outside its list. Its lists are the values allowed when it was written and they stay
+fixed, so a value an enum loses later still passes here and reaches the migration that rewrites
+it.
 
 ## Alternatives considered
 
@@ -50,6 +51,8 @@ that reads the column.
   schemars feature, but each list would be written twice and kept in step by hand.
 - **`DeriveActiveEnum` where it compiles and a hand-written impl for the three `self` lists.** Two
   mechanisms for one idea, and the reader has to know which enum uses which.
+- **Taking the migration's lists from the enums.** One copy of each list, but a value removed
+  from an enum would then be refused here, before the migration that rewrites it could run.
 - **Storing `self` under another text.** The derive would compile, but the owner's rows would be
   rewritten and the stored value would differ from the one tools print.
 - **CHECK constraints on the columns.** They would stop a bad value at the write, but the only

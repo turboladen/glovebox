@@ -13,8 +13,10 @@ const PAYERS: &[&str] = &["self", "insurance", "third_party", "manufacturer"];
 
 /// Each vocabulary column with the values it may hold. A null is always
 /// allowed here; the column's own `NOT NULL` decides whether one can exist.
-// A test holds each list equal to the enum that reads its column, for the
-// columns that have one.
+// The lists are the values allowed when this migration was written, and they
+// stay as they are. A value an enum gains later is in no database that has
+// yet to run this migration, and one it loses must still pass here so that
+// the migration that rewrites those rows can run after this one.
 const COLUMNS: &[(&str, &str, &[&str])] = &[
     (
         "incidents",
@@ -132,16 +134,11 @@ async fn describe_unlisted(
 
 #[cfg(test)]
 mod tests {
-    use sea_orm::{ConnectionTrait, Database, DatabaseConnection};
+    use sea_orm::{ConnectionTrait, DatabaseConnection};
     use sea_orm_migration::MigratorTrait;
 
     use super::COLUMNS;
-    use crate::{
-        db::connect_options,
-        entities::{incident::IncidentCategory, incident_service_link::LinkRole},
-        migration::Migrator,
-        vocab::Vocabulary,
-    };
+    use crate::migration::{Migrator, schema::testing::migrated_to};
 
     // The number of migrations that run before this one.
     const BEFORE: u32 = 7;
@@ -149,8 +146,7 @@ mod tests {
     // One row in every table with a vocabulary column, each holding a listed
     // value or, where the column allows it, a null.
     async fn db_before() -> DatabaseConnection {
-        let db = Database::connect(connect_options(None)).await.unwrap();
-        Migrator::up(&db, Some(BEFORE)).await.unwrap();
+        let db = migrated_to(BEFORE).await;
         db.execute_unprepared(
             "INSERT INTO vehicles (id, name, created_at, updated_at)
                  VALUES (1, 'Golf', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00');
@@ -232,29 +228,5 @@ mod tests {
             "{err}"
         );
         assert!(err.contains("maintenance, mod, repair"), "{err}");
-    }
-
-    // The guard and the reader must agree, or the guard passes a value the
-    // enum refuses.
-    #[test]
-    fn each_list_matches_the_enum_that_reads_the_column() {
-        fn texts<V: Vocabulary>() -> Vec<&'static str> {
-            V::ALL.iter().map(|v| v.as_str()).collect()
-        }
-        let allowed = |table: &str, column: &str| -> Vec<&str> {
-            COLUMNS
-                .iter()
-                .find(|(t, c, _)| (*t, *c) == (table, column))
-                .map(|(_, _, values)| values.to_vec())
-                .unwrap()
-        };
-        assert_eq!(
-            allowed("incidents", "category"),
-            texts::<IncidentCategory>()
-        );
-        assert_eq!(
-            allowed("incident_service_links", "role"),
-            texts::<LinkRole>()
-        );
     }
 }

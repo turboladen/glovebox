@@ -29,6 +29,6 @@ tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
-glovebox-shared = { path = "../glovebox-shared", features = ["schemars", "test-support"] }
+glovebox-shared = { path = "../glovebox-shared", features = ["test-support"] }
 rmcp = { version = "3.9", features = ["client"] }
 tempfile = "3"

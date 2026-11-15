@@ -348,9 +348,9 @@ opens a form and the button that submits it carry the same words. Every date is 
   `incident_service_link::LinkRole`. The enum is stored, serialized and printed as one text. A
   tool argument names the enum, so its schema lists the values, and a web form reads text through
   `vocab::parse`. Explain a variant in a `//` comment or in the argument's description, because a
-  doc comment on a variant turns the schema's `enum` list into `oneOf`. A test holds
-  each list in `m20261115_000001_vocabulary_values` equal to its enum, so a new value goes in
-  both, and removing or renaming a value needs a migration that rewrites the rows.
+  doc comment on a variant turns the schema's `enum` list into `oneOf`. Adding
+  a value is one line in the macro call. Removing or renaming one needs a migration that rewrites
+  the rows, placed after `m20261115_000001_vocabulary_values`, whose lists stay as written.
   The lists still held as `VALID_*` strings in `services/` are tracked in glovebox-nd5i.
   `docs/adr/0004-typed-vocabularies.md` records why.
 - **Migrations**: new migrations go after `m20261115_000001_vocabulary_values`; the
