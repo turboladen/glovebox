@@ -202,7 +202,7 @@ pub struct UpdateNeedInput {
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<Supplier>")]
     pub supplied_by: Option<Option<Supplier>>,
-    /// `replacement` or `upgrade`.
+    /// Whether the need is filled like for like or with something better.
     ///
     /// Send `null` to clear it; omit the key to leave it unchanged.
     #[serde(default, deserialize_with = "nullable")]

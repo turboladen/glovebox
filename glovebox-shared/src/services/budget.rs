@@ -14,7 +14,10 @@ use sea_orm::*;
 use serde::Serialize;
 
 use crate::{
-    entities::{maintenance_schedule_item, work_item},
+    entities::{
+        maintenance_schedule_item,
+        work_item::{self, JobStatus},
+    },
     error::DomainResult,
     services::reminders::RemindersResponse,
 };
@@ -129,7 +132,7 @@ pub async fn forecast_from(
     // schedule links suppress first occurrences ("already planned").
     let backlog: Vec<work_item::Model> = work_item::Entity::find()
         .filter(work_item::Column::VehicleId.eq(vehicle_id))
-        .filter(work_item::Column::Status.eq(work_item::JobStatus::Planned))
+        .filter(work_item::Column::Status.eq(JobStatus::Planned))
         .all(db)
         .await?;
 
@@ -228,7 +231,7 @@ pub async fn forecast_from(
 mod tests {
     use super::*;
     use crate::{
-        entities::{mileage_log, service_record, service_schedule_link, work_item::JobStatus},
+        entities::{mileage_log, service_record, service_schedule_link},
         error::DomainError,
         inputs::work_item::{NewWorkItem, UpdateWorkItem},
         services::{reminders, work_item as work_item_svc},

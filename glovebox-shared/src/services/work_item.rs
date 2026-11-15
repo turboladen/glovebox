@@ -1051,13 +1051,13 @@ mod tests {
         let a = create(&db, vid, item("open")).await.unwrap();
         let b = create(&db, vid, item("finished")).await.unwrap();
         let c = create(&db, vid, item("abandoned")).await.unwrap();
-        for (id, status) in [(b.id, "done"), (c.id, "dropped")] {
+        for (id, status) in [(b.id, JobStatus::Done), (c.id, JobStatus::Dropped)] {
             update(
                 &db,
                 vid,
                 id,
                 UpdateWorkItem {
-                    status: Some(status.parse().unwrap()),
+                    status: Some(status),
                     ..Default::default()
                 },
             )

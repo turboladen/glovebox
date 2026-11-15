@@ -30,7 +30,7 @@
       {% if let Some(e) = n.error_in("decide") %}<div class="work"><p class="error" role="alert"><b>Not saved.</b> {{ e }}</p></div>{% endif %}
       <div role="radiogroup" aria-label="Options for {{ n.name }}">
       {% for o in n.options %}
-      <label class="row opt{% if o.blocked %} opt--blocked{% if o.fit_class == "does_not_fit" %} opt--does_not_fit{% endif %}{% endif %}">
+      <label class="row opt{% if o.blocked %} opt--blocked opt--{{ o.fit_class }}{% endif %}">
         {% if loop.first %}<span class="l" aria-hidden="true">Options</span>{% else %}<span></span>{% endif %}
         <span class="pick"><input type="radio" name="option_id" value="{{ o.id }}"{% if o.checked %} checked{% endif %}{% if o.blocked %} disabled aria-describedby="opt-{{ o.id }}-why opt-{{ o.id }}-note"{% endif %}></span>
         {% include "part_cells.html" %}
@@ -70,16 +70,14 @@
             <div class="fields">
               <label class="field"><span>Supplier</span>
                 <select name="supplied_by">
-                  <option value=""{% if n.supplier_is("") %} selected{% endif %}>Not decided</option>
-                  <option value="self"{% if n.supplier_is("self") %} selected{% endif %}>Self</option>
-                  <option value="shop"{% if n.supplier_is("shop") %} selected{% endif %}>Shop</option>
+                  {% for c in n.supplier_choices %}<option value="{{ c.value }}"{% if c.selected %} selected{% endif %}>{{ c.label }}</option>
+                  {% endfor %}
                 </select>
               </label>
               <label class="field"><span>Approach</span>
                 <select name="approach">
-                  <option value=""{% if n.approach_is("") %} selected{% endif %}>Not decided</option>
-                  <option value="replacement"{% if n.approach_is("replacement") %} selected{% endif %}>Replacement</option>
-                  <option value="upgrade"{% if n.approach_is("upgrade") %} selected{% endif %}>Upgrade</option>
+                  {% for c in n.approach_choices %}<option value="{{ c.value }}"{% if c.selected %} selected{% endif %}>{{ c.label }}</option>
+                  {% endfor %}
                 </select>
               </label>
             </div>

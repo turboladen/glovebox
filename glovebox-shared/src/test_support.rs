@@ -55,13 +55,18 @@ pub async fn add_job(
 
 /// Sets a job's status through the work-item service. Panics if the write
 /// fails.
-pub async fn set_job_status(db: &DatabaseConnection, vehicle_id: i32, job_id: i32, status: &str) {
+pub async fn set_job_status(
+    db: &DatabaseConnection,
+    vehicle_id: i32,
+    job_id: i32,
+    status: crate::entities::work_item::JobStatus,
+) {
     crate::services::work_item::update(
         db,
         vehicle_id,
         job_id,
         crate::inputs::work_item::UpdateWorkItem {
-            status: Some(status.parse().unwrap()),
+            status: Some(status),
             ..Default::default()
         },
     )

@@ -16,6 +16,17 @@ crate::vocab::vocabulary! {
 /// checks each source id against the vehicle. A source id,
 /// `completed_service_id` and `appointment_id` each clear when the row they
 /// name is deleted.
+impl JobStatus {
+    /// Whether nothing more will happen on the job: it is done or dropped.
+    #[must_use]
+    pub fn is_finished(self) -> bool {
+        match self {
+            JobStatus::Planned => false,
+            JobStatus::Done | JobStatus::Dropped => true,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "work_items")]
 pub struct Model {

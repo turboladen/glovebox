@@ -29,10 +29,9 @@ pub(crate) async fn mark_returned(
     Ok(active.update(db).await?)
 }
 
-// Checks a status a caller asks for. `returned` is in the vocabulary but is
-// only reachable through the return action on a need, which records the
-// reason and unlinks the part in the same write.
-fn validate_requested_status(status: PartStatus) -> DomainResult<()> {
+// `returned` is reachable only through the return action on a need, which
+// records the reason and unlinks the part in the same write.
+fn refuse_returned(status: PartStatus) -> DomainResult<()> {
     if status == PartStatus::Returned {
         return Err(DomainError::BadRequest(
             "A part is marked returned by returning it from its need (return_part)".into(),
@@ -43,7 +42,7 @@ fn validate_requested_status(status: PartStatus) -> DomainResult<()> {
 
 // A returned part may only go back to `purchased`.
 fn validate_status_change(existing: &part::Model, status: PartStatus) -> DomainResult<()> {
-    validate_requested_status(status)?;
+    refuse_returned(status)?;
     if is_returned(existing) && status != PartStatus::Purchased {
         return Err(DomainError::BadRequest(format!(
             "Part {} was returned; its status can only change back to purchased",
@@ -100,7 +99,7 @@ pub async fn create(
     super::vehicle::require(db, vehicle_id).await?;
     let supplied_by = input.supplied_by.unwrap_or(Supplier::Owner);
     if let Some(status) = input.status {
-        validate_requested_status(status)?;
+        refuse_returned(status)?;
     }
     if let Some(service_id) = input.installed_service_id {
         super::service_record::require(db, vehicle_id, service_id).await?;
@@ -737,13 +736,17 @@ mod tests {
         let db = test_db().await;
         let vid = seed_vehicle(&db).await;
         let p = seed_returned(&db, vid).await;
-        for status in ["installed", "replaced", "returned"] {
+        for status in [
+            PartStatus::Installed,
+            PartStatus::Replaced,
+            PartStatus::Returned,
+        ] {
             let err = update(
                 &db,
                 vid,
                 p.id,
                 UpdatePart {
-                    status: Some(status.parse().unwrap()),
+                    status: Some(status),
                     ..Default::default()
                 },
             )

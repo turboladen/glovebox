@@ -29,7 +29,6 @@ pub struct UpdateWorkItem {
     pub est_cost_cents: Option<Option<i32>>,
     pub revisit_by_date: Option<Option<chrono::NaiveDate>>,
     pub revisit_by_miles: Option<Option<i32>>,
-    /// One of `planned | done | dropped`.
     pub status: Option<JobStatus>,
     /// Moves the job to an appointment (which must be open) or, with `None`, off it.
     pub appointment_id: Option<Option<i32>>,

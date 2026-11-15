@@ -7,7 +7,7 @@ crate::vocab::vocabulary! {
         Purchased => "purchased",
         Installed => "installed",
         Replaced => "replaced",
-        // Sent back to the seller.
+        // The part went back to the seller.
         Returned => "returned",
     }
 }
@@ -15,7 +15,7 @@ crate::vocab::vocabulary! {
 crate::vocab::vocabulary! {
     /// Who brings a part to the job.
     pub enum Supplier {
-        // The owner.
+        // The tools call the owner `self`.
         Owner => "self",
         Shop => "shop",
     }
@@ -49,7 +49,6 @@ pub struct Model {
     pub location: Option<String>,
     pub warranty_expires_on: Option<chrono::NaiveDate>,
     pub warranty_expires_miles: Option<i32>,
-    /// Who bought the part: `self` or `shop`.
     pub supplied_by: Supplier,
     pub received_on: Option<chrono::NaiveDate>,
     pub returned_on: Option<chrono::NaiveDate>,

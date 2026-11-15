@@ -2346,10 +2346,10 @@ mod tests {
         );
     }
 
-    fn inline_part(name: &str, supplied_by: &str) -> NewPart {
+    fn inline_part(name: &str, supplied_by: Supplier) -> NewPart {
         NewPart {
             name: name.into(),
-            supplied_by: Some(supplied_by.parse().unwrap()),
+            supplied_by: Some(supplied_by),
             ..Default::default()
         }
     }
@@ -2434,9 +2434,9 @@ mod tests {
                 parts: Some(vec![
                     NewPart {
                         seller: Some("FCP Euro".into()),
-                        ..inline_part("Front brake pads", "self")
+                        ..inline_part("Front brake pads", Supplier::Owner)
                     },
-                    inline_part("Brake fluid", "shop"),
+                    inline_part("Brake fluid", Supplier::Shop),
                 ]),
                 ..Default::default()
             },
@@ -2499,7 +2499,7 @@ mod tests {
                 service_date: date("2025-03-24"),
                 invoice_ref: Some("07447".into()),
                 line_items: Some(vec![line("Oil change", WorkKind::Maintenance)]),
-                parts: Some(vec![inline_part("Oil filter", "shop")]),
+                parts: Some(vec![inline_part("Oil filter", Supplier::Shop)]),
                 ..Default::default()
             },
         )
@@ -2518,7 +2518,10 @@ mod tests {
                     line("Other", WorkKind::Repair),
                     line("Another", WorkKind::Mod),
                 ]),
-                parts: Some(vec![inline_part("A", "self"), inline_part("B", "self")]),
+                parts: Some(vec![
+                    inline_part("A", Supplier::Owner),
+                    inline_part("B", Supplier::Owner),
+                ]),
                 ..Default::default()
             },
         )
@@ -2551,7 +2554,7 @@ mod tests {
                 line_items: Some(vec![line("Oil change", WorkKind::Maintenance)]),
                 parts: Some(vec![NewPart {
                     need_id: Some(99_999),
-                    ..inline_part("Filter", "self")
+                    ..inline_part("Filter", Supplier::Owner)
                 }]),
                 ..Default::default()
             },
@@ -3229,7 +3232,7 @@ mod tests {
             NewServiceRecord {
                 service_date: date("2024-03-01"),
                 mileage: Some(50_000),
-                parts: Some(vec![inline_part("Pads", "shop")]),
+                parts: Some(vec![inline_part("Pads", Supplier::Shop)]),
                 ..Default::default()
             },
         )
@@ -3351,14 +3354,19 @@ mod tests {
             .id
         }
 
-        async fn add_need(f: &Fixture, job_id: i32, name: &str, supplied_by: Option<&str>) -> i32 {
+        async fn add_need(
+            f: &Fixture,
+            job_id: i32,
+            name: &str,
+            supplied_by: Option<Supplier>,
+        ) -> i32 {
             need::add(
                 &f.db,
                 f.vehicle,
                 job_id,
                 NewNeed {
                     name: name.into(),
-                    supplied_by: supplied_by.map(|s| s.parse().unwrap()),
+                    supplied_by,
                     ..Default::default()
                 },
             )
@@ -3460,7 +3468,7 @@ mod tests {
         async fn inline_shop_part_fills_its_need() {
             let f = fixture().await;
             let job_id = add_job(&f, "Rear brakes").await;
-            let need_id = add_need(&f, job_id, "Pads", Some("shop")).await;
+            let need_id = add_need(&f, job_id, "Pads", Some(Supplier::Shop)).await;
 
             let created = create(
                 &f.db,
@@ -3693,7 +3701,7 @@ mod tests {
         async fn deleting_the_service_unlinks_its_inline_shop_part() {
             let f = fixture().await;
             let job_id = add_job(&f, "Rear brakes").await;
-            let need_id = add_need(&f, job_id, "Brake fluid", Some("shop")).await;
+            let need_id = add_need(&f, job_id, "Brake fluid", Some(Supplier::Shop)).await;
             let filed = || NewServiceRecord {
                 work_item_ids: Some(vec![job_id]),
                 parts: Some(vec![NewPart {
@@ -3728,7 +3736,7 @@ mod tests {
         async fn correcting_the_parts_unlinks_a_removed_shop_part_only() {
             let f = fixture().await;
             let job_id = add_job(&f, "Rear brakes").await;
-            let fluid = add_need(&f, job_id, "Brake fluid", Some("shop")).await;
+            let fluid = add_need(&f, job_id, "Brake fluid", Some(Supplier::Shop)).await;
             let pads = add_need(&f, job_id, "Pads", None).await;
             let own_part = link_new_part(&f, pads, true).await;
             let created = create(
@@ -3875,7 +3883,7 @@ mod tests {
             let f = fixture().await;
             let other = VehicleFixture::new().name("Other").insert_id(&f.db).await;
             let job_id = add_job(&f, "Rear brakes").await;
-            let need_id = add_need(&f, job_id, "Pads", Some("shop")).await;
+            let need_id = add_need(&f, job_id, "Pads", Some(Supplier::Shop)).await;
             let inline = |need_id| NewServiceRecord {
                 appointment_id: None,
                 parts: Some(vec![NewPart {
@@ -3900,7 +3908,7 @@ mod tests {
         async fn one_bad_need_id_commits_nothing() {
             let f = fixture().await;
             let job_id = add_job(&f, "Rear brakes").await;
-            let good = add_need(&f, job_id, "Pads", Some("shop")).await;
+            let good = add_need(&f, job_id, "Pads", Some(Supplier::Shop)).await;
             let linked = add_need(&f, job_id, "Sensor", None).await;
             link_new_part(&f, linked, false).await;
             let parts_before = row_count::<part::Entity>(&f.db).await;
@@ -3962,7 +3970,7 @@ mod tests {
             .unwrap()
             .id;
             let job_id = add_job(&f, "Rear brakes").await;
-            let need_id = add_need(&f, job_id, "Pads", Some("shop")).await;
+            let need_id = add_need(&f, job_id, "Pads", Some(Supplier::Shop)).await;
             let first = create(
                 &f.db,
                 f.vehicle,

@@ -21,7 +21,7 @@ pub struct NewPart {
     /// Warranty expiry: date and/or mileage.
     pub warranty_expires_on: Option<chrono::NaiveDate>,
     pub warranty_expires_miles: Option<i32>,
-    /// `self` (default) or `shop`.
+    /// Defaults to the owner.
     pub supplied_by: Option<Supplier>,
     /// The seller's order or confirmation number.
     pub order_ref: Option<String>,

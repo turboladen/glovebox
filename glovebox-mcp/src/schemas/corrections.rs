@@ -297,7 +297,7 @@ pub struct ListServicesInput {
 pub struct ListPartsInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
-    /// Only parts with this status: `purchased`, `installed`, `replaced` or `returned`.
+    /// Only parts with this status.
     pub status: Option<PartStatus>,
 }
 
@@ -478,7 +478,7 @@ pub struct CorrectPartInput {
     /// `purchased`, `installed` or `replaced`. A return is made on the need,
     /// not here; a returned part can only be set back to `purchased`.
     pub status: Option<PartStatus>,
-    /// `self` or `shop`.
+    /// Who supplied the part.
     pub supplied_by: Option<Supplier>,
     /// Manufacturer/brand.
     ///

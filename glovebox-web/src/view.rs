@@ -5,7 +5,12 @@
 use std::collections::HashMap;
 
 use glovebox_shared::{
-    entities::{need_option, need_option::Fitment, part, todo},
+    entities::{
+        job_need::Approach,
+        need_option::{self, Fitment},
+        part::{self, Supplier},
+        todo,
+    },
     money::format_cents,
     services::{
         checklist::{self, Checklist, HomeAppointment, JobView, NeedView, StepRow},
@@ -14,6 +19,7 @@ use glovebox_shared::{
         reminders,
         waiting::{Waiting, booked_note},
     },
+    vocab::Vocabulary,
 };
 
 /// Why a write failed, and what the owner had typed, so a page can show the
@@ -130,7 +136,7 @@ impl OptionCard {
             fit_note: option.fitment_note.clone(),
             rejected_reason: rejected.then(|| option.rejected_reason.clone().unwrap_or_default()),
             checked,
-            blocked: !checked && (rejected || option.fitment == Fitment::DoesNotFit),
+            blocked: !checked && need::is_ruled_out(option),
         }
     }
 }
@@ -223,8 +229,9 @@ pub struct NeedCard {
     /// Every option, the chosen one included, for the decision form.
     pub options: Vec<OptionCard>,
     pub none_checked: bool,
-    supplier: String,
-    approach: String,
+    /// The choices of the supplier and approach selects, "Not decided" first.
+    pub supplier_choices: Vec<Choice>,
+    pub approach_choices: Vec<Choice>,
     /// The stored supplier and approach as their tags read, when decided.
     pub supplier_kind: Option<String>,
     pub approach_kind: Option<String>,
@@ -248,14 +255,6 @@ pub struct NeedCard {
 }
 
 impl NeedCard {
-    pub fn supplier_is(&self, value: &str) -> bool {
-        self.supplier == value
-    }
-
-    pub fn approach_is(&self, value: &str) -> bool {
-        self.approach == value
-    }
-
     pub fn supplier_text(&self) -> &str {
         self.supplier_kind.as_deref().unwrap_or("Not decided")
     }
@@ -583,12 +582,8 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
     let need = &view.need;
     let failure = ctx.failure.filter(|f| f.target == Target::Need(need.id));
     let typed = |key: &str| failure.and_then(|f| f.value(key));
-    let supplier = need
-        .supplied_by
-        .map(glovebox_shared::entities::part::Supplier::as_str);
-    let approach = need
-        .approach
-        .map(glovebox_shared::entities::job_need::Approach::as_str);
+    let supplier = need.supplied_by.map(Supplier::as_str);
+    let approach = need.approach.map(Approach::as_str);
 
     let chosen_id = need.chosen_option_id;
     let selected: Option<i32> = match typed("option_id") {
@@ -653,8 +648,8 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
         linked: LinkedPart::of(view),
         chosen,
         options,
-        supplier: form_text(typed("supplied_by"), supplier),
-        approach: form_text(typed("approach"), approach),
+        supplier_choices: choices::<Supplier>(typed("supplied_by").or(supplier)),
+        approach_choices: choices::<Approach>(typed("approach").or(approach)),
         supplier_kind: supplier.map(sentence_case),
         approach_kind: approach.map(sentence_case),
         decision_reason: need.decision_reason.clone(),
@@ -687,10 +682,31 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
     }
 }
 
-/// What a select shows: the text the owner sent when the form failed, else
-/// the stored value, else nothing.
-fn form_text(typed: Option<&str>, stored: Option<&str>) -> String {
-    typed.or(stored).unwrap_or_default().to_owned()
+/// One choice of a select: the value it posts, its words, and whether it is
+/// the one shown.
+#[derive(Clone)]
+pub struct Choice {
+    pub value: &'static str,
+    pub label: String,
+    pub selected: bool,
+}
+
+/// The choices of a select over `V`, with "Not decided" first. `current` is
+/// the text the owner sent when the form failed, else the stored value.
+fn choices<V: Vocabulary>(current: Option<&str>) -> Vec<Choice> {
+    let current = current.unwrap_or_default();
+    let blank = std::iter::once(("", "Not decided".to_owned()));
+    let listed = V::ALL
+        .iter()
+        .map(|v| (v.as_str(), sentence_case(v.as_str())));
+    blank
+        .chain(listed)
+        .map(|(value, label)| Choice {
+            value,
+            label,
+            selected: value == current,
+        })
+        .collect()
 }
 
 /// Builds the card of a job from its view.

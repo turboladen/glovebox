@@ -6,9 +6,9 @@ pub struct NewNeed {
     pub name: String,
     /// How many are needed; defaults to 1 and must be at least 1.
     pub quantity: Option<i32>,
-    /// `self` or `shop`; absent while undecided.
+    /// Absent while undecided.
     pub supplied_by: Option<Supplier>,
-    /// `replacement` or `upgrade`; absent while undecided.
+    /// Absent while undecided.
     pub approach: Option<Approach>,
 }
 
@@ -32,7 +32,7 @@ pub struct NewOption {
     pub seller: Option<String>,
     pub price_cents: Option<i32>,
     pub url: Option<String>,
-    /// `confirmed`, `unconfirmed` (the default) or `does_not_fit`.
+    /// Defaults to `unconfirmed`.
     pub fitment: Option<Fitment>,
     pub fitment_note: Option<String>,
 }

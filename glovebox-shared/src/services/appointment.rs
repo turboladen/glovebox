@@ -90,13 +90,7 @@ pub fn status(a: &appointment::Model, job_statuses: &[JobStatus]) -> &'static st
     match Ending::of(a) {
         Some(Ending::Cancelled) => "cancelled",
         Some(Ending::Closed) => "done",
-        None if !job_statuses.is_empty()
-            && job_statuses
-                .iter()
-                .all(|s| matches!(s, JobStatus::Done | JobStatus::Dropped)) =>
-        {
-            "done"
-        }
+        None if !job_statuses.is_empty() && job_statuses.iter().all(|s| s.is_finished()) => "done",
         None => "planning",
     }
 }
@@ -602,7 +596,7 @@ pub async fn delete(db: &impl ConnectionTrait, vehicle_id: i32, id: i32) -> Doma
 mod tests {
     use super::*;
     use crate::{
-        entities::{service_record, todo, work_item},
+        entities::{part::Supplier, service_record, todo, work_item},
         error::DomainError,
         inputs::{
             need::NewNeed,
@@ -935,7 +929,7 @@ mod tests {
         let a = create(&db, v, appt("Brakes")).await.unwrap();
         let planned = add_job(&db, v, "Brake pads", Some(a.id)).await;
         let finished = add_job(&db, v, "Brake pads", Some(a.id)).await;
-        set_job_status(&db, v, finished, "done").await;
+        set_job_status(&db, v, finished, JobStatus::Done).await;
         need::add(
             &db,
             v,
@@ -1062,7 +1056,7 @@ mod tests {
         let j2 = add_job(&db, v, "Brake pads", Some(a.id)).await;
         for (job_id, name, supplied_by) in [
             (j1, "Pads", None),
-            (j1, "Rotors", Some("shop")),
+            (j1, "Rotors", Some(Supplier::Shop)),
             (j2, "Fluid", None),
         ] {
             need::add(
@@ -1071,7 +1065,7 @@ mod tests {
                 job_id,
                 NewNeed {
                     name: name.into(),
-                    supplied_by: supplied_by.map(|v| v.parse().unwrap()),
+                    supplied_by,
                     ..Default::default()
                 },
             )
@@ -1163,7 +1157,7 @@ mod tests {
         let v = VehicleFixture::new().insert_id(&db).await;
         let a = create(&db, v, appt("Brakes")).await.unwrap();
         let job_id = add_job(&db, v, "Brake pads", Some(a.id)).await;
-        set_job_status(&db, v, job_id, "done").await;
+        set_job_status(&db, v, job_id, JobStatus::Done).await;
         let t = todo_svc::add(
             &db,
             v,
@@ -1192,25 +1186,25 @@ mod tests {
         let cancelled = create(&db, v, appt("Wipers")).await.unwrap();
         let on_closed = add_job(&db, v, "Brake pads", Some(closed.id)).await;
         let on_cancelled = add_job(&db, v, "Brake pads", Some(cancelled.id)).await;
-        let set_status = |job_id, status: &str| {
+        let set_status = |job_id, status: JobStatus| {
             job::update(
                 &db,
                 v,
                 job_id,
                 UpdateWorkItem {
-                    status: Some(status.parse().unwrap()),
+                    status: Some(status),
                     ..Default::default()
                 },
             )
         };
-        set_status(on_closed, "done").await.unwrap();
-        set_status(on_cancelled, "dropped").await.unwrap();
+        set_status(on_closed, JobStatus::Done).await.unwrap();
+        set_status(on_cancelled, JobStatus::Dropped).await.unwrap();
         close(&db, v, closed.id).await.unwrap();
         cancel(&db, v, cancelled.id).await.unwrap();
 
-        set_status(on_closed, "planned").await.unwrap();
+        set_status(on_closed, JobStatus::Planned).await.unwrap();
         // The returned job says where it ended up, not where it was.
-        let returned = set_status(on_cancelled, "planned").await.unwrap();
+        let returned = set_status(on_cancelled, JobStatus::Planned).await.unwrap();
         assert_eq!(returned.appointment_id, None);
 
         let reopened = summary(&db, v, closed.id).await.unwrap();
@@ -1232,8 +1226,8 @@ mod tests {
         let other = create(&db, v, appt("Wipers")).await.unwrap();
         let on_closed = add_job(&db, v, "Brake pads", Some(closed.id)).await;
         let elsewhere = add_job(&db, v, "Wiper blades", Some(other.id)).await;
-        set_job_status(&db, v, on_closed, "done").await;
-        set_job_status(&db, v, elsewhere, "done").await;
+        set_job_status(&db, v, on_closed, JobStatus::Done).await;
+        set_job_status(&db, v, elsewhere, JobStatus::Done).await;
         close(&db, v, closed.id).await.unwrap();
 
         let kept = job::update(
@@ -1306,7 +1300,7 @@ mod tests {
             .await
             .unwrap();
         }
-        set_job_status(&db, v, dropped, "dropped").await;
+        set_job_status(&db, v, dropped, JobStatus::Dropped).await;
         let all = list(&db, v, true).await.unwrap();
         assert_eq!(all[0].needs_open, 1);
     }

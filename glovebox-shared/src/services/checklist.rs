@@ -344,10 +344,7 @@ pub async fn past_decisions(
             .cloned();
         // An option marked `does_not_fit` is ruled out as surely as a rejected
         // one, and it keeps the reason of a choice the same way.
-        let rejected = all
-            .into_iter()
-            .filter(|o| need::is_rejected(o) || o.fitment == Fitment::DoesNotFit)
-            .collect();
+        let rejected = all.into_iter().filter(need::is_ruled_out).collect();
         out.push(PastDecision {
             vehicle_id: job.vehicle_id,
             vehicle_name: vehicles
@@ -763,7 +760,7 @@ mod tests {
     ) -> i32 {
         let id = new_need(db, vehicle_id, job_id, name).await;
         let option_id = new_option(db, vehicle_id, id, description, None).await;
-        set_supplier(db, vehicle_id, id, "self").await;
+        set_supplier(db, vehicle_id, id, Supplier::Owner).await;
         need::decide(db, vehicle_id, id, Some(option_id), Some("fits".into()))
             .await
             .unwrap();
@@ -783,20 +780,20 @@ mod tests {
             .await
             .unwrap()
             .id;
-        set_supplier(db, vehicle_id, id, "self").await;
+        set_supplier(db, vehicle_id, id, Supplier::Owner).await;
         need::decide(db, vehicle_id, id, Some(option_id), None)
             .await
             .unwrap();
         id
     }
 
-    async fn set_supplier(db: &DatabaseConnection, vehicle_id: i32, need_id: i32, who: &str) {
+    async fn set_supplier(db: &DatabaseConnection, vehicle_id: i32, need_id: i32, who: Supplier) {
         need::update(
             db,
             vehicle_id,
             need_id,
             UpdateNeed {
-                supplied_by: Some(Some(who.parse().unwrap())),
+                supplied_by: Some(Some(who)),
                 ..Default::default()
             },
         )
@@ -934,7 +931,7 @@ mod tests {
         .await
         .unwrap()
         .id;
-        set_supplier(&db, v, n, "self").await;
+        set_supplier(&db, v, n, Supplier::Owner).await;
         need::decide(&db, v, n, Some(unsure), None).await.unwrap();
 
         let list = for_unscheduled(&db, v).await.unwrap();
@@ -1053,7 +1050,7 @@ mod tests {
         let a = appointment_id(&db, v).await;
         let job = add_job(&db, v, "Brakes", Some(a)).await;
         let n = new_need(&db, v, job, "Rear pads").await;
-        set_supplier(&db, v, n, "shop").await;
+        set_supplier(&db, v, n, Supplier::Shop).await;
         let list = for_appointment(&db, v, a).await.unwrap();
         let steps = &list.next_steps;
         assert!(steps.decide.is_empty() && steps.order.is_empty() && steps.arriving.is_empty());
@@ -1069,7 +1066,7 @@ mod tests {
         let a = appointment_id(&db, v).await;
         let job = add_job(&db, v, "Brakes", Some(a)).await;
         new_need(&db, v, job, "Rear pads").await;
-        set_job_status(&db, v, job, "dropped").await;
+        set_job_status(&db, v, job, JobStatus::Dropped).await;
         let list = for_appointment(&db, v, a).await.unwrap();
         let steps = &list.next_steps;
         assert!(
@@ -1090,7 +1087,7 @@ mod tests {
         let job = add_job(&db, v, "Brakes", Some(a)).await;
         new_need(&db, v, job, "Rear pads").await;
         to_order_need(&db, v, job, "Rear rotors", "OE rotors").await;
-        set_job_status(&db, v, job, "done").await;
+        set_job_status(&db, v, job, JobStatus::Done).await;
         let list = for_appointment(&db, v, a).await.unwrap();
         let steps = &list.next_steps;
         assert!(steps.decide.is_empty() && steps.order.is_empty() && steps.arriving.is_empty());
@@ -1200,7 +1197,7 @@ mod tests {
         let v = VehicleFixture::new().insert_id(&db).await;
         let job = add_job(&db, v, "Brakes", None).await;
         let n = new_need(&db, v, job, "Brake fluid").await;
-        set_supplier(&db, v, n, "shop").await;
+        set_supplier(&db, v, n, Supplier::Shop).await;
         let fluid = part_svc::create(
             &db,
             v,
@@ -1227,10 +1224,10 @@ mod tests {
         new_need(&db, v, job, "Pads").await;
         to_order_need(&db, v, job, "Rotors", "Rotor").await;
         let shop = new_need(&db, v, job, "Fluid").await;
-        set_supplier(&db, v, shop, "shop").await;
+        set_supplier(&db, v, shop, Supplier::Shop).await;
 
         assert_eq!(for_job(&db, v, job).await.unwrap().open_needs(), 2);
-        set_job_status(&db, v, job, "done").await;
+        set_job_status(&db, v, job, JobStatus::Done).await;
         assert_eq!(for_job(&db, v, job).await.unwrap().open_needs(), 0);
     }
 
@@ -1289,7 +1286,7 @@ mod tests {
         let a = appointment_id(&db, v).await;
         let job = add_job(&db, v, "Brakes", Some(a)).await;
         let shop = new_need(&db, v, job, "Rear pads").await;
-        set_supplier(&db, v, shop, "shop").await;
+        set_supplier(&db, v, shop, Supplier::Shop).await;
         let received = to_order_need(&db, v, job, "Front pads", "Textar pads").await;
         order(&db, v, received, "2026-11-06").await;
         need::mark_received(&db, v, received, Some(date("2026-11-09")))
@@ -1318,7 +1315,7 @@ mod tests {
 
         let open = new_need(&db, v, job, "Wipers").await;
         let _ = open;
-        set_job_status(&db, v, job, "done").await;
+        set_job_status(&db, v, job, JobStatus::Done).await;
         let list = for_appointment(&db, v, a).await.unwrap();
         let wipers = list.next_steps.done.last().unwrap();
         assert_eq!(wipers.summary, "Wipers: the job is done");
@@ -1335,7 +1332,7 @@ mod tests {
         let job = add_job(&db, v, "Brakes", Some(a)).await;
         let n = new_need(&db, v, job, "Rear rotors").await;
         let option_id = new_option(&db, v, n, "OE rotors", Some("5Q0615601E")).await;
-        set_supplier(&db, v, n, "self").await;
+        set_supplier(&db, v, n, Supplier::Owner).await;
         need::decide(&db, v, n, Some(option_id), None)
             .await
             .unwrap();
@@ -1384,7 +1381,7 @@ mod tests {
         )
         .await
         .unwrap();
-        set_supplier(&db, v, n, "self").await;
+        set_supplier(&db, v, n, Supplier::Owner).await;
         need::decide(&db, v, n, Some(option_id), None)
             .await
             .unwrap();
@@ -1473,7 +1470,7 @@ mod tests {
         new_need(&db, v, scheduled, "Pads").await;
         let done = add_job(&db, v, "Oil", None).await;
         new_need(&db, v, done, "Filter").await;
-        set_job_status(&db, v, done, "done").await;
+        set_job_status(&db, v, done, JobStatus::Done).await;
         crate::services::todo::add(
             &db,
             v,
@@ -1604,7 +1601,7 @@ mod tests {
         )
         .await
         .unwrap();
-        set_supplier(&db, v, n, "self").await;
+        set_supplier(&db, v, n, Supplier::Owner).await;
         need::decide(&db, v, n, Some(right), Some("OE-grade".into()))
             .await
             .unwrap();
@@ -1645,7 +1642,7 @@ mod tests {
         let job = add_job(&db, v, "Brakes", None).await;
         let n = new_need(&db, v, job, "Rear rotors").await;
         let first = new_option(&db, v, n, "310 mm rotors", None).await;
-        set_supplier(&db, v, n, "self").await;
+        set_supplier(&db, v, n, Supplier::Owner).await;
         need::decide(&db, v, n, Some(first), Some("cheapest OE size".into()))
             .await
             .unwrap();

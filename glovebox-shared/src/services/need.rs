@@ -70,7 +70,7 @@ impl Stage {
 /// needs uses this.
 #[must_use]
 pub fn counts_as_open(job_status: JobStatus, stage: Stage) -> bool {
-    job_status == JobStatus::Planned && stage.is_open()
+    !job_status.is_finished() && stage.is_open()
 }
 
 /// Derives a need's stage. The first matching row wins, so a linked part
@@ -115,6 +115,13 @@ pub fn is_rejected(option: &need_option::Model) -> bool {
     option.rejected_reason.is_some() || option.rejected_on.is_some()
 }
 
+/// Returns true when `option` cannot be chosen: it has been rejected, or it
+/// does not fit the car.
+#[must_use]
+pub fn is_ruled_out(option: &need_option::Model) -> bool {
+    is_rejected(option) || option.fitment == Fitment::DoesNotFit
+}
+
 /// Loads a need that belongs to `vehicle_id`, resolving need, work item and
 /// vehicle in one joined query.
 ///
@@ -153,7 +160,7 @@ async fn require_option(
 ///
 /// # Errors
 /// `NotFound` for a work item that is not the vehicle's; `Invalid` for a
-/// blank name, a quantity below 1 or a value outside the vocabulary.
+/// blank name or a quantity below 1.
 pub async fn add(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -225,7 +232,7 @@ pub async fn delete(db: &impl ConnectionTrait, vehicle_id: i32, need_id: i32) ->
 ///
 /// # Errors
 /// `NotFound` for a need that is not the vehicle's; `Invalid` for a blank
-/// description, a negative price or an unknown fitment.
+/// description or a negative price.
 pub async fn add_option(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -349,8 +356,8 @@ pub async fn update_option<C: ConnectionTrait + TransactionTrait>(
     if let Some(value) = input.url {
         active.url = Set(value.as_deref().and_then(super::trim_to_none));
     }
-    if let Some(value) = &input.fitment {
-        active.fitment = Set(*value);
+    if let Some(value) = input.fitment {
+        active.fitment = Set(value);
     }
     if let Some(value) = input.fitment_note {
         active.fitment_note = Set(value.as_deref().and_then(super::trim_to_none));
@@ -837,13 +844,13 @@ mod tests {
         }
     }
 
-    fn need_model(supplied_by: Option<&str>, chosen: Option<i32>) -> job_need::Model {
+    fn need_model(supplied_by: Option<Supplier>, chosen: Option<i32>) -> job_need::Model {
         job_need::Model {
             id: 1,
             work_item_id: 1,
             name: "Pads".into(),
             quantity: 1,
-            supplied_by: supplied_by.map(|s| s.parse().unwrap()),
+            supplied_by,
             approach: None,
             chosen_option_id: chosen,
             decision_reason: None,
@@ -854,7 +861,7 @@ mod tests {
         }
     }
 
-    fn part_model(status: &str, received_on: Option<&str>) -> part::Model {
+    fn part_model(status: PartStatus, received_on: Option<&str>) -> part::Model {
         part::Model {
             id: 1,
             vehicle_id: 1,
@@ -866,7 +873,7 @@ mod tests {
             purchase_date: None,
             cost_cents: None,
             cost_currency: None,
-            status: status.parse().unwrap(),
+            status,
             installed_date: None,
             installed_odometer: None,
             installed_service_id: None,
@@ -900,33 +907,49 @@ mod tests {
     fn stage_table_first_match_wins() {
         let cases = [
             (need_model(None, None), None, Stage::Undecided),
-            (need_model(Some("self"), None), None, Stage::Undecided),
-            (need_model(Some("self"), Some(1)), None, Stage::ToOrder),
-            (need_model(Some("shop"), None), None, Stage::ShopSupplies),
-            (need_model(Some("shop"), Some(1)), None, Stage::ShopSupplies),
+            (
+                need_model(Some(Supplier::Owner), None),
+                None,
+                Stage::Undecided,
+            ),
+            (
+                need_model(Some(Supplier::Owner), Some(1)),
+                None,
+                Stage::ToOrder,
+            ),
+            (
+                need_model(Some(Supplier::Shop), None),
+                None,
+                Stage::ShopSupplies,
+            ),
+            (
+                need_model(Some(Supplier::Shop), Some(1)),
+                None,
+                Stage::ShopSupplies,
+            ),
             (
                 need_model(None, None),
-                Some(part_model("purchased", None)),
+                Some(part_model(PartStatus::Purchased, None)),
                 Stage::Ordered,
             ),
             (
-                need_model(Some("self"), Some(1)),
-                Some(part_model("purchased", None)),
+                need_model(Some(Supplier::Owner), Some(1)),
+                Some(part_model(PartStatus::Purchased, None)),
                 Stage::Ordered,
             ),
             (
-                need_model(Some("self"), Some(1)),
-                Some(part_model("purchased", Some("2026-11-01"))),
+                need_model(Some(Supplier::Owner), Some(1)),
+                Some(part_model(PartStatus::Purchased, Some("2026-11-01"))),
                 Stage::Received,
             ),
             (
                 need_model(None, None),
-                Some(part_model("installed", Some("2026-11-01"))),
+                Some(part_model(PartStatus::Installed, Some("2026-11-01"))),
                 Stage::Installed,
             ),
             (
-                need_model(Some("shop"), None),
-                Some(part_model("installed", None)),
+                need_model(Some(Supplier::Shop), None),
+                Some(part_model(PartStatus::Installed, None)),
                 Stage::Installed,
             ),
         ];
@@ -1849,7 +1872,7 @@ mod tests {
             let job_id = add_job(&db, vehicle_id, "Rear brakes", Some(visit.id)).await;
             let (n, _) = ordered_need(&db, vehicle_id, job_id).await;
             // A done job stays on the appointment when it is put away.
-            crate::test_support::set_job_status(&db, vehicle_id, job_id, "done").await;
+            crate::test_support::set_job_status(&db, vehicle_id, job_id, JobStatus::Done).await;
             if cancel {
                 appointment::cancel(&db, vehicle_id, visit.id)
                     .await
