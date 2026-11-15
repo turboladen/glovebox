@@ -1,11 +1,14 @@
 use std::collections::HashMap;
 
-use crate::entities::{service_record::Payer, service_record_line_item::WorkKind};
 use sea_orm::*;
 use serde::Serialize;
 
 use crate::{
-    entities::{mileage_log, part, service_record, service_record_line_item},
+    entities::{
+        mileage_log, part,
+        service_record::{self, Payer},
+        service_record_line_item::{self, WorkKind},
+    },
     error::DomainResult,
     services::{
         recall::{self, RecallRef},

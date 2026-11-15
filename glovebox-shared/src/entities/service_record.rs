@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 crate::vocab::vocabulary! {
     /// Who paid for a service or for one of its lines.
     pub enum Payer {
-        // The owner.
+        // The tools call the owner `self`.
         Owner => "self",
         Insurance => "insurance",
         ThirdParty => "third_party",
@@ -25,7 +25,7 @@ crate::vocab::vocabulary! {
     /// Who did the work of a service.
     pub enum Performer {
         Shop => "shop",
-        // The owner.
+        // The tools call the owner `self`.
         Owner => "self",
     }
 }

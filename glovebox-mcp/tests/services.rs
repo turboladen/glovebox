@@ -159,35 +159,6 @@ async fn record_service_payer_flows_into_cost_summary_split() {
         err.contains("paid_by: unknown variant") && err.contains("third_party"),
         "the error must name the argument and list the valid payers; got: {err}"
     );
-
-    // A bad value inside a line names the line and the argument.
-    let err = t
-        .call_err(
-            "record_service",
-            json!({
-                "vehicle_id": v.id,
-                "service_date": "2026-06-20",
-                "line_items": [
-                    { "description": "Oil", "work_kind": "maintenance" },
-                    { "description": "Flash", "work_kind": "upgrade" }
-                ]
-            }),
-        )
-        .await;
-    assert!(
-        err.contains("line_items[1].work_kind") && err.contains("`mod`"),
-        "got: {err}"
-    );
-    let err = t
-        .call_err(
-            "record_service",
-            json!({ "vehicle_id": v.id, "service_date": "2026-06-20", "performed_by": "dealer" }),
-        )
-        .await;
-    assert!(
-        err.contains("performed_by: unknown variant") && err.contains("`shop`"),
-        "got: {err}"
-    );
 }
 
 // Re-recording the same invoice_ref returns the same record, so a retry loop
@@ -442,20 +413,84 @@ async fn record_service_files_a_multi_line_invoice_in_one_call() {
 }
 
 #[tokio::test]
-async fn record_service_rejects_a_bad_work_kind_with_the_field_name() {
+async fn record_service_rejects_a_bad_work_kind_or_performer_with_the_argument_path() {
     let c = connect().await;
     let v = vehicle::create(&c.db, new_vehicle("Daily"))
         .await
         .unwrap()
         .id;
+    // A bad value inside a line names the line and the argument.
     let err = c
         .call_err(
             "record_service",
             json!({"vehicle_id": v, "service_date": "2025-03-24",
-                   "line_items": [{"description": "Tune", "work_kind": "upgrade"}]}),
+                   "line_items": [{"description": "Oil", "work_kind": "maintenance"},
+                                  {"description": "Tune", "work_kind": "upgrade"}]}),
         )
         .await;
-    assert!(err.contains("work_kind"), "got: {err}");
+    assert!(
+        err.contains("line_items[1].work_kind") && err.contains("`mod`"),
+        "got: {err}"
+    );
+    let err = c
+        .call_err(
+            "record_service",
+            json!({"vehicle_id": v, "service_date": "2025-03-24", "performed_by": "dealer"}),
+        )
+        .await;
+    assert!(
+        err.contains("performed_by: unknown variant") && err.contains("`shop`"),
+        "got: {err}"
+    );
+    let listed = c.call("list_services", json!({ "vehicle_id": v })).await;
+    assert_eq!(listed, json!([]), "a refused call records nothing");
+}
+
+#[tokio::test]
+async fn correct_service_refuses_a_value_outside_a_list_and_changes_nothing() {
+    let c = connect().await;
+    let v = vehicle::create(&c.db, new_vehicle("Daily"))
+        .await
+        .unwrap()
+        .id;
+    let recorded = c
+        .call(
+            "record_service",
+            json!({"vehicle_id": v, "service_date": "2025-03-24", "paid_by": "insurance",
+                   "line_items": [{"description": "Bodywork", "work_kind": "repair"}]}),
+        )
+        .await;
+    let sid = recorded["id"].clone();
+
+    for (arguments, path) in [
+        (json!({"paid_by": "bogus", "notes": "x"}), "paid_by"),
+        (
+            json!({"performed_by": "dealer", "notes": "x"}),
+            "performed_by",
+        ),
+        (
+            json!({"notes": "x",
+                   "line_items": [{"description": "Tune", "work_kind": "upgrade"}]}),
+            "line_items[0].work_kind",
+        ),
+    ] {
+        let mut arguments = arguments;
+        arguments["vehicle_id"] = json!(v);
+        arguments["service_id"] = sid.clone();
+        let err = c.call_err("correct_service", arguments).await;
+        assert!(
+            err.contains(&format!("{path}: unknown variant")),
+            "got: {err}"
+        );
+    }
+
+    let read = c
+        .call("get_service", json!({"vehicle_id": v, "service_id": sid}))
+        .await;
+    assert_eq!(read["paid_by"], "insurance");
+    assert_eq!(read["performed_by"], "shop");
+    assert!(read["notes"].is_null(), "got: {read}");
+    assert_eq!(read["line_items"][0]["work_kind"], "repair");
 }
 
 #[tokio::test]

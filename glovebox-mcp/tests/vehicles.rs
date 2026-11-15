@@ -457,6 +457,7 @@ async fn a_vocabulary_argument_lists_its_values_in_the_schema() {
         ("correct_service", "paid_by", &payers),
         ("correct_service", "performed_by", &performers),
         ("correct_service", "line_items.[].work_kind", &work_kinds),
+        ("correct_service", "line_items.[].paid_by", &payers),
     ] {
         let input = tools
             .iter()

@@ -9,7 +9,7 @@ use crate::{
 pub struct NewLineItem {
     pub description: String,
     pub work_kind: WorkKind,
-    /// `None` for the service's own payer.
+    /// `None` means the line follows the service's payer.
     pub paid_by: Option<Payer>,
     pub quantity: Option<f64>,
     pub unit_cost_cents: Option<i32>,

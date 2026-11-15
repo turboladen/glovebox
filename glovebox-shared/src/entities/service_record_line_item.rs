@@ -10,10 +10,10 @@ crate::vocab::vocabulary! {
         Mod => "mod",
         Repair => "repair",
         Inspection => "inspection",
-        // Work done under a recall campaign.
+        // A recall line is work done under a recall campaign.
         Recall => "recall",
-        // A charge on the invoice that is not work, such as tax, shop
-        // supplies or disposal.
+        // A fee is a charge on the invoice that is not work, such as tax,
+        // shop supplies or disposal.
         Fee => "fee",
     }
 }
