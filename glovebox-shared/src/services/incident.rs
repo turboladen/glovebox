@@ -242,10 +242,10 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     vehicle_id: i32,
     input: NewIncident,
 ) -> DomainResult<IncidentWithDetails> {
+    let txn = super::begin_write(db).await?;
+    let db = &txn;
     super::vehicle::require(db, vehicle_id).await?;
     require_links_owned(db, vehicle_id, input.recurrence_of_id).await?;
-
-    let txn = super::begin_write(db).await?;
 
     let model = incident::ActiveModel {
         vehicle_id: Set(vehicle_id),
@@ -291,6 +291,8 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     id: i32,
     input: UpdateIncident,
 ) -> DomainResult<IncidentWithDetails> {
+    let txn = super::begin_write(db).await?;
+    let db = &txn;
     let existing = require_incident(db, vehicle_id, id).await?;
 
     require_links_owned(db, vehicle_id, input.recurrence_of_id.flatten()).await?;
@@ -298,8 +300,8 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     // chain. Walk the proposed target's ancestors; if `id` appears, linking
     // would close a cycle and the first feature that traverses recurrence
     // chains would loop forever. Chains are short (bounded walk, one query
-    // per hop), and the walk happens before the txn so nothing mutates on
-    // rejection.
+    // per hop), and the walk runs under the write lock so two updates at once
+    // cannot close a cycle between them.
     if let Some(target) = input.recurrence_of_id.flatten() {
         if target == id {
             return Err(DomainError::BadRequest(
@@ -328,8 +330,6 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
                 .and_then(|i| i.recurrence_of_id);
         }
     }
-
-    let txn = super::begin_write(db).await?;
 
     let mut active: incident::ActiveModel = existing.into();
 

@@ -378,6 +378,8 @@ pub async fn update_option<C: ConnectionTrait + TransactionTrait>(
     option_id: i32,
     input: UpdateOption,
 ) -> DomainResult<need_option::Model> {
+    let txn = super::begin_write(db).await?;
+    let db = &txn;
     let existing = require_option(db, vehicle_id, option_id).await?;
     if let Some(description) = &input.description {
         super::validate_not_blank("description", description)?;
@@ -430,7 +432,6 @@ pub async fn update_option<C: ConnectionTrait + TransactionTrait>(
         || input.rejected_reason.as_ref().is_some_and(Option::is_some);
     // The option write and the choice clearing commit together, so a need
     // never keeps a choice that was just rejected.
-    let txn = super::begin_write(db).await?;
     let mut updated = active.update(&txn).await?;
     if now_unusable {
         keep_choice_on_option(&txn, updated.need_id, updated.id).await?;

@@ -26,20 +26,23 @@ case "$status" in
 esac
 
 status=0
-grep -rnE '\.begin\(\)|\.begin_with_(config|options)\(|\.transaction\(' glovebox-shared/src/services \
-  | grep -v '^glovebox-shared/src/services/mod.rs:.*begin_with_options' || status=$?
+opened=$(grep -rnE '\.begin\(\)|\.begin_with_(config|options)\(|\.transaction\(' \
+  glovebox-shared/src/services) || status=$?
 
 case "$status" in
-  0)
-    echo "FAIL: a service opens a transaction without services::begin_write"
-    exit 1
-    ;;
-  1) ;;
+  0 | 1) ;;
   *)
     echo "FAIL: grep errored with status $status"
     exit "$status"
     ;;
 esac
+# The one call allowed is the one inside services::begin_write.
+opened=$(printf '%s\n' "$opened" | grep -v '^glovebox-shared/src/services/mod.rs:.*begin_with_options' | grep -v '^$' || true)
+if [ -n "$opened" ]; then
+  printf '%s\n' "$opened"
+  echo "FAIL: a service opens a transaction without services::begin_write"
+  exit 1
+fi
 
 status=0
 grep -rnEi 'sea[-_]orm' glovebox-web/Cargo.toml glovebox-web/src glovebox-web/tests || status=$?

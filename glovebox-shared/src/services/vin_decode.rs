@@ -149,9 +149,9 @@ pub(crate) async fn store_attributes<C: ConnectionTrait + TransactionTrait>(
     vehicle_id: i32,
     decoded: &VinDecodeResult,
 ) -> DomainResult<()> {
-    crate::services::vehicle::require(db, vehicle_id).await?;
-
     let txn = super::begin_write(db).await?;
+    let db = &txn;
+    crate::services::vehicle::require(db, vehicle_id).await?;
 
     // Delete any existing vin_decode attributes for this vehicle, then re-insert
     vehicle_attribute::Entity::delete_many()

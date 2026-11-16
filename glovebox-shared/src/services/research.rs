@@ -148,6 +148,8 @@ async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
     vehicle_id: i32,
     recalls: &[RecallInfo],
 ) -> DomainResult<usize> {
+    let txn = super::begin_write(db).await?;
+    let db = &txn;
     // Collect existing recall source_urls for this vehicle to deduplicate
     let existing_reports = research_report::Entity::find()
         .filter(research_report::Column::VehicleId.eq(vehicle_id))
@@ -211,6 +213,7 @@ async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
     }
 
     if new_findings.is_empty() {
+        txn.commit().await?;
         return Ok(0);
     }
     let count = new_findings.len();
@@ -221,8 +224,6 @@ async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
         if count == 1 { "" } else { "s" }
     );
     let raw_data = serde_json::to_string(&new_findings).ok();
-
-    let txn = super::begin_write(db).await?;
 
     let report = research_report::ActiveModel {
         vehicle_id: Set(vehicle_id),
@@ -265,8 +266,8 @@ pub async fn file_finding<C: ConnectionTrait + TransactionTrait>(
     let db = &txn;
     crate::services::vehicle::require(db, vehicle_id).await?;
 
-    // An anchor written before the lock existed may have a twin; the oldest
-    // one is always the one picked.
+    // No unique index stops two anchors for one vehicle, so the oldest is
+    // always the one picked.
     let report = match research_report::Entity::find()
         .filter(research_report::Column::VehicleId.eq(vehicle_id))
         .filter(research_report::Column::ReportType.eq("external_research"))
