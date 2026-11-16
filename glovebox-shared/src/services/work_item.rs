@@ -267,7 +267,7 @@ pub(crate) async fn load_completed_by(
 pub(crate) async fn reopen_completed_by(
     db: &impl ConnectionTrait,
     service_record_id: i32,
-) -> DomainResult<()> {
+) -> DomainResult<super::appointment::SettledJobs> {
     let reopened: Vec<i32> = work_item::Entity::find()
         .filter(work_item::Column::CompletedServiceId.eq(service_record_id))
         .all(db)
@@ -344,15 +344,29 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     Ok(created)
 }
 
+/// A work item after [`update`], with what its return to `planned` did to
+/// its appointment. Each id is present only when the update did that.
+#[derive(Debug, Serialize)]
+pub struct UpdatedWorkItem {
+    #[serde(flatten)]
+    pub work_item: work_item::Model,
+    /// The hand-closed appointment the item is on, which is open again.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reopened_appointment_id: Option<i32>,
+    /// The cancelled appointment the item came off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub left_cancelled_appointment_id: Option<i32>,
+}
+
 /// Changes a work item. Setting a done or dropped item back to `planned`
 /// settles its appointment as `appointment::settle_reopened_jobs` describes,
-/// in the same transaction.
+/// in the same transaction, and the result names the appointment it changed.
 pub async fn update<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
     id: i32,
     input: UpdateWorkItem,
-) -> DomainResult<work_item::Model> {
+) -> DomainResult<UpdatedWorkItem> {
     let txn = db.begin().await?;
     let db = &txn;
     // The write comes before any read, so SQLite gives this transaction the
@@ -430,15 +444,24 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     }
 
     active.updated_at = Set(super::now());
-    let mut updated = active.update(db).await?;
+    let updated = active.update(db).await?;
+    let mut out = UpdatedWorkItem {
+        reopened_appointment_id: None,
+        left_cancelled_appointment_id: None,
+        work_item: updated,
+    };
     if reopens {
-        super::appointment::settle_reopened_jobs(db, &[updated.id]).await?;
-        // Settling takes the job off a cancelled appointment, so the row is
-        // read again and the caller sees where the job ended up.
-        updated = get(db, vehicle_id, id).await?;
+        let settled = super::appointment::settle_reopened_jobs(db, &[id]).await?;
+        if settled.unassigned_job_ids.contains(&id) {
+            out.left_cancelled_appointment_id = out.work_item.appointment_id;
+            // Settling took the job off the appointment, so the row is read
+            // again and the caller sees where the job ended up.
+            out.work_item = get(db, vehicle_id, id).await?;
+        }
+        out.reopened_appointment_id = settled.reopened_appointment_ids.first().copied();
     }
     txn.commit().await?;
-    Ok(updated)
+    Ok(out)
 }
 
 pub async fn delete(db: &impl ConnectionTrait, vehicle_id: i32, id: i32) -> DomainResult<()> {
@@ -810,8 +833,8 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(cleared.revisit_by_date, None);
-        assert_eq!(cleared.revisit_by_miles, Some(70_000));
+        assert_eq!(cleared.work_item.revisit_by_date, None);
+        assert_eq!(cleared.work_item.revisit_by_miles, Some(70_000));
     }
 
     #[tokio::test]
@@ -1042,8 +1065,8 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(updated.status, JobStatus::Done);
-        assert_eq!(updated.est_cost_cents, None);
+        assert_eq!(updated.work_item.status, JobStatus::Done);
+        assert_eq!(updated.work_item.est_cost_cents, None);
     }
 
     #[tokio::test]
@@ -1131,7 +1154,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(reopened.status, JobStatus::Planned);
-        assert_eq!(reopened.completed_service_id, None);
+        assert_eq!(reopened.work_item.status, JobStatus::Planned);
+        assert_eq!(reopened.work_item.completed_service_id, None);
     }
 }

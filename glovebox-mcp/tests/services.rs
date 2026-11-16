@@ -635,11 +635,14 @@ async fn delete_service_reopens_the_incident_and_work_it_closed() {
         .await;
     assert_eq!(fixed["resolved"], true);
 
-    t.call(
-        "delete_service",
-        json!({ "vehicle_id": v.id, "service_id": recorded["id"] }),
-    )
-    .await;
+    let deleted = t
+        .call(
+            "delete_service",
+            json!({ "vehicle_id": v.id, "service_id": recorded["id"] }),
+        )
+        .await;
+    assert_eq!(deleted["appointments_reopened"], json!([]));
+    assert_eq!(deleted["jobs_unassigned"], json!([]));
 
     let reopened = t
         .call(
@@ -652,6 +655,56 @@ async fn delete_service_reopens_the_incident_and_work_it_closed() {
         .call("list_planned_work", json!({ "vehicle_id": v.id }))
         .await;
     assert_eq!(planned["items"][0]["status"], "planned");
+}
+
+#[tokio::test]
+async fn delete_service_names_the_appointments_it_moves() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let mut jobs = Vec::new();
+    for (purpose, status) in [("Brakes", "done"), ("Wipers", "cancelled")] {
+        let appt = t
+            .call(
+                "plan_appointment",
+                json!({ "vehicle_id": v.id, "purpose": purpose }),
+            )
+            .await["id"]
+            .clone();
+        let job = t
+            .call(
+                "plan_work",
+                json!({ "vehicle_id": v.id, "title": purpose, "appointment_id": appt }),
+            )
+            .await["id"]
+            .clone();
+        jobs.push((appt, job, status));
+    }
+    let recorded = t
+        .call(
+            "record_service",
+            json!({
+                "vehicle_id": v.id,
+                "service_date": "2026-06-01",
+                "work_item_ids": [jobs[0].1, jobs[1].1]
+            }),
+        )
+        .await;
+    for (appt, _, status) in &jobs {
+        t.call(
+            "update_appointment",
+            json!({ "vehicle_id": v.id, "appointment_id": appt, "status": status }),
+        )
+        .await;
+    }
+
+    let deleted = t
+        .call(
+            "delete_service",
+            json!({ "vehicle_id": v.id, "service_id": recorded["id"] }),
+        )
+        .await;
+    assert_eq!(deleted["appointments_reopened"], json!([jobs[0].0]));
+    assert_eq!(deleted["jobs_unassigned"], json!([jobs[1].1]));
 }
 
 #[tokio::test]

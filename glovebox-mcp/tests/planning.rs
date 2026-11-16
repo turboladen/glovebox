@@ -310,6 +310,72 @@ async fn update_and_delete_planned_work() {
 }
 
 #[tokio::test]
+async fn update_planned_work_reports_the_appointment_a_reopened_job_moves() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let mut jobs = Vec::new();
+    for (purpose, status) in [("Brakes", "done"), ("Wipers", "cancelled")] {
+        let appt = t
+            .call(
+                "plan_appointment",
+                json!({ "vehicle_id": v.id, "purpose": purpose }),
+            )
+            .await["id"]
+            .clone();
+        let job = t
+            .call(
+                "plan_work",
+                json!({ "vehicle_id": v.id, "title": purpose, "appointment_id": appt }),
+            )
+            .await["id"]
+            .clone();
+        t.call(
+            "update_planned_work",
+            json!({ "vehicle_id": v.id, "work_item_id": job, "status": "done" }),
+        )
+        .await;
+        t.call(
+            "update_appointment",
+            json!({ "vehicle_id": v.id, "appointment_id": appt, "status": status }),
+        )
+        .await;
+        jobs.push((appt, job));
+    }
+    let [(closed, on_closed), (cancelled, on_cancelled)] = jobs.try_into().unwrap();
+    let back_to_planned =
+        |job| json!({ "vehicle_id": v.id, "work_item_id": job, "status": "planned" });
+
+    let reopened = t
+        .call("update_planned_work", back_to_planned(on_closed.clone()))
+        .await;
+    assert_eq!(reopened["reopened_appointment_id"], closed);
+    assert_eq!(reopened["appointment_id"], closed);
+    assert!(
+        reopened.get("left_cancelled_appointment_id").is_none(),
+        "{reopened}"
+    );
+
+    let left = t
+        .call("update_planned_work", back_to_planned(on_cancelled.clone()))
+        .await;
+    assert_eq!(left["left_cancelled_appointment_id"], cancelled);
+    assert!(left["appointment_id"].is_null(), "{left}");
+    assert!(left.get("reopened_appointment_id").is_none(), "{left}");
+
+    let edited = t
+        .call(
+            "update_planned_work",
+            json!({ "vehicle_id": v.id, "work_item_id": on_closed, "title": "Rear brakes" }),
+        )
+        .await;
+    assert!(edited.get("reopened_appointment_id").is_none(), "{edited}");
+    assert!(
+        edited.get("left_cancelled_appointment_id").is_none(),
+        "{edited}"
+    );
+}
+
+#[tokio::test]
 async fn planning_tools_reject_unknown_arguments() {
     let t = connect().await;
     common::assert_unknown_field_rejected(
