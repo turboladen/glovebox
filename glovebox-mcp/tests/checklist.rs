@@ -279,6 +279,51 @@ async fn the_calls_return_part_names_undo_a_return() {
 }
 
 #[tokio::test]
+async fn a_replaced_part_reads_installed_and_cannot_be_returned() {
+    let t = connect().await;
+    let v = add_vehicle(&t, "GTI").await;
+    let job = plan_job(&t, v, "Rear brakes", None).await;
+    let rotors = add_need(&t, v, job, "Rear rotors").await;
+    let option = add_option(&t, v, rotors, json!({ "description": "310 mm rotor" })).await;
+    t.call(
+        "update_need",
+        json!({
+            "vehicle_id": v, "need_id": rotors, "supplied_by": "self",
+            "chosen_option_id": option
+        }),
+    )
+    .await;
+    let ordered = t
+        .call(
+            "mark_need_ordered",
+            json!({ "vehicle_id": v, "need_id": rotors }),
+        )
+        .await;
+    let part = ordered["part"]["id"].as_i64().unwrap();
+    t.call(
+        "correct_part",
+        json!({ "vehicle_id": v, "part_id": part, "status": "replaced" }),
+    )
+    .await;
+
+    let checklist = t.call("get_checklist", json!({ "vehicle_id": v })).await;
+    assert_eq!(
+        checklist["jobs"][0]["needs"][0]["stage"], "installed",
+        "got: {checklist}"
+    );
+    let err = t
+        .call_err(
+            "return_part",
+            json!({ "vehicle_id": v, "need_id": rotors, "reason": "Wrong size" }),
+        )
+        .await;
+    assert!(
+        err.contains("is installed; only an ordered or received part can be returned"),
+        "got: {err}"
+    );
+}
+
+#[tokio::test]
 async fn existing_part_links_without_reentry() {
     let t = connect().await;
     let v = add_vehicle(&t, "GTI").await;

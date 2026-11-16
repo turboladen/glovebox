@@ -4,11 +4,14 @@ use axum::{body::Body, http::StatusCode};
 use common::{app, db, get_page, page, post_form, request};
 use glovebox_shared::{
     db::DatabaseConnection,
-    entities::{need_option::Fitment, part::Supplier},
+    entities::{
+        need_option::Fitment,
+        part::{PartStatus, Supplier},
+    },
     inputs::{
         appointment::NewAppointment,
         need::{NewNeed, NewOption, OrderDetails, UpdateNeed},
-        part::{NewPart, PartFilter},
+        part::{NewPart, PartFilter, UpdatePart},
         work_item::NewWorkItem,
     },
     services::{appointment, need, part, todo, work_item},
@@ -712,6 +715,34 @@ async fn return_adds_the_todo_and_moves_the_need_back() {
         .unwrap();
     assert_eq!(todos.len(), 1);
     assert!(group(&body, "todos").contains(&todos[0].title), "{body}");
+}
+
+#[tokio::test]
+async fn a_replaced_part_reads_installed_and_offers_no_return() {
+    let w = World::new().await;
+    w.choose_good().await;
+    w.order_it().await;
+    let part_id = need::require(&w.db, w.vehicle, w.need)
+        .await
+        .unwrap()
+        .part_id
+        .unwrap();
+    part::update(
+        &w.db,
+        w.vehicle,
+        part_id,
+        UpdatePart {
+            status: Some(PartStatus::Replaced),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let (_, body) = w.get(&w.page_path()).await;
+    assert!(group(&body, "done").contains("Front pads"), "{body}");
+    assert!(need_summary(&body, w.need).contains("Installed"), "{body}");
+    assert!(!body.contains(&w.need_path("return")), "{body}");
 }
 
 #[tokio::test]

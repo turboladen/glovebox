@@ -9,7 +9,7 @@ use crate::{
     entities::{
         job_need,
         need_option::{self, Fitment},
-        part::{self, PartStatus, Supplier},
+        part::{self, Supplier},
         todo,
         work_item::{self, JobStatus},
     },
@@ -75,12 +75,13 @@ pub fn counts_as_open(job_status: JobStatus, stage: Stage) -> bool {
 }
 
 /// Derives a need's stage. The first matching row wins, so a linked part
-/// decides the stage whatever the supplier and chosen option say. `part` is
-/// the need's linked part, if any.
+/// decides the stage whatever the supplier and chosen option say, and a part
+/// that is installed or replaced reads `installed`. `part` is the need's
+/// linked part, if any.
 #[must_use]
 pub fn stage(need: &job_need::Model, part: Option<&part::Model>) -> Stage {
     if let Some(part) = part {
-        return if part.status == PartStatus::Installed {
+        return if super::part::was_fitted(part) {
             Stage::Installed
         } else if part.received_on.is_some() {
             Stage::Received
@@ -823,7 +824,10 @@ pub async fn return_part<C: ConnectionTrait + TransactionTrait>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{VehicleFixture, add_job, date, row_count, test_db};
+    use crate::{
+        entities::part::PartStatus,
+        test_support::{VehicleFixture, add_job, date, row_count, test_db},
+    };
 
     async fn seed_job(db: &DatabaseConnection) -> (i32, i32) {
         let vehicle_id = VehicleFixture::new().insert_id(db).await;
@@ -951,6 +955,18 @@ mod tests {
             (
                 need_model(Some(Supplier::Shop), None),
                 Some(part_model(PartStatus::Installed, None)),
+                Stage::Installed,
+            ),
+            // A replaced part was fitted once, so it reads installed whether
+            // or not its arrival was recorded.
+            (
+                need_model(Some(Supplier::Owner), Some(1)),
+                Some(part_model(PartStatus::Replaced, Some("2026-11-01"))),
+                Stage::Installed,
+            ),
+            (
+                need_model(None, None),
+                Some(part_model(PartStatus::Replaced, None)),
                 Stage::Installed,
             ),
         ];

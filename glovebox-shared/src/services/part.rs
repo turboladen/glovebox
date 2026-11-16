@@ -14,6 +14,12 @@ pub(crate) fn is_returned(p: &part::Model) -> bool {
     p.status == PartStatus::Returned
 }
 
+/// Whether `p` has been on the car: it is installed, or it was installed and
+/// later replaced.
+pub(crate) fn was_fitted(p: &part::Model) -> bool {
+    matches!(p.status, PartStatus::Installed | PartStatus::Replaced)
+}
+
 /// Marks `p` returned today for `reason`, remembering the need it was
 /// returned from.
 pub(crate) async fn mark_returned(

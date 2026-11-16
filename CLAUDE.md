@@ -203,7 +203,8 @@ until the records cover 1,000 miles (`costs::MIN_MILES_FOR_COST_PER_1000`).
 **Job checklist.** An appointment groups jobs (`work_items`) and to-dos for one shop trip, a job
 lists needs, and a need lists researched options. A need's stage (`undecided`, `to_order`,
 `shop_supplies`, `ordered`, `received`, `installed`) is derived by `need::stage` and never stored;
-the first matching row wins, so a linked part decides the stage. An appointment reads `done` when
+the first matching row wins, so a linked part decides the stage, and a part that is installed or
+replaced reads `installed`. An appointment reads `done` when
 it has jobs and every one is done or dropped; only `cancelled` and a hand-closed date are stored,
 and closing or cancelling unassigns the jobs that are still planned. A closed or cancelled
 appointment therefore never holds a planned job: when a job on one returns to `planned` (its

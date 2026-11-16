@@ -130,7 +130,8 @@ pub struct RecordServiceInput {
     /// completes nothing by itself: name the finished jobs in `work_item_ids`
     /// and the parts the shop fitted in `part_ids` or `parts`. The result's
     /// `unfitted_needs` lists every need on a completed job whose part is
-    /// linked but not installed; ask the owner about each one.
+    /// linked but neither installed nor replaced; ask the owner about each
+    /// one.
     pub appointment_id: Option<i32>,
 }
 
