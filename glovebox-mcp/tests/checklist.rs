@@ -275,7 +275,11 @@ async fn the_calls_return_part_names_undo_a_return() {
     assert!(names(&checklist, "todos").is_empty(), "got: {checklist}");
     let row = &checklist["jobs"][0]["needs"][0];
     assert_eq!(row["need"]["chosen_option_id"], option);
+    assert_eq!(row["need"]["decision_reason"], "Matches the brakes");
     assert_eq!(row["chosen"]["rejected_reason"], Value::Null);
+    // Choosing the option again clears the history its rejection kept.
+    assert_eq!(row["chosen"]["chosen_reason"], Value::Null, "got: {row}");
+    assert_eq!(row["chosen"]["chosen_on"], Value::Null, "got: {row}");
 }
 
 #[tokio::test]

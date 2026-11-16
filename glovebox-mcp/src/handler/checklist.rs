@@ -362,11 +362,13 @@ impl GloveboxMcp {
                        true, so set it when the option itself was the mistake (the wrong size or \
                        fitment) and leave it false for a damaged or mis-shipped part. The reason \
                        the owner gave for choosing a rejected option stays on it as \
-                       `chosen_reason`. To undo a return made by mistake, three calls are needed: \
-                       `correct_part` with status `purchased`, `link_part_to_need` to link the \
-                       part again, and `delete_todo` for the \"Return ...\" to-do. When \
-                       `option_was_wrong` was true, also clear the rejection with \
-                       `update_need_option` and choose the option again with `update_need`."
+                       `chosen_reason` until the option is chosen again. To undo a return made by \
+                       mistake, three calls are needed: `correct_part` with status `purchased`, \
+                       `link_part_to_need` to link the part again, and `delete_todo` for the \
+                       \"Return ...\" to-do. When `option_was_wrong` was true, also clear the \
+                       rejection with `update_need_option` and choose the option again with \
+                       `update_need`, sending its `chosen_reason` as `decision_reason` to keep \
+                       the owner's reason."
     )]
     async fn return_part(
         &self,

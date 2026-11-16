@@ -115,7 +115,7 @@ async fn self_need(
 
 // Adds `candidate` to the need and chooses it.
 async fn choose(
-    db: &impl ConnectionTrait,
+    db: &(impl ConnectionTrait + TransactionTrait),
     vehicle_id: i32,
     need_id: i32,
     candidate: NewOption,

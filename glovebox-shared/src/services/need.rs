@@ -435,14 +435,15 @@ pub async fn update_with_choice<C: ConnectionTrait + TransactionTrait>(
 /// `None`, and records the reason in the same write. Choosing a different
 /// option stamps `decided_on` with today's date, choosing the option already
 /// chosen keeps the date and replaces only the reason, and clearing removes
-/// the date.
+/// the date. Choosing an option clears the `chosen_reason` and `chosen_on` it
+/// kept from an earlier choice.
 ///
 /// # Errors
 /// `NotFound` for a need that is not the vehicle's; `BadRequest` for an
 /// option of another need, one marked `does_not_fit` or a rejected one, and
 /// for a reason sent without an option.
-pub async fn decide(
-    db: &impl ConnectionTrait,
+pub async fn decide<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
     vehicle_id: i32,
     need_id: i32,
     option_id: Option<i32>,
@@ -487,7 +488,40 @@ pub async fn decide(
     active.decision_reason = Set(reason);
     active.decided_on = Set(decided_on);
     active.updated_at = Set(super::now());
-    Ok(active.update(db).await?)
+    // The history clear and the choice commit together, so a failed choice
+    // never erases the history of the option it named.
+    let txn = db.begin().await?;
+    if let Some(option_id) = option_id {
+        clear_choice_history(&txn, option_id).await?;
+    }
+    let decided = active.update(&txn).await?;
+    txn.commit().await?;
+    Ok(decided)
+}
+
+// Clears the reason and date an option kept from an earlier choice, which
+// `keep_choice_on_option` copied there when that choice was ruled out. An
+// option with no such history is left untouched.
+async fn clear_choice_history(db: &impl ConnectionTrait, option_id: i32) -> DomainResult<()> {
+    need_option::Entity::update_many()
+        .col_expr(
+            need_option::Column::ChosenReason,
+            Expr::value(None::<String>),
+        )
+        .col_expr(
+            need_option::Column::ChosenOn,
+            Expr::value(None::<chrono::NaiveDate>),
+        )
+        .col_expr(need_option::Column::UpdatedAt, Expr::value(super::now()))
+        .filter(need_option::Column::Id.eq(option_id))
+        .filter(
+            Condition::any()
+                .add(need_option::Column::ChosenReason.is_not_null())
+                .add(need_option::Column::ChosenOn.is_not_null()),
+        )
+        .exec(db)
+        .await?;
+    Ok(())
 }
 
 /// A need with the part linked to it and the stage that results.
@@ -1633,6 +1667,94 @@ mod tests {
             .unwrap();
         let today = crate::services::today();
         assert_eq!(changed.decided_on, Some(today));
+    }
+
+    async fn reject(db: &DatabaseConnection, vehicle_id: i32, option_id: i32, why: Option<&str>) {
+        update_option(
+            db,
+            vehicle_id,
+            option_id,
+            UpdateOption {
+                rejected_reason: Some(why.map(Into::into)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn option_row(db: &DatabaseConnection, option_id: i32) -> need_option::Model {
+        need_option::Entity::find_by_id(option_id)
+            .one(db)
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn choosing_an_option_again_clears_its_choice_history() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let n = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
+        let first = add_option(&db, vehicle_id, n.id, option("First"))
+            .await
+            .unwrap();
+        let second = add_option(&db, vehicle_id, n.id, option("Second"))
+            .await
+            .unwrap();
+        for (o, why) in [(&first, "fits"), (&second, "cheaper")] {
+            decide(&db, vehicle_id, n.id, Some(o.id), Some(why.into()))
+                .await
+                .unwrap();
+            reject(&db, vehicle_id, o.id, Some("wrong size")).await;
+        }
+        assert_eq!(
+            option_row(&db, first.id).await.chosen_reason.as_deref(),
+            Some("fits")
+        );
+
+        reject(&db, vehicle_id, first.id, None).await;
+        decide(
+            &db,
+            vehicle_id,
+            n.id,
+            Some(first.id),
+            Some("fits after all".into()),
+        )
+        .await
+        .unwrap();
+
+        let chosen = option_row(&db, first.id).await;
+        assert_eq!((chosen.chosen_reason, chosen.chosen_on), (None, None));
+        // The other option keeps the history of its own earlier choice.
+        let other = option_row(&db, second.id).await;
+        assert_eq!(other.chosen_reason.as_deref(), Some("cheaper"));
+        assert!(other.chosen_on.is_some());
+    }
+
+    #[tokio::test]
+    async fn an_ordinary_choice_leaves_the_option_untouched() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let n = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
+        let o = add_option(&db, vehicle_id, n.id, option("Pads"))
+            .await
+            .unwrap();
+        let old: chrono::DateTime<chrono::Utc> = "2026-01-02T03:04:05Z".parse().unwrap();
+        need_option::ActiveModel {
+            id: Unchanged(o.id),
+            updated_at: Set(old),
+            ..Default::default()
+        }
+        .update(&db)
+        .await
+        .unwrap();
+
+        decide(&db, vehicle_id, n.id, Some(o.id), Some("fits".into()))
+            .await
+            .unwrap();
+
+        assert_eq!(option_row(&db, o.id).await.updated_at, old);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

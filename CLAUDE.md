@@ -214,8 +214,8 @@ Deleting a service, or correcting its `part_ids`, also unlinks from its need eve
 part the service stops installing. A need is
 open when `need::counts_as_open` says so (an open stage on a planned job); every open-needs count
 uses it. Rejecting or ruling out a chosen option keeps the need's reason and date on the option as
-`chosen_reason` and `chosen_on`, and `past_decisions` lists both kinds under `rejected`, so it
-still reports them. Choosing the option a need
+`chosen_reason` and `chosen_on` until the option is chosen again, and `past_decisions` lists both
+kinds under `rejected`, so it still reports them. Choosing the option a need
 already has keeps `decided_on`. `mark_ordered` claims the need with a conditional write as the
 first statement of its transaction, so two orders at once create one part, and its default cost
 is the option's unit price times the need's quantity (`need::order_cost_cents`). `update_need` and

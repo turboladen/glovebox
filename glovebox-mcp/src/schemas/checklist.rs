@@ -212,7 +212,8 @@ pub struct UpdateNeedInput {
     /// `get_checklist`). Choosing a different option stamps the decision date;
     /// choosing the option already chosen keeps the date. Either way the
     /// stored reason is REPLACED with `decision_reason`, and cleared when that
-    /// is left out. An option whose fitment is `does_not_fit`, or that is rejected, is
+    /// is left out, and the option's own `chosen_reason` and `chosen_on` are
+    /// cleared. An option whose fitment is `does_not_fit`, or that is rejected, is
     /// refused. Choose only what the owner chose.
     ///
     /// Send `null` to clear the choice, its reason and its date (do not send a
