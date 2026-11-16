@@ -401,7 +401,7 @@ pub(crate) async fn link_service(
 
 /// What happens to the recalls a deleted service performed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RecallsOnDelete {
+pub(crate) enum RecallsOnDelete {
     /// Each recall reads `open` again, unless another service also performed it.
     Reopen,
     /// Each recall reads `done` with no service, as `recall::set_status` stores `done`.

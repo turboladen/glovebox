@@ -213,7 +213,11 @@ cancelled one lets the job go to the unscheduled pool (`appointment::settle_reop
 The `delete_service` and `update_planned_work` replies name the appointment that reopened and the
 jobs that left a cancelled one. Re-recording the service does not close the appointment again.
 Deleting a service, or correcting its `part_ids`, also unlinks from its need every shop-supplied
-part the service stops installing. A need is
+part the service stops installing that goes back to purchased; a part a later service replaced
+keeps its status and its need. `delete_service` refuses a service that recorded work as done
+(jobs, installed parts, resolved incidents, recalls) until `completed_work` says whether that
+work did not happen, which undoes it, or was done another way, which keeps it and drops only the
+invoice. `docs/adr/0005-deleting-a-service-asks-what-happened.md` records why. A need is
 open when `need::counts_as_open` says so (an open stage on a planned job); every open-needs count
 uses it. Rejecting or ruling out a chosen option keeps the need's reason and date on the option as
 `chosen_reason` and `chosen_on` until the option is chosen again, and `past_decisions` lists both

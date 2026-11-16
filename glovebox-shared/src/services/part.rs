@@ -321,28 +321,11 @@ pub(crate) async fn follow_service(
     Ok(())
 }
 
-/// What [`uninstall`] does to a part's status.
-pub(crate) enum UninstallStatus {
-    /// The part reads `purchased` whatever its status was.
-    Purchased,
-    /// Only an `installed` part goes back to `purchased`; a replaced or
-    /// returned part keeps its status.
-    PurchasedIfInstalled,
-}
-
-/// Detaches a part from the service that installed it, clearing its install
-/// fields and setting its status as `status` says.
-pub(crate) async fn uninstall(
-    db: &impl ConnectionTrait,
-    p: part::Model,
-    status: UninstallStatus,
-) -> DomainResult<()> {
-    // A returned part keeps its status in both modes.
-    let revert = match status {
-        _ if is_returned(&p) => false,
-        UninstallStatus::Purchased => true,
-        UninstallStatus::PurchasedIfInstalled => p.status == PartStatus::Installed,
-    };
+/// Detaches a part from the service that installed it and clears its
+/// install fields. An `installed` part goes back to `purchased`; a replaced or
+/// returned part keeps its status.
+pub(crate) async fn uninstall(db: &impl ConnectionTrait, p: part::Model) -> DomainResult<()> {
+    let revert = p.status == PartStatus::Installed && !is_returned(&p);
     let mut active: part::ActiveModel = p.into();
     if revert {
         active.status = Set(PartStatus::Purchased);
@@ -841,9 +824,14 @@ mod tests {
         .update(&db)
         .await
         .unwrap();
-        super::super::service_record::delete(&db, vid, sid, None)
-            .await
-            .unwrap();
+        super::super::service_record::delete(
+            &db,
+            vid,
+            sid,
+            Some(super::super::service_record::CompletedWork::DidNotHappen),
+        )
+        .await
+        .unwrap();
         let after = get(&db, vid, p.id).await.unwrap();
         assert_eq!(after.status, PartStatus::Returned);
         assert_eq!(after.returned_on, Some(date("2026-11-06")));
