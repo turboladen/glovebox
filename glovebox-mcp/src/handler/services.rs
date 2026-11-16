@@ -71,8 +71,8 @@ impl GloveboxMcp {
                        fitted in `part_ids` (a part already recorded) or in `parts` (a new one, \
                        which may name the need it fills with `need_id`). A shop does not always \
                        fit everything that was brought. The result's `unfitted_needs` lists every \
-                       need on a completed job whose part is linked but not installed; ask the \
-                       owner about each one."
+                       need on a completed job whose part is linked but neither installed nor \
+                       replaced; ask the owner about each one."
     )]
     async fn record_service(
         &self,

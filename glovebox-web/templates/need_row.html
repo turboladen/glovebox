@@ -27,6 +27,7 @@
     {% if n.can_decide %}
     <form method="post" action="/vehicles/{{ n.vid }}/needs/{{ n.id }}/decision" id="need-{{ n.id }}-decide">
       <input type="hidden" name="back" value="{{ n.back }}">
+      <input type="hidden" name="stored_reason" value="{{ n.stored_reason }}">
       {% if let Some(e) = n.error_in("decide") %}<div class="work"><p class="error" role="alert"><b>Not saved.</b> {{ e }}</p></div>{% endif %}
       <div role="radiogroup" aria-label="Options for {{ n.name }}">
       {% for o in n.options %}
@@ -51,7 +52,7 @@
       </div>
       <div class="work">
         <span class="l">Your decision</span>
-        <label class="field"><span>Reason for the choice</span><textarea name="reason"{% if n.invalid("reason") %} aria-invalid="true"{% endif %}>{{ n.reason_value }}</textarea></label>
+        <label class="field"><span>Reason</span><textarea name="reason"{% if n.invalid("reason") %} aria-invalid="true"{% endif %}>{{ n.reason_value }}</textarea></label>
         <div class="form-actions"><button class="btn" type="submit">Save decision</button></div>
       </div>
     </form>

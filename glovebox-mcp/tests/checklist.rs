@@ -275,7 +275,116 @@ async fn the_calls_return_part_names_undo_a_return() {
     assert!(names(&checklist, "todos").is_empty(), "got: {checklist}");
     let row = &checklist["jobs"][0]["needs"][0];
     assert_eq!(row["need"]["chosen_option_id"], option);
+    assert_eq!(row["need"]["decision_reason"], "Matches the brakes");
     assert_eq!(row["chosen"]["rejected_reason"], Value::Null);
+    // Choosing the option again clears the history its rejection kept.
+    assert_eq!(row["chosen"]["chosen_reason"], Value::Null, "got: {row}");
+    assert_eq!(row["chosen"]["chosen_on"], Value::Null, "got: {row}");
+}
+
+#[tokio::test]
+async fn a_reason_with_no_chosen_option_is_kept_only_for_a_shop_need() {
+    let t = connect().await;
+    let v = add_vehicle(&t, "GTI").await;
+    let job = plan_job(&t, v, "Spark plugs", None).await;
+    let need = add_need(&t, v, job, "Spark plugs").await;
+
+    let err = t
+        .call_err(
+            "update_need",
+            json!({ "vehicle_id": v, "need_id": need, "decision_reason": "OEM only" }),
+        )
+        .await;
+    assert!(
+        err.contains("decision_reason: needs a chosen option unless the shop supplies the need"),
+        "got: {err}"
+    );
+
+    let shop = t
+        .call(
+            "update_need",
+            json!({
+                "vehicle_id": v, "need_id": need, "supplied_by": "shop",
+                "decision_reason": "OEM only"
+            }),
+        )
+        .await;
+    assert_eq!(shop["decision_reason"], "OEM only");
+
+    // A shop need takes a reason together with a cleared choice.
+    let cleared = t
+        .call(
+            "update_need",
+            json!({
+                "vehicle_id": v, "need_id": need, "chosen_option_id": null,
+                "decision_reason": "The shop stocks OEM plugs"
+            }),
+        )
+        .await;
+    assert_eq!(cleared["decision_reason"], "The shop stocks OEM plugs");
+
+    // Clearing a choice the need does not have leaves its reason alone.
+    let unchanged = t
+        .call(
+            "update_need",
+            json!({ "vehicle_id": v, "need_id": need, "chosen_option_id": null }),
+        )
+        .await;
+    assert_eq!(unchanged["decision_reason"], "The shop stocks OEM plugs");
+
+    // Moving it to the owner with no chosen option clears the reason.
+    let moved = t
+        .call(
+            "update_need",
+            json!({ "vehicle_id": v, "need_id": need, "supplied_by": "self" }),
+        )
+        .await;
+    assert_eq!(moved["decision_reason"], Value::Null, "got: {moved}");
+}
+
+#[tokio::test]
+async fn a_replaced_part_reads_installed_and_cannot_be_returned() {
+    let t = connect().await;
+    let v = add_vehicle(&t, "GTI").await;
+    let job = plan_job(&t, v, "Rear brakes", None).await;
+    let rotors = add_need(&t, v, job, "Rear rotors").await;
+    let option = add_option(&t, v, rotors, json!({ "description": "310 mm rotor" })).await;
+    t.call(
+        "update_need",
+        json!({
+            "vehicle_id": v, "need_id": rotors, "supplied_by": "self",
+            "chosen_option_id": option
+        }),
+    )
+    .await;
+    let ordered = t
+        .call(
+            "mark_need_ordered",
+            json!({ "vehicle_id": v, "need_id": rotors }),
+        )
+        .await;
+    let part = ordered["part"]["id"].as_i64().unwrap();
+    t.call(
+        "correct_part",
+        json!({ "vehicle_id": v, "part_id": part, "status": "replaced" }),
+    )
+    .await;
+
+    let checklist = t.call("get_checklist", json!({ "vehicle_id": v })).await;
+    assert_eq!(
+        checklist["jobs"][0]["needs"][0]["stage"], "installed",
+        "got: {checklist}"
+    );
+    let err = t
+        .call_err(
+            "return_part",
+            json!({ "vehicle_id": v, "need_id": rotors, "reason": "Wrong size" }),
+        )
+        .await;
+    assert!(
+        err.contains("is installed; only an ordered or received part can be returned"),
+        "got: {err}"
+    );
 }
 
 #[tokio::test]
@@ -724,7 +833,10 @@ async fn options_and_needs_can_be_edited_and_deleted() {
             json!({ "vehicle_id": v, "need_id": need, "chosen_option_id": null, "decision_reason": "why" }),
         )
         .await;
-    assert!(err.contains("a reason needs a chosen option"), "got: {err}");
+    assert!(
+        err.contains("decision_reason: needs a chosen option unless the shop supplies the need"),
+        "got: {err}"
+    );
 
     assert_eq!(
         t.call(

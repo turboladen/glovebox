@@ -203,7 +203,8 @@ until the records cover 1,000 miles (`costs::MIN_MILES_FOR_COST_PER_1000`).
 **Job checklist.** An appointment groups jobs (`work_items`) and to-dos for one shop trip, a job
 lists needs, and a need lists researched options. A need's stage (`undecided`, `to_order`,
 `shop_supplies`, `ordered`, `received`, `installed`) is derived by `need::stage` and never stored;
-the first matching row wins, so a linked part decides the stage. An appointment reads `done` when
+the first matching row wins, so a linked part decides the stage, and a part that is installed or
+replaced reads `installed`. An appointment reads `done` when
 it has jobs and every one is done or dropped; only `cancelled` and a hand-closed date are stored,
 and closing or cancelling unassigns the jobs that are still planned. A closed or cancelled
 appointment therefore never holds a planned job: when a job on one returns to `planned` (its
@@ -213,10 +214,15 @@ Deleting a service, or correcting its `part_ids`, also unlinks from its need eve
 part the service stops installing. A need is
 open when `need::counts_as_open` says so (an open stage on a planned job); every open-needs count
 uses it. Rejecting or ruling out a chosen option keeps the need's reason and date on the option as
-`chosen_reason` and `chosen_on`, and `past_decisions` lists both kinds under `rejected`, so it
-still reports them. Choosing the option a need
-already has keeps `decided_on`. `mark_ordered` claims the need with a conditional write as the
-first statement of its transaction, so two orders at once create one part, and its default cost
+`chosen_reason` and `chosen_on` until the option is chosen again, and `past_decisions` lists both
+kinds under `rejected`, so it still reports them. Choosing the option a need
+already has keeps `decided_on`. A need with no chosen option holds a `decision_reason` only while
+the shop supplies it: `need::update` refuses one otherwise and clears the stored one when the
+supplier moves away from `shop`. Clearing a choice the need does not have keeps its reason. The web
+decision form sends back the reason it showed, so with no option chosen an unedited reason counts
+as none sent, and the form goes through `need::update_with_choice` like `update_need`.
+`mark_ordered` claims the need with a conditional write as the first statement of its transaction,
+so two orders at once create one part, and its default cost
 is the option's unit price times the need's quantity (`need::order_cost_cents`). `update_need` and
 `update_appointment` apply an edit together with a choice or a status change in one transaction
 (`need::update_with_choice`, `appointment::update_with_status`), so a refused choice or status

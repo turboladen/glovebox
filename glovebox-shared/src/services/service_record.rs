@@ -98,14 +98,16 @@ pub struct ServiceRecordWithLinks {
     /// coexist. Empty (and omitted from JSON) on every other path.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub possible_duplicates: Vec<PossibleDuplicate>,
-    /// Needs on the jobs this service completed whose part is linked but not
-    /// installed, so the caller can ask whether each was fitted. Filled only
+    /// Needs on the jobs this service completed whose part is linked but
+    /// neither installed nor replaced, so the caller can ask whether each was
+    /// fitted. Filled only
     /// by `create` and `update`; empty (and omitted from JSON) otherwise.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unfitted_needs: Vec<UnfittedNeed>,
 }
 
-/// A need on a completed job whose linked part is not installed.
+/// A need on a completed job whose linked part is neither installed nor
+/// replaced.
 #[derive(Clone, Debug, Serialize)]
 pub struct UnfittedNeed {
     pub need_id: i32,
@@ -287,8 +289,8 @@ impl ServiceRecordWithLinks {
     }
 }
 
-/// The needs on `jobs` whose linked part is not installed, in need order, with
-/// two batched queries.
+/// The needs on `jobs` whose linked part has not been fitted (it is neither
+/// installed nor replaced), in need order, with two batched queries.
 async fn unfitted_needs(
     db: &impl ConnectionTrait,
     jobs: &[WorkItemRef],
@@ -315,7 +317,7 @@ async fn unfitted_needs(
         .into_iter()
         .filter_map(|n| {
             let part_id = n.part_id?;
-            if parts.get(&part_id)?.status == PartStatus::Installed {
+            if part_svc::was_fitted(parts.get(&part_id)?) {
                 return None;
             }
             Some(UnfittedNeed {
@@ -3568,6 +3570,81 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(again.unfitted_needs.len(), 1);
+        }
+
+        async fn set_part_status(f: &Fixture, part_id: i32, status: PartStatus) {
+            part::ActiveModel {
+                id: Unchanged(part_id),
+                status: Set(status),
+                ..Default::default()
+            }
+            .update(&f.db)
+            .await
+            .unwrap();
+        }
+
+        #[tokio::test]
+        async fn a_replaced_part_is_not_listed_as_unfitted() {
+            let f = fixture().await;
+            let job_id = add_job(&f, "Rear brakes").await;
+            let need_id = add_need(&f, job_id, "Pads", None).await;
+            let part_id = link_new_part(&f, need_id, true).await;
+            set_part_status(&f, part_id, PartStatus::Replaced).await;
+
+            let created = create(
+                &f.db,
+                f.vehicle,
+                NewServiceRecord {
+                    work_item_ids: Some(vec![job_id]),
+                    ..invoice(&f)
+                },
+            )
+            .await
+            .unwrap();
+
+            assert!(created.unfitted_needs.is_empty());
+        }
+
+        // Dropping a replaced part from the service's `part_ids` keeps its
+        // status, so the need stays linked and still reads installed.
+        #[tokio::test]
+        async fn a_replaced_part_dropped_from_its_service_still_reads_installed() {
+            let f = fixture().await;
+            let job_id = add_job(&f, "Rear brakes").await;
+            let need_id = add_need(&f, job_id, "Pads", None).await;
+            let part_id = link_new_part(&f, need_id, true).await;
+            let created = create(
+                &f.db,
+                f.vehicle,
+                NewServiceRecord {
+                    part_ids: Some(vec![part_id]),
+                    work_item_ids: Some(vec![job_id]),
+                    ..invoice(&f)
+                },
+            )
+            .await
+            .unwrap();
+            set_part_status(&f, part_id, PartStatus::Replaced).await;
+
+            update(
+                &f.db,
+                f.vehicle,
+                created.record.id,
+                UpdateServiceRecord {
+                    part_ids: Some(vec![]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+            let n = job_need::Entity::find_by_id(need_id)
+                .one(&f.db)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(n.part_id, Some(part_id));
+            assert_eq!(stage_of(&f, need_id).await, need::Stage::Installed);
         }
 
         #[tokio::test]

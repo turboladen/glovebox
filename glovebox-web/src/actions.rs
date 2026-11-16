@@ -76,7 +76,7 @@ fn field_label(field: &str) -> &str {
     match field {
         "amount" | "cost_cents" => "Price",
         "purchase_date" => "Order date",
-        "reason" => "Reason",
+        "reason" | "decision_reason" => "Reason",
         "title" => "To-do",
         "supplied_by" => "Supplier",
         "approach" => "Approach",
@@ -90,7 +90,7 @@ fn input_for(form: &str, field: &str) -> Option<&'static str> {
     match (form, field) {
         ("order", "amount" | "cost_cents") => Some("cost"),
         ("order", "purchase_date") => Some("purchase_date"),
-        ("return" | "decide", "reason") => Some("reason"),
+        ("return" | "decide", "reason") | ("decide", "decision_reason") => Some("reason"),
         _ => None,
     }
 }
@@ -287,6 +287,9 @@ pub struct DecisionForm {
     option_id: String,
     #[serde(default)]
     reason: String,
+    // The reason the form showed when it was rendered. A form rendered
+    // without the field sends none, and its reason box counts as unedited.
+    stored_reason: Option<String>,
     back: Option<String>,
 }
 
@@ -318,10 +321,20 @@ async fn decide(
         "option",
         "choose one of the listed options",
     )?;
-    // The form sends the stored reason along with an empty choice; clearing
-    // the choice drops the reason.
-    let reason = option_id.and(trim_to_none(&form.reason));
-    need::decide(&state.db, vid, id, option_id, reason).await
+    // The reason box is prefilled with the stored reason, so it arrives even
+    // when the owner only cleared the choice. With no option chosen, an
+    // unedited box therefore counts as no reason sent, and the shared rules
+    // for clearing a choice decide what happens to the stored one.
+    let reason = trim_to_none(&form.reason);
+    let edited = form
+        .stored_reason
+        .as_deref()
+        .is_some_and(|stored| reason != trim_to_none(stored));
+    let input = UpdateNeed {
+        decision_reason: (option_id.is_some() || edited).then_some(reason),
+        ..Default::default()
+    };
+    need::update_with_choice(&state.db, vid, id, input, Some(option_id)).await
 }
 
 #[derive(Deserialize)]
