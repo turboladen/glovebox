@@ -2571,6 +2571,44 @@ mod tests {
         assert_eq!(row_count::<todo::Entity>(&pools[0]).await, 1);
     }
 
+    // A correction that waits on a return reads the returned part once the
+    // return commits, so it refuses rather than install a part that is gone.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_correction_racing_a_return_sees_the_returned_part() {
+        let (_dir, pools) = race_pools().await;
+        let (first, second) = (pools[0].clone(), pools[1].clone());
+        let (vehicle_id, job_id) = seed_job(&first).await;
+        let (n, _) = ordered_need(&first, vehicle_id, job_id).await;
+        let part_id = require(&first, vehicle_id, n.id)
+            .await
+            .unwrap()
+            .part_id
+            .unwrap();
+
+        let txn = first.begin().await.unwrap();
+        let input = ReturnInput {
+            reason: "Wrong size".into(),
+            option_was_wrong: false,
+        };
+        return_part(&txn, vehicle_id, n.id, input).await.unwrap();
+        let correcting = tokio::spawn(async move {
+            let input = crate::inputs::part::UpdatePart {
+                status: Some(PartStatus::Installed),
+                ..Default::default()
+            };
+            crate::services::part::update(&second, vehicle_id, part_id, input).await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        txn.commit().await.unwrap();
+
+        let err = correcting.await.unwrap().unwrap_err();
+        assert!(err.to_string().contains("was returned"), "{err}");
+        let p = crate::services::part::get(&first, vehicle_id, part_id)
+            .await
+            .unwrap();
+        assert_eq!(p.status, PartStatus::Returned);
+    }
+
     #[tokio::test]
     async fn mark_ordered_on_a_shop_need_is_refused() {
         let db = test_db().await;

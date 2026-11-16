@@ -1,4 +1,4 @@
-use sea_orm::*;
+use sea_orm::{sea_query::Expr, *};
 
 use crate::{
     entities::{
@@ -140,7 +140,39 @@ pub async fn create(
     Ok(model.insert(db).await?)
 }
 
-pub async fn update(
+/// Corrects a part's fields, in one transaction.
+///
+/// # Errors
+/// `NotFound` for a part or an installing service that is not the vehicle's;
+/// `BadRequest` for the status `returned`, which only `return_part` sets, for
+/// any status but `purchased` on a returned part, and for install details on
+/// a returned part that the same update does not make `purchased`.
+pub async fn update<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    id: i32,
+    input: UpdatePart,
+) -> DomainResult<part::Model> {
+    let txn = db.begin().await?;
+    // The claim takes the write lock before the part is read, so a return
+    // from the other program cannot commit between the checks and the write.
+    claim(&txn, id).await?;
+    let updated = write_update(&txn, vehicle_id, id, input).await?;
+    txn.commit().await?;
+    Ok(updated)
+}
+
+// Writes the part row without changing it, as `need::claim` does for a need.
+async fn claim(txn: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
+    part::Entity::update_many()
+        .col_expr(part::Column::UpdatedAt, Expr::col(part::Column::UpdatedAt))
+        .filter(part::Column::Id.eq(id))
+        .exec(txn)
+        .await?;
+    Ok(())
+}
+
+async fn write_update(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     id: i32,
