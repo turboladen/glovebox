@@ -439,13 +439,8 @@ pub struct DeleteServiceInput {
     pub vehicle_id: i32,
     /// Service record id, from `list_services` or `summarize_recent_activity`.
     pub service_id: i32,
-    /// What happened to the work this service recorded as done: `did_not_happen` (it was
-    /// never done, so its jobs, incidents and recalls open again and its installed parts go
-    /// back to purchased) or `done_another_way` (it was done, at another shop, on another
-    /// visit or by the owner, so it all stays done and only this invoice goes).
-    ///
-    /// Needed only when the service recorded work as done; the refusal without it names
-    /// each item. Ask the owner which is true; never choose on your own.
+    /// What happened to the work this service recorded as done: `did_not_happen` or
+    /// `done_another_way`. Needed only when the service recorded work as done; ask the owner.
     #[serde(default)]
     pub completed_work: Option<glovebox_shared::services::service_record::CompletedWork>,
 }

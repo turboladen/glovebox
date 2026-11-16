@@ -46,8 +46,8 @@ would undo.
 ## Alternatives considered
 
 - **A choice for each kind of work** (jobs, parts, incidents, recalls). This is more precise, but
-  the owner's answer is one fact about one invoice, and mixed answers are rare enough to handle
-  with `correct_service` before the delete.
+  the owner's answer is one fact about one invoice. `correct_service` cannot yet express a mixed
+  answer, because dropping an item from it always treats that item's work as not done.
 - **Always undo, and warn in the reply.** The owner would learn what changed only after it had
   changed. A wrong guess also costs the most here, because the undo reopens appointments and
   unlinks parts.
@@ -59,4 +59,6 @@ would undo.
 - Claude has to ask before deleting any service that recorded work, which is most of them.
 - After `done_another_way`, a job is done with no completing service, the same state as a job set
   to done by hand. A recall it came from therefore reads done.
-- `part::uninstall` has one behavior: only an installed part goes back to purchased.
+- Jobs, parts and recalls each have one release function that takes the answer
+  (`work_item::release_completed`, `part::release_from_service`,
+  `recall::release_from_deleted_service`), so `correct_service` can take the same choice later.

@@ -178,9 +178,8 @@ impl GloveboxMcp {
                        again (`appointments_reopened`; re-filing does not close it, so offer \
                        `update_appointment` with `status: \"done\"` afterwards), and a job on a \
                        cancelled appointment goes back to the unscheduled jobs \
-                       (`jobs_unassigned`). After `done_another_way`, the jobs stay done, the \
-                       incidents stay resolved, the recalls stay done (`recalls_kept_done`), and \
-                       the parts keep their status and install date. Either way the service's \
+                       (`jobs_unassigned`). After `done_another_way` all of that work stays done \
+                       (`recalls_kept_done`) and only the invoice goes. Either way the service's \
                        schedule links, line items and odometer reading are removed, and its parts \
                        are kept and listed in `kept_part_ids`: when re-filing the invoice, attach \
                        them with `record_service`'s `part_ids`; otherwise remove them with \

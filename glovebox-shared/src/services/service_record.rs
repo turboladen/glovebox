@@ -8,10 +8,10 @@ use crate::{
         incident::{self, IncidentCategory},
         incident_service_link::{self, LinkRole},
         job_need, mileage_log,
-        part::{self, PartStatus, Supplier},
+        part::{self, PartStatus},
         service_recall_link,
         service_record::{self, Payer, Performer},
-        service_record_line_item, service_schedule_link, work_item as job,
+        service_record_line_item, service_schedule_link,
     },
     error::{DomainError, DomainResult},
     inputs::{
@@ -962,10 +962,9 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
             .into_iter()
             .filter(|old_part| !new_part_ids.contains(&old_part.id))
             .collect();
-        unlink_shop_parts_from_needs(&txn, &removed).await?;
-        for old_part in removed {
-            part_svc::uninstall(&txn, old_part).await?;
-        }
+        // Taking a part off the invoice treats its install as not having
+        // happened; only `delete` asks the owner which it was.
+        part_svc::release_from_service(&txn, removed, CompletedWork::DidNotHappen).await?;
         // Link new parts
         for &part_id in &new_part_ids {
             part_svc::install(&txn, vehicle_id, part_id, &record, Set(record.mileage)).await?;
@@ -999,40 +998,6 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     txn.commit().await?;
 
     Ok(updated)
-}
-
-/// Detaches from its need every installed part in `parts` that the shop
-/// supplied, when a service stops installing those parts. The owner never held such a part,
-/// so its need falls back to `shop_supplies` and a re-filed invoice can link a
-/// new part to it.
-async fn unlink_shop_parts_from_needs(
-    txn: &impl ConnectionTrait,
-    parts: &[part::Model],
-) -> DomainResult<()> {
-    // A part a later service marked replaced did come off the car, so it
-    // keeps its need; only an installed part goes back to purchased and
-    // leaves it.
-    let shop_part_ids: Vec<i32> = parts
-        .iter()
-        .filter(|p| p.supplied_by == Supplier::Shop && p.status == PartStatus::Installed)
-        .map(|p| p.id)
-        .collect();
-    if shop_part_ids.is_empty() {
-        return Ok(());
-    }
-    job_need::Entity::update_many()
-        .col_expr(
-            job_need::Column::PartId,
-            sea_query::Expr::value(None::<i32>),
-        )
-        .col_expr(
-            job_need::Column::UpdatedAt,
-            sea_query::Expr::value(super::now()),
-        )
-        .filter(job_need::Column::PartId.is_in(shop_part_ids))
-        .exec(txn)
-        .await?;
-    Ok(())
 }
 
 /// Refuses an invoice number that another service on the vehicle already
@@ -1086,19 +1051,20 @@ pub async fn link_schedule_items<C: ConnectionTrait + TransactionTrait>(
     load_service_links(db, record).await
 }
 
-use super::recall::RecallsOnDelete;
-
 crate::vocab::vocabulary! {
     /// What happened to the work a service recorded as done, which deleting
-    /// the service needs to know.
-    // `did_not_happen`: the work was never done, so what the service closed
-    // opens again. `done_another_way`: the work was done, but not on this
-    // invoice, so it stays done and only the invoice goes.
+    /// the service needs to know: `did_not_happen` undoes the work, and
+    /// `done_another_way` keeps it and drops only the invoice.
     pub enum CompletedWork {
         DidNotHappen => "did_not_happen",
         DoneAnotherWay => "done_another_way",
     }
 }
+
+// The answer most tests give when they delete a service, which undoes its
+// work as a delete did before the owner was asked.
+#[cfg(test)]
+pub(crate) const UNDO: Option<CompletedWork> = Some(CompletedWork::DidNotHappen);
 
 /// What [`delete`] changed besides the service itself.
 #[derive(Debug, Default, Serialize)]
@@ -1124,28 +1090,13 @@ pub struct DeletedService {
 
 /// Deletes a service record and its owned rows.
 ///
-/// When the service recorded work as done (jobs it completed, parts it
-/// installed, incidents it resolved or recalls it performed), `completed`
-/// must say what happened to that work. With `None` nothing is deleted and
-/// the call returns `BadRequest` naming each item. For a service that
-/// recorded none, `completed` is ignored.
-///
-/// After `did_not_happen`, each job it completed returns to `planned`,
-/// which opens a hand-closed appointment again and takes a job off a
-/// cancelled one (`reopened_appointment_ids`, `unassigned_job_ids`). Each
-/// incident it resolved goes back to unresolved unless another service also
-/// resolved it, each recall it performed reads `open` unless another service
-/// also performed it (`still_done_elsewhere_recall_ids`), and each part it
-/// installed is `purchased` again with its install fields cleared. A part a
-/// later service marked replaced keeps that status and its need. An
-/// installed part the shop supplied is unlinked from its need.
-///
-/// After `done_another_way`, the jobs stay done, the incidents stay
-/// resolved, the recalls are stored as done, and the parts keep their status
-/// and install date, unlinked from the service.
-///
-/// Either way the parts' ids come back in `kept_part_ids`, so the caller can
-/// attach them to a re-filed service or delete them with `part::delete`.
+/// A service that recorded work as done (jobs it completed, parts it
+/// installed, incidents it resolved or recalls it performed) needs
+/// `completed`: with `None` nothing is written and the call returns
+/// `BadRequest` naming each item. `did_not_happen` undoes that work unless
+/// another service also covers it, and `done_another_way` keeps it and
+/// unlinks it from the service. A part a later service replaced stays
+/// replaced either way. The parts are kept and listed in `kept_part_ids`.
 pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -1162,11 +1113,10 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .await?
         .remove(&existing.id)
         .unwrap_or_default();
-    let completed_jobs = job::Entity::find()
-        .filter(job::Column::CompletedServiceId.eq(existing.id))
-        .order_by_asc(job::Column::Id)
-        .all(&txn)
-        .await?;
+    let completed_jobs = work_item::load_completed_by(&txn, &[existing.id])
+        .await?
+        .remove(&existing.id)
+        .unwrap_or_default();
     let linked_parts = part::Entity::find()
         .filter(part::Column::InstalledServiceId.eq(existing.id))
         .order_by_asc(part::Column::Id)
@@ -1177,10 +1127,12 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         && completed_jobs.is_empty()
         && linked_parts.is_empty()
         && resolved_incidents.is_empty());
-    // The choice is checked before anything is written.
-    let choice = match (recorded_work, completed) {
-        (false, _) => None,
-        (true, None) => {
+    // The choice is checked before anything is written. A service that
+    // recorded no work has nothing for either answer to act on.
+    let choice = match completed {
+        Some(choice) => choice,
+        None if !recorded_work => CompletedWork::DidNotHappen,
+        None => {
             return Err(completed_work_needs_a_choice(
                 existing.id,
                 &completed_jobs,
@@ -1189,20 +1141,20 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
                 &performed,
             ));
         }
-        (true, Some(choice)) => Some(choice),
     };
+    let job_ids: Vec<i32> = completed_jobs.iter().map(|j| j.id).collect();
+    let settled = work_item::release_completed(&txn, &job_ids, choice).await?;
+    if choice == CompletedWork::DidNotHappen {
+        let incident_ids: Vec<i32> = resolved_incidents.iter().map(|i| i.id).collect();
+        reopen_resolved_incidents(&txn, existing.id, incident_ids).await?;
+    }
     let mut outcome = DeletedService {
         kept_part_ids: linked_parts.iter().map(|p| p.id).collect(),
+        reopened_appointment_ids: settled.reopened_appointment_ids,
+        unassigned_job_ids: settled.unassigned_job_ids,
         ..Default::default()
     };
-
-    if choice == Some(CompletedWork::DoneAnotherWay) {
-        detach_completed_work(&txn, existing.id).await?;
-    } else {
-        let settled = undo_completed_work(&txn, existing.id, linked_parts).await?;
-        outcome.reopened_appointment_ids = settled.reopened_appointment_ids;
-        outcome.unassigned_job_ids = settled.unassigned_job_ids;
-    }
+    part_svc::release_from_service(&txn, linked_parts, choice).await?;
 
     // Remove the auto-created mileage log(s) — an orphaned log would keep
     // feeding reminders' mileage estimate while staying hidden from the feed.
@@ -1236,72 +1188,22 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     // Delete the service record
     existing.delete(&txn).await?;
 
-    if let Some(choice) = choice.filter(|_| !performed.is_empty()) {
-        let finding_ids = performed.iter().map(|r| r.finding_id).collect();
-        let recalls = match choice {
-            CompletedWork::DidNotHappen => RecallsOnDelete::Reopen,
-            CompletedWork::DoneAnotherWay => RecallsOnDelete::KeepDone,
-        };
-        let released = recall::release_from_deleted_service(&txn, finding_ids, recalls).await?;
-        outcome.reopened_recall_ids = released.reopened;
-        outcome.kept_done_recall_ids = released.kept_done;
-        outcome.still_done_elsewhere_recall_ids = released.still_done_elsewhere;
-    }
+    let finding_ids = performed.iter().map(|r| r.finding_id).collect();
+    let released = recall::release_from_deleted_service(&txn, finding_ids, choice).await?;
+    outcome.reopened_recall_ids = released.reopened;
+    outcome.kept_done_recall_ids = released.kept_done;
+    outcome.still_done_elsewhere_recall_ids = released.still_done_elsewhere;
 
     txn.commit().await?;
 
     Ok(outcome)
 }
 
-// Keeps the work a deleted service recorded as done and drops only its link
-// to the service: jobs stay done, and parts keep their status and install
-// date. Incident and recall links go with the service's other link rows.
-async fn detach_completed_work(txn: &impl ConnectionTrait, service_id: i32) -> DomainResult<()> {
-    job::Entity::update_many()
-        .col_expr(
-            job::Column::CompletedServiceId,
-            sea_query::Expr::value(None::<i32>),
-        )
-        .col_expr(job::Column::UpdatedAt, sea_query::Expr::value(super::now()))
-        .filter(job::Column::CompletedServiceId.eq(service_id))
-        .exec(txn)
-        .await?;
-    part::Entity::update_many()
-        .col_expr(
-            part::Column::InstalledServiceId,
-            sea_query::Expr::value(None::<i32>),
-        )
-        .col_expr(
-            part::Column::UpdatedAt,
-            sea_query::Expr::value(super::now()),
-        )
-        .filter(part::Column::InstalledServiceId.eq(service_id))
-        .exec(txn)
-        .await?;
-    Ok(())
-}
-
-// Undoes the work a deleted service recorded as done: its jobs return to
-// planned, its incidents reopen, and its installed parts go back to purchased.
-async fn undo_completed_work(
-    txn: &impl ConnectionTrait,
-    service_id: i32,
-    linked_parts: Vec<part::Model>,
-) -> DomainResult<appointment::SettledJobs> {
-    let settled = work_item::reopen_completed_by(txn, service_id).await?;
-    reopen_resolved_incidents(txn, service_id).await?;
-    unlink_shop_parts_from_needs(txn, &linked_parts).await?;
-    for p in linked_parts {
-        part_svc::uninstall(txn, p).await?;
-    }
-    Ok(settled)
-}
-
 // The refusal to delete a service that recorded work as done before the
 // caller says what happened to it, naming each item.
 fn completed_work_needs_a_choice(
     service_id: i32,
-    jobs: &[job::Model],
+    jobs: &[WorkItemRef],
     parts: &[part::Model],
     incidents: &[incident::Model],
     recalls: &[RecallRef],
@@ -1368,21 +1270,13 @@ async fn claim(txn: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
     Ok(())
 }
 
-/// Marks unresolved each incident a service that is about to be deleted
-/// resolved, unless another service also resolved it. Runs before the link
-/// rows are removed because it reads them.
+// Marks unresolved each of `resolved_here`, the incidents a service that is
+// about to be deleted resolved, unless another service also resolved it.
 async fn reopen_resolved_incidents(
     txn: &impl ConnectionTrait,
     service_id: i32,
+    resolved_here: Vec<i32>,
 ) -> DomainResult<()> {
-    let resolved_here: Vec<i32> = incident_service_link::Entity::find()
-        .filter(incident_service_link::Column::ServiceRecordId.eq(service_id))
-        .filter(incident_service_link::Column::Role.eq(LinkRole::Resolved))
-        .all(txn)
-        .await?
-        .into_iter()
-        .map(|l| l.incident_id)
-        .collect();
     if resolved_here.is_empty() {
         return Ok(());
     }
@@ -1418,7 +1312,7 @@ async fn reopen_resolved_incidents(
 mod tests {
     use super::*;
     use crate::{
-        entities::{service_record_line_item::WorkKind, work_item::JobStatus},
+        entities::{part::Supplier, service_record_line_item::WorkKind, work_item::JobStatus},
         inputs::{incident::NewIncident, part::NewPart},
         services::incident,
         test_support::{VehicleFixture, date, row_count, test_db},
@@ -1668,15 +1562,10 @@ mod tests {
         .await
         .unwrap();
 
-        let kept = delete(
-            &db,
-            vid,
-            created.record.id,
-            Some(CompletedWork::DidNotHappen),
-        )
-        .await
-        .unwrap()
-        .kept_part_ids;
+        let kept = delete(&db, vid, created.record.id, UNDO)
+            .await
+            .unwrap()
+            .kept_part_ids;
         assert_eq!(kept, vec![part_id], "the kept parts are reported");
 
         // Record gone
@@ -1738,9 +1627,7 @@ mod tests {
         .await
         .unwrap();
 
-        delete(&db, vid, svc_id, Some(CompletedWork::DidNotHappen))
-            .await
-            .unwrap();
+        delete(&db, vid, svc_id, UNDO).await.unwrap();
 
         // The incident link rows are gone.
         let links = incident_service_link::Entity::find()
@@ -1813,14 +1700,7 @@ mod tests {
         .await
         .unwrap();
 
-        delete(
-            &db,
-            vid,
-            created.record.id,
-            Some(CompletedWork::DidNotHappen),
-        )
-        .await
-        .unwrap();
+        delete(&db, vid, created.record.id, UNDO).await.unwrap();
 
         let logs = mileage_log::Entity::find()
             .filter(mileage_log::Column::VehicleId.eq(vid))
@@ -3169,9 +3049,7 @@ mod tests {
         assert_eq!(work_item_before.status, JobStatus::Done);
         assert_eq!(recall::list(&db, v).await.unwrap()[0].status, "done");
 
-        delete(&db, v, closing.record.id, Some(CompletedWork::DidNotHappen))
-            .await
-            .unwrap();
+        delete(&db, v, closing.record.id, UNDO).await.unwrap();
 
         let work_item_after = work_item_svc::get(&db, v, work_item.id).await.unwrap();
         assert_eq!(work_item_after.status, JobStatus::Planned);
@@ -3315,9 +3193,7 @@ mod tests {
             .await
             .unwrap();
 
-        let out = delete(&db, v, svc, Some(CompletedWork::DidNotHappen))
-            .await
-            .unwrap();
+        let out = delete(&db, v, svc, UNDO).await.unwrap();
 
         assert_eq!(out.reopened_recall_ids, vec![finding_id]);
         assert!(out.kept_done_recall_ids.is_empty());
@@ -3360,9 +3236,7 @@ mod tests {
         let first = service_with_recall(&db, v, finding_id).await;
         let second = service_with_recall(&db, v, finding_id).await;
 
-        let out = delete(&db, v, first, Some(CompletedWork::DidNotHappen))
-            .await
-            .unwrap();
+        let out = delete(&db, v, first, UNDO).await.unwrap();
 
         assert!(out.reopened_recall_ids.is_empty());
         assert_eq!(out.still_done_elsewhere_recall_ids, vec![finding_id]);
@@ -3393,9 +3267,7 @@ mod tests {
         .unwrap();
         let part_id = svc.parts[0].id;
 
-        delete(&db, v, svc.record.id, Some(CompletedWork::DidNotHappen))
-            .await
-            .unwrap();
+        delete(&db, v, svc.record.id, UNDO).await.unwrap();
 
         let kept = part_svc::get(&db, v, part_id).await.unwrap();
         assert_eq!(kept.status, PartStatus::Purchased);
@@ -3877,14 +3749,9 @@ mod tests {
             assert_eq!(appointment_status(&f).await, "done");
             assert_eq!(stage_of(&f, need_id).await, need::Stage::Installed);
 
-            let deleted = delete(
-                &f.db,
-                f.vehicle,
-                created.record.id,
-                Some(CompletedWork::DidNotHappen),
-            )
-            .await
-            .unwrap();
+            let deleted = delete(&f.db, f.vehicle, created.record.id, UNDO)
+                .await
+                .unwrap();
 
             // An appointment that read done from its jobs had no date to clear.
             assert!(deleted.reopened_appointment_ids.is_empty());
@@ -3910,14 +3777,9 @@ mod tests {
                 .await
                 .unwrap();
 
-            let deleted = delete(
-                &f.db,
-                f.vehicle,
-                created.record.id,
-                Some(CompletedWork::DidNotHappen),
-            )
-            .await
-            .unwrap();
+            let deleted = delete(&f.db, f.vehicle, created.record.id, UNDO)
+                .await
+                .unwrap();
             assert_eq!(deleted.reopened_appointment_ids, vec![f.appointment]);
             assert!(deleted.unassigned_job_ids.is_empty());
 
@@ -3953,14 +3815,9 @@ mod tests {
                 .await
                 .unwrap();
 
-            let deleted = delete(
-                &f.db,
-                f.vehicle,
-                created.record.id,
-                Some(CompletedWork::DidNotHappen),
-            )
-            .await
-            .unwrap();
+            let deleted = delete(&f.db, f.vehicle, created.record.id, UNDO)
+                .await
+                .unwrap();
             assert!(deleted.reopened_appointment_ids.is_empty());
             assert_eq!(deleted.unassigned_job_ids, vec![job_id]);
 
@@ -3991,14 +3848,9 @@ mod tests {
             };
             let created = create(&f.db, f.vehicle, filed()).await.unwrap();
 
-            let deleted = delete(
-                &f.db,
-                f.vehicle,
-                created.record.id,
-                Some(CompletedWork::DidNotHappen),
-            )
-            .await
-            .unwrap();
+            let deleted = delete(&f.db, f.vehicle, created.record.id, UNDO)
+                .await
+                .unwrap();
 
             assert_eq!(deleted.kept_part_ids, created.part_ids);
             assert_eq!(stage_of(&f, need_id).await, need::Stage::ShopSupplies);
@@ -4055,9 +3907,17 @@ mod tests {
             assert_eq!(stage_of(&f, pads).await, need::Stage::Received);
         }
 
-        // Files an invoice that completes `job_id` and installs a shop part
-        // for `need_id`, and returns the service and part ids.
-        async fn file_shop_part(f: &Fixture, job_id: i32, need_id: i32) -> (i32, i32) {
+        // A "Rear brakes" job whose shop-supplied fluid an invoice installed.
+        struct Filed {
+            job_id: i32,
+            need_id: i32,
+            service_id: i32,
+            part_id: i32,
+        }
+
+        async fn file_shop_part(f: &Fixture) -> Filed {
+            let job_id = add_job(f, "Rear brakes").await;
+            let need_id = add_need(f, job_id, "Brake fluid", Some(Supplier::Shop)).await;
             let created = create(
                 &f.db,
                 f.vehicle,
@@ -4069,44 +3929,31 @@ mod tests {
                         need_id: Some(need_id),
                         ..Default::default()
                     }]),
-                    ..invoice(&f)
+                    ..invoice(f)
                 },
             )
             .await
             .unwrap();
-            (created.record.id, created.part_ids[0])
-        }
-
-        async fn mark_replaced(f: &Fixture, part_id: i32) {
-            part_svc::update(
-                &f.db,
-                f.vehicle,
-                part_id,
-                crate::inputs::part::UpdatePart {
-                    status: Some(PartStatus::Replaced),
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap();
+            Filed {
+                job_id,
+                need_id,
+                service_id: created.record.id,
+                part_id: created.part_ids[0],
+            }
         }
 
         #[tokio::test]
         async fn work_that_did_not_happen_keeps_a_part_a_later_service_replaced() {
             let f = fixture().await;
-            let job_id = add_job(&f, "Rear brakes").await;
-            let need_id = add_need(&f, job_id, "Brake fluid", Some(Supplier::Shop)).await;
-            let (service_id, part_id) = file_shop_part(&f, job_id, need_id).await;
-            mark_replaced(&f, part_id).await;
-
-            delete(
-                &f.db,
-                f.vehicle,
+            let Filed {
+                job_id,
+                need_id,
                 service_id,
-                Some(CompletedWork::DidNotHappen),
-            )
-            .await
-            .unwrap();
+                part_id,
+            } = file_shop_part(&f).await;
+            set_part_status(&f, part_id, PartStatus::Replaced).await;
+
+            delete(&f.db, f.vehicle, service_id, UNDO).await.unwrap();
 
             let p = part_svc::get(&f.db, f.vehicle, part_id).await.unwrap();
             assert_eq!(
@@ -4121,9 +3968,12 @@ mod tests {
         #[tokio::test]
         async fn work_done_another_way_stays_done_without_the_invoice() {
             let f = fixture().await;
-            let job_id = add_job(&f, "Rear brakes").await;
-            let need_id = add_need(&f, job_id, "Brake fluid", Some(Supplier::Shop)).await;
-            let (service_id, part_id) = file_shop_part(&f, job_id, need_id).await;
+            let Filed {
+                job_id,
+                need_id,
+                service_id,
+                part_id,
+            } = file_shop_part(&f).await;
             let installed_on = part_svc::get(&f.db, f.vehicle, part_id)
                 .await
                 .unwrap()
@@ -4156,9 +4006,12 @@ mod tests {
         #[tokio::test]
         async fn a_service_with_completed_work_refuses_a_delete_with_no_choice() {
             let f = fixture().await;
-            let job_id = add_job(&f, "Rear brakes").await;
-            let need_id = add_need(&f, job_id, "Brake fluid", Some(Supplier::Shop)).await;
-            let (service_id, part_id) = file_shop_part(&f, job_id, need_id).await;
+            let Filed {
+                job_id,
+                need_id,
+                service_id,
+                part_id,
+            } = file_shop_part(&f).await;
 
             let err = delete(&f.db, f.vehicle, service_id, None)
                 .await
@@ -4179,10 +4032,13 @@ mod tests {
         #[tokio::test]
         async fn correcting_the_parts_keeps_a_replaced_shop_part_on_its_need() {
             let f = fixture().await;
-            let job_id = add_job(&f, "Rear brakes").await;
-            let need_id = add_need(&f, job_id, "Brake fluid", Some(Supplier::Shop)).await;
-            let (service_id, part_id) = file_shop_part(&f, job_id, need_id).await;
-            mark_replaced(&f, part_id).await;
+            let Filed {
+                need_id,
+                service_id,
+                part_id,
+                ..
+            } = file_shop_part(&f).await;
+            set_part_status(&f, part_id, PartStatus::Replaced).await;
 
             update(
                 &f.db,
@@ -4462,14 +4318,9 @@ mod tests {
             .unwrap();
             assert_eq!(stage_of(&f, need_id).await, need::Stage::Installed);
 
-            delete(
-                &f.db,
-                f.vehicle,
-                created.record.id,
-                Some(CompletedWork::DidNotHappen),
-            )
-            .await
-            .unwrap();
+            delete(&f.db, f.vehicle, created.record.id, UNDO)
+                .await
+                .unwrap();
 
             assert_eq!(stage_of(&f, need_id).await, need::Stage::Ordered);
             assert_eq!(job_status(&f, job_id).await, JobStatus::Planned);

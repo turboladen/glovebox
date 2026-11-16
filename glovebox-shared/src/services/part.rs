@@ -2,11 +2,13 @@ use sea_orm::{sea_query::Expr, *};
 
 use crate::{
     entities::{
+        job_need,
         part::{self, PartStatus, Supplier},
         service_record,
     },
     error::{DomainError, DomainResult},
     inputs::part::{NewPart, PartFilter, UpdatePart},
+    services::service_record::CompletedWork,
 };
 
 /// Whether `p` was sent back from its need.
@@ -321,20 +323,59 @@ pub(crate) async fn follow_service(
     Ok(())
 }
 
-/// Detaches a part from the service that installed it and clears its
-/// install fields. An `installed` part goes back to `purchased`; a replaced or
-/// returned part keeps its status.
-pub(crate) async fn uninstall(db: &impl ConnectionTrait, p: part::Model) -> DomainResult<()> {
-    let revert = p.status == PartStatus::Installed && !is_returned(&p);
-    let mut active: part::ActiveModel = p.into();
-    if revert {
-        active.status = Set(PartStatus::Purchased);
+/// Releases `parts` from the service that installed them, on the caller's
+/// transaction. After `did_not_happen` an installed part goes back to
+/// `purchased` with its install fields cleared and, when the shop supplied
+/// it, leaves its need; a replaced or returned part keeps its status and its
+/// need. After `done_another_way` every part keeps its status and install
+/// date. Either way no part names the service any more.
+pub(crate) async fn release_from_service(
+    db: &impl ConnectionTrait,
+    parts: Vec<part::Model>,
+    completed: CompletedWork,
+) -> DomainResult<()> {
+    if parts.is_empty() {
+        return Ok(());
     }
-    active.installed_service_id = Set(None);
-    active.installed_date = Set(None);
-    active.installed_odometer = Set(None);
-    active.updated_at = Set(super::now());
-    active.update(db).await?;
+    if completed == CompletedWork::DoneAnotherWay {
+        part::Entity::update_many()
+            .col_expr(part::Column::InstalledServiceId, Expr::value(None::<i32>))
+            .col_expr(part::Column::UpdatedAt, Expr::value(super::now()))
+            .filter(part::Column::Id.is_in(parts.iter().map(|p| p.id)))
+            .exec(db)
+            .await?;
+        return Ok(());
+    }
+    // Only an installed part goes back to purchased. A part a later service
+    // replaced did come off the car, so it stays as it is.
+    let reverts = |p: &part::Model| p.status == PartStatus::Installed && !is_returned(p);
+    // The owner never held a shop-supplied part, so its need falls back to
+    // `shop_supplies` and a re-filed invoice can link a new part to it.
+    let shop_ids: Vec<i32> = parts
+        .iter()
+        .filter(|p| reverts(p) && p.supplied_by == Supplier::Shop)
+        .map(|p| p.id)
+        .collect();
+    if !shop_ids.is_empty() {
+        job_need::Entity::update_many()
+            .col_expr(job_need::Column::PartId, Expr::value(None::<i32>))
+            .col_expr(job_need::Column::UpdatedAt, Expr::value(super::now()))
+            .filter(job_need::Column::PartId.is_in(shop_ids))
+            .exec(db)
+            .await?;
+    }
+    for p in parts {
+        let revert = reverts(&p);
+        let mut active: part::ActiveModel = p.into();
+        if revert {
+            active.status = Set(PartStatus::Purchased);
+        }
+        active.installed_service_id = Set(None);
+        active.installed_date = Set(None);
+        active.installed_odometer = Set(None);
+        active.updated_at = Set(super::now());
+        active.update(db).await?;
+    }
     Ok(())
 }
 
@@ -824,14 +865,9 @@ mod tests {
         .update(&db)
         .await
         .unwrap();
-        super::super::service_record::delete(
-            &db,
-            vid,
-            sid,
-            Some(super::super::service_record::CompletedWork::DidNotHappen),
-        )
-        .await
-        .unwrap();
+        super::super::service_record::delete(&db, vid, sid, super::super::service_record::UNDO)
+            .await
+            .unwrap();
         let after = get(&db, vid, p.id).await.unwrap();
         assert_eq!(after.status, PartStatus::Returned);
         assert_eq!(after.returned_on, Some(date("2026-11-06")));
