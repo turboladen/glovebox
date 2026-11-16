@@ -13,13 +13,13 @@ use crate::{
 pub(crate) async fn insert(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
-    appointment_id: Option<i32>,
-    title: String,
+    input: NewTodo,
 ) -> DomainResult<todo::Model> {
     let model = todo::ActiveModel {
         vehicle_id: Set(vehicle_id),
-        appointment_id: Set(appointment_id),
-        title: Set(title),
+        appointment_id: Set(input.appointment_id),
+        title: Set(input.title),
+        notes: Set(input.notes),
         ..Default::default()
     };
     Ok(model.insert(db).await?)
@@ -53,35 +53,22 @@ pub async fn add<C: ConnectionTrait + TransactionTrait>(
     input: NewTodo,
 ) -> DomainResult<todo::Model> {
     super::validate_not_blank("title", &input.title)?;
-    let Some(appointment_id) = input.appointment_id else {
-        super::vehicle::require(db, vehicle_id).await?;
-        return Ok(new_row(vehicle_id, input).insert(db).await?);
-    };
+    super::vehicle::require(db, vehicle_id).await?;
     // Claiming the appointment first keeps a close from landing between the
     // check and the insert.
     let txn = db.begin().await?;
-    super::appointment::claim(&txn, appointment_id).await?;
-    super::vehicle::require(&txn, vehicle_id).await?;
-    super::appointment::require_assignable(&txn, vehicle_id, appointment_id).await?;
-    let created = new_row(vehicle_id, input).insert(&txn).await?;
+    if let Some(appointment_id) = input.appointment_id {
+        super::appointment::claim_assignable(&txn, vehicle_id, appointment_id).await?;
+    }
+    let created = insert(&txn, vehicle_id, input).await?;
     txn.commit().await?;
     Ok(created)
 }
 
-fn new_row(vehicle_id: i32, input: NewTodo) -> todo::ActiveModel {
-    todo::ActiveModel {
-        vehicle_id: Set(vehicle_id),
-        appointment_id: Set(input.appointment_id),
-        title: Set(input.title),
-        notes: Set(input.notes),
-        ..Default::default()
-    }
-}
-
 // Changes a to-do's title or notes, or moves it to another appointment of
 // the vehicle or off any appointment. It runs inside `update_with_done`'s
-// transaction, after the to-do's claim, so the appointment check and the
-// write see the same state.
+// transaction after the to-do's claim, which already holds SQLite's write
+// lock, so the appointment check and the write see the same state.
 async fn update(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -97,7 +84,6 @@ async fn update(
     if let Some(Some(appointment_id)) = input.appointment_id
         && existing.appointment_id != Some(appointment_id)
     {
-        super::appointment::claim(db, appointment_id).await?;
         super::appointment::require_assignable(db, vehicle_id, appointment_id).await?;
     }
     let mut active: todo::ActiveModel = existing.into();

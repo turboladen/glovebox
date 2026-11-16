@@ -214,8 +214,6 @@ pub async fn require(
         .ok_or_else(|| DomainError::NotFound(format!("Appointment {id} not found")))
 }
 
-/// [`require`] for an appointment that is about to receive a job or an invoice:
-/// a cancelled or hand-closed appointment is refused.
 /// True while the appointment takes new jobs and to-dos: it is neither
 /// closed by hand nor cancelled. One whose jobs are all done still does.
 #[must_use]
@@ -223,6 +221,8 @@ pub fn accepts_work(a: &appointment::Model) -> bool {
     Ending::of(a).is_none()
 }
 
+/// [`require`] for an appointment that is about to receive a job, a to-do or
+/// an invoice: a cancelled or hand-closed appointment is refused.
 pub(crate) async fn require_assignable(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -238,8 +238,9 @@ pub(crate) async fn require_assignable(
     Ok(found)
 }
 
-/// [`require_assignable`] for a caller that is about to put a job on the
-/// appointment inside `txn`. It must be the transaction's first statement.
+/// [`require_assignable`] for a caller that is about to put a job or a to-do
+/// on the appointment inside `txn`. It must be the transaction's first
+/// statement.
 pub(crate) async fn claim_assignable(
     txn: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -253,7 +254,7 @@ pub(crate) async fn claim_assignable(
 // first statement gives it SQLite's write lock (waiting out the busy timeout),
 // so everything the transaction reads afterwards is the committed state and no
 // other program can close, cancel or fill the appointment until it ends.
-pub(crate) async fn claim(txn: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
+async fn claim(txn: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
     appointment::Entity::update_many()
         .col_expr(
             appointment::Column::UpdatedAt,
@@ -281,7 +282,7 @@ pub(crate) async fn open_id(
         .filter(appointment::Column::VehicleId.eq(vehicle_id))
         .one(db)
         .await?;
-    Ok(found.filter(|a| Ending::of(a).is_none()).map(|a| a.id))
+    Ok(found.filter(accepts_work).map(|a| a.id))
 }
 
 /// Lists a vehicle's appointments with their counts, soonest planned date
