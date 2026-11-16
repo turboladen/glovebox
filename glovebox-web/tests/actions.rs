@@ -1,7 +1,7 @@
 mod common;
 
-use axum::{body::Body, http::StatusCode};
-use common::{app, db, get_page, page, post_form, request};
+use axum::{Router, body::Body, http::StatusCode};
+use common::{app, db, page, post_to, request};
 use glovebox_shared::{
     db::DatabaseConnection,
     entities::{
@@ -12,9 +12,10 @@ use glovebox_shared::{
         appointment::NewAppointment,
         need::{NewNeed, NewOption, OrderDetails, UpdateNeed},
         part::{NewPart, PartFilter, UpdatePart},
+        todo::NewTodo,
         work_item::NewWorkItem,
     },
-    services::{appointment, need, part, todo, work_item},
+    services::{appointment, need, part, todo, vehicle, work_item},
     test_support::{self, VehicleFixture, date},
 };
 
@@ -23,6 +24,9 @@ use glovebox_shared::{
 // non-fitting option.
 struct World {
     db: DatabaseConnection,
+    // One application for every request, so the undo of a deleted to-do,
+    // which lives in the server, carries from one request to the next.
+    app: Router,
     vehicle: i32,
     appointment: i32,
     job: i32,
@@ -107,6 +111,7 @@ impl World {
         .unwrap()
         .id;
         Self {
+            app: app(db.clone(), "test"),
             db,
             vehicle,
             appointment,
@@ -162,7 +167,7 @@ impl World {
     }
 
     async fn get(&self, path: &str) -> (StatusCode, String) {
-        get_page(&self.db, path).await
+        page(self.app.clone(), common::get(path)).await
     }
 
     async fn post(
@@ -170,7 +175,7 @@ impl World {
         path: &str,
         fields: &[(&str, &str)],
     ) -> (StatusCode, Option<String>, String) {
-        post_form(&self.db, path, fields).await
+        post_to(self.app.clone(), path, fields).await
     }
 }
 
@@ -872,10 +877,49 @@ async fn todo_add_tick_undo_delete() {
         "{undone}"
     );
 
-    let (status, _, _) = w.post(&todo_path("delete"), &[("back", &back)]).await;
+    let (status, location, _) = w.post(&todo_path("delete"), &[("back", &back)]).await;
     assert_eq!(status, StatusCode::SEE_OTHER);
-    let (_, gone) = w.get(&back).await;
-    assert!(!gone.contains("Bring wheel locks"), "{gone}");
+    let deleted = format!("{back}?done=deleted-todo-{id}");
+    assert_eq!(location.as_deref(), Some(deleted.as_str()));
+    let (_, gone) = w.get(&deleted).await;
+    assert!(
+        !group(&gone, "todos").contains("Bring wheel locks"),
+        "{gone}"
+    );
+    assert!(gone.contains(r#"role="status""#), "{gone}");
+    assert!(
+        gone.contains("Deleted \u{201c}Bring wheel locks\u{201d}."),
+        "{gone}"
+    );
+    assert!(gone.contains(&todo_path("restore")), "{gone}");
+
+    let (status, location, _) = w.post(&todo_path("restore"), &[("back", &back)]).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(location.as_deref(), Some(back.as_str()));
+    let (_, restored) = w.get(&back).await;
+    assert!(
+        group(&restored, "todos").contains("Bring wheel locks"),
+        "{restored}"
+    );
+    let open = todo::list(&w.db, w.vehicle, Some(Some(w.appointment)), false)
+        .await
+        .unwrap();
+    assert_eq!(open.iter().map(|t| t.id).collect::<Vec<_>>(), vec![id]);
+
+    // The address of the banner, loaded again after the undo, shows none.
+    let (_, stale) = w.get(&deleted).await;
+    assert!(!stale.contains(r#"role="status""#), "{stale}");
+    // A second undo, as a double click sends, lands where the first did.
+    let (status, location, _) = w.post(&todo_path("restore"), &[("back", &back)]).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(location.as_deref(), Some(back.as_str()));
+    assert_eq!(
+        todo::list(&w.db, w.vehicle, None, true)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
 
     let (status, _, body) = w
         .post(
@@ -927,8 +971,26 @@ async fn home_todos_can_be_added_ticked_and_deleted() {
     assert!(ticked.contains(&todo_path("done/undo")), "{ticked}");
 
     w.post(&todo_path("done/undo"), &[("back", "/")]).await;
-    let (status, _, _) = w.post(&todo_path("delete"), &[("back", "/")]).await;
+    let (status, location, _) = w.post(&todo_path("delete"), &[("back", "/")]).await;
     assert_eq!(status, StatusCode::SEE_OTHER);
+    let deleted = format!("/?done=deleted-todo-{id}");
+    assert_eq!(location.as_deref(), Some(deleted.as_str()));
+    let (_, gone) = w.get(&deleted).await;
+    assert!(
+        gone.contains("Deleted \u{201c}Return the HP Plus pads\u{201d}."),
+        "{gone}"
+    );
+    assert!(gone.contains(&todo_path("restore")), "{gone}");
+    assert!(!gone.contains(&todo_path("done")), "{gone}");
+
+    let (status, location, _) = w.post(&todo_path("restore"), &[("back", "/")]).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(location.as_deref(), Some("/"));
+    let (_, home) = w.get("/").await;
+    assert!(home.contains(&todo_path("done")), "{home}");
+    assert!(!home.contains(r#"role="status""#), "{home}");
+
+    w.post(&todo_path("delete"), &[("back", "/")]).await;
     let (_, gone) = w.get("/").await;
     assert!(!gone.contains("Return the HP Plus pads"), "{gone}");
 
@@ -939,6 +1001,212 @@ async fn home_todos_can_be_added_ticked_and_deleted() {
         body.contains("Open work"),
         "the home page is shown again: {body}"
     );
+}
+
+async fn add_todo(w: &World, title: &str) -> i32 {
+    todo::add(
+        &w.db,
+        w.vehicle,
+        NewTodo {
+            title: title.into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id
+}
+
+#[tokio::test]
+async fn deleting_a_second_todo_replaces_the_first_undo() {
+    let w = World::new().await;
+    let a = add_todo(&w, "Wash").await;
+    let b = add_todo(&w, "Wax").await;
+    let path = |id: i32, action: &str| format!("/vehicles/{}/todos/{id}/{action}", w.vehicle);
+    w.post(&path(a, "delete"), &[("back", "/")]).await;
+    w.post(&path(b, "delete"), &[("back", "/")]).await;
+
+    let (_, first) = w.get(&format!("/?done=deleted-todo-{a}")).await;
+    assert!(!first.contains(r#"role="status""#), "{first}");
+    let (status, _, body) = w.post(&path(a, "restore"), &[("back", "/")]).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        body.contains("That delete can no longer be undone."),
+        "{body}"
+    );
+
+    let (status, _, _) = w.post(&path(b, "restore"), &[("back", "/")]).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let left = todo::list(&w.db, w.vehicle, None, true).await.unwrap();
+    assert_eq!(left.iter().map(|t| t.id).collect::<Vec<_>>(), vec![b]);
+}
+
+#[tokio::test]
+async fn a_second_post_of_a_delete_keeps_the_undo() {
+    let w = World::new().await;
+    let id = add_todo(&w, "Wash").await;
+    let delete = format!("/vehicles/{}/todos/{id}/delete", w.vehicle);
+    let deleted = format!("/?done=deleted-todo-{id}");
+    for _ in 0..2 {
+        let (status, location, _) = w.post(&delete, &[("back", "/")]).await;
+        assert_eq!(status, StatusCode::SEE_OTHER);
+        assert_eq!(location.as_deref(), Some(deleted.as_str()));
+    }
+    let (_, home) = w.get(&deleted).await;
+    assert!(home.contains(r#"role="status""#), "{home}");
+
+    // Once the undo has run, a delete of a to-do that is gone is refused.
+    w.post(
+        &format!("/vehicles/{}/todos/{id}/restore", w.vehicle),
+        &[("back", "/")],
+    )
+    .await;
+    todo::delete(&w.db, w.vehicle, id).await.unwrap();
+    let (status, _, _) = w.post(&delete, &[("back", "/")]).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn an_undo_onto_a_closed_appointment_returns_home() {
+    let w = World::new().await;
+    let back = w.page_path();
+    let id = todo::add(
+        &w.db,
+        w.vehicle,
+        NewTodo {
+            title: "Bring wheel locks".into(),
+            appointment_id: Some(w.appointment),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    let path = |action: &str| format!("/vehicles/{}/todos/{id}/{action}", w.vehicle);
+    w.post(&path("delete"), &[("back", &back)]).await;
+    appointment::close(&w.db, w.vehicle, w.appointment)
+        .await
+        .unwrap();
+
+    let (status, location, _) = w.post(&path("restore"), &[("back", &back)]).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(location.as_deref(), Some("/"));
+    let (_, home) = w.get("/").await;
+    assert!(home.contains("Bring wheel locks"), "{home}");
+}
+
+// A refused restore keeps the undo, so the next try meets the same refusal
+// rather than "can no longer be undone".
+#[tokio::test]
+async fn a_refused_undo_keeps_its_row() {
+    let w = World::new().await;
+    let spare = VehicleFixture::new().name("Spare").insert_id(&w.db).await;
+    let id = todo::add(
+        &w.db,
+        spare,
+        NewTodo {
+            title: "Wash".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    let path = |action: &str| format!("/vehicles/{spare}/todos/{id}/{action}");
+    w.post(&path("delete"), &[("back", "/")]).await;
+    vehicle::delete_unused(&w.db, spare).await.unwrap();
+
+    for _ in 0..2 {
+        let (status, _, body) = w.post(&path("restore"), &[("back", "/")]).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+        assert!(!body.contains("can no longer be undone"), "{body}");
+    }
+}
+
+#[tokio::test]
+async fn a_delete_undo_shows_only_on_the_page_that_listed_the_todo() {
+    let w = World::new().await;
+    let id = todo::add(
+        &w.db,
+        w.vehicle,
+        NewTodo {
+            title: "Bring wheel locks".into(),
+            appointment_id: Some(w.appointment),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    let other = appointment::create(
+        &w.db,
+        w.vehicle,
+        NewAppointment {
+            purpose: "Tires".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    w.post(
+        &format!("/vehicles/{}/todos/{id}/delete", w.vehicle),
+        &[("back", &w.page_path())],
+    )
+    .await;
+
+    let done = format!("?done=deleted-todo-{id}");
+    let (_, listed) = w.get(&format!("{}{done}", w.page_path())).await;
+    assert!(listed.contains(r#"role="status""#), "{listed}");
+    for page in [
+        format!("/vehicles/{}/appointments/{other}{done}", w.vehicle),
+        format!("{}{done}", w.job_path()),
+        format!("/{done}"),
+    ] {
+        let (_, body) = w.get(&page).await;
+        assert!(!body.contains(r#"role="status""#), "{page}: {body}");
+    }
+
+    // A to-do on no appointment is listed on the home page, never a job's.
+    let home_todo = add_todo(&w, "Wash").await;
+    w.post(
+        &format!("/vehicles/{}/todos/{home_todo}/delete", w.vehicle),
+        &[("back", "/")],
+    )
+    .await;
+    let done = format!("?done=deleted-todo-{home_todo}");
+    let (_, home) = w.get(&format!("/{done}")).await;
+    assert!(home.contains(r#"role="status""#), "{home}");
+    let (_, job) = w.get(&format!("{}{done}", w.job_path())).await;
+    assert!(!job.contains(r#"role="status""#), "{job}");
+}
+
+#[tokio::test]
+async fn a_delete_undo_belongs_to_its_vehicle() {
+    let w = World::new().await;
+    let other = VehicleFixture::new().name("Other").insert_id(&w.db).await;
+    let id = add_todo(&w, "Wash").await;
+    let path = |vid: i32, action: &str| format!("/vehicles/{vid}/todos/{id}/{action}");
+    w.post(&path(w.vehicle, "delete"), &[("back", "/")]).await;
+
+    let (status, _, body) = w.post(&path(other, "restore"), &[("back", "/")]).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        body.contains("That delete can no longer be undone."),
+        "{body}"
+    );
+    assert!(
+        todo::list(&w.db, other, None, true)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let (_, home) = w.get(&format!("/?done=deleted-todo-{id}")).await;
+    let restore = path(w.vehicle, "restore");
+    assert!(home.contains(&format!(r#"action="{restore}""#)), "{home}");
+    let (status, _, _) = w.post(&restore, &[("back", "/")]).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
 }
 
 #[tokio::test]

@@ -1047,7 +1047,7 @@ pub async fn return_part<C: ConnectionTrait + TransactionTrait>(
     let found = linked_part(&txn, &need).await?;
     require_unfitted(&found, PartAction::Return)?;
     let job = super::work_item::get(&txn, vehicle_id, need.work_item_id).await?;
-    let appointment_id = super::appointment::open_id(&txn, job.appointment_id).await?;
+    let appointment_id = super::appointment::open_id(&txn, vehicle_id, job.appointment_id).await?;
     let title = match found.seller.as_deref().and_then(super::trim_to_none) {
         Some(seller) => format!("Return {} to {seller}", found.name),
         None => format!("Return {}", found.name),
@@ -1088,7 +1088,7 @@ mod tests {
     use super::*;
     use crate::{
         entities::part::PartStatus,
-        test_support::{VehicleFixture, add_job, date, row_count, test_db},
+        test_support::{VehicleFixture, add_job, date, race_pools, row_count, test_db},
     };
 
     async fn seed_job(db: &DatabaseConnection) -> (i32, i32) {
@@ -2118,19 +2118,6 @@ mod tests {
             .await
             .unwrap();
         (require(db, vehicle_id, n.id).await.unwrap(), o)
-    }
-
-    // Opens three pools on one new database file, the way two programs and
-    // a second connection share it.
-    async fn race_pools() -> (tempfile::TempDir, Vec<DatabaseConnection>) {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("glovebox.db");
-        let path = path.to_str().unwrap();
-        let mut pools = Vec::new();
-        for _ in 0..3 {
-            pools.push(crate::db::connect(path).await.unwrap());
-        }
-        (dir, pools)
     }
 
     async fn new_part(db: &DatabaseConnection, vehicle_id: i32, name: &str) -> part::Model {

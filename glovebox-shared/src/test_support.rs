@@ -11,6 +11,21 @@ pub async fn test_db() -> DatabaseConnection {
     crate::db::connect_in_memory().await
 }
 
+/// Three pools on one new database file, for a test that races writes. Each
+/// `connect` is its own one-connection pool, as the MCP server and the web
+/// page are. The file lives as long as the returned directory.
+#[cfg(test)]
+pub async fn race_pools() -> (tempfile::TempDir, Vec<DatabaseConnection>) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("glovebox.db");
+    let path = path.to_str().unwrap();
+    let mut pools = Vec::new();
+    for _ in 0..3 {
+        pools.push(crate::db::connect(path).await.unwrap());
+    }
+    (dir, pools)
+}
+
 /// The date `days` days before [`services::today`](crate::services::today).
 /// A test that judges a reminder against the current date dates its fixtures
 /// with this, so that it holds on whatever day it runs and agrees with the

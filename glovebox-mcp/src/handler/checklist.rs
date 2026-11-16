@@ -379,7 +379,9 @@ impl GloveboxMcp {
         deleted_result(
             "to-do",
             p.todo_id,
-            todo::delete(&*self.db, p.vehicle_id, p.todo_id).await,
+            todo::delete(&*self.db, p.vehicle_id, p.todo_id)
+                .await
+                .map(drop),
         )
     }
 }

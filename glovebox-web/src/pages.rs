@@ -19,7 +19,7 @@ use glovebox_shared::{
 use serde::Deserialize;
 
 use crate::{
-    AppState,
+    AppState, DeletedTodo,
     view::{
         Banner, CardContext, Count, Failure, HomeAppointmentRow, JobCard, Steps, Target, TodoCard,
         TodoForm, WaitingRows, job_card, sentence_case, steps,
@@ -241,10 +241,12 @@ fn open_need(query: &PageQuery) -> Option<i32> {
     query.open.as_deref()?.strip_prefix("need-")?.parse().ok()
 }
 
-/// The record a `?done=` value names: `need-<id>` or `todo-<id>`.
+/// The record a `?done=` value names: `need-<id>`, `todo-<id>` or
+/// `deleted-todo-<id>`.
 enum Done {
     Need(i32),
     Todo(i32),
+    DeletedTodo(i32),
 }
 
 impl Done {
@@ -252,6 +254,9 @@ impl Done {
         let done = done?;
         if let Some(id) = done.strip_prefix("need-") {
             return id.parse().ok().map(Self::Need);
+        }
+        if let Some(id) = done.strip_prefix("deleted-todo-") {
+            return id.parse().ok().map(Self::DeletedTodo);
         }
         done.strip_prefix("todo-")?.parse().ok().map(Self::Todo)
     }
@@ -276,14 +281,37 @@ fn todo_banner(vid: i32, back: &str, todo: &todo::Model) -> Option<Banner> {
     })
 }
 
-// The undo strip for a page whose needs and to-dos are in hand. A value that
-// names nothing on the page shows no strip.
+// The undo strip for a deleted to-do, while the server still holds it and
+// only on the page that listed it: the page of `appointment`, or the home
+// page for `None`.
+fn deleted_banner(
+    vid: i32,
+    back: &str,
+    deleted: &DeletedTodo,
+    id: i32,
+    appointment: Option<i32>,
+) -> Option<Banner> {
+    let todo = deleted
+        .get(vid, id)
+        .filter(|t| t.appointment_id == appointment)?;
+    Some(Banner {
+        message: format!("Deleted \u{201c}{}\u{201d}.", todo.title),
+        action: format!("/vehicles/{vid}/todos/{id}/restore"),
+        back: back.to_owned(),
+    })
+}
+
+// The undo strip for a page whose needs and to-dos are in hand, where
+// `appointment` names the appointment whose to-dos the page lists, if any. A
+// value that names nothing on the page shows no strip.
 fn page_banner<'a>(
     vid: i32,
     back: &str,
     done: Option<&str>,
     needs: impl IntoIterator<Item = &'a NeedView>,
     todos: &[todo::Model],
+    appointment: Option<i32>,
+    state: &AppState,
 ) -> Option<Banner> {
     match Done::parse(done)? {
         Done::Need(id) => needs
@@ -294,6 +322,10 @@ fn page_banner<'a>(
             .iter()
             .find(|t| t.id == id)
             .and_then(|t| todo_banner(vid, back, t)),
+        // A page that lists no to-dos, such as a job page, shows no strip.
+        Done::DeletedTodo(id) => {
+            appointment.and_then(|a| deleted_banner(vid, back, &state.deleted_todo, id, Some(a)))
+        }
     }
 }
 
@@ -311,6 +343,7 @@ async fn home_banner(state: &AppState, vid: i32, done: Option<&str>) -> Option<B
             let found = todo_svc::require(&state.db, vid, id).await.ok()?;
             todo_banner(vid, "/", &found)
         }
+        Done::DeletedTodo(id) => deleted_banner(vid, "/", &state.deleted_todo, id, None),
     }
 }
 
@@ -417,6 +450,8 @@ async fn appointment_page(
             done,
             list.jobs.iter().flat_map(|j| &j.needs),
             &list.todos,
+            Some(id),
+            state,
         ),
         top_error,
         vid,
@@ -497,7 +532,7 @@ async fn job_page(state: &AppState, vid: i32, id: i32, view: Page<'_>) -> Domain
     });
     Ok(JobPage {
         chrome: Chrome::of(state),
-        banner: page_banner(vid, &back, done, &view.needs, &[]),
+        banner: page_banner(vid, &back, done, &view.needs, &[], None, state),
         top_error,
         vid,
         vehicle: car.name,

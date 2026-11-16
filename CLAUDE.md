@@ -266,7 +266,13 @@ A page is a view of the shared library, and a future page follows the same rules
 
 - **No queries.** The crate holds `glovebox_shared::db::DatabaseConnection` and calls shared
   services. It never names SeaORM, and the layering gate fails if a manifest, source or test file
-  does.
+  does. The one piece of page state outside the database is `AppState::deleted_todo`, the undo
+  slot for the last to-do deleted on the page. It holds only a row this server deleted, and it
+  does not make the page a store of records, so a future page keeps its records in the database.
+  Its accepted limits: one slot serves every vehicle and tab, a double-clicked Delete or Undo can
+  answer with an error page although the action worked, a failed undo keeps its row without
+  showing the banner again, and a vehicle deleted during an undo gives an opaque error and writes
+  nothing.
 - **No script.** Every action is an HTML form post followed by a redirect back to the page, and a
   failed write renders the page again with the domain error beside the row. That page is served
   at the form's address, so every link on a page names the page's own path. The content security
@@ -288,8 +294,12 @@ A page is a view of the shared library, and a future page follows the same rules
   incidents (`waiting::waiting`), then the appointments and to-dos. Those four lists hold no
   forms. An item a planned job covers links to the job, and an item whose job is on an
   appointment is left out. `docs/adr/0002-home-page-shows-waiting-work.md` records why.
-- **Marking a need ordered has no undo**, because it creates a purchase record. A to-do tick and a
-  received date show a banner with an undo form.
+- **Marking a need ordered has no undo**, because it creates a purchase record. A to-do tick, a
+  received date and a deleted to-do show a banner with an undo form. The undo of a delete puts
+  the row back through `todo::restore` and lasts until the next delete or a restart of the server.
+  It is the one post that does not return to its page: a to-do whose appointment has closed comes
+  back on no appointment, so its undo redirects to the home page, which lists it. MCP deletes get
+  no undo.
 
 The look lives in one inline stylesheet in `templates/base.html`, and
 `docs/superpowers/specs/2026-11-14-web-design-pass-design.md` states its rules. The page reads as a
