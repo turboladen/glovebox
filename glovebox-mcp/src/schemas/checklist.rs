@@ -493,8 +493,7 @@ pub struct MarkNeedReceivedInput {
     pub received: Option<bool>,
     /// The day it arrived, `YYYY-MM-DD`. Defaults to today when the part has
     /// no arrival date yet; a part that has one is refused unless this names
-    /// the new date. Not allowed with
-    /// `received: false`.
+    /// the new date. Not allowed with `received: false`.
     pub received_on: Option<String>,
 }
 

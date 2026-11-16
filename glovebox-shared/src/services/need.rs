@@ -1030,7 +1030,8 @@ pub async fn set_arrival<C: ConnectionTrait + TransactionTrait>(
 ///
 /// # Errors
 /// `NotFound` for a need that is not the vehicle's; `BadRequest` when the
-/// need is not `ordered` or `received`; `Invalid` for a blank reason.
+/// need has no part linked or its part is installed or replaced; `Invalid`
+/// for a blank reason.
 pub async fn return_part<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -2494,27 +2495,31 @@ mod tests {
             writes.spawn(async move {
                 let mut results = Vec::new();
                 for round in 0..30 {
-                    let result = if (i + round) % 2 == 0 {
+                    let is_link = (i + round) % 2 == 0;
+                    let result = if is_link {
                         link_part(&db, vehicle_id, n.id, p.id, Some(date("2026-11-01")))
                             .await
                             .map(|_| ())
                     } else {
                         unlink_part(&db, vehicle_id, n.id).await.map(|_| ())
                     };
-                    results.push(result);
+                    results.push((is_link, result));
                 }
                 results
             });
         }
         let results: Vec<_> = writes.join_all().await.into_iter().flatten().collect();
 
-        for result in &results {
+        for (_, result) in &results {
             assert!(
                 matches!(result, Ok(()) | Err(DomainError::BadRequest(_))),
                 "{results:?}"
             );
         }
-        let links = results.iter().step_by(2).filter(|r| r.is_ok()).count();
+        let links = results
+            .iter()
+            .filter(|(is_link, result)| *is_link && result.is_ok())
+            .count();
         assert!(links > 0, "{results:?}");
         // The need and the part agree: the part is linked to this need or to
         // none, and it keeps the arrival date every link gave it.
