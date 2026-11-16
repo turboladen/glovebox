@@ -900,6 +900,8 @@ async fn closing_waits_for_open_work_and_un_ticking_reopens_the_appointment() {
         )
         .await;
     assert_eq!(back["appointment_id"], appt);
+    assert_eq!(back["reopened_appointment_id"], appt);
+    assert!(back.get("left_appointment_id").is_none(), "got: {back}");
     let listed = t
         .call("list_appointments", json!({ "vehicle_id": v }))
         .await;

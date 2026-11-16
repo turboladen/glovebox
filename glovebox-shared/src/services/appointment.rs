@@ -176,6 +176,7 @@ pub async fn update_with_status<C: ConnectionTrait + TransactionTrait>(
     change: Option<StatusChange>,
 ) -> DomainResult<RevisedAppointment> {
     let txn = db.begin().await?;
+    claim(&txn, id).await?;
     update(&txn, vehicle_id, id, input).await?;
     let (unassigned_job_ids, unassigned_todo_ids) = match change {
         Some(StatusChange::Close) => {
@@ -450,13 +451,13 @@ async fn summaries(
     Ok(out)
 }
 
-/// Closes an appointment by hand (`closed_on`) and takes every job still
-/// `planned` off it, in one transaction. Done and dropped jobs stay, and no
-/// need is touched.
+/// Closes an appointment by hand (`closed_on`). The appointment keeps its
+/// jobs and to-dos.
 ///
 /// # Errors
 /// `NotFound` for an appointment that is not the vehicle's; `BadRequest` when
-/// it is already cancelled or closed by hand.
+/// it is already cancelled or closed by hand, or while a job on it is still
+/// planned or a to-do on it is open, naming each one.
 pub async fn close<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -468,10 +469,13 @@ pub async fn close<C: ConnectionTrait + TransactionTrait>(
     Ok(closed)
 }
 
-/// [`close`], marking the appointment cancelled (`cancelled_on`) instead.
+/// Cancels an appointment (`cancelled_on`) and takes every job still
+/// `planned` and every open to-do off it, in one transaction. Done and
+/// dropped jobs and done to-dos stay, and no need is touched.
 ///
 /// # Errors
-/// As for [`close`].
+/// `NotFound` for an appointment that is not the vehicle's; `BadRequest` when
+/// it is already cancelled or closed by hand.
 pub async fn cancel<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -568,30 +572,23 @@ fn still_open(id: i32, jobs: &[work_item::Model], todos: &[todo::Model]) -> Doma
     ))
 }
 
-/// The appointment a to-do keeps when it is marked not done again: a
-/// hand-closed appointment opens again, and a cancelled one gives the to-do
-/// up, so a closed or cancelled appointment never holds an open to-do. The
-/// caller holds the write lock.
+/// What marking a to-do not done does to its appointment, on the caller's
+/// transaction: a hand-closed appointment opens again, and a cancelled one
+/// gives the to-do up, so a closed or cancelled appointment never holds an
+/// open to-do. Returns the appointment the to-do keeps and the one that
+/// reopened.
 pub(crate) async fn settle_reopened_todo(
     db: &impl ConnectionTrait,
     appointment_id: Option<i32>,
-) -> DomainResult<Option<i32>> {
+) -> DomainResult<(Option<i32>, Option<i32>)> {
     let Some(id) = appointment_id else {
-        return Ok(None);
+        return Ok((None, None));
     };
-    let Some(found) = appointment::Entity::find_by_id(id).one(db).await? else {
-        return Ok(None);
-    };
-    match Ending::of(&found) {
-        None => Ok(Some(id)),
-        Some(Ending::Cancelled) => Ok(None),
-        Some(Ending::Closed) => {
-            let mut active: appointment::ActiveModel = found.into();
-            active.closed_on = Set(None);
-            active.updated_at = Set(super::now());
-            active.update(db).await?;
-            Ok(Some(id))
-        }
+    let (reopened, cancelled) = reopen_closed_among(db, vec![id]).await?;
+    if cancelled.contains(&id) {
+        Ok((None, None))
+    } else {
+        Ok((Some(id), reopened.first().copied()))
     }
 }
 
@@ -620,42 +617,17 @@ pub(crate) async fn settle_reopened_jobs(
         .all(db)
         .await?;
     let appointment_ids: Vec<i32> = jobs.iter().filter_map(|j| j.appointment_id).collect();
-    let (cancelled, closed): (Vec<appointment::Model>, Vec<appointment::Model>) =
-        appointment::Entity::find()
-            .filter(appointment::Column::Id.is_in(appointment_ids))
-            .filter(
-                Condition::any()
-                    .add(appointment::Column::CancelledOn.is_not_null())
-                    .add(appointment::Column::ClosedOn.is_not_null()),
-            )
-            .all(db)
-            .await?
-            .into_iter()
-            .partition(|a| Ending::of(a) == Some(Ending::Cancelled));
-    let mut settled = SettledJobs {
-        reopened_appointment_ids: closed.iter().map(|a| a.id).collect(),
-        unassigned_job_ids: jobs
-            .iter()
-            .filter(|j| {
-                j.appointment_id
-                    .is_some_and(|id| cancelled.iter().any(|a| a.id == id))
-            })
-            .map(|j| j.id)
-            .collect(),
+    let (reopened_appointment_ids, cancelled) = reopen_closed_among(db, appointment_ids).await?;
+    let mut unassigned_job_ids: Vec<i32> = jobs
+        .iter()
+        .filter(|j| j.appointment_id.is_some_and(|id| cancelled.contains(&id)))
+        .map(|j| j.id)
+        .collect();
+    unassigned_job_ids.sort_unstable();
+    let settled = SettledJobs {
+        reopened_appointment_ids,
+        unassigned_job_ids,
     };
-    settled.reopened_appointment_ids.sort_unstable();
-    settled.unassigned_job_ids.sort_unstable();
-    if !settled.reopened_appointment_ids.is_empty() {
-        appointment::Entity::update_many()
-            .col_expr(
-                appointment::Column::ClosedOn,
-                Expr::value(None::<chrono::NaiveDate>),
-            )
-            .col_expr(appointment::Column::UpdatedAt, Expr::value(super::now()))
-            .filter(appointment::Column::Id.is_in(settled.reopened_appointment_ids.clone()))
-            .exec(db)
-            .await?;
-    }
     if !settled.unassigned_job_ids.is_empty() {
         work_item::Entity::update_many()
             .col_expr(work_item::Column::AppointmentId, Expr::value(None::<i32>))
@@ -667,8 +639,43 @@ pub(crate) async fn settle_reopened_jobs(
     Ok(settled)
 }
 
-/// Clears both `closed_on` and `cancelled_on`. Jobs that closing took off the
-/// appointment stay off it.
+// Opens again every hand-closed appointment among `ids` and returns their ids
+// sorted, with the ids of the cancelled ones, which the caller takes its work
+// off. One rule serves jobs and to-dos that have just become open again.
+async fn reopen_closed_among(
+    db: &impl ConnectionTrait,
+    ids: Vec<i32>,
+) -> DomainResult<(Vec<i32>, Vec<i32>)> {
+    let (cancelled, closed): (Vec<appointment::Model>, Vec<appointment::Model>) =
+        appointment::Entity::find()
+            .filter(appointment::Column::Id.is_in(ids))
+            .filter(
+                Condition::any()
+                    .add(appointment::Column::CancelledOn.is_not_null())
+                    .add(appointment::Column::ClosedOn.is_not_null()),
+            )
+            .all(db)
+            .await?
+            .into_iter()
+            .partition(|a| Ending::of(a) == Some(Ending::Cancelled));
+    let mut reopened: Vec<i32> = closed.iter().map(|a| a.id).collect();
+    reopened.sort_unstable();
+    if !reopened.is_empty() {
+        appointment::Entity::update_many()
+            .col_expr(
+                appointment::Column::ClosedOn,
+                Expr::value(None::<chrono::NaiveDate>),
+            )
+            .col_expr(appointment::Column::UpdatedAt, Expr::value(super::now()))
+            .filter(appointment::Column::Id.is_in(reopened.clone()))
+            .exec(db)
+            .await?;
+    }
+    Ok((reopened, cancelled.iter().map(|a| a.id).collect()))
+}
+
+/// Clears both `closed_on` and `cancelled_on`. Jobs and to-dos that
+/// cancelling took off the appointment stay off it.
 ///
 /// # Errors
 /// `NotFound` for an appointment that is not the vehicle's.

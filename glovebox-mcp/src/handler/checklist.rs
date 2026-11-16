@@ -363,8 +363,9 @@ impl GloveboxMcp {
                        only the fields to change; null clears notes or the appointment. Find \
                        to-do ids in `get_checklist`. Moving a to-do onto a closed or cancelled \
                        appointment is an error; handle it as for `add_todo`. Un-ticking a to-do \
-                       on a closed appointment reopens the appointment, and un-ticking one on a \
-                       cancelled appointment takes it off, as the result's `appointment_id` shows."
+                       on a closed appointment reopens the appointment (named in \
+                       `reopened_appointment_id`), and un-ticking one on a cancelled appointment \
+                       takes it off (named in `left_appointment_id`); tell the owner either way."
     )]
     async fn update_todo(
         &self,

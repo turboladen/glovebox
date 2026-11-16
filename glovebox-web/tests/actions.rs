@@ -1142,6 +1142,35 @@ async fn an_undo_onto_a_closed_appointment_returns_home() {
     assert!(home.contains("Bring wheel locks"), "{home}");
 }
 
+#[tokio::test]
+async fn un_ticking_a_todo_on_a_cancelled_appointment_returns_home() {
+    let w = World::new().await;
+    let back = w.page_path();
+    let id = todo::add(
+        &w.db,
+        w.vehicle,
+        NewTodo {
+            title: "Bring wheel locks".into(),
+            appointment_id: Some(w.appointment),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    todo::complete(&w.db, w.vehicle, id, None).await.unwrap();
+    appointment::cancel(&w.db, w.vehicle, w.appointment)
+        .await
+        .unwrap();
+
+    let undo = format!("/vehicles/{}/todos/{id}/done/undo", w.vehicle);
+    let (status, location, _) = w.post(&undo, &[("back", &back)]).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(location.as_deref(), Some("/"));
+    let (_, home) = w.get("/").await;
+    assert!(home.contains("Bring wheel locks"), "{home}");
+}
+
 // A refused restore keeps the undo, so the next try meets the same refusal
 // rather than "can no longer be undone".
 #[tokio::test]
