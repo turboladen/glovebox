@@ -12,6 +12,7 @@ use crate::{
         service_recall_link,
         service_record::{self, Payer, Performer},
         service_record_line_item, service_schedule_link,
+        work_item::{self as job, JobStatus},
     },
     error::{DomainError, DomainResult},
     inputs::{
@@ -1061,8 +1062,8 @@ crate::vocab::vocabulary! {
     }
 }
 
-// The answer most tests give when they delete a service, which undoes its
-// work as a delete did before the owner was asked.
+// The answer most tests give when they delete a service: the work did not
+// happen, so the delete undoes it.
 #[cfg(test)]
 pub(crate) const UNDO: Option<CompletedWork> = Some(CompletedWork::DidNotHappen);
 
@@ -1103,29 +1104,43 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     id: i32,
     completed: Option<CompletedWork>,
 ) -> DomainResult<DeletedService> {
-    let txn = db.begin().await?;
-    // The claim takes the write lock before anything is read, so the work
-    // named in a refusal is the work the delete would undo.
-    claim(&txn, id).await?;
+    // The write lock is held before anything is read, so the work named in a
+    // refusal is the work the delete would undo.
+    let txn = super::begin_write(db).await?;
     let existing = require(&txn, vehicle_id, id).await?;
 
     let performed = recall::load_performed(&txn, &[existing.id])
         .await?
         .remove(&existing.id)
         .unwrap_or_default();
-    let completed_jobs = work_item::load_completed_by(&txn, &[existing.id])
+    // Only work that still reads done needs an answer. A job moved off done
+    // loses its link with the service through its foreign key, and a part
+    // returned since keeps its status either way.
+    let completed_jobs: Vec<WorkItemRef> = job::Entity::find()
+        .filter(job::Column::CompletedServiceId.eq(existing.id))
+        .filter(job::Column::Status.eq(JobStatus::Done))
+        .order_by_asc(job::Column::Id)
+        .all(&txn)
         .await?
-        .remove(&existing.id)
-        .unwrap_or_default();
+        .into_iter()
+        .map(|j| WorkItemRef {
+            id: j.id,
+            title: j.title,
+        })
+        .collect();
     let linked_parts = part::Entity::find()
         .filter(part::Column::InstalledServiceId.eq(existing.id))
         .order_by_asc(part::Column::Id)
         .all(&txn)
         .await?;
+    let fitted_parts: Vec<&part::Model> = linked_parts
+        .iter()
+        .filter(|p| p.status != PartStatus::Returned)
+        .collect();
     let resolved_incidents = resolved_by(&txn, existing.id).await?;
     let recorded_work = !(performed.is_empty()
         && completed_jobs.is_empty()
-        && linked_parts.is_empty()
+        && fitted_parts.is_empty()
         && resolved_incidents.is_empty());
     // The choice is checked before anything is written. A service that
     // recorded no work has nothing for either answer to act on.
@@ -1136,7 +1151,7 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
             return Err(completed_work_needs_a_choice(
                 existing.id,
                 &completed_jobs,
-                &linked_parts,
+                &fitted_parts,
                 &resolved_incidents,
                 &performed,
             ));
@@ -1204,7 +1219,7 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
 fn completed_work_needs_a_choice(
     service_id: i32,
     jobs: &[WorkItemRef],
-    parts: &[part::Model],
+    parts: &[&part::Model],
     incidents: &[incident::Model],
     recalls: &[RecallRef],
 ) -> DomainError {
@@ -1233,7 +1248,7 @@ fn completed_work_needs_a_choice(
     ))
 }
 
-// The incidents the service resolved, oldest first.
+// The incidents the service resolved that still read resolved, oldest first.
 async fn resolved_by(
     txn: &impl ConnectionTrait,
     service_id: i32,
@@ -1251,23 +1266,10 @@ async fn resolved_by(
     }
     Ok(incident::Entity::find()
         .filter(incident::Column::Id.is_in(ids))
+        .filter(incident::Column::Resolved.eq(true))
         .order_by_asc(incident::Column::Id)
         .all(txn)
         .await?)
-}
-
-// Writes the service row without changing it, as `need::claim` does for a
-// need, so a transaction takes the write lock before it reads.
-async fn claim(txn: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
-    service_record::Entity::update_many()
-        .col_expr(
-            service_record::Column::UpdatedAt,
-            sea_query::Expr::col(service_record::Column::UpdatedAt),
-        )
-        .filter(service_record::Column::Id.eq(id))
-        .exec(txn)
-        .await?;
-    Ok(())
 }
 
 // Marks unresolved each of `resolved_here`, the incidents a service that is
@@ -3354,6 +3356,44 @@ mod tests {
     }
 
     // ─── invoices against appointments ───
+
+    // Deletes racing on one file from several pools delete the service once,
+    // and the rest find it gone: each takes the write lock before it reads.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_deletes_of_one_service_delete_it_once() {
+        let (_dir, pools) = crate::test_support::race_pools().await;
+        let first = &pools[0];
+        let v = seed_vehicle(first).await;
+        let part_id = seed_part(first, v, "Pads").await;
+        let id = create(
+            first,
+            v,
+            NewServiceRecord {
+                service_date: date("2024-06-01"),
+                part_ids: Some(vec![part_id]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .record
+        .id;
+
+        let mut deletes = tokio::task::JoinSet::new();
+        for db in pools.iter().chain(pools.iter()).cloned() {
+            deletes.spawn(async move { delete(&db, v, id, UNDO).await.map(|_| ()) });
+        }
+        let results = deletes.join_all().await;
+
+        assert_eq!(
+            results.iter().filter(|r| r.is_ok()).count(),
+            1,
+            "{results:?}"
+        );
+        for err in results.iter().filter_map(|r| r.as_ref().err()) {
+            assert!(matches!(err, DomainError::NotFound(_)), "{err:?}");
+        }
+    }
 
     mod appointments {
         use super::*;

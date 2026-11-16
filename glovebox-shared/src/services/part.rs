@@ -348,7 +348,7 @@ pub(crate) async fn release_from_service(
     }
     // Only an installed part goes back to purchased. A part a later service
     // replaced did come off the car, so it stays as it is.
-    let reverts = |p: &part::Model| p.status == PartStatus::Installed && !is_returned(p);
+    let reverts = |p: &part::Model| p.status == PartStatus::Installed;
     // The owner never held a shop-supplied part, so its need falls back to
     // `shop_supplies` and a re-filed invoice can link a new part to it.
     let shop_ids: Vec<i32> = parts

@@ -57,6 +57,10 @@ would undo.
 ## Consequences
 
 - Claude has to ask before deleting any service that recorded work, which is most of them.
+- `done_another_way` is for work with no invoice to file. When the invoice that did the work
+  exists, the delete answers `did_not_happen` and that invoice is recorded, because only a
+  recorded service can complete the jobs again and give the schedule items their baseline.
+  Either answer removes the deleted service's schedule links.
 - After `done_another_way`, a job is done with no completing service, the same state as a job set
   to done by hand. A recall it came from therefore reads done.
 - Jobs, parts and recalls each have one release function that takes the answer
