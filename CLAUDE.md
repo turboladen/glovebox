@@ -219,7 +219,8 @@ kinds under `rejected`, so it still reports them. Choosing the option a need
 already has keeps `decided_on`. A need with no chosen option holds a `decision_reason` only while
 the shop supplies it: `need::update` refuses one otherwise and clears the stored one when the
 supplier moves away from `shop`, and the web decision form goes through
-`need::decide_dropping_unheld_reason`, which drops a reason the need cannot hold.
+`need::decide_dropping_unheld_reason`, which drops a reason the need cannot hold after the call,
+and the reason of a choice being cleared.
 `mark_ordered` claims the need with a conditional write as the first statement of its transaction,
 so two orders at once create one part, and its default cost
 is the option's unit price times the need's quantity (`need::order_cost_cents`). `update_need` and

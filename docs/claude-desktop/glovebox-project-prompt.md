@@ -92,7 +92,7 @@ you link.
      or `parts`, because a shop does not always fit everything that was brought. A part the shop
      supplied and that is not recorded yet goes in `parts` with the `need_id` it fills.
 4. Read the result. `unfitted_needs` lists every need on a job the invoice completed whose part is
-   linked but not installed. Ask Steve about every entry: was it fitted? When it was fitted, call
+   linked but neither installed nor replaced. Ask Steve about every entry: was it fitted? When it was fitted, call
    `correct_service` with a `part_ids` list holding every part the service installed plus this one
    (the list replaces the old one). When it was not, leave it and say so. `lines_total_cents` is
    the sum of the lines; when it differs from the total, a `note` gives both amounts, and a `fee`

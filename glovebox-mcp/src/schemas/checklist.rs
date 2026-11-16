@@ -231,8 +231,9 @@ pub struct UpdateNeedInput {
     /// supplies, records why. It is refused when the need is left with no
     /// chosen option and the shop does not supply it.
     ///
-    /// Send `null` to clear it; omit the key to leave it unchanged (unless
-    /// `chosen_option_id` is sent).
+    /// Send `null` to clear it; omit the key to leave it unchanged, unless
+    /// `chosen_option_id` is sent or `supplied_by` moves a need with no chosen
+    /// option away from `shop`, which both clear it.
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<String>")]
     pub decision_reason: Option<Option<String>>,
