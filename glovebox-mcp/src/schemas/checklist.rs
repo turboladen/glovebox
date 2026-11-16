@@ -10,9 +10,14 @@ use glovebox_shared::{
     error::DomainResult,
     inputs::{
         appointment::{NewAppointment, StatusChange, UpdateAppointment},
-        need::{NewNeed, NewOption, OrderDetails, ReturnInput, UpdateNeed, UpdateOption},
+        checklist::ChecklistScope,
+        need::{
+            ArrivalChange, NewNeed, NewOption, OrderDetails, PartLink, ReturnInput, UpdateNeed,
+            UpdateOption,
+        },
         todo::{NewTodo, UpdateTodo},
     },
+    services::{checklist, need},
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -148,6 +153,15 @@ pub struct GetChecklistInput {
     /// Read this one job, with its needs. Pass at most one of
     /// `appointment_id` and `work_item_id`.
     pub work_item_id: Option<i32>,
+}
+
+impl GetChecklistInput {
+    pub fn into_domain(self) -> DomainResult<(i32, ChecklistScope)> {
+        Ok((
+            self.vehicle_id,
+            checklist::scope(self.appointment_id, self.work_item_id)?,
+        ))
+    }
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -451,8 +465,19 @@ pub struct LinkPartToNeedInput {
     pub part_id: Option<Option<i32>>,
     /// The day the part arrived, `YYYY-MM-DD`, when linking a part that is
     /// already in hand. Ask the owner once and set it here. Not allowed when
-    /// `part_id` is `null`.
+    /// `part_id` is `null`, or for a part that is installed or replaced.
     pub received_on: Option<String>,
+}
+
+impl LinkPartToNeedInput {
+    pub fn into_domain(self) -> DomainResult<(i32, i32, PartLink)> {
+        let received_on = dates::parse_optional_date("received_on", self.received_on)?;
+        Ok((
+            self.vehicle_id,
+            self.need_id,
+            need::part_link(self.part_id, received_on)?,
+        ))
+    }
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -460,14 +485,27 @@ pub struct LinkPartToNeedInput {
 pub struct MarkNeedReceivedInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
-    /// Need id, from `get_checklist`. It must have a part linked.
+    /// Need id, from `get_checklist`. It must have a part linked that is not
+    /// installed or replaced.
     pub need_id: i32,
     /// `true` (the default) records that the part arrived; `false` clears the
     /// arrival date so the need reads `ordered` again.
     pub received: Option<bool>,
-    /// The day it arrived, `YYYY-MM-DD`. Defaults to today. Not allowed with
-    /// `received: false`.
+    /// The day it arrived, `YYYY-MM-DD`. Defaults to today when the part has
+    /// no arrival date yet; a part that has one is refused unless this names
+    /// the new date. Not allowed with `received: false`.
     pub received_on: Option<String>,
+}
+
+impl MarkNeedReceivedInput {
+    pub fn into_domain(self) -> DomainResult<(i32, i32, ArrivalChange)> {
+        let received_on = dates::parse_optional_date("received_on", self.received_on)?;
+        Ok((
+            self.vehicle_id,
+            self.need_id,
+            need::arrival(self.received.unwrap_or(true), received_on)?,
+        ))
+    }
 }
 
 #[derive(Deserialize, JsonSchema)]

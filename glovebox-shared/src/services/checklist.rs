@@ -19,6 +19,7 @@ use crate::{
         work_item::{self, JobStatus},
     },
     error::{DomainError, DomainResult},
+    inputs::checklist::ChecklistScope,
     money::format_cents,
     services::{
         appointment::{self, AppointmentSummary},
@@ -256,6 +257,55 @@ pub async fn for_job(
         .await?
         .pop()
         .ok_or_else(|| DomainError::NotFound(format!("Work item {work_item_id} not found")))
+}
+
+/// The scope that an appointment id, a job id or neither names: that
+/// appointment, that job, or the unscheduled jobs.
+///
+/// # Errors
+/// `Invalid` on `appointment_id` when both ids are given.
+pub fn scope(
+    appointment_id: Option<i32>,
+    work_item_id: Option<i32>,
+) -> DomainResult<ChecklistScope> {
+    match (appointment_id, work_item_id) {
+        (Some(_), Some(_)) => Err(DomainError::invalid(
+            "appointment_id",
+            "pass either appointment_id or work_item_id, not both",
+        )),
+        (Some(id), None) => Ok(ChecklistScope::Appointment(id)),
+        (None, Some(id)) => Ok(ChecklistScope::Job(id)),
+        (None, None) => Ok(ChecklistScope::Unscheduled),
+    }
+}
+
+/// What [`get`] read: a checklist, or one job with its needs.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum ChecklistRead {
+    Checklist(Checklist),
+    Job(JobView),
+}
+
+/// Reads the checklist `scope` names, through [`for_appointment`],
+/// [`for_job`] or [`for_unscheduled`].
+///
+/// # Errors
+/// As for the function that reads the scope.
+pub async fn get(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    scope: ChecklistScope,
+) -> DomainResult<ChecklistRead> {
+    match scope {
+        ChecklistScope::Appointment(id) => for_appointment(db, vehicle_id, id)
+            .await
+            .map(ChecklistRead::Checklist),
+        ChecklistScope::Job(id) => for_job(db, vehicle_id, id).await.map(ChecklistRead::Job),
+        ChecklistScope::Unscheduled => for_unscheduled(db, vehicle_id)
+            .await
+            .map(ChecklistRead::Checklist),
+    }
 }
 
 /// The needs, across all vehicles, whose name or any option's description,
@@ -1832,5 +1882,69 @@ mod tests {
         let a = &home[1];
         assert!(a.appointments.is_empty() && a.waiting.jobs.is_empty());
         assert_eq!(a.todos.len(), 1);
+    }
+
+    #[test]
+    fn scope_reads_at_most_one_id() {
+        assert_eq!(
+            scope(Some(3), None).unwrap(),
+            ChecklistScope::Appointment(3)
+        );
+        assert_eq!(scope(None, Some(4)).unwrap(), ChecklistScope::Job(4));
+        assert_eq!(scope(None, None).unwrap(), ChecklistScope::Unscheduled);
+        let err = scope(Some(3), Some(4)).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "appointment_id: pass either appointment_id or work_item_id, not both"
+        );
+        assert!(matches!(err, DomainError::Invalid { .. }), "{err:?}");
+    }
+
+    fn json(value: &impl Serialize) -> serde_json::Value {
+        serde_json::to_value(value).unwrap()
+    }
+
+    #[tokio::test]
+    async fn get_reads_the_same_as_the_function_for_its_scope() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let a = appointment_id(&db, v).await;
+        let on_visit = add_job(&db, v, "Brakes", Some(a)).await;
+        new_need(&db, v, on_visit, "Pads").await;
+        let loose = add_job(&db, v, "Wipers", None).await;
+        new_need(&db, v, loose, "Blades").await;
+
+        let got = get(&db, v, ChecklistScope::Appointment(a)).await.unwrap();
+        let want = for_appointment(&db, v, a).await.unwrap();
+        assert_eq!(json(&got), json(&want));
+        let got = get(&db, v, ChecklistScope::Job(loose)).await.unwrap();
+        let want = for_job(&db, v, loose).await.unwrap();
+        assert_eq!(json(&got), json(&want));
+        let got = get(&db, v, ChecklistScope::Unscheduled).await.unwrap();
+        let want = for_unscheduled(&db, v).await.unwrap();
+        assert_eq!(json(&got), json(&want));
+        assert_eq!(json(&got)["jobs"][0]["job"]["id"], loose);
+
+        let other = VehicleFixture::new().name("Other").insert_id(&db).await;
+        for (scope, missing, id) in [
+            (
+                ChecklistScope::Appointment(a),
+                ChecklistScope::Appointment(99_999),
+                a,
+            ),
+            (
+                ChecklistScope::Job(loose),
+                ChecklistScope::Job(99_999),
+                loose,
+            ),
+        ] {
+            let wrong = get(&db, other, scope).await.unwrap_err().to_string();
+            let absent = get(&db, v, missing).await.unwrap_err().to_string();
+            assert_eq!(
+                wrong.replace(&id.to_string(), "N"),
+                absent.replace("99999", "N"),
+                "{scope:?}"
+            );
+        }
     }
 }

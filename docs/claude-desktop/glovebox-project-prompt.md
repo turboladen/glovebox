@@ -153,8 +153,10 @@ need has a decision, every decision has a reason, and every part ordered has arr
    and the date he gives. It creates the part record from the chosen option. When the part is
    already recorded, for example one bought before you started planning, call `link_part_to_need`
    with its id instead of entering it again, and ask Steve once whether it has arrived so you can
-   pass `received_on`.
-9. When a part arrives, call `mark_need_received`. This is the moment a wrong part is caught, so ask
+   pass `received_on`. A part that is already installed or replaced takes no `received_on` there;
+   correct a stored date with `correct_part`.
+9. When a part arrives, call `mark_need_received`; skip it for a part you linked with `received_on`
+   in step 8, which is already received. This is the moment a wrong part is caught, so ask
    him to check the part number and fit against the option before ticking it off. When it is wrong,
    call `return_part` with the reason; set `option_was_wrong` when the option itself was the
    mistake. That records the return, sends the need back, and adds a to-do to take the part back.

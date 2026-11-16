@@ -3,13 +3,9 @@
 
 use rmcp::{ErrorData as McpError, model::CallToolResult, tool, tool_router};
 
-use glovebox_shared::{
-    dates,
-    error::DomainError,
-    services::{appointment, checklist, need, todo},
-};
+use glovebox_shared::services::{appointment, checklist, need, todo};
 
-use super::{GloveboxMcp, Parameters, deleted_result, domain_error, domain_result};
+use super::{GloveboxMcp, Parameters, deleted_result, domain_result};
 use crate::schemas::{
     AddNeedInput, AddNeedOptionInput, AddTodoInput, DeleteAppointmentInput, DeleteNeedInput,
     DeleteNeedOptionInput, DeleteTodoInput, GetChecklistInput, LinkPartToNeedInput,
@@ -115,21 +111,8 @@ impl GloveboxMcp {
         params: Parameters<GetChecklistInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "get_checklist");
-        match (p.appointment_id, p.work_item_id) {
-            (Some(_), Some(_)) => domain_error(DomainError::invalid(
-                "appointment_id",
-                "pass either appointment_id or work_item_id, not both",
-            )),
-            (Some(appointment_id), None) => domain_result(
-                checklist::for_appointment(&*self.db, p.vehicle_id, appointment_id).await,
-            ),
-            (None, Some(work_item_id)) => {
-                domain_result(checklist::for_job(&*self.db, p.vehicle_id, work_item_id).await)
-            }
-            (None, None) => {
-                domain_result(checklist::for_unscheduled(&*self.db, p.vehicle_id).await)
-            }
-        }
+        let (vehicle_id, scope) = domain_input!(p.into_domain());
+        domain_result(checklist::get(&*self.db, vehicle_id, scope).await)
     }
 
     #[tool(
@@ -291,64 +274,39 @@ impl GloveboxMcp {
                        it is not entered again, or detach it with `part_id: null` (the part is \
                        kept). Linking needs no chosen option; a need with no supplier takes the \
                        part's. Pass `received_on` when the part is already in hand; ask the owner \
-                       once and set it here. A part reads `ordered` until someone marks it \
-                       received, and a part linked to one need cannot be linked to another. \
-                       `part_id` is required: send null to unlink, never leave it out."
+                       once and set it here. A part that is installed or replaced takes no \
+                       `received_on` here; `correct_part` corrects a stored date. A part reads \
+                       `ordered` until someone marks it received, and a part linked to one need \
+                       cannot be linked to another. `part_id` is required: send null to unlink, \
+                       never leave it out."
     )]
     async fn link_part_to_need(
         &self,
         params: Parameters<LinkPartToNeedInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "link_part_to_need");
-        match p.part_id {
-            None => domain_error(DomainError::invalid(
-                "part_id",
-                "is required: send a part id to link, or null to unlink",
-            )),
-            Some(None) if p.received_on.is_some() => domain_error(DomainError::invalid(
-                "received_on",
-                "cannot be sent when unlinking (part_id: null)",
-            )),
-            Some(None) => {
-                domain_result(need::unlink_part(&*self.db, p.vehicle_id, p.need_id).await)
-            }
-            Some(Some(part_id)) => {
-                let received_on =
-                    domain_input!(dates::parse_optional_date("received_on", p.received_on));
-                domain_result(
-                    need::link_part(&*self.db, p.vehicle_id, p.need_id, part_id, received_on).await,
-                )
-            }
-        }
+        let (vehicle_id, need_id, link) = domain_input!(p.into_domain());
+        domain_result(need::set_part(&*self.db, vehicle_id, need_id, link).await)
     }
 
     #[tool(
         name = "mark_need_received",
         description = "Record that a need's part arrived, stamping the part with the date \
                        (`received_on`, default today). Arrival is its own step because checking \
-                       the box is when a wrong part is caught. `received: false` clears the date \
-                       so the need reads `ordered` again. The need must have a part linked. If \
-                       the part is wrong, call `return_part`."
+                       the box is when a wrong part is caught. For a part that already has a \
+                       date, the call is refused unless `received_on` names the new date. \
+                       `received: false` clears the date so the need reads `ordered` again. The \
+                       need must have a part linked, and a part that is installed or replaced is \
+                       refused; `correct_part` corrects its stored date. If the part is wrong, \
+                       call `return_part`."
     )]
     async fn mark_need_received(
         &self,
         params: Parameters<MarkNeedReceivedInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "mark_need_received");
-        if p.received.unwrap_or(true) {
-            let received_on =
-                domain_input!(dates::parse_optional_date("received_on", p.received_on));
-            domain_result(
-                need::mark_received(&*self.db, p.vehicle_id, p.need_id, received_on).await,
-            )
-        } else if p.received_on.is_some() {
-            domain_error(DomainError::invalid(
-                "received_on",
-                "cannot be sent with received: false",
-            ))
-        } else {
-            domain_result(need::clear_received(&*self.db, p.vehicle_id, p.need_id).await)
-        }
+        let (vehicle_id, need_id, change) = domain_input!(p.into_domain());
+        domain_result(need::set_arrival(&*self.db, vehicle_id, need_id, change).await)
     }
 
     #[tool(

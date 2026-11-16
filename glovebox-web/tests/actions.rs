@@ -666,6 +666,80 @@ async fn received_shows_an_undo_banner_and_undo_restores_arriving() {
 }
 
 #[tokio::test]
+async fn a_stale_received_post_keeps_the_date_already_stored() {
+    let w = World::new().await;
+    w.choose_good().await;
+    w.order_it().await;
+    let back = w.page_path();
+    // The page was loaded before the part was marked received elsewhere.
+    need::mark_received(&w.db, w.vehicle, w.need, Some(date("2026-11-10")))
+        .await
+        .unwrap();
+
+    let (status, _, body) = w.post(&w.need_path("received"), &[("back", &back)]).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(body.contains("Not saved"), "{body}");
+    let refusal = format!(
+        "Need {}&#39;s part was already received on 2026-11-10",
+        w.need
+    );
+    assert!(body.contains(&refusal), "{body}");
+    assert!(!body.contains(r#"role="status""#), "{body}");
+    let part_id = need::require(&w.db, w.vehicle, w.need)
+        .await
+        .unwrap()
+        .part_id
+        .unwrap();
+    let stored = part::get(&w.db, w.vehicle, part_id).await.unwrap();
+    assert_eq!(stored.received_on, Some(date("2026-11-10")));
+}
+
+#[tokio::test]
+async fn a_stale_arrival_post_for_an_installed_part_is_refused() {
+    let w = World::new().await;
+    w.choose_good().await;
+    w.order_it().await;
+    need::mark_received(&w.db, w.vehicle, w.need, Some(date("2026-11-14")))
+        .await
+        .unwrap();
+    let part_id = need::require(&w.db, w.vehicle, w.need)
+        .await
+        .unwrap()
+        .part_id
+        .unwrap();
+    // The page was loaded before the part went on the car.
+    part::update(
+        &w.db,
+        w.vehicle,
+        part_id,
+        UpdatePart {
+            status: Some(PartStatus::Installed),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let back = w.page_path();
+
+    for (action, words) in [
+        ("received", "can be marked received"),
+        ("received/undo", "can have its arrival date cleared"),
+    ] {
+        let (status, _, body) = w.post(&w.need_path(action), &[("back", &back)]).await;
+
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{action}");
+        assert!(body.contains("Not saved"), "{action}: {body}");
+        let refusal =
+            format!("Part {part_id} is installed; only an ordered or received part {words}");
+        assert!(body.contains(&refusal), "{action}: {body}");
+        assert!(!body.contains(r#"role="status""#), "{action}: {body}");
+        let stored = part::get(&w.db, w.vehicle, part_id).await.unwrap();
+        assert_eq!(stored.received_on, Some(date("2026-11-14")), "{action}");
+    }
+}
+
+#[tokio::test]
 async fn return_requires_a_reason() {
     let w = World::new().await;
     w.choose_good().await;
