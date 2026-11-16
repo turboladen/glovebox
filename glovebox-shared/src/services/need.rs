@@ -1522,7 +1522,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_reason_without_a_choice_is_refused_unless_the_shop_supplies() {
+    async fn a_reason_without_a_choice_is_refused_off_shop_supply() {
         let db = test_db().await;
         let (vehicle_id, job_id) = seed_job(&db).await;
         for who in [None, Some(Supplier::Owner)] {
@@ -1549,14 +1549,23 @@ mod tests {
                 None
             );
         }
+    }
 
+    #[tokio::test]
+    async fn a_shop_need_with_no_choice_stores_a_reason() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
         let shop = shop_need(&db, vehicle_id, job_id).await;
         let stored = update(&db, vehicle_id, shop.id, reason("OEM plugs only"))
             .await
             .unwrap();
         assert_eq!(stored.decision_reason.as_deref(), Some("OEM plugs only"));
+    }
 
-        // The supplier sent in the same call decides.
+    #[tokio::test]
+    async fn the_supplier_sent_with_a_reason_decides_whether_it_is_held() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
         let n = add(&db, vehicle_id, job_id, need("Fluid")).await.unwrap();
         let to_shop = update(
             &db,
@@ -1585,8 +1594,12 @@ mod tests {
         let after = require(&db, vehicle_id, n.id).await.unwrap();
         assert_eq!(after.supplied_by, Some(Supplier::Shop));
         assert_eq!(after.decision_reason.as_deref(), Some("shop stocks it"));
+    }
 
-        // Clearing a reason is always allowed.
+    #[tokio::test]
+    async fn clearing_a_reason_is_always_allowed() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
         let owner = add(&db, vehicle_id, job_id, need("Wipers")).await.unwrap();
         store_reason(&db, owner.id, "legacy").await;
         let clear = UpdateNeed {
@@ -1737,11 +1750,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_dropping_decide_keeps_only_a_reason_the_need_can_hold() {
+    async fn the_dropping_decide_keeps_a_shop_needs_reason_with_no_choice() {
         let db = test_db().await;
         let (vehicle_id, job_id) = seed_job(&db).await;
-
-        // A shop need with no choice keeps the reason the form sends.
         let shop = shop_need(&db, vehicle_id, job_id).await;
         add_option(&db, vehicle_id, shop.id, option("NGK plugs"))
             .await
@@ -1754,8 +1765,12 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(kept.decision_reason.as_deref(), Some("OEM only"));
+    }
 
-        // Clearing a shop need's choice drops the reason that came with it.
+    #[tokio::test]
+    async fn the_dropping_decide_drops_the_reason_of_a_cleared_shop_choice() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
         let chosen_shop = shop_need(&db, vehicle_id, job_id).await;
         let o = add_option(&db, vehicle_id, chosen_shop.id, option("NGK plugs"))
             .await
@@ -1780,8 +1795,12 @@ mod tests {
         .unwrap();
         assert_eq!(cleared.chosen_option_id, None);
         assert_eq!(cleared.decision_reason, None);
+    }
 
-        // An owner need clearing its choice drops the reason without refusing.
+    #[tokio::test]
+    async fn the_dropping_decide_drops_an_owner_needs_reason_without_refusing() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
         let owner = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
         let o = add_option(&db, vehicle_id, owner.id, option("Pads"))
             .await
