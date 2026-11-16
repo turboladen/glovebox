@@ -245,6 +245,8 @@ pub async fn restore<C: ConnectionTrait + TransactionTrait>(
     }
     restored.appointment_id =
         super::appointment::open_id(&txn, vehicle_id, deleted.appointment_id).await?;
+    // The inserted row already carries a fresh `updated_at`, so this update
+    // sets only the appointment.
     if restored.appointment_id.is_some() {
         todo::Entity::update_many()
             .col_expr(

@@ -322,8 +322,9 @@ fn page_banner<'a>(
             .iter()
             .find(|t| t.id == id)
             .and_then(|t| todo_banner(vid, back, t)),
+        // A page that lists no to-dos, such as a job page, shows no strip.
         Done::DeletedTodo(id) => {
-            deleted_banner(vid, back, &state.deleted_todo, id, Some(appointment?))
+            appointment.and_then(|a| deleted_banner(vid, back, &state.deleted_todo, id, Some(a)))
         }
     }
 }

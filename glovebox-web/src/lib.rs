@@ -40,9 +40,11 @@ pub struct DeletedTodo(Arc<Mutex<Option<todo::Model>>>);
 // The slot holds only a row this server deleted, so the restore trusts
 // nothing a form sent, and one slot is enough because a banner offers the
 // undo of the last action alone. The lock is never held across an await.
-// Accepted limits: a double-clicked Delete or Undo can answer with an error
-// or another page although the action worked, and a failed undo keeps its
-// row without showing the banner again (the browser's back button reaches it).
+// Accepted limits: one slot serves every vehicle and tab, a double-clicked
+// Delete or Undo can answer with an error or another page although the
+// action worked, a failed undo keeps its row without showing the banner again
+// (the browser's back button reaches it), and a vehicle deleted during an
+// undo gives an opaque error and writes nothing.
 impl DeletedTodo {
     fn lock(&self) -> std::sync::MutexGuard<'_, Option<todo::Model>> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
