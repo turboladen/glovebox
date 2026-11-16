@@ -1,9 +1,11 @@
 //! Recalls: research findings with category `recall`, seen with a status that
 //! says whether the work that addresses them is planned or done.
 //!
-//! A recall is `done` when a service is linked to it or its stored status is
-//! `completed`, `not_applicable` when its stored status is `dismissed`,
-//! `planned` when an open work item points at it, and `open` otherwise.
+//! A recall reads `done` when a service is linked to it, when the owner marked
+//! it done, or when a job from it is done with none planned. It reads
+//! `not_applicable` when the owner marked it so, `planned` when neither the
+//! owner nor a service has settled it and a planned job addresses it, and
+//! `open` otherwise.
 
 use std::collections::HashMap;
 
@@ -58,6 +60,30 @@ impl RecallStatus {
 /// has marked it done or not applicable. No caller can set it.
 pub(crate) const PLANNED: &str = "planned";
 
+// What keeps a recall done whatever the owner set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Held {
+    ByService,
+    ByDoneJob,
+}
+
+// The settable status a recall reads from its stored status and its links,
+// with what holds it there when that is not the stored status. Both the
+// lists and `set_status` go through this one rule.
+fn settle(
+    stored: RecallStatus,
+    has_service: bool,
+    done_job_only: bool,
+) -> (RecallStatus, Option<Held>) {
+    if has_service {
+        (RecallStatus::Done, Some(Held::ByService))
+    } else if stored == RecallStatus::Open && done_job_only {
+        (RecallStatus::Done, Some(Held::ByDoneJob))
+    } else {
+        (stored, None)
+    }
+}
+
 /// A recall as the owner sees it.
 #[derive(Debug, Serialize)]
 pub struct RecallWithStatus {
@@ -75,6 +101,10 @@ pub struct RecallWithStatus {
     pub work_item_id: Option<i32>,
     /// The latest service linked to this recall, if any.
     pub done_service: Option<ServiceRef>,
+    #[serde(skip)]
+    settled: RecallStatus,
+    #[serde(skip)]
+    held: Option<Held>,
 }
 
 /// A recall as seen from a service that performed it.
@@ -193,19 +223,18 @@ async fn with_status(
                 .map(|s| ServiceRef::from((*s).clone()));
             let planned_work_item_id = planned.get(&f.id).copied();
             let work_item_id = planned_work_item_id.or_else(|| completed.get(&f.id).copied());
-            // A job set to done by hand has no service to link, so the done
-            // job itself settles an open recall. A planned job still reads
-            // planned, and setting the job back to planned undoes this.
-            let done_job = planned_work_item_id.is_none() && completed.contains_key(&f.id);
-            let set = match RecallStatus::from_stored(&f.status) {
-                _ if done_service.is_some() => RecallStatus::Done,
-                RecallStatus::Open if done_job => RecallStatus::Done,
-                stored => stored,
-            };
-            let status = if set == RecallStatus::Open && planned_work_item_id.is_some() {
+            // A job set to done by hand has no service to link, so it settles
+            // an open recall unless another job from it is planned.
+            let done_job_only = planned_work_item_id.is_none() && completed.contains_key(&f.id);
+            let (settled, held) = settle(
+                RecallStatus::from_stored(&f.status),
+                done_service.is_some(),
+                done_job_only,
+            );
+            let status = if settled == RecallStatus::Open && planned_work_item_id.is_some() {
                 PLANNED
             } else {
-                set.as_str()
+                settled.as_str()
             };
             RecallWithStatus {
                 finding_id: f.id,
@@ -216,6 +245,8 @@ async fn with_status(
                 status: status.to_owned(),
                 work_item_id,
                 done_service,
+                settled,
+                held,
             }
         })
         .collect())
@@ -254,55 +285,68 @@ pub async fn list_for_vehicle(
 
 /// Sets a recall to `open`, `done` or `not_applicable` without a service.
 ///
-/// A recall linked to a service is `done` for as long as the link exists, so
-/// setting it to anything else is a `BadRequest`.
-pub async fn set_status(
-    db: &impl ConnectionTrait,
+/// # Errors
+/// `NotFound` for a finding that is not a recall on this vehicle. A recall
+/// linked to a service reads `done` for as long as the link exists, and one
+/// whose job is marked done with none planned reads `done` until that job is
+/// planned again or dropped, so asking either for another status is a
+/// `BadRequest`.
+pub async fn set_status<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
     vehicle_id: i32,
     finding_id: i32,
     status: RecallStatus,
 ) -> DomainResult<RecallWithStatus> {
-    let finding = require_recalls(db, vehicle_id, &[finding_id])
+    let txn = db.begin().await?;
+    claim(&txn, finding_id).await?;
+    let finding = require_recalls(&txn, vehicle_id, &[finding_id])
         .await?
         .remove(0);
 
-    if status != RecallStatus::Done {
-        let linked = service_recall_link::Entity::find()
-            .filter(service_recall_link::Column::ResearchFindingId.eq(finding_id))
-            .count(db)
-            .await?;
-        if linked > 0 {
-            return Err(DomainError::BadRequest(format!(
+    // The requested status goes through the derivation every list uses, so
+    // the refusal and the lists cannot disagree.
+    let mut proposed = finding.clone();
+    status.stored().clone_into(&mut proposed.status);
+    let shown = with_status(&txn, vec![proposed]).await?.remove(0);
+    if shown.settled != status {
+        return Err(match shown.held {
+            Some(Held::ByService) => DomainError::BadRequest(format!(
                 "Recall {finding_id} is linked to a service, so it stays done until that service \
                  is deleted"
-            )));
-        }
-    }
-    if status == RecallStatus::Open && settled_by_a_done_job(db, finding_id).await? {
-        return Err(DomainError::BadRequest(format!(
-            "Recall {finding_id} has a job marked done, so it stays done until that job is \
-             planned again or dropped"
-        )));
+            )),
+            Some(Held::ByDoneJob) => DomainError::BadRequest(format!(
+                "Recall {finding_id} has a job marked done, so it stays done until that job is \
+                 planned again or dropped"
+            )),
+            None => DomainError::Internal(format!(
+                "recall {finding_id} reads {} after being set to {}",
+                shown.settled.as_str(),
+                status.as_str()
+            )),
+        });
     }
 
     let mut active: research_finding::ActiveModel = finding.into();
     active.status = Set(status.stored().to_owned());
     active.updated_at = Set(super::now());
-    let updated = active.update(db).await?;
-    Ok(with_status(db, vec![updated]).await?.remove(0))
+    let updated = active.update(&txn).await?;
+    let read = with_status(&txn, vec![updated]).await?.remove(0);
+    txn.commit().await?;
+    Ok(read)
 }
 
-// True when a done job and no planned one comes from the finding, the case
-// `with_status` reads as done.
-async fn settled_by_a_done_job(db: &impl ConnectionTrait, finding_id: i32) -> DomainResult<bool> {
-    let statuses: Vec<JobStatus> = work_item::Entity::find()
-        .filter(work_item::Column::ResearchFindingId.eq(finding_id))
-        .all(db)
-        .await?
-        .into_iter()
-        .map(|w| w.status)
-        .collect();
-    Ok(statuses.contains(&JobStatus::Done) && !statuses.contains(&JobStatus::Planned))
+// Writes the finding row without changing it, so `set_status` takes SQLite's
+// write lock before it reads, as `need::claim` does for a need.
+async fn claim(txn: &impl ConnectionTrait, finding_id: i32) -> DomainResult<()> {
+    research_finding::Entity::update_many()
+        .col_expr(
+            research_finding::Column::UpdatedAt,
+            sea_query::Expr::col(research_finding::Column::UpdatedAt),
+        )
+        .filter(research_finding::Column::Id.eq(finding_id))
+        .exec(txn)
+        .await?;
+    Ok(())
 }
 
 /// The ids among `finding_ids` whose findings are recalls, in one query.
@@ -464,7 +508,7 @@ mod tests {
         inputs::{
             part::NewPart,
             service_record::{NewLineItem, NewServiceRecord},
-            work_item::{NewWorkItem, UpdateWorkItem},
+            work_item::NewWorkItem,
         },
         services::{
             nhtsa::RecallInfo,
@@ -472,7 +516,7 @@ mod tests {
             service_record::{self as service_svc, ServiceRecordWithLinks},
             work_item as work_item_svc,
         },
-        test_support::{VehicleFixture, test_db},
+        test_support::{VehicleFixture, set_job_status, test_db},
     };
 
     fn recall_info(campaign: &str, subject: &str) -> RecallInfo {
@@ -760,18 +804,9 @@ mod tests {
         }
     }
 
-    async fn set_job_status(db: &DatabaseConnection, v: i32, id: i32, status: JobStatus) {
-        work_item_svc::update(
-            db,
-            v,
-            id,
-            UpdateWorkItem {
-                status: Some(status),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
+    async fn shown(db: &DatabaseConnection, v: i32) -> (String, Option<i32>, bool) {
+        let r = &list(db, v).await.unwrap()[0];
+        (r.status.clone(), r.work_item_id, r.done_service.is_some())
     }
 
     #[tokio::test]
@@ -780,25 +815,18 @@ mod tests {
         let v = seed_vehicle(&db).await;
         let id = seed_recall(&db, v, "24V110000").await;
         let item = plan_work_for_recall(&db, v, id).await;
-        let shown = |db: DatabaseConnection| async move {
-            let r = &list(&db, v).await.unwrap()[0];
-            (r.status.clone(), r.work_item_id, r.done_service.is_some())
-        };
 
         set_job_status(&db, v, item.id, JobStatus::Done).await;
-        assert_eq!(
-            shown(db.clone()).await,
-            ("done".into(), Some(item.id), false)
-        );
+        assert_eq!(shown(&db, v).await, ("done".into(), Some(item.id), false));
 
         set_job_status(&db, v, item.id, JobStatus::Planned).await;
         assert_eq!(
-            shown(db.clone()).await,
+            shown(&db, v).await,
             ("planned".into(), Some(item.id), false)
         );
 
         set_job_status(&db, v, item.id, JobStatus::Dropped).await;
-        assert_eq!(shown(db.clone()).await, ("open".into(), None, false));
+        assert_eq!(shown(&db, v).await, ("open".into(), None, false));
     }
 
     #[tokio::test]
