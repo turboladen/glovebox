@@ -218,10 +218,11 @@ pub struct UpdateNeedInput {
     /// cleared. An option whose fitment is `does_not_fit`, or that is rejected, is
     /// refused. Choose only what the owner chose.
     ///
-    /// Send `null` to clear the choice, its reason and its date; a
-    /// `decision_reason` sent with it is kept only for a need the shop
-    /// supplies, and refused otherwise. Omit the key to leave the choice
-    /// unchanged.
+    /// Send `null` to clear the choice, its reason and its date; on a need
+    /// with no chosen option it changes nothing unless `decision_reason` is
+    /// sent too. A `decision_reason` sent with `null` is kept only for a need
+    /// the shop supplies, and refused otherwise. Omit the key to leave the
+    /// choice unchanged.
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<i32>")]
     pub chosen_option_id: Option<Option<i32>>,
@@ -232,8 +233,9 @@ pub struct UpdateNeedInput {
     /// chosen option and the shop does not supply it.
     ///
     /// Send `null` to clear it; omit the key to leave it unchanged, unless
-    /// `chosen_option_id` is sent or `supplied_by` moves a need with no chosen
-    /// option away from `shop`, which both clear it.
+    /// `chosen_option_id` chooses an option or clears a choice, or
+    /// `supplied_by` moves a need with no chosen option away from `shop`; each
+    /// of those clears it.
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<String>")]
     pub decision_reason: Option<Option<String>>,

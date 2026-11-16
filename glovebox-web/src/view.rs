@@ -237,6 +237,9 @@ pub struct NeedCard {
     pub approach_kind: Option<String>,
     pub decision_reason: Option<String>,
     pub reason_value: String,
+    /// The stored reason, sent back with the decision form so the action can
+    /// tell an edited reason from the prefilled one.
+    pub stored_reason: String,
     pub purchase: Option<String>,
     /// The need's notes, without the one `no_decision` stands for.
     pub notes: Vec<String>,
@@ -656,6 +659,7 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
         supplier_kind: supplier.map(sentence_case),
         approach_kind: approach.map(sentence_case),
         decision_reason: need.decision_reason.clone(),
+        stored_reason: need.decision_reason.clone().unwrap_or_default(),
         // The return form also has a `reason` input, so only a failed
         // decision brings back what was typed here.
         reason_value: typed("reason")

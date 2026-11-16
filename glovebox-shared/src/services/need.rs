@@ -460,7 +460,9 @@ pub async fn delete_option<C: ConnectionTrait + TransactionTrait>(
 /// clears the choice for `Some(None)`) in one transaction. The reason stored
 /// with a choice is `input.decision_reason`, and it is cleared when that field
 /// is absent or `None`; without a `choice`, `decision_reason` edits only the
-/// reason. A refused choice leaves every other change unapplied.
+/// reason. `Some(None)` on a need with no chosen option changes no choice, so
+/// with `decision_reason` absent it keeps the stored reason. A refused choice
+/// leaves every other change unapplied.
 ///
 /// # Errors
 /// `NotFound` for a need that is not the vehicle's; `Invalid` as for
@@ -476,11 +478,15 @@ pub async fn update_with_choice<C: ConnectionTrait + TransactionTrait>(
         return update(db, vehicle_id, need_id, input).await;
     };
     // `decide` writes the reason itself, so the edit leaves it alone.
-    let reason = input.decision_reason.take().flatten();
+    let reason = input.decision_reason.take();
     let txn = db.begin().await?;
     claim(&txn, need_id).await?;
-    update(&txn, vehicle_id, need_id, input).await?;
-    let decided = decide(&txn, vehicle_id, need_id, option_id, reason).await?;
+    let updated = update(&txn, vehicle_id, need_id, input).await?;
+    if option_id.is_none() && reason.is_none() && updated.chosen_option_id.is_none() {
+        txn.commit().await?;
+        return Ok(updated);
+    }
+    let decided = decide(&txn, vehicle_id, need_id, option_id, reason.flatten()).await?;
     txn.commit().await?;
     Ok(decided)
 }
@@ -571,36 +577,6 @@ async fn clear_choice_history(db: &impl ConnectionTrait, option_id: i32) -> Doma
         .exec(db)
         .await?;
     Ok(())
-}
-
-/// Like [`decide`], except that a reason the need cannot hold after the call
-/// is dropped instead of refused, and so is the reason of a choice being
-/// cleared, even on a need the shop supplies.
-///
-/// # Errors
-/// As for [`decide`], apart from the refused reason.
-pub async fn decide_dropping_unheld_reason<C: ConnectionTrait + TransactionTrait>(
-    db: &C,
-    vehicle_id: i32,
-    need_id: i32,
-    option_id: Option<i32>,
-    reason: Option<String>,
-) -> DomainResult<job_need::Model> {
-    let txn = db.begin().await?;
-    claim(&txn, need_id).await?;
-    let need = require(&txn, vehicle_id, need_id).await?;
-    let keeps = option_id.is_some()
-        || (need.chosen_option_id.is_none() && need.supplied_by == Some(Supplier::Shop));
-    let decided = decide(
-        &txn,
-        vehicle_id,
-        need_id,
-        option_id,
-        reason.filter(|_| keeps),
-    )
-    .await?;
-    txn.commit().await?;
-    Ok(decided)
 }
 
 // Takes SQLite's write lock for the transaction by making its first
@@ -1779,78 +1755,99 @@ mod tests {
         assert_eq!(after.decision_reason.as_deref(), Some("OEM only"));
     }
 
-    #[tokio::test]
-    async fn the_dropping_decide_keeps_a_shop_needs_reason_with_no_choice() {
-        let db = test_db().await;
-        let (vehicle_id, job_id) = seed_job(&db).await;
-        let shop = shop_need(&db, vehicle_id, job_id).await;
-        add_option(&db, vehicle_id, shop.id, option("NGK plugs"))
-            .await
-            .unwrap();
-        update(&db, vehicle_id, shop.id, reason("OEM only"))
-            .await
-            .unwrap();
-        let kept =
-            decide_dropping_unheld_reason(&db, vehicle_id, shop.id, None, Some("OEM only".into()))
-                .await
-                .unwrap();
-        assert_eq!(kept.decision_reason.as_deref(), Some("OEM only"));
+    fn clear_choice_with(reason: Option<Option<&str>>) -> UpdateNeed {
+        UpdateNeed {
+            decision_reason: reason.map(|r| r.map(Into::into)),
+            ..Default::default()
+        }
     }
 
     #[tokio::test]
-    async fn the_dropping_decide_drops_the_reason_of_a_cleared_shop_choice() {
+    async fn clearing_no_choice_keeps_a_shop_needs_reason() {
         let db = test_db().await;
         let (vehicle_id, job_id) = seed_job(&db).await;
-        let chosen_shop = shop_need(&db, vehicle_id, job_id).await;
-        let o = add_option(&db, vehicle_id, chosen_shop.id, option("NGK plugs"))
+        let shop = shop_need(&db, vehicle_id, job_id).await;
+        update(&db, vehicle_id, shop.id, reason("OEM only"))
+            .await
+            .unwrap();
+        let kept = update_with_choice(
+            &db,
+            vehicle_id,
+            shop.id,
+            clear_choice_with(None),
+            Some(None),
+        )
+        .await
+        .unwrap();
+        assert_eq!(kept.decision_reason.as_deref(), Some("OEM only"));
+    }
+
+    // An older owner need with a reason and no choice is not refused when the
+    // choice it does not have is cleared.
+    #[tokio::test]
+    async fn clearing_no_choice_on_an_owner_need_changes_nothing() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let n = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
+        store_reason(&db, n.id, "legacy").await;
+        let same = update_with_choice(&db, vehicle_id, n.id, clear_choice_with(None), Some(None))
+            .await
+            .unwrap();
+        assert_eq!(same.decision_reason.as_deref(), Some("legacy"));
+    }
+
+    #[tokio::test]
+    async fn clearing_a_shop_choice_clears_its_reason_unless_a_new_one_is_sent() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let shop = shop_need(&db, vehicle_id, job_id).await;
+        let o = add_option(&db, vehicle_id, shop.id, option("NGK plugs"))
             .await
             .unwrap();
         decide(
             &db,
             vehicle_id,
-            chosen_shop.id,
+            shop.id,
             Some(o.id),
             Some("cheaper than OEM".into()),
         )
         .await
         .unwrap();
-        let cleared = decide_dropping_unheld_reason(
+        let cleared = update_with_choice(
             &db,
             vehicle_id,
-            chosen_shop.id,
-            None,
-            Some("cheaper than OEM".into()),
+            shop.id,
+            clear_choice_with(None),
+            Some(None),
         )
         .await
         .unwrap();
         assert_eq!(cleared.chosen_option_id, None);
         assert_eq!(cleared.decision_reason, None);
-    }
 
-    #[tokio::test]
-    async fn the_dropping_decide_drops_an_owner_needs_reason_without_refusing() {
-        let db = test_db().await;
-        let (vehicle_id, job_id) = seed_job(&db).await;
-        let owner = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
-        let o = add_option(&db, vehicle_id, owner.id, option("Pads"))
-            .await
-            .unwrap();
-        let chosen = decide_dropping_unheld_reason(
+        decide(
             &db,
             vehicle_id,
-            owner.id,
+            shop.id,
             Some(o.id),
-            Some("quiet".into()),
+            Some("cheaper than OEM".into()),
         )
         .await
         .unwrap();
-        assert_eq!(chosen.decision_reason.as_deref(), Some("quiet"));
-        let cleared =
-            decide_dropping_unheld_reason(&db, vehicle_id, owner.id, None, Some("quiet".into()))
-                .await
-                .unwrap();
-        assert_eq!(cleared.chosen_option_id, None);
-        assert_eq!(cleared.decision_reason, None);
+        let replaced = update_with_choice(
+            &db,
+            vehicle_id,
+            shop.id,
+            clear_choice_with(Some(Some("The shop stocks OEM"))),
+            Some(None),
+        )
+        .await
+        .unwrap();
+        assert_eq!(replaced.chosen_option_id, None);
+        assert_eq!(
+            replaced.decision_reason.as_deref(),
+            Some("The shop stocks OEM")
+        );
     }
 
     #[tokio::test]
@@ -2261,18 +2258,7 @@ mod tests {
                     decision_reason: Some(Some(format!("reason {i}"))),
                     ..Default::default()
                 };
-                if i % 2 == 0 {
-                    update_with_choice(&db, vehicle_id, n.id, input, Some(Some(o.id))).await
-                } else {
-                    decide_dropping_unheld_reason(
-                        &db,
-                        vehicle_id,
-                        n.id,
-                        Some(o.id),
-                        input.decision_reason.flatten(),
-                    )
-                    .await
-                }
+                update_with_choice(&db, vehicle_id, n.id, input, Some(Some(o.id))).await
             });
         }
         let results = decisions.join_all().await;

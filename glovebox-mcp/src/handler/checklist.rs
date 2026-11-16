@@ -369,7 +369,7 @@ impl GloveboxMcp {
                        \"Return ...\" to-do. When `option_was_wrong` was true, also clear the \
                        rejection with `update_need_option` and choose the option again with \
                        `update_need`, sending its `chosen_reason` as `decision_reason` to keep \
-                       the owner's reason."
+                       the owner's reason; the decision date becomes today."
     )]
     async fn return_part(
         &self,

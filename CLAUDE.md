@@ -218,9 +218,9 @@ uses it. Rejecting or ruling out a chosen option keeps the need's reason and dat
 kinds under `rejected`, so it still reports them. Choosing the option a need
 already has keeps `decided_on`. A need with no chosen option holds a `decision_reason` only while
 the shop supplies it: `need::update` refuses one otherwise and clears the stored one when the
-supplier moves away from `shop`, and the web decision form goes through
-`need::decide_dropping_unheld_reason`, which drops a reason the need cannot hold after the call,
-and the reason of a choice being cleared.
+supplier moves away from `shop`. Clearing a choice the need does not have keeps its reason. The web
+decision form sends back the reason it showed, so an unedited reason counts as none sent and the
+form goes through `need::update_with_choice` like `update_need`.
 `mark_ordered` claims the need with a conditional write as the first statement of its transaction,
 so two orders at once create one part, and its default cost
 is the option's unit price times the need's quantity (`need::order_cost_cents`). `update_need` and

@@ -323,6 +323,15 @@ async fn a_reason_with_no_chosen_option_is_kept_only_for_a_shop_need() {
         .await;
     assert_eq!(cleared["decision_reason"], "The shop stocks OEM plugs");
 
+    // Clearing a choice the need does not have leaves its reason alone.
+    let unchanged = t
+        .call(
+            "update_need",
+            json!({ "vehicle_id": v, "need_id": need, "chosen_option_id": null }),
+        )
+        .await;
+    assert_eq!(unchanged["decision_reason"], "The shop stocks OEM plugs");
+
     // Moving it to the owner with no chosen option clears the reason.
     let moved = t
         .call(

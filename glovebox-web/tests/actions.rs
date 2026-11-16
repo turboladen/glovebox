@@ -1033,10 +1033,20 @@ async fn clearing_a_decision_with_the_prefilled_reason_clears_it() {
     .await;
 
     // The form sends the stored reason along with the empty choice.
+    let (_, page) = w.get(&back).await;
+    assert!(
+        page.contains(r#"name="stored_reason" value="Quiet.""#),
+        "{page}"
+    );
     let (status, _, body) = w
         .post(
             &w.need_path("decision"),
-            &[("option_id", ""), ("reason", "Quiet."), ("back", &back)],
+            &[
+                ("option_id", ""),
+                ("reason", "Quiet."),
+                ("stored_reason", "Quiet."),
+                ("back", &back),
+            ],
         )
         .await;
 
@@ -1044,6 +1054,39 @@ async fn clearing_a_decision_with_the_prefilled_reason_clears_it() {
     let (_, after) = w.get(&back).await;
     assert!(group(&after, "decide").contains("Front pads"), "{after}");
     assert!(!after.contains("Quiet."), "{after}");
+}
+
+#[tokio::test]
+async fn a_reason_typed_with_no_choice_on_an_owner_need_is_refused() {
+    let w = World::new().await;
+    let back = w.page_path();
+    let good = w.good.to_string();
+    w.post(
+        &w.need_path("decision"),
+        &[("option_id", &good), ("reason", "Quiet."), ("back", &back)],
+    )
+    .await;
+
+    let (status, _, body) = w
+        .post(
+            &w.need_path("decision"),
+            &[
+                ("option_id", ""),
+                ("reason", "Not sure yet."),
+                ("stored_reason", "Quiet."),
+                ("back", &back),
+            ],
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert!(
+        body.contains("needs a chosen option unless the shop supplies the need"),
+        "{body}"
+    );
+    let stored = need::require(&w.db, w.vehicle, w.need).await.unwrap();
+    assert_eq!(stored.chosen_option_id, Some(w.good));
+    assert_eq!(stored.decision_reason.as_deref(), Some("Quiet."));
 }
 
 impl World {
@@ -1076,6 +1119,7 @@ async fn saving_no_choice_on_a_shop_need_keeps_its_reason_until_it_is_emptied() 
             &[
                 ("option_id", ""),
                 ("reason", "The shop uses OEM pads."),
+                ("stored_reason", "The shop uses OEM pads."),
                 ("back", &back),
             ],
         )
@@ -1089,7 +1133,12 @@ async fn saving_no_choice_on_a_shop_need_keeps_its_reason_until_it_is_emptied() 
 
     w.post(
         &w.need_path("decision"),
-        &[("option_id", ""), ("reason", ""), ("back", &back)],
+        &[
+            ("option_id", ""),
+            ("reason", ""),
+            ("stored_reason", "The shop uses OEM pads."),
+            ("back", &back),
+        ],
     )
     .await;
     let (_, after) = w.get(&back).await;
@@ -1118,6 +1167,7 @@ async fn clearing_a_shop_needs_choice_drops_that_choices_reason() {
             &[
                 ("option_id", ""),
                 ("reason", "Cheaper than OEM."),
+                ("stored_reason", "Cheaper than OEM."),
                 ("back", &back),
             ],
         )
@@ -1126,6 +1176,43 @@ async fn clearing_a_shop_needs_choice_drops_that_choices_reason() {
     assert_eq!(status, StatusCode::SEE_OTHER, "{body}");
     let (_, after) = w.get(&back).await;
     assert!(!after.contains("Cheaper than OEM."), "{after}");
+}
+
+#[tokio::test]
+async fn a_new_reason_with_no_choice_on_a_shop_need_replaces_the_choices() {
+    let w = World::new().await;
+    let back = w.page_path();
+    w.supply_from_the_shop(None).await;
+    let good = w.good.to_string();
+    w.post(
+        &w.need_path("decision"),
+        &[
+            ("option_id", &good),
+            ("reason", "Cheaper than OEM."),
+            ("back", &back),
+        ],
+    )
+    .await;
+
+    let (status, _, body) = w
+        .post(
+            &w.need_path("decision"),
+            &[
+                ("option_id", ""),
+                ("reason", "The shop stocks OEM pads."),
+                ("stored_reason", "Cheaper than OEM."),
+                ("back", &back),
+            ],
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::SEE_OTHER, "{body}");
+    let stored = need::require(&w.db, w.vehicle, w.need).await.unwrap();
+    assert_eq!(stored.chosen_option_id, None);
+    assert_eq!(
+        stored.decision_reason.as_deref(),
+        Some("The shop stocks OEM pads.")
+    );
 }
 
 #[tokio::test]

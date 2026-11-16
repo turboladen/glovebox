@@ -287,6 +287,9 @@ pub struct DecisionForm {
     option_id: String,
     #[serde(default)]
     reason: String,
+    // The reason the form showed when it was rendered.
+    #[serde(default)]
+    stored_reason: String,
     back: Option<String>,
 }
 
@@ -319,10 +322,16 @@ async fn decide(
         "choose one of the listed options",
     )?;
     // The reason box is prefilled with the stored reason, so it arrives even
-    // when the owner only cleared the choice. The shared function keeps it
-    // only where the need can still hold it.
+    // when the owner only cleared the choice. With no option chosen, an
+    // unedited box therefore counts as no reason sent, and the shared rules
+    // for clearing a choice decide what happens to the stored one.
     let reason = trim_to_none(&form.reason);
-    need::decide_dropping_unheld_reason(&state.db, vid, id, option_id, reason).await
+    let edited = reason != trim_to_none(&form.stored_reason);
+    let input = UpdateNeed {
+        decision_reason: (option_id.is_some() || edited).then_some(reason),
+        ..Default::default()
+    };
+    need::update_with_choice(&state.db, vid, id, input, Some(option_id)).await
 }
 
 #[derive(Deserialize)]
