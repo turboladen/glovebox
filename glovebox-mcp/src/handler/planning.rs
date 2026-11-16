@@ -112,7 +112,12 @@ impl GloveboxMcp {
                        are linked; set `done` here only for work that left no paperwork. Setting \
                        `done` here does not close a recall or incident the item is linked to: \
                        also call `set_recall_status` or `update_incident` for it. Use \
-                       `delete_planned_work` only for an item added by mistake."
+                       `delete_planned_work` only for an item added by mistake. Setting `planned` \
+                       on an item whose appointment was closed by hand opens that appointment \
+                       again, and the result names it in `reopened_appointment_id`. On a \
+                       cancelled appointment the item comes off it and is unscheduled, and the \
+                       result names the appointment in `left_cancelled_appointment_id`. Tell the \
+                       owner when either happens."
     )]
     async fn update_planned_work(
         &self,

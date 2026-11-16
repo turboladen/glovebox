@@ -210,6 +210,8 @@ and closing or cancelling unassigns the jobs that are still planned. A closed or
 appointment therefore never holds a planned job: when a job on one returns to `planned` (its
 service is deleted, or its status is set back), a hand-closed appointment opens again and a
 cancelled one lets the job go to the unscheduled pool (`appointment::settle_reopened_jobs`).
+The `delete_service` and `update_planned_work` replies name the appointment that reopened and the
+jobs that left a cancelled one. Re-recording the service does not close the appointment again.
 Deleting a service, or correcting its `part_ids`, also unlinks from its need every shop-supplied
 part the service stops installing. A need is
 open when `need::counts_as_open` says so (an open stage on a planned job); every open-needs count

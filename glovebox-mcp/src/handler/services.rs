@@ -177,9 +177,12 @@ impl GloveboxMcp {
                        the invoice, attach them with `record_service`'s `part_ids`; otherwise \
                        remove them with `delete_part`. A kept part the shop supplied is unlinked \
                        from its need, so re-filing the invoice can name the need again. If its \
-                       appointment was closed by hand, it opens again; a job it completed on a \
-                       cancelled appointment goes back to the unscheduled jobs. To change a \
-                       record rather than remove it, use `correct_service`."
+                       appointment was closed by hand, it opens again and the result lists it in \
+                       `appointments_reopened`; re-filing the invoice does not close it again, so \
+                       offer `update_appointment` with `status: \"done\"` afterwards. A job it \
+                       completed on a cancelled appointment goes back to the unscheduled jobs and \
+                       is listed in `jobs_unassigned`. To change a record rather than remove it, \
+                       use `correct_service`."
     )]
     async fn delete_service(
         &self,
@@ -202,6 +205,8 @@ impl GloveboxMcp {
                     "recalls_reopened": out.reopened_recall_ids,
                     "recalls_still_done_elsewhere": out.still_done_elsewhere_recall_ids,
                     "recalls_kept_done": out.kept_done_recall_ids,
+                    "appointments_reopened": out.reopened_appointment_ids,
+                    "jobs_unassigned": out.unassigned_job_ids,
                 })
             }),
         )

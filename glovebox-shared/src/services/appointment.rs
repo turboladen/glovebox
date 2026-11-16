@@ -518,6 +518,15 @@ async fn put_away(
     })
 }
 
+/// What [`settle_reopened_jobs`] changed, with each list sorted by id.
+#[derive(Debug, Default, Serialize)]
+pub struct SettledJobs {
+    /// The hand-closed appointments that are open again.
+    pub reopened_appointment_ids: Vec<i32>,
+    /// The jobs taken off a cancelled appointment.
+    pub unassigned_job_ids: Vec<i32>,
+}
+
 /// Brings the appointments of jobs that have just returned to `planned` back
 /// in line with the rule that a closed or cancelled appointment holds no
 /// planned job, on the caller's transaction. A hand-closed appointment opens
@@ -525,17 +534,15 @@ async fn put_away(
 pub(crate) async fn settle_reopened_jobs(
     db: &impl ConnectionTrait,
     job_ids: &[i32],
-) -> DomainResult<()> {
+) -> DomainResult<SettledJobs> {
     if job_ids.is_empty() {
-        return Ok(());
+        return Ok(SettledJobs::default());
     }
-    let appointment_ids: Vec<i32> = work_item::Entity::find()
+    let jobs = work_item::Entity::find()
         .filter(work_item::Column::Id.is_in(job_ids.to_vec()))
         .all(db)
-        .await?
-        .into_iter()
-        .filter_map(|j| j.appointment_id)
-        .collect();
+        .await?;
+    let appointment_ids: Vec<i32> = jobs.iter().filter_map(|j| j.appointment_id).collect();
     let (cancelled, closed): (Vec<appointment::Model>, Vec<appointment::Model>) =
         appointment::Entity::find()
             .filter(appointment::Column::Id.is_in(appointment_ids))
@@ -548,27 +555,39 @@ pub(crate) async fn settle_reopened_jobs(
             .await?
             .into_iter()
             .partition(|a| Ending::of(a) == Some(Ending::Cancelled));
-    if !closed.is_empty() {
+    let mut settled = SettledJobs {
+        reopened_appointment_ids: closed.iter().map(|a| a.id).collect(),
+        unassigned_job_ids: jobs
+            .iter()
+            .filter(|j| {
+                j.appointment_id
+                    .is_some_and(|id| cancelled.iter().any(|a| a.id == id))
+            })
+            .map(|j| j.id)
+            .collect(),
+    };
+    settled.reopened_appointment_ids.sort_unstable();
+    settled.unassigned_job_ids.sort_unstable();
+    if !settled.reopened_appointment_ids.is_empty() {
         appointment::Entity::update_many()
             .col_expr(
                 appointment::Column::ClosedOn,
                 Expr::value(None::<chrono::NaiveDate>),
             )
             .col_expr(appointment::Column::UpdatedAt, Expr::value(super::now()))
-            .filter(appointment::Column::Id.is_in(closed.iter().map(|a| a.id)))
+            .filter(appointment::Column::Id.is_in(settled.reopened_appointment_ids.clone()))
             .exec(db)
             .await?;
     }
-    if !cancelled.is_empty() {
+    if !settled.unassigned_job_ids.is_empty() {
         work_item::Entity::update_many()
             .col_expr(work_item::Column::AppointmentId, Expr::value(None::<i32>))
             .col_expr(work_item::Column::UpdatedAt, Expr::value(super::now()))
-            .filter(work_item::Column::Id.is_in(job_ids.to_vec()))
-            .filter(work_item::Column::AppointmentId.is_in(cancelled.iter().map(|a| a.id)))
+            .filter(work_item::Column::Id.is_in(settled.unassigned_job_ids.clone()))
             .exec(db)
             .await?;
     }
-    Ok(())
+    Ok(settled)
 }
 
 /// Clears both `closed_on` and `cancelled_on`. Jobs that closing took off the
@@ -1209,10 +1228,15 @@ mod tests {
         close(&db, v, closed.id).await.unwrap();
         cancel(&db, v, cancelled.id).await.unwrap();
 
-        set_status(on_closed, JobStatus::Planned).await.unwrap();
+        let reopening = set_status(on_closed, JobStatus::Planned).await.unwrap();
+        assert_eq!(reopening.reopened_appointment_id, Some(closed.id));
+        assert_eq!(reopening.left_cancelled_appointment_id, None);
+        assert_eq!(reopening.work_item.appointment_id, Some(closed.id));
         // The returned job says where it ended up, not where it was.
         let returned = set_status(on_cancelled, JobStatus::Planned).await.unwrap();
-        assert_eq!(returned.appointment_id, None);
+        assert_eq!(returned.work_item.appointment_id, None);
+        assert_eq!(returned.left_cancelled_appointment_id, Some(cancelled.id));
+        assert_eq!(returned.reopened_appointment_id, None);
 
         let reopened = summary(&db, v, closed.id).await.unwrap();
         assert_eq!(reopened.status, "planning");
@@ -1223,6 +1247,30 @@ mod tests {
         );
         let unscheduled = job::get(&db, v, on_cancelled).await.unwrap();
         assert_eq!(unscheduled.appointment_id, None);
+    }
+
+    #[tokio::test]
+    async fn a_job_set_back_to_planned_on_an_open_appointment_moves_nothing() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let open = create(&db, v, appt("Brakes")).await.unwrap();
+        let job_id = add_job(&db, v, "Brake pads", Some(open.id)).await;
+        set_job_status(&db, v, job_id, JobStatus::Done).await;
+
+        let returned = job::update(
+            &db,
+            v,
+            job_id,
+            UpdateWorkItem {
+                status: Some(JobStatus::Planned),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(returned.reopened_appointment_id, None);
+        assert_eq!(returned.left_cancelled_appointment_id, None);
+        assert_eq!(returned.work_item.appointment_id, Some(open.id));
     }
 
     #[tokio::test]
@@ -1249,8 +1297,8 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(kept.appointment_id, Some(closed.id));
-        assert_eq!(kept.notes.as_deref(), Some("Pads only"));
+        assert_eq!(kept.work_item.appointment_id, Some(closed.id));
+        assert_eq!(kept.work_item.notes.as_deref(), Some("Pads only"));
 
         // Moving another job onto the closed appointment is a new assignment.
         let err = job::update(

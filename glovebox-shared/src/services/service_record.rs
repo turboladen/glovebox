@@ -1101,6 +1101,12 @@ pub struct DeletedService {
     pub still_done_elsewhere_recall_ids: Vec<i32>,
     /// Ids of the recalls stored as `done` because the caller chose `KeepDone`.
     pub kept_done_recall_ids: Vec<i32>,
+    /// Ids of the hand-closed appointments that are open again because a job
+    /// the service completed is planned again.
+    pub reopened_appointment_ids: Vec<i32>,
+    /// Ids of the jobs the service completed that came off a cancelled
+    /// appointment.
+    pub unassigned_job_ids: Vec<i32>,
 }
 
 /// Deletes a service record and its owned rows, and reopens what it closed.
@@ -1111,7 +1117,9 @@ pub struct DeletedService {
 /// parameter is ignored. A recall another service also performed stays `done` and is reported in
 /// `still_done_elsewhere_recall_ids`. Each incident the service resolved goes back to
 /// unresolved unless another service also resolved it. Each work item it
-/// completed returns to `planned`. Parts it installed stay, reverted to
+/// completed returns to `planned`, which opens a hand-closed appointment again
+/// and takes a job off a cancelled one; `reopened_appointment_ids` and
+/// `unassigned_job_ids` list them. Parts it installed stay, reverted to
 /// `purchased` with their install fields cleared, including parts created
 /// inline by this service; their ids come back in `kept_part_ids` so the
 /// caller can attach them to a re-filed service or delete them with
@@ -1138,7 +1146,9 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     };
     let mut outcome = DeletedService::default();
 
-    work_item::reopen_completed_by(&txn, existing.id).await?;
+    let settled = work_item::reopen_completed_by(&txn, existing.id).await?;
+    outcome.reopened_appointment_ids = settled.reopened_appointment_ids;
+    outcome.unassigned_job_ids = settled.unassigned_job_ids;
     reopen_resolved_incidents(&txn, existing.id).await?;
 
     // Unlink parts installed during this service (revert to purchased)
@@ -3700,10 +3710,13 @@ mod tests {
             assert_eq!(appointment_status(&f).await, "done");
             assert_eq!(stage_of(&f, need_id).await, need::Stage::Installed);
 
-            delete(&f.db, f.vehicle, created.record.id, None)
+            let deleted = delete(&f.db, f.vehicle, created.record.id, None)
                 .await
                 .unwrap();
 
+            // An appointment that read done from its jobs had no date to clear.
+            assert!(deleted.reopened_appointment_ids.is_empty());
+            assert!(deleted.unassigned_job_ids.is_empty());
             assert_eq!(appointment_status(&f).await, "planning");
             assert_eq!(job_status(&f, job_id).await, JobStatus::Planned);
             assert_eq!(stage_of(&f, need_id).await, need::Stage::Received);
@@ -3725,9 +3738,11 @@ mod tests {
                 .await
                 .unwrap();
 
-            delete(&f.db, f.vehicle, created.record.id, None)
+            let deleted = delete(&f.db, f.vehicle, created.record.id, None)
                 .await
                 .unwrap();
+            assert_eq!(deleted.reopened_appointment_ids, vec![f.appointment]);
+            assert!(deleted.unassigned_job_ids.is_empty());
 
             let summary = appointment::summary(&f.db, f.vehicle, f.appointment)
                 .await
@@ -3761,9 +3776,11 @@ mod tests {
                 .await
                 .unwrap();
 
-            delete(&f.db, f.vehicle, created.record.id, None)
+            let deleted = delete(&f.db, f.vehicle, created.record.id, None)
                 .await
                 .unwrap();
+            assert!(deleted.reopened_appointment_ids.is_empty());
+            assert_eq!(deleted.unassigned_job_ids, vec![job_id]);
 
             assert_eq!(appointment_status(&f).await, "cancelled");
             let job = work_item::Entity::find_by_id(job_id)
