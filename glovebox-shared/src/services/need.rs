@@ -2576,14 +2576,11 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_correction_racing_a_return_sees_the_returned_part() {
         let (_dir, pools) = race_pools().await;
-        let (first, second) = (pools[0].clone(), pools[1].clone());
-        let (vehicle_id, job_id) = seed_job(&first).await;
-        let (n, _) = ordered_need(&first, vehicle_id, job_id).await;
-        let part_id = require(&first, vehicle_id, n.id)
-            .await
-            .unwrap()
-            .part_id
-            .unwrap();
+        let first = &pools[0];
+        let second = pools[1].clone();
+        let (vehicle_id, job_id) = seed_job(first).await;
+        let (n, _) = ordered_need(first, vehicle_id, job_id).await;
+        let part_id = n.part_id.unwrap();
 
         let txn = first.begin().await.unwrap();
         let input = ReturnInput {
@@ -2599,11 +2596,15 @@ mod tests {
             crate::services::part::update(&second, vehicle_id, part_id, input).await
         });
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(
+            !correcting.is_finished(),
+            "the correction ran ahead of the open return"
+        );
         txn.commit().await.unwrap();
 
         let err = correcting.await.unwrap().unwrap_err();
         assert!(err.to_string().contains("was returned"), "{err}");
-        let p = crate::services::part::get(&first, vehicle_id, part_id)
+        let p = crate::services::part::get(first, vehicle_id, part_id)
             .await
             .unwrap();
         assert_eq!(p.status, PartStatus::Returned);
