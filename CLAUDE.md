@@ -324,6 +324,15 @@ opens a form and the button that submits it carry the same words. Every date is 
 - Service functions take `db: &impl ConnectionTrait` as the first parameter, never a server type.
 - **Error model**: services return `DomainResult<T>`. `Invalid` renders as `"{field}: {message}"`;
   `BadRequest` renders its message verbatim; `Db` and `Internal` are opaque to the client.
+  A service's message reads correctly on both the web page and in a tool result, so it carries no
+  argument syntax such as "send null". The MCP tool and field descriptions carry the wire syntax.
+- **A transaction that writes claims its row first.** Its first statement is a write that takes
+  SQLite's write lock, such as `need::claim`, `appointment::claim` or `todo::claim` (a no-op
+  `UPDATE ... SET updated_at = updated_at`), or a conditional write like `mark_ordered`'s, and the
+  reads and checks follow inside the transaction. A transaction that begins with a read holds a
+  snapshot, and when the other program commits before the first write, SQLite fails it with a
+  busy-snapshot error at once; the busy timeout does not help. A race test opens several pools on
+  one file (`test_support::race_pools`) and fails when the claim is removed.
 - **Stamps are set by code, never by the database.** No stamp column has a default. An entity
   fills `created_at` and `updated_at` on insert (`stamp_on_insert!` in `entities/mod.rs`), and
   every update function sets `active.updated_at = Set(services::now())`, because SeaORM
