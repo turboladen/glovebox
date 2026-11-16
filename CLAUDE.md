@@ -231,7 +231,8 @@ is the option's unit price times the need's quantity (`need::order_cost_cents`).
 leaves the other fields unchanged. An option that is `does_not_fit` or rejected cannot be chosen,
 and no tool chooses a supplier or an option for the owner. `return_part` is the only way a part
 becomes `returned`, and its to-do goes on the job's appointment only while that appointment is
-open (no list shows the to-dos of a closed or cancelled one). Naming an appointment in `record_service` installs and completes nothing; the
+open (no list shows the to-dos of a closed or cancelled one), and `add_todo` and `update_todo`
+refuse to put a to-do on a closed or cancelled appointment (`appointment::require_assignable`). Naming an appointment in `record_service` installs and completes nothing; the
 result's `unfitted_needs` lists the linked parts the invoice did not install. `need_id` is accepted
 on the inline parts of `record_service` only, and `get_checklist` takes at most one of
 `appointment_id` and `work_item_id`.

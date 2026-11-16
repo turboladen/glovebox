@@ -216,6 +216,13 @@ pub async fn require(
 
 /// [`require`] for an appointment that is about to receive a job or an invoice:
 /// a cancelled or hand-closed appointment is refused.
+/// True while the appointment takes new jobs and to-dos: it is neither
+/// closed by hand nor cancelled. One whose jobs are all done still does.
+#[must_use]
+pub fn accepts_work(a: &appointment::Model) -> bool {
+    Ending::of(a).is_none()
+}
+
 pub(crate) async fn require_assignable(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -246,7 +253,7 @@ pub(crate) async fn claim_assignable(
 // first statement gives it SQLite's write lock (waiting out the busy timeout),
 // so everything the transaction reads afterwards is the committed state and no
 // other program can close, cancel or fill the appointment until it ends.
-async fn claim(txn: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
+pub(crate) async fn claim(txn: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
     appointment::Entity::update_many()
         .col_expr(
             appointment::Column::UpdatedAt,

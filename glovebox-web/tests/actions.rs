@@ -936,6 +936,42 @@ async fn todo_add_tick_undo_delete() {
 }
 
 #[tokio::test]
+async fn a_closed_appointment_shows_no_add_form_and_refuses_a_new_todo() {
+    let w = World::new().await;
+    let back = w.page_path();
+    let appointment = w.appointment.to_string();
+    appointment::close(&w.db, w.vehicle, w.appointment)
+        .await
+        .unwrap();
+
+    let (_, body) = w.get(&back).await;
+    assert!(!body.contains(">Add a to-do<"), "{body}");
+
+    let (status, _, body) = w
+        .post(
+            &format!("/vehicles/{}/todos", w.vehicle),
+            &[
+                ("title", "Bring wheel locks"),
+                ("appointment_id", &appointment),
+                ("back", &back),
+            ],
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let expected = format!(
+        r#"<div class="page notice"><p class="error" role="alert"><b>Not saved.</b> Appointment {} is closed; reopen it first</p></div>"#,
+        w.appointment
+    );
+    assert!(body.contains(&expected), "{body}");
+    assert!(
+        todo::list(&w.db, w.vehicle, None, true)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn home_todos_can_be_added_ticked_and_deleted() {
     let w = World::new().await;
     let add_path = format!("/vehicles/{}/todos", w.vehicle);

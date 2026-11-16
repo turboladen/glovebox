@@ -45,35 +45,44 @@ pub async fn require(
 ///
 /// # Errors
 /// `NotFound` for a vehicle or appointment that is not found, with an
-/// appointment of another vehicle reading as missing; `Invalid` for a blank
-/// title.
-pub async fn add(
-    db: &impl ConnectionTrait,
+/// appointment of another vehicle reading as missing; `BadRequest` for an
+/// appointment that is closed or cancelled; `Invalid` for a blank title.
+pub async fn add<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
     vehicle_id: i32,
     input: NewTodo,
 ) -> DomainResult<todo::Model> {
     super::validate_not_blank("title", &input.title)?;
-    super::vehicle::require(db, vehicle_id).await?;
-    if let Some(id) = input.appointment_id {
-        super::appointment::require(db, vehicle_id, id).await?;
-    }
-    let model = todo::ActiveModel {
+    let Some(appointment_id) = input.appointment_id else {
+        super::vehicle::require(db, vehicle_id).await?;
+        return Ok(new_row(vehicle_id, input).insert(db).await?);
+    };
+    // Claiming the appointment first keeps a close from landing between the
+    // check and the insert.
+    let txn = db.begin().await?;
+    super::appointment::claim(&txn, appointment_id).await?;
+    super::vehicle::require(&txn, vehicle_id).await?;
+    super::appointment::require_assignable(&txn, vehicle_id, appointment_id).await?;
+    let created = new_row(vehicle_id, input).insert(&txn).await?;
+    txn.commit().await?;
+    Ok(created)
+}
+
+fn new_row(vehicle_id: i32, input: NewTodo) -> todo::ActiveModel {
+    todo::ActiveModel {
         vehicle_id: Set(vehicle_id),
         appointment_id: Set(input.appointment_id),
         title: Set(input.title),
         notes: Set(input.notes),
         ..Default::default()
-    };
-    Ok(model.insert(db).await?)
+    }
 }
 
-/// Changes a to-do's title or notes, or moves it to another appointment of
-/// the vehicle or off any appointment.
-///
-/// # Errors
-/// `NotFound` as for [`add`] and for a to-do that is not the vehicle's;
-/// `Invalid` for a blank title.
-pub async fn update(
+// Changes a to-do's title or notes, or moves it to another appointment of
+// the vehicle or off any appointment. It runs inside `update_with_done`'s
+// transaction, after the to-do's claim, so the appointment check and the
+// write see the same state.
+async fn update(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     id: i32,
@@ -83,8 +92,13 @@ pub async fn update(
     if let Some(title) = &input.title {
         super::validate_not_blank("title", title)?;
     }
-    if let Some(Some(appointment_id)) = input.appointment_id {
-        super::appointment::require(db, vehicle_id, appointment_id).await?;
+    // Moving a to-do onto a closed or cancelled appointment is refused; one
+    // already there may still be edited.
+    if let Some(Some(appointment_id)) = input.appointment_id
+        && existing.appointment_id != Some(appointment_id)
+    {
+        super::appointment::claim(db, appointment_id).await?;
+        super::appointment::require_assignable(db, vehicle_id, appointment_id).await?;
     }
     let mut active: todo::ActiveModel = existing.into();
     if let Some(v) = input.title {
@@ -105,7 +119,9 @@ pub async fn update(
 /// its original `done_on`; otherwise it is stamped with today's date.
 ///
 /// # Errors
-/// As for [`update`].
+/// `NotFound` for a to-do that is not the vehicle's or an appointment that is
+/// not found; `BadRequest` for a move onto an appointment that is closed or
+/// cancelled; `Invalid` for a blank title.
 pub async fn update_with_done<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -521,6 +537,76 @@ mod tests {
         .await
         .unwrap()
         .id
+    }
+
+    #[tokio::test]
+    async fn a_todo_cannot_be_added_to_or_moved_onto_a_closed_or_cancelled_appointment() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let closed = appointment_id(&db, v, "Brakes").await;
+        let cancelled = appointment_id(&db, v, "Tires").await;
+        let kept = add(&db, v, new_todo("Bring the key", Some(closed)))
+            .await
+            .unwrap();
+        appointment::close(&db, v, closed).await.unwrap();
+        appointment::cancel(&db, v, cancelled).await.unwrap();
+        let loose = add(&db, v, new_todo("Loose", None)).await.unwrap();
+
+        for (id, ending) in [(closed, "closed"), (cancelled, "cancelled")] {
+            let expected = format!("Appointment {id} is {ending}; reopen it first");
+            let err = add(&db, v, new_todo("Late", Some(id))).await.unwrap_err();
+            assert_eq!(err.to_string(), expected);
+            let move_onto = UpdateTodo {
+                appointment_id: Some(Some(id)),
+                ..Default::default()
+            };
+            let err = update_with_done(&db, v, loose.id, move_onto, None)
+                .await
+                .unwrap_err();
+            assert_eq!(err.to_string(), expected);
+        }
+        assert_eq!(row_count::<todo::Entity>(&db).await, 2);
+        assert_eq!(
+            require(&db, v, loose.id).await.unwrap().appointment_id,
+            None
+        );
+
+        // A to-do already on a closed appointment can still be edited.
+        let edit = UpdateTodo {
+            title: Some("Bring both keys".into()),
+            appointment_id: Some(Some(closed)),
+            ..Default::default()
+        };
+        let edited = update_with_done(&db, v, kept.id, edit, None).await.unwrap();
+        assert_eq!(
+            (edited.title.as_str(), edited.appointment_id),
+            ("Bring both keys", Some(closed))
+        );
+    }
+
+    #[tokio::test]
+    async fn adding_todos_while_the_appointment_closes_never_fails_on_the_lock() {
+        let (_dir, pools) = race_pools().await;
+        let first = &pools[0];
+        let v = VehicleFixture::new().insert_id(first).await;
+        let a = appointment_id(first, v, "Brakes").await;
+
+        let mut adds = tokio::task::JoinSet::new();
+        for (i, db) in pools.iter().chain(pools.iter()).cloned().enumerate() {
+            adds.spawn(async move { add(&db, v, new_todo(&format!("To-do {i}"), Some(a))).await });
+        }
+        let closer = pools[1].clone();
+        let closed = tokio::spawn(async move { appointment::close(&closer, v, a).await });
+        let results = adds.join_all().await;
+        closed.await.unwrap().unwrap();
+
+        for result in &results {
+            match result {
+                Ok(_) => {}
+                Err(DomainError::BadRequest(m)) if m.contains("is closed") => {}
+                other => panic!("unexpected result {other:?}"),
+            }
+        }
     }
 
     #[tokio::test]

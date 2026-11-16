@@ -433,7 +433,7 @@ async fn small_jobs(
     Ok(())
 }
 
-async fn todos(db: &impl ConnectionTrait, at: &Visit) -> DomainResult<()> {
+async fn todos(db: &(impl ConnectionTrait + TransactionTrait), at: &Visit) -> DomainResult<()> {
     let (v, a) = (at.vehicle, Some(at.appointment));
     for (title, done) in [
         ("Ask the shop about the clunk over bumps", false),

@@ -342,7 +342,10 @@ impl GloveboxMcp {
         name = "add_todo",
         description = "Add a plain to-do (\"Return the HP Plus pads\", \"Ask KW to confirm the \
                        differential\"), optionally on an appointment. Tick it off with \
-                       `update_todo`; it appears in `get_checklist` under `todos`."
+                       `update_todo`; it appears in `get_checklist` under `todos`. A closed or \
+                       cancelled appointment takes no new to-dos and the call is an error: ask \
+                       the owner whether to reopen it (`update_appointment` with status \
+                       `planning`), then add the to-do, or add it with no appointment."
     )]
     async fn add_todo(&self, params: Parameters<AddTodoInput>) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "add_todo");
@@ -355,7 +358,9 @@ impl GloveboxMcp {
         description = "Tick a to-do off with `done: true` (stamped with today's date) or un-tick \
                        it with `done: false`, and change its title, notes or appointment. Send \
                        only the fields to change; null clears notes or the appointment. Find \
-                       to-do ids in `get_checklist`."
+                       to-do ids in `get_checklist`. Moving a to-do onto a closed or cancelled \
+                       appointment is an error; ask the owner whether to reopen that appointment \
+                       first, as for `add_todo`."
     )]
     async fn update_todo(
         &self,
