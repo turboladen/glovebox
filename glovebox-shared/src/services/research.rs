@@ -148,6 +148,8 @@ async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
     vehicle_id: i32,
     recalls: &[RecallInfo],
 ) -> DomainResult<usize> {
+    let txn = super::begin_write(db).await?;
+    let db = &txn;
     // Collect existing recall source_urls for this vehicle to deduplicate
     let existing_reports = research_report::Entity::find()
         .filter(research_report::Column::VehicleId.eq(vehicle_id))
@@ -211,6 +213,7 @@ async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
     }
 
     if new_findings.is_empty() {
+        txn.commit().await?;
         return Ok(0);
     }
     let count = new_findings.len();
@@ -221,8 +224,6 @@ async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
         if count == 1 { "" } else { "s" }
     );
     let raw_data = serde_json::to_string(&new_findings).ok();
-
-    let txn = db.begin().await?;
 
     let report = research_report::ActiveModel {
         vehicle_id: Set(vehicle_id),
@@ -254,16 +255,19 @@ async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
 /// Persist an externally-researched finding (e.g. filed by an MCP client)
 /// under this vehicle's `external_research` anchor report — created on first
 /// use, reused thereafter (mirrors how recalls anchor to `recalls_only`).
-pub async fn file_finding(
-    db: &impl ConnectionTrait,
+pub async fn file_finding<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
     vehicle_id: i32,
     input: NewFiledFinding,
 ) -> DomainResult<research_finding::Model> {
+    // The anchor report and the finding are written under one write lock, so
+    // two first filings at once create one anchor.
+    let txn = super::begin_write(db).await?;
+    let db = &txn;
     crate::services::vehicle::require(db, vehicle_id).await?;
 
-    // order_by_asc(Id): should concurrent first-filings ever race-create two
-    // anchors (no unique index on vehicle+type), every later call still picks
-    // the same one deterministically.
+    // No unique index stops two anchors for one vehicle, so the oldest is
+    // always the one picked.
     let report = match research_report::Entity::find()
         .filter(research_report::Column::VehicleId.eq(vehicle_id))
         .filter(research_report::Column::ReportType.eq("external_research"))
@@ -290,7 +294,7 @@ pub async fn file_finding(
         }
     };
 
-    Ok(research_finding::ActiveModel {
+    let finding = research_finding::ActiveModel {
         report_id: Set(report.id),
         category: Set(input.category),
         title: Set(input.title),
@@ -301,7 +305,9 @@ pub async fn file_finding(
         ..Default::default()
     }
     .insert(db)
-    .await?)
+    .await?;
+    txn.commit().await?;
+    Ok(finding)
 }
 
 #[cfg(test)]

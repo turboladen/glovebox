@@ -155,31 +155,8 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     id: i32,
     input: UpdatePart,
 ) -> DomainResult<part::Model> {
-    let txn = db.begin().await?;
-    // The claim takes the write lock before the part is read, so a return
-    // from the other program cannot commit between the checks and the write.
-    claim(&txn, id).await?;
-    let updated = write_update(&txn, vehicle_id, id, input).await?;
-    txn.commit().await?;
-    Ok(updated)
-}
-
-// Writes the part row without changing it, as `need::claim` does for a need.
-async fn claim(txn: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
-    part::Entity::update_many()
-        .col_expr(part::Column::UpdatedAt, Expr::col(part::Column::UpdatedAt))
-        .filter(part::Column::Id.eq(id))
-        .exec(txn)
-        .await?;
-    Ok(())
-}
-
-async fn write_update(
-    db: &impl ConnectionTrait,
-    vehicle_id: i32,
-    id: i32,
-    input: UpdatePart,
-) -> DomainResult<part::Model> {
+    let txn = super::begin_write(db).await?;
+    let db = &txn;
     let existing = get(db, vehicle_id, id).await?;
 
     if let Some(Some(service_id)) = input.installed_service_id {
@@ -270,7 +247,9 @@ async fn write_update(
     }
 
     active.updated_at = Set(super::now());
-    Ok(active.update(db).await?)
+    let updated = active.update(db).await?;
+    txn.commit().await?;
+    Ok(updated)
 }
 
 /// Marks a vehicle's part as installed by `record` on the record's date.

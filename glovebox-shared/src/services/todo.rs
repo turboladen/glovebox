@@ -11,8 +11,8 @@ use crate::{
 
 /// Inserts a to-do for a vehicle, on an appointment when one is given. The
 /// caller has already checked that the appointment belongs to the vehicle and
-/// takes work, through `appointment::claim_assignable` or
-/// `appointment::open_id`.
+/// takes work, through `appointment::require_assignable` on a write
+/// transaction or `appointment::open_id`.
 pub(crate) async fn insert(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -57,11 +57,9 @@ pub async fn add<C: ConnectionTrait + TransactionTrait>(
 ) -> DomainResult<todo::Model> {
     super::validate_not_blank("title", &input.title)?;
     super::vehicle::require(db, vehicle_id).await?;
-    // Claiming the appointment first keeps a close from landing between the
-    // check and the insert.
-    let txn = db.begin().await?;
+    let txn = super::begin_write(db).await?;
     if let Some(appointment_id) = input.appointment_id {
-        super::appointment::claim_assignable(&txn, vehicle_id, appointment_id).await?;
+        super::appointment::require_assignable(&txn, vehicle_id, appointment_id).await?;
     }
     let created = insert(&txn, vehicle_id, input).await?;
     txn.commit().await?;
@@ -70,8 +68,8 @@ pub async fn add<C: ConnectionTrait + TransactionTrait>(
 
 // Changes a to-do's title or notes, or moves it to another appointment of
 // the vehicle or off any appointment. It runs inside `update_with_done`'s
-// transaction after the to-do's claim, which already holds SQLite's write
-// lock, so the appointment check and the write see the same state.
+// write transaction, so the appointment check and the write see the same
+// state.
 // `opening` is true when the same call marks the to-do not done.
 async fn update(
     db: &impl ConnectionTrait,
@@ -121,8 +119,7 @@ pub async fn update_with_done<C: ConnectionTrait + TransactionTrait>(
     input: UpdateTodo,
     done: Option<bool>,
 ) -> DomainResult<UpdatedTodo> {
-    let txn = db.begin().await?;
-    claim(&txn, id).await?;
+    let txn = super::begin_write(db).await?;
     let edited = update(&txn, vehicle_id, id, input, done == Some(false)).await?;
     let result = match done {
         Some(true) if edited.done_on.is_some() => UpdatedTodo::plain(edited),
@@ -159,17 +156,6 @@ impl UpdatedTodo {
     }
 }
 
-// Writes the to-do row without changing it, as `appointment::claim` does for
-// an appointment, so a transaction takes the write lock before it reads.
-async fn claim(txn: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
-    todo::Entity::update_many()
-        .col_expr(todo::Column::UpdatedAt, Expr::col(todo::Column::UpdatedAt))
-        .filter(todo::Column::Id.eq(id))
-        .exec(txn)
-        .await?;
-    Ok(())
-}
-
 /// Marks a to-do done on `on`, or today when `on` is absent.
 ///
 /// # Errors
@@ -198,8 +184,7 @@ pub async fn reopen<C: ConnectionTrait + TransactionTrait>(
     vehicle_id: i32,
     id: i32,
 ) -> DomainResult<UpdatedTodo> {
-    let txn = db.begin().await?;
-    claim(&txn, id).await?;
+    let txn = super::begin_write(db).await?;
     let existing = require(&txn, vehicle_id, id).await?;
     let was_on = existing.appointment_id;
     let (appointment_id, reopened_appointment_id) =
@@ -270,10 +255,9 @@ pub async fn restore<C: ConnectionTrait + TransactionTrait>(
         return Err(not_found(id));
     }
     super::vehicle::require(db, vehicle_id).await?;
-    let txn = db.begin().await?;
-    // The insert is the transaction's first statement, so it takes the write
-    // lock before anything is read, and a row already at the id makes it
-    // insert nothing instead of failing on the primary key.
+    let txn = super::begin_write(db).await?;
+    // A row already at the id makes the insert do nothing instead of failing
+    // on the primary key.
     let mut restored = todo::Model {
         appointment_id: None,
         updated_at: super::now(),
@@ -903,17 +887,14 @@ mod tests {
         let v = VehicleFixture::new().insert_id(first).await;
         let t = add(first, v, new_todo("Wash", None)).await.unwrap();
 
-        let mut writes = tokio::task::JoinSet::new();
-        for (i, db) in pools.iter().chain(pools.iter()).cloned().enumerate() {
-            writes.spawn(async move {
-                let input = UpdateTodo {
-                    notes: Some(Some(format!("note {i}"))),
-                    ..Default::default()
-                };
-                update_with_done(&db, v, t.id, input, Some(i % 2 == 0)).await
-            });
-        }
-        let results = writes.join_all().await;
+        let results = crate::test_support::race(&pools, |i, db| async move {
+            let input = UpdateTodo {
+                notes: Some(Some(format!("note {i}"))),
+                ..Default::default()
+            };
+            update_with_done(&db, v, t.id, input, Some(i % 2 == 0)).await
+        })
+        .await;
 
         assert!(results.iter().all(Result::is_ok), "{results:?}");
     }

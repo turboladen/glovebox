@@ -297,8 +297,7 @@ pub async fn set_status<C: ConnectionTrait + TransactionTrait>(
     finding_id: i32,
     status: RecallStatus,
 ) -> DomainResult<RecallWithStatus> {
-    let txn = db.begin().await?;
-    claim(&txn, finding_id).await?;
+    let txn = super::begin_write(db).await?;
     let finding = require_recalls(&txn, vehicle_id, &[finding_id])
         .await?
         .remove(0);
@@ -333,20 +332,6 @@ pub async fn set_status<C: ConnectionTrait + TransactionTrait>(
     let read = with_status(&txn, vec![updated]).await?.remove(0);
     txn.commit().await?;
     Ok(read)
-}
-
-// Writes the finding row without changing it, so `set_status` takes SQLite's
-// write lock before it reads, as `need::claim` does for a need.
-async fn claim(txn: &impl ConnectionTrait, finding_id: i32) -> DomainResult<()> {
-    research_finding::Entity::update_many()
-        .col_expr(
-            research_finding::Column::UpdatedAt,
-            sea_query::Expr::col(research_finding::Column::UpdatedAt),
-        )
-        .filter(research_finding::Column::Id.eq(finding_id))
-        .exec(txn)
-        .await?;
-    Ok(())
 }
 
 /// The ids among `finding_ids` whose findings are recalls, in one query.
@@ -798,6 +783,28 @@ mod tests {
     async fn shown(db: &DatabaseConnection, v: i32) -> (String, Option<i32>, bool) {
         let r = &list(db, v).await.unwrap()[0];
         (r.status.clone(), r.work_item_id, r.done_service.is_some())
+    }
+
+    // Status changes racing on one file from several pools all succeed: each
+    // opens with the write lock, which a write to an FTS-indexed table needs.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_status_changes_on_one_recall_all_succeed() {
+        let (_dir, pools) = crate::test_support::race_pools().await;
+        let first = &pools[0];
+        let v = seed_vehicle(first).await;
+        let id = seed_recall(first, v, "24V110000").await;
+
+        let results = crate::test_support::race(&pools, |i, db| async move {
+            let status = if i % 2 == 0 {
+                RecallStatus::Done
+            } else {
+                RecallStatus::NotApplicable
+            };
+            set_status(&db, v, id, status).await.map(|_| ())
+        })
+        .await;
+
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
     }
 
     #[tokio::test]

@@ -317,12 +317,10 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
         return Err(DomainError::invalid("title", "must not be blank"));
     }
     validate_revisit(input.revisit_by_miles)?;
-    let txn = db.begin().await?;
+    let txn = super::begin_write(db).await?;
     let db = &txn;
-    // The claim comes before any read, so the appointment cannot be closed or
-    // cancelled between this check and the insert.
     if let Some(id) = input.appointment_id {
-        crate::services::appointment::claim_assignable(db, vehicle_id, id).await?;
+        crate::services::appointment::require_assignable(db, vehicle_id, id).await?;
     }
     crate::services::vehicle::require(db, vehicle_id).await?;
     let schedule_item_id = require_links_owned(
@@ -375,19 +373,8 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     id: i32,
     input: UpdateWorkItem,
 ) -> DomainResult<UpdatedWorkItem> {
-    let txn = db.begin().await?;
+    let txn = super::begin_write(db).await?;
     let db = &txn;
-    // The write comes before any read, so SQLite gives this transaction the
-    // write lock first. The job and its appointment then cannot change between
-    // the checks below and the update.
-    work_item::Entity::update_many()
-        .col_expr(
-            work_item::Column::UpdatedAt,
-            sea_query::Expr::col(work_item::Column::UpdatedAt),
-        )
-        .filter(work_item::Column::Id.eq(id))
-        .exec(db)
-        .await?;
     let existing = get(db, vehicle_id, id).await?;
     let reopens = existing.status != JobStatus::Planned && input.status == Some(JobStatus::Planned);
 
@@ -498,6 +485,36 @@ mod tests {
 
     async fn seed_vehicle(db: &impl ConnectionTrait) -> i32 {
         VehicleFixture::new().insert_id(db).await
+    }
+
+    // Job edits racing on one file from several pools all succeed: each opens
+    // with the write lock, which a write to an FTS-indexed table needs.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_edits_of_one_job_all_succeed() {
+        let (_dir, pools) = crate::test_support::race_pools().await;
+        let first = &pools[0];
+        let v = seed_vehicle(first).await;
+        let job = create(
+            first,
+            v,
+            NewWorkItem {
+                title: "Brakes".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let results = crate::test_support::race(&pools, |i, db| async move {
+            let input = UpdateWorkItem {
+                notes: Some(Some(format!("note {i}"))),
+                ..Default::default()
+            };
+            update(&db, v, job.id, input).await.map(|_| ())
+        })
+        .await;
+
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
     }
 
     async fn seed_schedule_item(db: &impl ConnectionTrait, vehicle_id: i32) -> i32 {

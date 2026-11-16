@@ -713,6 +713,9 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     vehicle_id: i32,
     input: NewServiceRecord,
 ) -> DomainResult<ServiceRecordWithLinks> {
+    let pool = db;
+    let txn = super::begin_write(pool).await?;
+    let db = &txn;
     super::vehicle::require(db, vehicle_id).await?;
 
     // An LLM may send "" or spaces rather than omitting the invoice number, and a
@@ -749,8 +752,6 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     if let Some(appointment_id) = input.appointment_id {
         appointment::require_assignable(db, vehicle_id, appointment_id).await?;
     }
-
-    let txn = db.begin().await?;
 
     // Resolved before the record is written so a bad schedule id is reported
     // ahead of any error the insert itself could raise.
@@ -843,7 +844,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     // signal, so surface other same-day records on this vehicle for the caller
     // to reconcile. Read-only, never blocks; distinct records coexist.
     if created.record.invoice_ref.is_none() {
-        created.possible_duplicates = same_day_peers(db, vehicle_id, &created.record).await?;
+        created.possible_duplicates = same_day_peers(pool, vehicle_id, &created.record).await?;
     }
 
     Ok(created)
@@ -856,6 +857,8 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     id: i32,
     input: UpdateServiceRecord,
 ) -> DomainResult<ServiceRecordWithLinks> {
+    let txn = super::begin_write(db).await?;
+    let db = &txn;
     let existing = require(db, vehicle_id, id).await?;
 
     validate_who_and_when(
@@ -881,8 +884,6 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     {
         appointment::require_assignable(db, vehicle_id, appointment_id).await?;
     }
-
-    let txn = db.begin().await?;
 
     let (date_before, mileage_before) = (existing.service_date, existing.mileage);
     let mut active: service_record::ActiveModel = existing.into();
@@ -1038,9 +1039,11 @@ pub async fn link_schedule_items<C: ConnectionTrait + TransactionTrait>(
     item_ids: &[i32],
     mode: LinkMode,
 ) -> DomainResult<ServiceRecordWithLinks> {
+    let pool = db;
+    let txn = super::begin_write(pool).await?;
+    let db = &txn;
     let existing = require(db, vehicle_id, id).await?;
 
-    let txn = db.begin().await?;
     schedule::link_service(&txn, vehicle_id, existing.id, item_ids, mode).await?;
 
     // Linking changes what the record accounts for — stamp it like update().
@@ -1049,7 +1052,7 @@ pub async fn link_schedule_items<C: ConnectionTrait + TransactionTrait>(
     let record = active.update(&txn).await?;
     txn.commit().await?;
 
-    load_service_links(db, record).await
+    load_service_links(pool, record).await
 }
 
 crate::vocab::vocabulary! {
@@ -3357,6 +3360,54 @@ mod tests {
 
     // ─── invoices against appointments ───
 
+    // Invoices filed at once from several pools are all recorded: each opens
+    // with the write lock before it reads the schedule it links.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_services_on_one_vehicle_are_all_recorded() {
+        let (_dir, pools) = crate::test_support::race_pools().await;
+        let first = &pools[0];
+        let v = seed_vehicle(first).await;
+
+        let results = crate::test_support::race(&pools, |i, db| async move {
+            let input = NewServiceRecord {
+                service_date: date("2024-06-01"),
+                invoice_ref: Some(format!("INV-{i}")),
+                ..Default::default()
+            };
+            create(&db, v, input).await.map(|_| ())
+        })
+        .await;
+
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
+        assert_eq!(
+            row_count::<service_record::Entity>(first).await,
+            results.len() as u64
+        );
+    }
+
+    // One invoice filed at once from several pools is stored once, and every
+    // other call gets that record back as already recorded.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn one_invoice_filed_at_once_is_recorded_once() {
+        let (_dir, pools) = crate::test_support::race_pools().await;
+        let first = &pools[0];
+        let v = seed_vehicle(first).await;
+
+        let results = crate::test_support::race(&pools, |_, db| async move {
+            let input = NewServiceRecord {
+                service_date: date("2024-06-01"),
+                invoice_ref: Some("INV-1".into()),
+                ..Default::default()
+            };
+            create(&db, v, input).await.map(|r| r.already_recorded)
+        })
+        .await;
+
+        let repeats: Vec<bool> = results.into_iter().map(Result::unwrap).collect();
+        assert_eq!(repeats.iter().filter(|r| !**r).count(), 1, "{repeats:?}");
+        assert_eq!(row_count::<service_record::Entity>(first).await, 1);
+    }
+
     // Deletes racing on one file from several pools delete the service once,
     // and the rest find it gone: each takes the write lock before it reads.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -3379,11 +3430,10 @@ mod tests {
         .record
         .id;
 
-        let mut deletes = tokio::task::JoinSet::new();
-        for db in pools.iter().chain(pools.iter()).cloned() {
-            deletes.spawn(async move { delete(&db, v, id, UNDO).await.map(|_| ()) });
-        }
-        let results = deletes.join_all().await;
+        let results = crate::test_support::race(&pools, |_, db| async move {
+            delete(&db, v, id, UNDO).await.map(|_| ())
+        })
+        .await;
 
         assert_eq!(
             results.iter().filter(|r| r.is_ok()).count(),

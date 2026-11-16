@@ -175,8 +175,7 @@ pub async fn update_with_status<C: ConnectionTrait + TransactionTrait>(
     input: UpdateAppointment,
     change: Option<StatusChange>,
 ) -> DomainResult<RevisedAppointment> {
-    let txn = db.begin().await?;
-    claim(&txn, id).await?;
+    let txn = super::begin_write(db).await?;
     update(&txn, vehicle_id, id, input).await?;
     let (unassigned_job_ids, unassigned_todo_ids) = match change {
         Some(StatusChange::Close) => {
@@ -240,34 +239,6 @@ pub(crate) async fn require_assignable(
         )));
     }
     Ok(found)
-}
-
-/// [`require_assignable`] for a caller that is about to put a job or a to-do
-/// on the appointment inside `txn`. It must be the transaction's first
-/// statement.
-pub(crate) async fn claim_assignable(
-    txn: &impl ConnectionTrait,
-    vehicle_id: i32,
-    id: i32,
-) -> DomainResult<appointment::Model> {
-    claim(txn, id).await?;
-    require_assignable(txn, vehicle_id, id).await
-}
-
-// Writes the appointment row without changing it. A write as a transaction's
-// first statement gives it SQLite's write lock (waiting out the busy timeout),
-// so everything the transaction reads afterwards is the committed state and no
-// other program can close, cancel or fill the appointment until it ends.
-async fn claim(txn: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
-    appointment::Entity::update_many()
-        .col_expr(
-            appointment::Column::UpdatedAt,
-            Expr::col(appointment::Column::UpdatedAt),
-        )
-        .filter(appointment::Column::Id.eq(id))
-        .exec(txn)
-        .await?;
-    Ok(())
 }
 
 /// Returns `id` when it names an appointment of `vehicle_id` that is neither
@@ -463,7 +434,7 @@ pub async fn close<C: ConnectionTrait + TransactionTrait>(
     vehicle_id: i32,
     id: i32,
 ) -> DomainResult<ClosedAppointment> {
-    let txn = db.begin().await?;
+    let txn = super::begin_write(db).await?;
     let closed = put_away(&txn, vehicle_id, id, Ending::Closed).await?;
     txn.commit().await?;
     Ok(closed)
@@ -481,7 +452,7 @@ pub async fn cancel<C: ConnectionTrait + TransactionTrait>(
     vehicle_id: i32,
     id: i32,
 ) -> DomainResult<ClosedAppointment> {
-    let txn = db.begin().await?;
+    let txn = super::begin_write(db).await?;
     let cancelled = put_away(&txn, vehicle_id, id, Ending::Cancelled).await?;
     txn.commit().await?;
     Ok(cancelled)
@@ -494,7 +465,6 @@ async fn put_away(
     id: i32,
     ending: Ending,
 ) -> DomainResult<ClosedAppointment> {
-    claim(db, id).await?;
     let existing = require(db, vehicle_id, id).await?;
     if let Some(current) = Ending::of(&existing) {
         return Err(DomainError::BadRequest(format!(
@@ -1487,8 +1457,8 @@ mod tests {
         .unwrap()
         .id;
 
-        let txn = first.begin().await.unwrap();
-        claim_assignable(&txn, v, a).await.unwrap();
+        let txn = crate::services::begin_write(&first).await.unwrap();
+        require_assignable(&txn, v, a).await.unwrap();
         let job = work_item::ActiveModel {
             vehicle_id: Set(v),
             title: Set("Pads".into()),
