@@ -932,8 +932,7 @@ mod tests {
             create(&db, vid, item("   ")).await.unwrap_err(),
             DomainError::Invalid { field, .. } if field == "title"
         ));
-        let left = list(&db, vid, true).await.unwrap();
-        assert!(left.is_empty(), "{left:?}");
+        crate::test_support::assert_empty(&list(&db, vid, true).await.unwrap());
     }
 
     #[tokio::test]
@@ -966,8 +965,7 @@ mod tests {
             .unwrap_err(),
             DomainError::NotFound(_)
         ));
-        let left = list(&db, owner, true).await.unwrap();
-        assert!(left.is_empty(), "{left:?}");
+        crate::test_support::assert_empty(&list(&db, owner, true).await.unwrap());
     }
 
     #[tokio::test]
@@ -989,8 +987,7 @@ mod tests {
             .unwrap_err(),
             DomainError::NotFound(_)
         ));
-        let left = list(&db, owner, true).await.unwrap();
-        assert!(left.is_empty(), "{left:?}");
+        crate::test_support::assert_empty(&list(&db, owner, true).await.unwrap());
     }
 
     #[tokio::test]
@@ -1012,8 +1009,7 @@ mod tests {
             .unwrap_err(),
             DomainError::NotFound(_)
         ));
-        let left = list(&db, owner, true).await.unwrap();
-        assert!(left.is_empty(), "{left:?}");
+        crate::test_support::assert_empty(&list(&db, owner, true).await.unwrap());
     }
 
     #[tokio::test]

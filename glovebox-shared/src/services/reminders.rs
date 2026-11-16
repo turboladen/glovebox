@@ -884,7 +884,7 @@ mod tests {
             .await
     }
 
-    #[allow(clippy::cast_precision_loss)] // a day count in the thousands
+    #[expect(clippy::cast_precision_loss, reason = "a day count in the thousands")]
     fn days_since_purchase() -> f64 {
         (crate::services::today() - day("2017-03-05")).num_days() as f64
     }

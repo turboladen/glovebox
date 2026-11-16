@@ -531,8 +531,7 @@ mod tests {
                 .unwrap_err(),
             DomainError::NotFound(_)
         ));
-        let left = list(&db, owner, PartFilter::default()).await.unwrap();
-        assert!(left.is_empty(), "{left:?}");
+        crate::test_support::assert_empty(&list(&db, owner, PartFilter::default()).await.unwrap());
     }
 
     #[tokio::test]

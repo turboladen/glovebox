@@ -31,15 +31,16 @@ fmt:
 check-layering:
     ./scripts/check-layering.sh
 
-# Backend gates: build, test, clippy over every target, tests included
+# Backend gates: clippy over every target (tests included, pedantic set in
+# Cargo.toml) first so a lint fails fast, then build and test
 ci-backend:
+    cargo clippy --workspace --all-targets --locked -- -D warnings
     cargo build --workspace --locked
     cargo test --workspace --locked
-    cargo clippy --workspace --all-targets --locked -- -D warnings -D clippy::pedantic
 
-# Spell-check (US English) with typos-cli; skipped with a note when it is not installed
+# Spell-check (US English) with typos-cli (`brew install typos-cli`)
 typos:
-    @if command -v typos >/dev/null; then typos; else echo "typos not installed (brew install typos-cli); skipping"; fi
+    typos
 
 # Run all CI gates locally
 ci: fmt-check check-layering typos ci-backend

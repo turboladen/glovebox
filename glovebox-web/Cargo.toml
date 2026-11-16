@@ -25,3 +25,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 glovebox-shared = { path = "../glovebox-shared", features = ["test-support"] }
 http-body-util.workspace = true
 tower.workspace = true
+
+[lints]
+workspace = true

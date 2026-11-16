@@ -266,7 +266,6 @@ mod tests {
     #[test]
     fn reset_of_a_missing_environment_removes_nothing_and_succeeds() {
         let dir = tempfile::tempdir().unwrap();
-        let left = reset(dir.path(), "test").unwrap();
-        assert!(left.is_empty(), "{left:?}");
+        crate::test_support::assert_empty(&reset(dir.path(), "test").unwrap());
     }
 }

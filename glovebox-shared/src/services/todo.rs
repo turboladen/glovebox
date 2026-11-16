@@ -376,8 +376,7 @@ mod tests {
         assert!(reopened.todo.done_on.is_none());
         assert_eq!(list(&db, v, None, false).await.unwrap().len(), 1);
         complete(&db, v, t.id, None).await.unwrap();
-        let left = list(&db, v, None, false).await.unwrap();
-        assert!(left.is_empty(), "{left:?}");
+        crate::test_support::assert_empty(&list(&db, v, None, false).await.unwrap());
         assert_eq!(list(&db, v, None, true).await.unwrap().len(), 1);
     }
 
@@ -672,8 +671,9 @@ mod tests {
         // came first and the close refused to leave it open on the appointment.
         match closed.await.unwrap() {
             Ok(_) => {
-                let left = list(first, v, Some(Some(a)), false).await.unwrap();
-                assert!(left.is_empty(), "{left:?}");
+                crate::test_support::assert_empty(
+                    &list(first, v, Some(Some(a)), false).await.unwrap(),
+                );
             }
             Err(DomainError::BadRequest(m)) if m.contains("still has open work") => {}
             Err(other) => panic!("unexpected close result {other:?}"),
@@ -968,7 +968,6 @@ mod tests {
                 missing.replace("99999", "N")
             );
         }
-        let left = list(&db, v2, None, true).await.unwrap();
-        assert!(left.is_empty(), "{left:?}");
+        crate::test_support::assert_empty(&list(&db, v2, None, true).await.unwrap());
     }
 }

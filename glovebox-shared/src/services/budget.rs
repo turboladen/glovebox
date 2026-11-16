@@ -107,7 +107,7 @@ fn planned_work_cost(backlog: &[work_item::Model]) -> (i64, Vec<UnestimatedWork>
 /// cycle is shorter). Overdue items count as one occurrence now. Items with
 /// no projectable due date (e.g. mileage-only interval on a vehicle with no
 /// mileage history) are skipped unless overdue.
-#[allow(clippy::cast_possible_truncation)] // day counts, not money
+#[expect(clippy::cast_possible_truncation, reason = "day counts, not money")]
 pub async fn forecast_from(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -525,7 +525,10 @@ mod tests {
         let rems = reminders::calculate_reminders(&db, vid).await.unwrap();
         let f = forecast_from(&db, vid, &rems).await.unwrap();
         assert!(!f.lines.is_empty(), "rate {}", rems.avg_daily_miles);
-        #[allow(clippy::cast_possible_truncation)] // a day count in the thousands
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "a day count in the thousands"
+        )]
         let first_in_days = (6_000.0 / rems.avg_daily_miles).ceil() as i64;
         assert_eq!(
             f.lines[0].when,

@@ -34,7 +34,7 @@ just reset-env test       # Delete the named non-live environment's database fil
 just seed test            # Fill the named non-live environment with made-up demo data (glovebox seed --env test)
 just web                  # Serve the live page on 127.0.0.1:4827 and open it; `just web test` serves data/glovebox-test.db on 4828
 
-cargo clippy --workspace --all-targets --locked -- -D warnings -D clippy::pedantic   # Rust lints, tests included (the CI gate)
+cargo clippy --workspace --all-targets --locked -- -D warnings   # Rust lints, tests included (the CI gate; pedantic is set in Cargo.toml)
 
 # Merging PRs: gate on parsed `gh pr checks` output showing zero pending/failed —
 # `--watch` exits 0 when it races a run that hasn't registered yet
@@ -428,10 +428,11 @@ Crate-level `#![allow]`s in `glovebox-shared/src/lib.rs` suppress intentional pe
   `lib.rs`
 
 `glovebox-mcp/src/schemas.rs` allows `clippy::option_option` on the corrections module for the same
-reason. Run `cargo clippy --workspace --all-targets --locked -- -D warnings -D clippy::pedantic` to verify
-zero warnings; it lints test code too. Add per-function `#[allow]` with a reason for unavoidable
-cases, such as a test that tells one long story. An `assert!` on `is_empty()` carries a message
-that prints the value.
+reason. `[workspace.lints.clippy]` in the root `Cargo.toml` denies the pedantic group for every
+crate. Run `cargo clippy --workspace --all-targets --locked -- -D warnings` to verify zero
+warnings; it lints test code too. Add a per-function `#[expect(..., reason = "...")]` for
+unavoidable cases, such as a test that tells one long story. A test checks a list is empty with
+`test_support::assert_empty`, which prints the list when it is not.
 
 ## Non-Interactive Shell Commands
 

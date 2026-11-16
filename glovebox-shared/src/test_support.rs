@@ -26,6 +26,12 @@ pub async fn race_pools() -> (tempfile::TempDir, Vec<DatabaseConnection>) {
     (dir, pools)
 }
 
+/// Asserts that `items` is empty, printing them when it is not.
+#[track_caller]
+pub fn assert_empty<T: std::fmt::Debug>(items: &[T]) {
+    assert!(items.is_empty(), "expected no items, got {items:?}");
+}
+
 /// Runs `op` twice on each of `pools` at once, as two page posts and two
 /// tool calls on one file do, and returns every result. `op` gets the run's
 /// index and its pool.

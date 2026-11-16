@@ -7,7 +7,7 @@ locale = "en-us"
 
 [files]
 # The generated tracker mirror's issue ids and hashes false-positive freely.
-extend-exclude = [".beads/", "data/", "target/"]
+extend-exclude = [".beads/"]
 
 [default.extend-words]
 # Car and page vocabulary, not typos:

@@ -1268,7 +1268,7 @@ mod tests {
 
         let view = for_job(&db, v, job).await.unwrap();
 
-        assert!(view.needs[0].notes.is_empty(), "{:?}", view.needs[0].notes);
+        crate::test_support::assert_empty(&view.needs[0].notes);
     }
 
     #[tokio::test]
@@ -1773,7 +1773,10 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(clippy::too_many_lines)] // one fixture across two vehicles, then its checks
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one fixture across two vehicles, then its checks"
+    )]
     async fn home_view_groups_by_vehicle() {
         let db = test_db().await;
         let golf = VehicleFixture::new().name("Golf").insert_id(&db).await;

@@ -21,7 +21,10 @@ const CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; font-src 'self
                    'self'; base-uri 'none'; frame-ancestors 'none'";
 
 #[tokio::test]
-#[allow(clippy::too_many_lines)] // one page's fixture, then a check per row
+#[expect(
+    clippy::too_many_lines,
+    reason = "one page's fixture, then a check per row"
+)]
 async fn home_lists_open_appointments_and_jobs_not_scheduled() {
     let db = db().await;
     let v = VehicleFixture::new().name("Golf GTI").insert_id(&db).await;
@@ -215,7 +218,10 @@ fn waiting_block(body: &str) -> &str {
 }
 
 #[tokio::test]
-#[allow(clippy::too_many_lines)] // one page's fixture, then a check per row
+#[expect(
+    clippy::too_many_lines,
+    reason = "one page's fixture, then a check per row"
+)]
 async fn home_shows_what_is_waiting_before_the_appointments() {
     let db = db().await;
     let v = gti_at_64k(&db).await;
