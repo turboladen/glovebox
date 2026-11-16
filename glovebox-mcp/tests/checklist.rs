@@ -343,7 +343,7 @@ async fn a_reason_with_no_chosen_option_is_kept_only_for_a_shop_need() {
 }
 
 #[tokio::test]
-async fn a_replaced_part_reads_installed_and_cannot_be_returned() {
+async fn a_replaced_part_reads_installed_and_cannot_be_returned_or_redated() {
     let t = connect().await;
     let v = add_vehicle(&t, "GTI").await;
     let job = plan_job(&t, v, "Rear brakes", None).await;
@@ -365,6 +365,11 @@ async fn a_replaced_part_reads_installed_and_cannot_be_returned() {
         .await;
     let part = ordered["part"]["id"].as_i64().unwrap();
     t.call(
+        "mark_need_received",
+        json!({ "vehicle_id": v, "need_id": rotors, "received_on": "2026-11-01" }),
+    )
+    .await;
+    t.call(
         "correct_part",
         json!({ "vehicle_id": v, "part_id": part, "status": "replaced" }),
     )
@@ -385,6 +390,35 @@ async fn a_replaced_part_reads_installed_and_cannot_be_returned() {
         err.contains("is installed; only an ordered or received part can be returned"),
         "got: {err}"
     );
+
+    // The arrival date of a part on the car stays as it is.
+    let err = t
+        .call_err(
+            "mark_need_received",
+            json!({ "vehicle_id": v, "need_id": rotors, "received_on": "2026-11-03" }),
+        )
+        .await;
+    assert_eq!(
+        err,
+        format!(
+            "Need {rotors} is installed; only an ordered or received part can be marked received"
+        )
+    );
+    let err = t
+        .call_err(
+            "mark_need_received",
+            json!({ "vehicle_id": v, "need_id": rotors, "received": false }),
+        )
+        .await;
+    assert_eq!(
+        err,
+        format!(
+            "Need {rotors} is installed; only an ordered or received part can have its arrival \
+             date cleared"
+        )
+    );
+    let parts = t.call("list_parts", json!({ "vehicle_id": v })).await;
+    assert_eq!(parts[0]["received_on"], "2026-11-01", "got: {parts}");
 }
 
 #[tokio::test]
@@ -452,6 +486,7 @@ async fn existing_part_links_without_reentry() {
         )
         .await;
     assert!(err.contains("received_on"), "got: {err}");
+    assert_eq!(err, "received_on: cannot be given when unlinking a part");
 
     // The key is required: leaving it out is not the same as unlinking.
     let err = t
@@ -461,6 +496,24 @@ async fn existing_part_links_without_reentry() {
         )
         .await;
     assert!(err.contains("part_id"), "got: {err}");
+    assert_eq!(
+        err,
+        "part_id: is required: name a part to link, or unlink the need's current part"
+    );
+
+    // A date has no meaning when clearing the arrival date.
+    let err = t
+        .call_err(
+            "mark_need_received",
+            json!({
+                "vehicle_id": v, "need_id": need, "received": false, "received_on": "2026-11-02"
+            }),
+        )
+        .await;
+    assert_eq!(
+        err,
+        "received_on: cannot be given when clearing the arrival date"
+    );
 
     // The job reads whole through get_checklist.
     let view = t
@@ -730,6 +783,10 @@ async fn get_checklist_rejects_both_ids_and_reads_the_unscheduled_view() {
     assert!(
         err.contains("appointment_id") && err.contains("work_item_id"),
         "got: {err}"
+    );
+    assert_eq!(
+        err,
+        "appointment_id: pass either appointment_id or work_item_id, not both"
     );
 
     let unscheduled = t.call("get_checklist", json!({ "vehicle_id": v })).await;

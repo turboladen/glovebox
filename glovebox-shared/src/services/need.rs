@@ -15,7 +15,10 @@ use crate::{
     },
     error::{DomainError, DomainResult},
     inputs::{
-        need::{NewNeed, NewOption, OrderDetails, ReturnInput, UpdateNeed, UpdateOption},
+        need::{
+            ArrivalChange, NewNeed, NewOption, OrderDetails, PartLink, ReturnInput, UpdateNeed,
+            UpdateOption,
+        },
         part::NewPart,
     },
 };
@@ -62,6 +65,14 @@ impl Stage {
     /// every other stage.
     #[must_use]
     pub fn can_return(self) -> bool {
+        self.has_unfitted_part()
+    }
+
+    /// Whether the need has a linked part that is not yet on the car: it is
+    /// `ordered` or `received`. Only such a part can be returned or have its
+    /// arrival date changed.
+    #[must_use]
+    pub fn has_unfitted_part(self) -> bool {
         matches!(self, Stage::Ordered | Stage::Received)
     }
 }
@@ -389,7 +400,7 @@ pub async fn update_option<C: ConnectionTrait + TransactionTrait>(
     {
         return Err(DomainError::invalid(
             "rejected_reason",
-            "must not be blank; send null to un-reject the option",
+            "must not be blank; clear the reason to un-reject the option",
         ));
     }
     let mut active: need_option::ActiveModel = existing.clone().into();
@@ -796,6 +807,66 @@ pub async fn link_part<C: ConnectionTrait + TransactionTrait>(
     Ok(purchase(need, found))
 }
 
+/// What [`set_part`] did: the need with its newly linked part, or the need
+/// with no part.
+#[derive(Serialize, Debug)]
+#[serde(untagged)]
+pub enum PartLinkOutcome {
+    Linked(Box<NeedPurchase>),
+    Unlinked(job_need::Model),
+}
+
+/// The part link that `part_id` and an optional date describe. `part_id` is
+/// `None` when no part and no unlink was asked for, `Some(None)` to unlink,
+/// and `Some(Some(id))` to link that part.
+///
+/// # Errors
+/// `Invalid` on `part_id` when it is `None`, and on `received_on` for a date
+/// given with an unlink.
+pub fn part_link(
+    part_id: Option<Option<i32>>,
+    received_on: Option<chrono::NaiveDate>,
+) -> DomainResult<PartLink> {
+    match (part_id, received_on) {
+        (None, _) => Err(DomainError::invalid(
+            "part_id",
+            "is required: name a part to link, or unlink the need's current part",
+        )),
+        (Some(None), Some(_)) => Err(DomainError::invalid(
+            "received_on",
+            "cannot be given when unlinking a part",
+        )),
+        (Some(None), None) => Ok(PartLink::Unlink),
+        (Some(Some(part_id)), received_on) => Ok(PartLink::Link {
+            part_id,
+            received_on,
+        }),
+    }
+}
+
+/// Applies `link` through [`link_part`] or [`unlink_part`].
+///
+/// # Errors
+/// As for [`link_part`] and [`unlink_part`].
+pub async fn set_part<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    need_id: i32,
+    link: PartLink,
+) -> DomainResult<PartLinkOutcome> {
+    match link {
+        PartLink::Link {
+            part_id,
+            received_on,
+        } => link_part(db, vehicle_id, need_id, part_id, received_on)
+            .await
+            .map(|purchase| PartLinkOutcome::Linked(Box::new(purchase))),
+        PartLink::Unlink => unlink_part(db, vehicle_id, need_id)
+            .await
+            .map(PartLinkOutcome::Unlinked),
+    }
+}
+
 /// Detaches a need's part without changing the part.
 ///
 /// # Errors
@@ -811,34 +882,54 @@ pub async fn unlink_part(
     set_need_part(db, need, None, None).await
 }
 
-async fn set_received(
-    db: &impl ConnectionTrait,
+// Refuses a need whose part is not `ordered` or `received`; `action` ends
+// the sentence "only an ordered or received part can ...".
+fn require_unfitted(need_id: i32, current: Stage, action: &str) -> DomainResult<()> {
+    if current.has_unfitted_part() {
+        return Ok(());
+    }
+    Err(DomainError::BadRequest(format!(
+        "Need {need_id} is {}; only an ordered or received part can {action}",
+        current.label()
+    )))
+}
+
+async fn set_received<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
     vehicle_id: i32,
     need_id: i32,
     on: Option<chrono::NaiveDate>,
+    action: &str,
 ) -> DomainResult<NeedPurchase> {
-    let need = require(db, vehicle_id, need_id).await?;
-    let found = linked_part(db, &need).await?;
+    let txn = db.begin().await?;
+    // The claim takes the write lock before the stage is read, so a part the
+    // other program installs cannot slip in between the check and the write.
+    claim(&txn, need_id).await?;
+    let need = require(&txn, vehicle_id, need_id).await?;
+    let found = linked_part(&txn, &need).await?;
+    require_unfitted(need_id, stage(&need, Some(&found)), action)?;
     let mut active: part::ActiveModel = found.into();
     active.received_on = Set(on);
     active.updated_at = Set(super::now());
-    let found = active.update(db).await?;
+    let found = active.update(&txn).await?;
+    txn.commit().await?;
     Ok(purchase(need, found))
 }
 
-/// Records the day a need's part arrived, today when `on` is `None`.
+/// Records the day a need's part arrived, today when `on` is `None`. A part
+/// that already has a date takes the new one.
 ///
 /// # Errors
 /// `NotFound` for a need that is not the vehicle's; `BadRequest` when it has
-/// no part.
-pub async fn mark_received(
-    db: &impl ConnectionTrait,
+/// no part or its part is installed or replaced.
+pub async fn mark_received<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
     vehicle_id: i32,
     need_id: i32,
     on: Option<chrono::NaiveDate>,
 ) -> DomainResult<NeedPurchase> {
     let on = on.unwrap_or_else(crate::services::today);
-    set_received(db, vehicle_id, need_id, Some(on)).await
+    set_received(db, vehicle_id, need_id, Some(on), "be marked received").await
 }
 
 /// Clears the arrival date of a need's part, so the need reads `ordered`
@@ -846,13 +937,55 @@ pub async fn mark_received(
 ///
 /// # Errors
 /// `NotFound` for a need that is not the vehicle's; `BadRequest` when it has
-/// no part.
-pub async fn clear_received(
-    db: &impl ConnectionTrait,
+/// no part or its part is installed or replaced.
+pub async fn clear_received<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
     vehicle_id: i32,
     need_id: i32,
 ) -> DomainResult<NeedPurchase> {
-    set_received(db, vehicle_id, need_id, None).await
+    set_received(
+        db,
+        vehicle_id,
+        need_id,
+        None,
+        "have its arrival date cleared",
+    )
+    .await
+}
+
+/// The arrival change that `received` and an optional date describe:
+/// `received` with the date (today when it is `None`), or a cleared date.
+///
+/// # Errors
+/// `Invalid` on `received_on` for a date given with `received` false.
+pub fn arrival(
+    received: bool,
+    received_on: Option<chrono::NaiveDate>,
+) -> DomainResult<ArrivalChange> {
+    match (received, received_on) {
+        (true, on) => Ok(ArrivalChange::Received(on)),
+        (false, None) => Ok(ArrivalChange::NotReceived),
+        (false, Some(_)) => Err(DomainError::invalid(
+            "received_on",
+            "cannot be given when clearing the arrival date",
+        )),
+    }
+}
+
+/// Applies `change` through [`mark_received`] or [`clear_received`].
+///
+/// # Errors
+/// As for [`mark_received`] and [`clear_received`].
+pub async fn set_arrival<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    need_id: i32,
+    change: ArrivalChange,
+) -> DomainResult<NeedPurchase> {
+    match change {
+        ArrivalChange::Received(on) => mark_received(db, vehicle_id, need_id, on).await,
+        ArrivalChange::NotReceived => clear_received(db, vehicle_id, need_id).await,
+    }
 }
 
 /// Sends back the part of an `ordered` or `received` need. In one
@@ -876,13 +1009,7 @@ pub async fn return_part<C: ConnectionTrait + TransactionTrait>(
     super::validate_not_blank("reason", &input.reason)?;
     let need = require(db, vehicle_id, need_id).await?;
     let found = linked_part(db, &need).await?;
-    let current = stage(&need, Some(&found));
-    if !current.can_return() {
-        return Err(DomainError::BadRequest(format!(
-            "Need {need_id} is {}; only an ordered or received part can be returned",
-            current.label()
-        )));
-    }
+    require_unfitted(need_id, stage(&need, Some(&found)), "be returned")?;
     let job = super::work_item::get(db, vehicle_id, need.work_item_id).await?;
     let appointment_id = super::appointment::open_id(db, job.appointment_id).await?;
     let title = match found.seller.as_deref().and_then(super::trim_to_none) {
@@ -2548,6 +2675,10 @@ mod tests {
                 matches!(&err, DomainError::Invalid { field, .. } if field == "rejected_reason"),
                 "{blank:?}: {err:?}"
             );
+            assert_eq!(
+                err.to_string(),
+                "rejected_reason: must not be blank; clear the reason to un-reject the option"
+            );
         }
         let after = require(&db, vehicle_id, n.id).await.unwrap();
         assert_eq!(after.chosen_option_id, Some(o.id));
@@ -2773,5 +2904,251 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(err, DomainError::Invalid { .. }));
+    }
+
+    // Puts the ordered need's part on the car with `status`.
+    async fn fit(db: &DatabaseConnection, vehicle_id: i32, part_id: i32, status: PartStatus) {
+        crate::services::part::update(
+            db,
+            vehicle_id,
+            part_id,
+            crate::inputs::part::UpdatePart {
+                status: Some(status),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn received_on(db: &DatabaseConnection, part_id: i32) -> Option<chrono::NaiveDate> {
+        part::Entity::find_by_id(part_id)
+            .one(db)
+            .await
+            .unwrap()
+            .unwrap()
+            .received_on
+    }
+
+    #[tokio::test]
+    async fn the_arrival_date_of_a_fitted_part_cannot_change() {
+        for status in [PartStatus::Installed, PartStatus::Replaced] {
+            let db = test_db().await;
+            let (vehicle_id, job_id) = seed_job(&db).await;
+            let (n, _) = ordered_need(&db, vehicle_id, job_id).await;
+            let part_id = n.part_id.unwrap();
+            mark_received(&db, vehicle_id, n.id, Some(date("2026-11-01")))
+                .await
+                .unwrap();
+            fit(&db, vehicle_id, part_id, status).await;
+
+            let err = mark_received(&db, vehicle_id, n.id, Some(date("2026-11-03")))
+                .await
+                .unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "Need {} is installed; only an ordered or received part can be marked received",
+                    n.id
+                ),
+                "{status:?}"
+            );
+            assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
+            let err = clear_received(&db, vehicle_id, n.id).await.unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "Need {} is installed; only an ordered or received part can have its arrival \
+                     date cleared",
+                    n.id
+                ),
+                "{status:?}"
+            );
+            assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
+            assert_eq!(
+                received_on(&db, part_id).await,
+                Some(date("2026-11-01")),
+                "{status:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_ordered_or_received_part_can_be_dated_and_cleared() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let (n, _) = ordered_need(&db, vehicle_id, job_id).await;
+        let part_id = n.part_id.unwrap();
+
+        let cleared = clear_received(&db, vehicle_id, n.id).await.unwrap();
+        assert_eq!(cleared.stage, Stage::Ordered);
+        let first = mark_received(&db, vehicle_id, n.id, Some(date("2026-11-01")))
+            .await
+            .unwrap();
+        assert_eq!(first.stage, Stage::Received);
+        let redated = mark_received(&db, vehicle_id, n.id, Some(date("2026-11-02")))
+            .await
+            .unwrap();
+        assert_eq!(redated.stage, Stage::Received);
+        assert_eq!(received_on(&db, part_id).await, Some(date("2026-11-02")));
+        let cleared = clear_received(&db, vehicle_id, n.id).await.unwrap();
+        assert_eq!(cleared.stage, Stage::Ordered);
+        assert_eq!(received_on(&db, part_id).await, None);
+    }
+
+    #[tokio::test]
+    async fn returning_an_installed_part_names_the_stage() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let (n, _) = ordered_need(&db, vehicle_id, job_id).await;
+        fit(&db, vehicle_id, n.part_id.unwrap(), PartStatus::Installed).await;
+        let err = return_part(
+            &db,
+            vehicle_id,
+            n.id,
+            ReturnInput {
+                reason: "x".into(),
+                option_was_wrong: false,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "Need {} is installed; only an ordered or received part can be returned",
+                n.id
+            )
+        );
+    }
+
+    #[test]
+    fn has_unfitted_part_holds_for_ordered_and_received_only() {
+        let all = [
+            Stage::Undecided,
+            Stage::ToOrder,
+            Stage::ShopSupplies,
+            Stage::Ordered,
+            Stage::Received,
+            Stage::Installed,
+        ];
+        for s in all {
+            let expected = matches!(s, Stage::Ordered | Stage::Received);
+            assert_eq!(s.has_unfitted_part(), expected, "{s:?}");
+            assert_eq!(s.can_return(), expected, "{s:?}");
+        }
+    }
+
+    #[test]
+    fn part_link_reads_the_part_and_the_date() {
+        let on = Some(date("2026-11-01"));
+        assert_eq!(
+            part_link(Some(Some(7)), on).unwrap(),
+            PartLink::Link {
+                part_id: 7,
+                received_on: on
+            }
+        );
+        assert_eq!(
+            part_link(Some(Some(7)), None).unwrap(),
+            PartLink::Link {
+                part_id: 7,
+                received_on: None
+            }
+        );
+        assert_eq!(part_link(Some(None), None).unwrap(), PartLink::Unlink);
+        let err = part_link(None, None).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "part_id: is required: name a part to link, or unlink the need's current part"
+        );
+        assert!(matches!(err, DomainError::Invalid { .. }), "{err:?}");
+        let err = part_link(Some(None), on).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "received_on: cannot be given when unlinking a part"
+        );
+        assert!(matches!(err, DomainError::Invalid { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn arrival_reads_the_flag_and_the_date() {
+        let on = Some(date("2026-11-01"));
+        assert_eq!(arrival(true, on).unwrap(), ArrivalChange::Received(on));
+        assert_eq!(arrival(true, None).unwrap(), ArrivalChange::Received(None));
+        assert_eq!(arrival(false, None).unwrap(), ArrivalChange::NotReceived);
+        let err = arrival(false, on).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "received_on: cannot be given when clearing the arrival date"
+        );
+        assert!(matches!(err, DomainError::Invalid { .. }), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn set_part_links_and_unlinks() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let n = add(&db, vehicle_id, job_id, need("Fluid")).await.unwrap();
+        let p = new_part(&db, vehicle_id, "Fluid").await;
+
+        let linked = set_part(
+            &db,
+            vehicle_id,
+            n.id,
+            PartLink::Link {
+                part_id: p.id,
+                received_on: Some(date("2026-11-01")),
+            },
+        )
+        .await
+        .unwrap();
+        let PartLinkOutcome::Linked(purchase) = &linked else {
+            panic!("expected a link: {linked:?}");
+        };
+        assert_eq!(purchase.need.part_id, Some(p.id));
+        assert_eq!(purchase.part.received_on, Some(date("2026-11-01")));
+        assert_eq!(purchase.stage, Stage::Received);
+        let json = serde_json::to_value(&linked).unwrap();
+        assert_eq!(json["need"]["part_id"], p.id, "{json}");
+        assert_eq!(json["stage"], "received", "{json}");
+
+        let unlinked = set_part(&db, vehicle_id, n.id, PartLink::Unlink)
+            .await
+            .unwrap();
+        let PartLinkOutcome::Unlinked(model) = &unlinked else {
+            panic!("expected an unlink: {unlinked:?}");
+        };
+        assert_eq!(model.part_id, None);
+        let json = serde_json::to_value(&unlinked).unwrap();
+        assert_eq!(json["id"], n.id, "{json}");
+        assert_eq!(json["part_id"], serde_json::Value::Null, "{json}");
+    }
+
+    #[tokio::test]
+    async fn set_arrival_stamps_and_clears() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let (n, _) = ordered_need(&db, vehicle_id, job_id).await;
+
+        let got = set_arrival(
+            &db,
+            vehicle_id,
+            n.id,
+            ArrivalChange::Received(Some(date("2026-11-01"))),
+        )
+        .await
+        .unwrap();
+        assert_eq!(got.part.received_on, Some(date("2026-11-01")));
+        assert_eq!(got.stage, Stage::Received);
+        let got = set_arrival(&db, vehicle_id, n.id, ArrivalChange::NotReceived)
+            .await
+            .unwrap();
+        assert_eq!(got.part.received_on, None);
+        assert_eq!(got.stage, Stage::Ordered);
+        let got = set_arrival(&db, vehicle_id, n.id, ArrivalChange::Received(None))
+            .await
+            .unwrap();
+        assert_eq!(got.part.received_on, Some(crate::services::today()));
     }
 }

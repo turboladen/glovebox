@@ -72,3 +72,25 @@ pub struct ReturnInput {
     /// rejected for the same reason and the need goes back to undecided.
     pub option_was_wrong: bool,
 }
+
+/// A change to the part linked to a need.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PartLink {
+    /// Link a part that is already recorded, stamping the day it arrived when
+    /// `received_on` is given.
+    Link {
+        part_id: i32,
+        received_on: Option<chrono::NaiveDate>,
+    },
+    /// Detach the need's current part and keep the part.
+    Unlink,
+}
+
+/// A change to the arrival date of a need's part.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArrivalChange {
+    /// The part arrived on this day, or today when it is `None`.
+    Received(Option<chrono::NaiveDate>),
+    /// The part has not arrived; its arrival date is cleared.
+    NotReceived,
+}

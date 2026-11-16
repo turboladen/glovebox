@@ -10,9 +10,14 @@ use glovebox_shared::{
     error::DomainResult,
     inputs::{
         appointment::{NewAppointment, StatusChange, UpdateAppointment},
-        need::{NewNeed, NewOption, OrderDetails, ReturnInput, UpdateNeed, UpdateOption},
+        checklist::ChecklistScope,
+        need::{
+            ArrivalChange, NewNeed, NewOption, OrderDetails, PartLink, ReturnInput, UpdateNeed,
+            UpdateOption,
+        },
         todo::{NewTodo, UpdateTodo},
     },
+    services::{checklist, need},
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -148,6 +153,15 @@ pub struct GetChecklistInput {
     /// Read this one job, with its needs. Pass at most one of
     /// `appointment_id` and `work_item_id`.
     pub work_item_id: Option<i32>,
+}
+
+impl GetChecklistInput {
+    pub fn into_domain(self) -> DomainResult<(i32, ChecklistScope)> {
+        Ok((
+            self.vehicle_id,
+            checklist::scope(self.appointment_id, self.work_item_id)?,
+        ))
+    }
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -455,12 +469,24 @@ pub struct LinkPartToNeedInput {
     pub received_on: Option<String>,
 }
 
+impl LinkPartToNeedInput {
+    pub fn into_domain(self) -> DomainResult<(i32, i32, PartLink)> {
+        let received_on = dates::parse_optional_date("received_on", self.received_on)?;
+        Ok((
+            self.vehicle_id,
+            self.need_id,
+            need::part_link(self.part_id, received_on)?,
+        ))
+    }
+}
+
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MarkNeedReceivedInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
-    /// Need id, from `get_checklist`. It must have a part linked.
+    /// Need id, from `get_checklist`. It must have a part linked that is not
+    /// installed.
     pub need_id: i32,
     /// `true` (the default) records that the part arrived; `false` clears the
     /// arrival date so the need reads `ordered` again.
@@ -468,6 +494,17 @@ pub struct MarkNeedReceivedInput {
     /// The day it arrived, `YYYY-MM-DD`. Defaults to today. Not allowed with
     /// `received: false`.
     pub received_on: Option<String>,
+}
+
+impl MarkNeedReceivedInput {
+    pub fn into_domain(self) -> DomainResult<(i32, i32, ArrivalChange)> {
+        let received_on = dates::parse_optional_date("received_on", self.received_on)?;
+        Ok((
+            self.vehicle_id,
+            self.need_id,
+            need::arrival(self.received.unwrap_or(true), received_on)?,
+        ))
+    }
 }
 
 #[derive(Deserialize, JsonSchema)]

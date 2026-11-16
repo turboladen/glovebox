@@ -2,6 +2,7 @@
 //! The MCP surface builds them directly.
 
 pub mod appointment;
+pub mod checklist;
 pub mod incident;
 pub mod mileage;
 pub mod model_template;
