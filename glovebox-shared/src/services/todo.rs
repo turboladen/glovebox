@@ -256,9 +256,8 @@ pub async fn restore<C: ConnectionTrait + TransactionTrait>(
     }
     super::vehicle::require(db, vehicle_id).await?;
     let txn = super::begin_write(db).await?;
-    // The insert is the transaction's first statement, so it takes the write
-    // lock before anything is read, and a row already at the id makes it
-    // insert nothing instead of failing on the primary key.
+    // A row already at the id makes the insert do nothing instead of failing
+    // on the primary key.
     let mut restored = todo::Model {
         appointment_id: None,
         updated_at: super::now(),
@@ -888,17 +887,14 @@ mod tests {
         let v = VehicleFixture::new().insert_id(first).await;
         let t = add(first, v, new_todo("Wash", None)).await.unwrap();
 
-        let mut writes = tokio::task::JoinSet::new();
-        for (i, db) in pools.iter().chain(pools.iter()).cloned().enumerate() {
-            writes.spawn(async move {
-                let input = UpdateTodo {
-                    notes: Some(Some(format!("note {i}"))),
-                    ..Default::default()
-                };
-                update_with_done(&db, v, t.id, input, Some(i % 2 == 0)).await
-            });
-        }
-        let results = writes.join_all().await;
+        let results = crate::test_support::race(&pools, |i, db| async move {
+            let input = UpdateTodo {
+                notes: Some(Some(format!("note {i}"))),
+                ..Default::default()
+            };
+            update_with_done(&db, v, t.id, input, Some(i % 2 == 0)).await
+        })
+        .await;
 
         assert!(results.iter().all(Result::is_ok), "{results:?}");
     }

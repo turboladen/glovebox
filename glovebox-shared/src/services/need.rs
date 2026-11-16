@@ -210,8 +210,8 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     Ok(updated)
 }
 
-// The body of `update`, run on its write transaction, so the checks below
-// read the committed row and nothing changes it before the write.
+// Applies an edit on the caller's write transaction, for `update` and
+// `update_with_choice`.
 async fn apply_update(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -676,7 +676,7 @@ pub async fn mark_ordered<C: ConnectionTrait + TransactionTrait>(
     let txn = super::begin_write(db).await?;
     // Only the first of two orders for one need links a part: the second
     // finds the part linked and its conditional write changes nothing.
-    let claimed = job_need::Entity::update_many()
+    let linked = job_need::Entity::update_many()
         .col_expr(job_need::Column::UpdatedAt, Expr::value(super::now()))
         .filter(job_need::Column::Id.eq(need_id))
         .filter(job_need::Column::PartId.is_null())
@@ -684,7 +684,7 @@ pub async fn mark_ordered<C: ConnectionTrait + TransactionTrait>(
         .await?
         .rows_affected;
     let need = require(&txn, vehicle_id, need_id).await?;
-    if claimed == 0 {
+    if linked == 0 {
         return Err(DomainError::BadRequest(format!(
             "Need {need_id} already has a part linked"
         )));
@@ -2375,13 +2375,10 @@ mod tests {
         )
         .await;
 
-        let mut orders = tokio::task::JoinSet::new();
-        for db in pools.iter().chain(pools.iter()).cloned() {
-            orders.spawn(async move {
-                mark_ordered(&db, vehicle_id, n.id, OrderDetails::default()).await
-            });
-        }
-        let results = orders.join_all().await;
+        let results = crate::test_support::race(&pools, |_, db| async move {
+            mark_ordered(&db, vehicle_id, n.id, OrderDetails::default()).await
+        })
+        .await;
 
         assert_eq!(
             results.iter().filter(|r| r.is_ok()).count(),
@@ -2403,21 +2400,18 @@ mod tests {
         let (vehicle_id, job_id) = seed_job(first).await;
         let (n, o) = chosen_need(first, vehicle_id, job_id, "Pads", None, None).await;
 
-        let mut decisions = tokio::task::JoinSet::new();
-        for (i, db) in pools.iter().chain(pools.iter()).cloned().enumerate() {
-            decisions.spawn(async move {
-                let input = UpdateNeed {
-                    decision_reason: Some(Some(format!("reason {i}"))),
-                    ..Default::default()
-                };
-                if i % 2 == 0 {
-                    update_with_choice(&db, vehicle_id, n.id, input, Some(Some(o.id))).await
-                } else {
-                    update(&db, vehicle_id, n.id, input).await
-                }
-            });
-        }
-        let results = decisions.join_all().await;
+        let results = crate::test_support::race(&pools, |i, db| async move {
+            let input = UpdateNeed {
+                decision_reason: Some(Some(format!("reason {i}"))),
+                ..Default::default()
+            };
+            if i % 2 == 0 {
+                update_with_choice(&db, vehicle_id, n.id, input, Some(Some(o.id))).await
+            } else {
+                update(&db, vehicle_id, n.id, input).await
+            }
+        })
+        .await;
 
         assert!(results.iter().all(Result::is_ok), "{results:?}");
     }
@@ -2431,17 +2425,14 @@ mod tests {
         let (vehicle_id, job_id) = seed_job(first).await;
         let (n, _) = ordered_need(first, vehicle_id, job_id).await;
 
-        let mut writes = tokio::task::JoinSet::new();
-        for (i, db) in pools.iter().chain(pools.iter()).cloned().enumerate() {
-            writes.spawn(async move {
-                if i % 2 == 0 {
-                    mark_received(&db, vehicle_id, n.id, Some(date("2026-11-01"))).await
-                } else {
-                    clear_received(&db, vehicle_id, n.id).await
-                }
-            });
-        }
-        let results = writes.join_all().await;
+        let results = crate::test_support::race(&pools, |i, db| async move {
+            if i % 2 == 0 {
+                mark_received(&db, vehicle_id, n.id, Some(date("2026-11-01"))).await
+            } else {
+                clear_received(&db, vehicle_id, n.id).await
+            }
+        })
+        .await;
 
         assert!(results.iter().all(Result::is_ok), "{results:?}");
     }
@@ -2516,18 +2507,14 @@ mod tests {
         let (vehicle_id, job_id) = seed_job(first).await;
         let (n, _) = ordered_need(first, vehicle_id, job_id).await;
 
-        let mut returns = tokio::task::JoinSet::new();
-        for db in pools.iter().chain(pools.iter()) {
-            let db = db.clone();
-            returns.spawn(async move {
-                let input = ReturnInput {
-                    reason: "Wrong size".into(),
-                    option_was_wrong: false,
-                };
-                return_part(&db, vehicle_id, n.id, input).await.map(|_| ())
-            });
-        }
-        let results = returns.join_all().await;
+        let results = crate::test_support::race(&pools, |_, db| async move {
+            let input = ReturnInput {
+                reason: "Wrong size".into(),
+                option_was_wrong: false,
+            };
+            return_part(&db, vehicle_id, n.id, input).await.map(|_| ())
+        })
+        .await;
 
         assert_eq!(
             results.iter().filter(|r| r.is_ok()).count(),

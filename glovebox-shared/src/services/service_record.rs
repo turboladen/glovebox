@@ -3365,18 +3365,15 @@ mod tests {
         let first = &pools[0];
         let v = seed_vehicle(first).await;
 
-        let mut filings = tokio::task::JoinSet::new();
-        for (i, db) in pools.iter().chain(pools.iter()).cloned().enumerate() {
-            filings.spawn(async move {
-                let input = NewServiceRecord {
-                    service_date: date("2024-06-01"),
-                    invoice_ref: Some(format!("INV-{i}")),
-                    ..Default::default()
-                };
-                create(&db, v, input).await.map(|_| ())
-            });
-        }
-        let results = filings.join_all().await;
+        let results = crate::test_support::race(&pools, |i, db| async move {
+            let input = NewServiceRecord {
+                service_date: date("2024-06-01"),
+                invoice_ref: Some(format!("INV-{i}")),
+                ..Default::default()
+            };
+            create(&db, v, input).await.map(|_| ())
+        })
+        .await;
 
         assert!(results.iter().all(Result::is_ok), "{results:?}");
     }
@@ -3403,11 +3400,10 @@ mod tests {
         .record
         .id;
 
-        let mut deletes = tokio::task::JoinSet::new();
-        for db in pools.iter().chain(pools.iter()).cloned() {
-            deletes.spawn(async move { delete(&db, v, id, UNDO).await.map(|_| ()) });
-        }
-        let results = deletes.join_all().await;
+        let results = crate::test_support::race(&pools, |_, db| async move {
+            delete(&db, v, id, UNDO).await.map(|_| ())
+        })
+        .await;
 
         assert_eq!(
             results.iter().filter(|r| r.is_ok()).count(),

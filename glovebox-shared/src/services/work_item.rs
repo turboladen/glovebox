@@ -505,17 +505,14 @@ mod tests {
         .await
         .unwrap();
 
-        let mut edits = tokio::task::JoinSet::new();
-        for (i, db) in pools.iter().chain(pools.iter()).cloned().enumerate() {
-            edits.spawn(async move {
-                let input = UpdateWorkItem {
-                    notes: Some(Some(format!("note {i}"))),
-                    ..Default::default()
-                };
-                update(&db, v, job.id, input).await.map(|_| ())
-            });
-        }
-        let results = edits.join_all().await;
+        let results = crate::test_support::race(&pools, |i, db| async move {
+            let input = UpdateWorkItem {
+                notes: Some(Some(format!("note {i}"))),
+                ..Default::default()
+            };
+            update(&db, v, job.id, input).await.map(|_| ())
+        })
+        .await;
 
         assert!(results.iter().all(Result::is_ok), "{results:?}");
     }

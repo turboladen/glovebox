@@ -794,18 +794,15 @@ mod tests {
         let v = seed_vehicle(first).await;
         let id = seed_recall(first, v, "24V110000").await;
 
-        let mut changes = tokio::task::JoinSet::new();
-        for (i, db) in pools.iter().chain(pools.iter()).cloned().enumerate() {
-            changes.spawn(async move {
-                let status = if i % 2 == 0 {
-                    RecallStatus::Done
-                } else {
-                    RecallStatus::NotApplicable
-                };
-                set_status(&db, v, id, status).await.map(|_| ())
-            });
-        }
-        let results = changes.join_all().await;
+        let results = crate::test_support::race(&pools, |i, db| async move {
+            let status = if i % 2 == 0 {
+                RecallStatus::Done
+            } else {
+                RecallStatus::NotApplicable
+            };
+            set_status(&db, v, id, status).await.map(|_| ())
+        })
+        .await;
 
         assert!(results.iter().all(Result::is_ok), "{results:?}");
     }

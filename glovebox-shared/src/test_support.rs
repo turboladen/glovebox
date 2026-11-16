@@ -26,6 +26,22 @@ pub async fn race_pools() -> (tempfile::TempDir, Vec<DatabaseConnection>) {
     (dir, pools)
 }
 
+/// Runs `op` twice on each of `pools` at once, as two page posts and two
+/// tool calls on one file do, and returns every result. `op` gets the run's
+/// index and its pool.
+pub async fn race<T, F, Fut>(pools: &[DatabaseConnection], op: F) -> Vec<T>
+where
+    F: Fn(usize, DatabaseConnection) -> Fut,
+    Fut: std::future::Future<Output = T> + Send + 'static,
+    T: Send + 'static,
+{
+    let mut runs = tokio::task::JoinSet::new();
+    for (i, db) in pools.iter().chain(pools.iter()).cloned().enumerate() {
+        runs.spawn(op(i, db));
+    }
+    runs.join_all().await
+}
+
 /// The date `days` days before [`services::today`](crate::services::today).
 /// A test that judges a reminder against the current date dates its fixtures
 /// with this, so that it holds on whatever day it runs and agrees with the

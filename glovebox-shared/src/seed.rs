@@ -40,7 +40,7 @@ pub struct SeedSummary {
 ///
 /// `BadRequest` when any vehicle exists.
 pub async fn demo<C: ConnectionTrait + TransactionTrait>(db: &C) -> DomainResult<SeedSummary> {
-    let txn = db.begin().await?;
+    let txn = crate::services::begin_write(db).await?;
     if entities::vehicle::Entity::find().count(&txn).await? > 0 {
         return Err(DomainError::BadRequest(
             "this database already has a vehicle; seed an empty environment".into(),

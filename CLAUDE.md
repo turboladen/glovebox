@@ -68,7 +68,8 @@ MCP server, and its `--open` flag opens the browser.
   the form posts, `src/view.rs` the view structs, `src/guard.rs` the request guard and the content
   security policy, and `templates/` the askama templates.
 - `scripts/check-layering.sh` (run by CI and `just ci`) keeps axum and rmcp out of `glovebox-shared`
-  and SeaORM out of `glovebox-web`.
+  and SeaORM out of `glovebox-web`, and refuses a transaction in `glovebox-shared/src/services`
+  opened any way but `services::begin_write`.
 
 ### Domain library (`glovebox-shared/src/`)
 

@@ -284,7 +284,14 @@ pub async fn unarchive(db: &impl ConnectionTrait, id: i32) -> DomainResult<vehic
 /// appointment, to-do or research finding is a `BadRequest` naming what it
 /// has. Its odometer readings, own schedule items and decoded attributes go
 /// with it.
-pub async fn delete_unused(db: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
+pub async fn delete_unused<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    id: i32,
+) -> DomainResult<()> {
+    // The counts and the delete share the write lock, so history the other
+    // program records meanwhile cannot slip past the check.
+    let txn = super::begin_write(db).await?;
+    let db = &txn;
     require(db, id).await?;
     let report_ids = research_report::Entity::find()
         .select_only()
@@ -355,6 +362,7 @@ pub async fn delete_unused(db: &impl ConnectionTrait, id: i32) -> DomainResult<(
         )));
     }
     vehicle::Entity::delete_by_id(id).exec(db).await?;
+    txn.commit().await?;
     Ok(())
 }
 
