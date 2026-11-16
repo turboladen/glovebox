@@ -193,10 +193,14 @@ async fn with_status(
                 .map(|s| ServiceRef::from((*s).clone()));
             let planned_work_item_id = planned.get(&f.id).copied();
             let work_item_id = planned_work_item_id.or_else(|| completed.get(&f.id).copied());
-            let set = if done_service.is_some() {
-                RecallStatus::Done
-            } else {
-                RecallStatus::from_stored(&f.status)
+            // A job set to done by hand has no service to link, so the done
+            // job itself settles an open recall. A planned job still reads
+            // planned, and setting the job back to planned undoes this.
+            let done_job = planned_work_item_id.is_none() && completed.contains_key(&f.id);
+            let set = match RecallStatus::from_stored(&f.status) {
+                _ if done_service.is_some() => RecallStatus::Done,
+                RecallStatus::Open if done_job => RecallStatus::Done,
+                stored => stored,
             };
             let status = if set == RecallStatus::Open && planned_work_item_id.is_some() {
                 PLANNED
@@ -274,12 +278,31 @@ pub async fn set_status(
             )));
         }
     }
+    if status == RecallStatus::Open && settled_by_a_done_job(db, finding_id).await? {
+        return Err(DomainError::BadRequest(format!(
+            "Recall {finding_id} has a job marked done, so it stays done until that job is \
+             planned again or dropped"
+        )));
+    }
 
     let mut active: research_finding::ActiveModel = finding.into();
     active.status = Set(status.stored().to_owned());
     active.updated_at = Set(super::now());
     let updated = active.update(db).await?;
     Ok(with_status(db, vec![updated]).await?.remove(0))
+}
+
+// True when a done job and no planned one comes from the finding, the case
+// `with_status` reads as done.
+async fn settled_by_a_done_job(db: &impl ConnectionTrait, finding_id: i32) -> DomainResult<bool> {
+    let statuses: Vec<JobStatus> = work_item::Entity::find()
+        .filter(work_item::Column::ResearchFindingId.eq(finding_id))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|w| w.status)
+        .collect();
+    Ok(statuses.contains(&JobStatus::Done) && !statuses.contains(&JobStatus::Planned))
 }
 
 /// The ids among `finding_ids` whose findings are recalls, in one query.
@@ -441,7 +464,7 @@ mod tests {
         inputs::{
             part::NewPart,
             service_record::{NewLineItem, NewServiceRecord},
-            work_item::NewWorkItem,
+            work_item::{NewWorkItem, UpdateWorkItem},
         },
         services::{
             nhtsa::RecallInfo,
@@ -735,6 +758,78 @@ mod tests {
                 0
             );
         }
+    }
+
+    async fn set_job_status(db: &DatabaseConnection, v: i32, id: i32, status: JobStatus) {
+        work_item_svc::update(
+            db,
+            v,
+            id,
+            UpdateWorkItem {
+                status: Some(status),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_recall_job_set_to_done_by_hand_reads_done_until_it_is_planned_again() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let id = seed_recall(&db, v, "24V110000").await;
+        let item = plan_work_for_recall(&db, v, id).await;
+        let shown = |db: DatabaseConnection| async move {
+            let r = &list(&db, v).await.unwrap()[0];
+            (r.status.clone(), r.work_item_id, r.done_service.is_some())
+        };
+
+        set_job_status(&db, v, item.id, JobStatus::Done).await;
+        assert_eq!(
+            shown(db.clone()).await,
+            ("done".into(), Some(item.id), false)
+        );
+
+        set_job_status(&db, v, item.id, JobStatus::Planned).await;
+        assert_eq!(
+            shown(db.clone()).await,
+            ("planned".into(), Some(item.id), false)
+        );
+
+        set_job_status(&db, v, item.id, JobStatus::Dropped).await;
+        assert_eq!(shown(db.clone()).await, ("open".into(), None, false));
+    }
+
+    #[tokio::test]
+    async fn a_done_recall_job_does_not_override_a_recall_marked_not_applicable() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let id = seed_recall(&db, v, "24V110000").await;
+        let item = plan_work_for_recall(&db, v, id).await;
+        set_status(&db, v, id, RecallStatus::NotApplicable)
+            .await
+            .unwrap();
+
+        set_job_status(&db, v, item.id, JobStatus::Done).await;
+        assert_eq!(list(&db, v).await.unwrap()[0].status, "not_applicable");
+    }
+
+    #[tokio::test]
+    async fn a_recall_settled_by_a_done_job_cannot_be_set_back_to_open() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let id = seed_recall(&db, v, "24V110000").await;
+        let item = plan_work_for_recall(&db, v, id).await;
+        set_job_status(&db, v, item.id, JobStatus::Done).await;
+
+        let err = set_status(&db, v, id, RecallStatus::Open)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("has a job marked done"), "{err}");
+        set_status(&db, v, id, RecallStatus::NotApplicable)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

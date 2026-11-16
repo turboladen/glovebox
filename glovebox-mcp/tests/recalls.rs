@@ -135,6 +135,37 @@ async fn list_recalls_shows_every_status_without_a_network_call() {
         .await;
 }
 
+#[tokio::test]
+async fn a_recall_job_marked_done_without_a_service_reads_done() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let recall = seed_recall(&t.db, v.id, "24V110000").await;
+    let item = t
+        .call(
+            "plan_work",
+            json!({ "vehicle_id": v.id, "title": "Recall", "research_finding_id": recall }),
+        )
+        .await;
+    t.call(
+        "update_planned_work",
+        json!({ "vehicle_id": v.id, "work_item_id": item["id"], "status": "done" }),
+    )
+    .await;
+
+    let out = t.call("list_recalls", json!({ "vehicle_id": v.id })).await;
+    assert_eq!(out["recalls"][0]["status"], "done");
+    assert_eq!(out["recalls"][0]["work_item_id"], item["id"]);
+    assert_eq!(out["recalls"][0]["done_service"], serde_json::Value::Null);
+
+    let err = t
+        .call_err(
+            "set_recall_status",
+            json!({ "vehicle_id": v.id, "finding_id": recall, "status": "open" }),
+        )
+        .await;
+    assert!(err.contains("has a job marked done"), "got: {err}");
+}
+
 // `check_recalls` makes a live NHTSA request, so it is not exercised here.
 #[tokio::test]
 async fn file_research_finding_persists_and_rejects_a_missing_vehicle() {
