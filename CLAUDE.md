@@ -26,7 +26,7 @@ cargo test --workspace    # Unit tests live in glovebox-shared services; MCP tes
 cargo test -p glovebox-shared test_name           # One service-level test
 cargo test -p glovebox-mcp --test rehearsal       # One MCP integration test file
 
-just ci                   # Everything CI runs: nightly fmt-check, layering, build, test, clippy
+just ci                   # Everything CI runs: nightly fmt-check, layering, typos, build, test, clippy
 just fmt                  # cargo +nightly fmt — rustfmt.toml uses nightly-only options; plain `cargo fmt` passes locally but CI's format job will fail
 just check-layering       # Layering gate only (scripts/check-layering.sh)
 just backup               # Copy the current environment's database to data/backups/ now (glovebox backup)
@@ -34,7 +34,7 @@ just reset-env test       # Delete the named non-live environment's database fil
 just seed test            # Fill the named non-live environment with made-up demo data (glovebox seed --env test)
 just web                  # Serve the live page on 127.0.0.1:4827 and open it; `just web test` serves data/glovebox-test.db on 4828
 
-cargo clippy --workspace -- -D clippy::pedantic   # Rust lints (pedantic is the CI gate)
+cargo clippy --workspace --all-targets --locked -- -D warnings   # Rust lints, tests included (the CI gate; pedantic is set in Cargo.toml)
 
 # Merging PRs: gate on parsed `gh pr checks` output showing zero pending/failed —
 # `--watch` exits 0 when it races a run that hasn't registered yet
@@ -428,8 +428,12 @@ Crate-level `#![allow]`s in `glovebox-shared/src/lib.rs` suppress intentional pe
   `lib.rs`
 
 `glovebox-mcp/src/schemas.rs` allows `clippy::option_option` on the corrections module for the same
-reason. Run `cargo clippy --workspace -- -D clippy::pedantic` to verify zero warnings. Add
-per-function `#[allow]` for unavoidable cases.
+reason. `[workspace.lints.clippy]` in the root `Cargo.toml` denies the pedantic group for every
+crate. Run `cargo clippy --workspace --all-targets --locked -- -D warnings` to verify zero
+warnings; it lints test code too. Add a per-function `#[expect(..., reason = "...")]` for
+unavoidable cases, such as a test that tells one long story. A test checks a list is empty with
+`test_support::assert_empty`, which prints the list when it is not, in preference to a bare
+`assert!(… .is_empty())`.
 
 ## Non-Interactive Shell Commands
 

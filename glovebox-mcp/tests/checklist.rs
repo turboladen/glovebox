@@ -62,6 +62,10 @@ fn names(checklist: &Value, group: &str) -> Vec<String> {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one appointment told start to finish"
+)]
 async fn sixty_k_story() {
     let t = connect().await;
     let v = add_vehicle(&t, "GTI").await;
@@ -432,6 +436,10 @@ async fn a_replaced_part_reads_installed_and_cannot_be_returned_or_redated() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one part followed through every tool that names it"
+)]
 async fn existing_part_links_without_reentry() {
     let t = connect().await;
     let v = add_vehicle(&t, "GTI").await;
@@ -1210,6 +1218,10 @@ async fn unknown_field_is_a_tool_error_naming_it() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one wrong-vehicle case per checklist tool"
+)]
 async fn wrong_vehicle_ids_read_as_missing() {
     let t = connect().await;
     let a = add_vehicle(&t, "Mine").await;

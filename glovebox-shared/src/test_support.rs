@@ -26,6 +26,12 @@ pub async fn race_pools() -> (tempfile::TempDir, Vec<DatabaseConnection>) {
     (dir, pools)
 }
 
+/// Asserts that `items` is empty, printing them when it is not.
+#[track_caller]
+pub fn assert_empty<T: std::fmt::Debug>(items: &[T]) {
+    assert!(items.is_empty(), "expected no items, got {items:?}");
+}
+
 /// Runs `op` twice on each of `pools` at once, as two page posts and two
 /// tool calls on one file do, and returns every result. `op` gets the run's
 /// index and its pool.
@@ -178,7 +184,7 @@ impl VehicleFixture {
     }
 
     #[must_use]
-    pub fn purchase_date(mut self, v: impl ToString) -> Self {
+    pub fn purchase_date(mut self, v: &(impl ToString + ?Sized)) -> Self {
         self.purchase_date = Some(date(&v.to_string()));
         self
     }
@@ -190,7 +196,7 @@ impl VehicleFixture {
     }
 
     #[must_use]
-    pub fn warranty_expires_on(mut self, v: impl ToString) -> Self {
+    pub fn warranty_expires_on(mut self, v: &(impl ToString + ?Sized)) -> Self {
         self.warranty_expires_on = Some(date(&v.to_string()));
         self
     }

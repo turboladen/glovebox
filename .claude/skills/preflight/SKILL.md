@@ -14,25 +14,41 @@ Run all validation checks in parallel and report a unified status.
 
 ## Checks to Run (in parallel)
 
-Launch these as parallel subagents or parallel bash commands:
+These are the gates `just ci` and CI run; the Justfile is the source of truth for each command.
 
-### 1. Rust Clippy (pedantic)
+### 1. Format
 ```bash
-cargo clippy --workspace -- -D clippy::pedantic
+just fmt-check
 ```
-Must produce **zero warnings**. The crate-level `#![allow]` in the crate roots already suppresses intentional pedantic lints (`option_option`, `struct_field_names`, `wildcard_imports`).
+Nightly rustfmt, because `rustfmt.toml` uses nightly-only options.
 
-### 2. Rust Tests
+### 2. Layering
 ```bash
-cargo test --workspace
+just check-layering
 ```
-All tests must pass.
 
-### 3. Rust Build (release check)
+### 3. Spell-check
 ```bash
-cargo build --workspace
+just typos
 ```
-Ensures the project compiles without errors.
+Needs `typos-cli` (`brew install typos-cli`).
+
+### 4. Clippy over every target
+```bash
+cargo clippy --workspace --all-targets --locked -- -D warnings
+```
+Must produce **zero warnings**. `[workspace.lints.clippy]` in `Cargo.toml` denies the pedantic group,
+and `--all-targets` lints the tests too.
+
+### 5. Tests
+```bash
+cargo test --workspace --locked
+```
+
+### 6. Build
+```bash
+cargo build --workspace --locked
+```
 
 ## Reporting
 
@@ -41,11 +57,14 @@ After all checks complete, report results in this format:
 ```
 Preflight Results
 ─────────────────────────
- [PASS/FAIL] cargo clippy (pedantic)
+ [PASS/FAIL] fmt-check
+ [PASS/FAIL] check-layering
+ [PASS/FAIL] typos
+ [PASS/FAIL] cargo clippy
  [PASS/FAIL] cargo test
  [PASS/FAIL] cargo build
 ─────────────────────────
- Overall: PASS / FAIL (N/3 passed)
+ Overall: PASS / FAIL (N/6 passed)
 ```
 
 If any check fails, show the relevant error output so the user can fix it.

@@ -298,7 +298,7 @@ mod tests {
         connect(path.to_str().unwrap()).await.unwrap();
         connect(path.to_str().unwrap()).await.unwrap();
         // Reopening a database that holds no vehicle takes no backup either.
-        assert!(backup::list(&path).is_empty());
+        crate::test_support::assert_empty(&backup::list(&path));
     }
 
     #[tokio::test]

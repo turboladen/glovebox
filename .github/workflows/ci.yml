@@ -74,10 +74,24 @@ jobs:
       - name: Build, test, clippy
         run: just ci-backend
 
+  # US-English spell-check over the whole tree, config in .typos.toml. It runs
+  # on docs-only changes too, since prose is most of what it checks.
+  typos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      # Pinned so a new dictionary release cannot turn an unchanged tree red;
+      # keep it in step with the version `just typos` runs locally.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: typos@1.50.3
+      - run: typos
+
   # Single required status check for branch protection. Passes when every needed
   # job succeeded or was skipped (docs-only change); fails if any failed/cancelled.
   all-checks:
-    needs: [changes, format, backend]
+    needs: [changes, format, backend, typos]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

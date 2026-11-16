@@ -6,6 +6,11 @@ members = ["glovebox-shared", "glovebox-mcp", "glovebox-cli", "glovebox-web"]
 edition = "2024"
 version = "0.1.0"
 
+# Every crate denies clippy's pedantic group. The CI gate adds `--all-targets`
+# (tests) and `-D warnings` (rustc warnings and unfulfilled expectations).
+[workspace.lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+
 [workspace.dependencies]
 sea-orm = { version = "2.0", features = ["sqlx-sqlite", "runtime-tokio-rustls", "macros", "with-chrono"] }
 sea-orm-migration = "2.0"

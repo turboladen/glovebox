@@ -585,7 +585,7 @@ mod tests {
         assert_eq!(fetched.incident.title, "Squeaky brakes");
         assert_eq!(fetched.incident.category, IncidentCategory::Noise);
         assert!(!fetched.incident.resolved);
-        assert!(fetched.followups.is_empty());
+        crate::test_support::assert_empty(&fetched.followups);
         assert!(fetched.resolved_by.is_empty() && fetched.noticed_during.is_none());
     }
 
@@ -1219,11 +1219,8 @@ mod tests {
             .unwrap_err(),
             DomainError::NotFound(_)
         ));
-        assert!(
-            list_followups(&db, owner, inc.incident.id)
-                .await
-                .unwrap()
-                .is_empty()
+        crate::test_support::assert_empty(
+            &list_followups(&db, owner, inc.incident.id).await.unwrap(),
         );
     }
 
@@ -1333,13 +1330,13 @@ mod tests {
             .all(&db)
             .await
             .unwrap();
-        assert!(followups.is_empty());
+        crate::test_support::assert_empty(&followups);
         let links = incident_service_link::Entity::find()
             .filter(incident_service_link::Column::IncidentId.eq(doomed.incident.id))
             .all(&db)
             .await
             .unwrap();
-        assert!(links.is_empty());
+        crate::test_support::assert_empty(&links);
         // The recurrence survives, unchained.
         let recur = get(&db, vid, recurrence.incident.id).await.unwrap();
         assert_eq!(recur.incident.recurrence_of_id, None);

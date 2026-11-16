@@ -531,12 +531,7 @@ mod tests {
                 .unwrap_err(),
             DomainError::NotFound(_)
         ));
-        assert!(
-            list(&db, owner, PartFilter::default())
-                .await
-                .unwrap()
-                .is_empty()
-        );
+        crate::test_support::assert_empty(&list(&db, owner, PartFilter::default()).await.unwrap());
     }
 
     #[tokio::test]

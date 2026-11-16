@@ -308,7 +308,7 @@ async fn list_update_followup_and_delete_an_incident() {
     ] {
         let mut wrong = json!({ "vehicle_id": other.id, "incident_id": iid });
         let mut missing = json!({ "vehicle_id": other.id, "incident_id": 99999 });
-        for (args, _) in [(&mut wrong, ()), (&mut missing, ())] {
+        for args in [&mut wrong, &mut missing] {
             for (k, v) in extra.as_object().unwrap() {
                 args[k] = v.clone();
             }

@@ -211,7 +211,7 @@ async fn link_service_to_maintenance_add_defaults_and_replace_overwrites() {
     let imported = svc_svc::create(
         &t.db,
         v.id,
-        minimal_service(days_ago(0), "Oil + brake fluid service"),
+        minimal_service(&days_ago(0), "Oil + brake fluid service"),
     )
     .await
     .unwrap();
@@ -336,7 +336,7 @@ async fn link_service_to_maintenance_wrong_parent_both_ways() {
         "got: {err}"
     );
     let fetched = svc_svc::get(&t.db, v.id, mine_svc.record.id).await.unwrap();
-    assert!(fetched.schedule_item_ids.is_empty());
+    glovebox_shared::test_support::assert_empty(&fetched.schedule_item_ids);
 }
 
 #[tokio::test]
@@ -986,6 +986,7 @@ async fn record_service_installs_parts_recorded_earlier() {
 }
 
 #[tokio::test]
+#[expect(clippy::too_many_lines, reason = "one case per date field")]
 async fn malformed_dates_are_refused_naming_the_field() {
     let t = connect().await;
     let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();

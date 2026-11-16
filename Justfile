@@ -31,14 +31,19 @@ fmt:
 check-layering:
     ./scripts/check-layering.sh
 
-# Backend gates: build, test, clippy (matches CLAUDE.md's pedantic convention)
+# The backend gates run clippy over every target first, so a lint fails fast,
+# then build and test. Cargo.toml sets the pedantic level.
 ci-backend:
+    cargo clippy --workspace --all-targets --locked -- -D warnings
     cargo build --workspace --locked
     cargo test --workspace --locked
-    cargo clippy --workspace -- -D clippy::pedantic
+
+# This spell-checks the tree in US English (`brew install typos-cli`).
+typos:
+    typos
 
 # Run all CI gates locally
-ci: fmt-check check-layering ci-backend
+ci: fmt-check check-layering typos ci-backend
 
 
 # --- Install ---

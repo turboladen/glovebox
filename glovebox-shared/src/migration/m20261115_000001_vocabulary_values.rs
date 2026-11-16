@@ -230,7 +230,7 @@ mod tests {
     #[tokio::test]
     async fn the_count_covers_every_row_and_the_allowed_values_are_shown() {
         let db = db_before().await;
-        db.execute_unprepared("UPDATE service_record_line_items SET work_kind = 'labour'")
+        db.execute_unprepared("UPDATE service_record_line_items SET work_kind = 'tune_up'")
             .await
             .unwrap();
 

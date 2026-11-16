@@ -926,7 +926,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(reopened.appointment.status, "planning");
-        assert!(reopened.unassigned_job_ids.is_empty());
+        crate::test_support::assert_empty(&reopened.unassigned_job_ids);
 
         let closed = update_with_status(
             &db,
@@ -1079,7 +1079,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let s = crate::services::service_record::create(
+        let service = crate::services::service_record::create(
             &db,
             v,
             NewServiceRecord {
@@ -1094,7 +1094,7 @@ mod tests {
                 service_record::Column::AppointmentId,
                 sea_orm::sea_query::Expr::value(a.id),
             )
-            .filter(service_record::Column::Id.eq(s.record.id))
+            .filter(service_record::Column::Id.eq(service.record.id))
             .exec(&db)
             .await
             .unwrap();
@@ -1116,12 +1116,12 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(t.appointment_id, None);
-        let s = service_record::Entity::find_by_id(s.record.id)
+        let service = service_record::Entity::find_by_id(service.record.id)
             .one(&db)
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(s.appointment_id, None);
+        assert_eq!(service.appointment_id, None);
     }
 
     #[tokio::test]

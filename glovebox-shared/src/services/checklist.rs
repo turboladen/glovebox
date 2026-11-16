@@ -1162,7 +1162,7 @@ mod tests {
                 description: description.into(),
                 manufacturer: maker.map(Into::into),
                 part_number: number.map(Into::into),
-                seller: seller,
+                seller,
                 ..Default::default()
             };
         let fcp = || Some("FCP Euro".to_string());
@@ -1268,7 +1268,7 @@ mod tests {
 
         let view = for_job(&db, v, job).await.unwrap();
 
-        assert!(view.needs[0].notes.is_empty(), "{:?}", view.needs[0].notes);
+        crate::test_support::assert_empty(&view.needs[0].notes);
     }
 
     #[tokio::test]
@@ -1773,6 +1773,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one fixture across two vehicles, then its checks"
+    )]
     async fn home_view_groups_by_vehicle() {
         let db = test_db().await;
         let golf = VehicleFixture::new().name("Golf").insert_id(&db).await;

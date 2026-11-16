@@ -205,12 +205,8 @@ mod tests {
             DomainError::NotFound(_)
         ));
         // Nothing was written for the bogus vehicle id.
-        assert!(
-            vehicle_attribute::Entity::find()
-                .all(&db)
-                .await
-                .unwrap()
-                .is_empty()
+        crate::test_support::assert_empty(
+            &vehicle_attribute::Entity::find().all(&db).await.unwrap(),
         );
     }
 

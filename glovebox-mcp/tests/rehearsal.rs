@@ -17,6 +17,10 @@ fn titles(items: &Value) -> Vec<&str> {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "a whole first session, one call after another"
+)]
 async fn a_new_owner_can_set_up_file_an_invoice_and_ask_whats_coming() {
     let t = connect().await;
 
