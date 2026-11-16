@@ -2416,6 +2416,36 @@ mod tests {
         assert!(results.iter().all(Result::is_ok), "{results:?}");
     }
 
+    // Arrival writes racing on one file from several pools all succeed: each
+    // transaction takes the write lock before it reads the stage.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_arrival_writes_on_one_need_all_succeed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("glovebox.db");
+        let path = path.to_str().unwrap();
+        let first = crate::db::connect(path).await.unwrap();
+        let (vehicle_id, job_id) = seed_job(&first).await;
+        let (n, _) = ordered_need(&first, vehicle_id, job_id).await;
+        let mut pools = vec![first];
+        for _ in 1..3 {
+            pools.push(crate::db::connect(path).await.unwrap());
+        }
+
+        let mut writes = tokio::task::JoinSet::new();
+        for (i, db) in pools.iter().chain(pools.iter()).cloned().enumerate() {
+            writes.spawn(async move {
+                if i % 2 == 0 {
+                    mark_received(&db, vehicle_id, n.id, None).await
+                } else {
+                    clear_received(&db, vehicle_id, n.id).await
+                }
+            });
+        }
+        let results = writes.join_all().await;
+
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
+    }
+
     #[tokio::test]
     async fn mark_ordered_on_a_shop_need_is_refused() {
         let db = test_db().await;
