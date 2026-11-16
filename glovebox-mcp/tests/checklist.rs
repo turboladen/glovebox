@@ -283,6 +283,57 @@ async fn the_calls_return_part_names_undo_a_return() {
 }
 
 #[tokio::test]
+async fn a_reason_with_no_chosen_option_is_kept_only_for_a_shop_need() {
+    let t = connect().await;
+    let v = add_vehicle(&t, "GTI").await;
+    let job = plan_job(&t, v, "Spark plugs", None).await;
+    let need = add_need(&t, v, job, "Spark plugs").await;
+
+    let err = t
+        .call_err(
+            "update_need",
+            json!({ "vehicle_id": v, "need_id": need, "decision_reason": "OEM only" }),
+        )
+        .await;
+    assert!(
+        err.contains("decision_reason: needs a chosen option unless the shop supplies the need"),
+        "got: {err}"
+    );
+
+    let shop = t
+        .call(
+            "update_need",
+            json!({
+                "vehicle_id": v, "need_id": need, "supplied_by": "shop",
+                "decision_reason": "OEM only"
+            }),
+        )
+        .await;
+    assert_eq!(shop["decision_reason"], "OEM only");
+
+    // A shop need takes a reason together with a cleared choice.
+    let cleared = t
+        .call(
+            "update_need",
+            json!({
+                "vehicle_id": v, "need_id": need, "chosen_option_id": null,
+                "decision_reason": "The shop stocks OEM plugs"
+            }),
+        )
+        .await;
+    assert_eq!(cleared["decision_reason"], "The shop stocks OEM plugs");
+
+    // Moving it to the owner with no chosen option clears the reason.
+    let moved = t
+        .call(
+            "update_need",
+            json!({ "vehicle_id": v, "need_id": need, "supplied_by": "self" }),
+        )
+        .await;
+    assert_eq!(moved["decision_reason"], Value::Null, "got: {moved}");
+}
+
+#[tokio::test]
 async fn a_replaced_part_reads_installed_and_cannot_be_returned() {
     let t = connect().await;
     let v = add_vehicle(&t, "GTI").await;
@@ -773,7 +824,10 @@ async fn options_and_needs_can_be_edited_and_deleted() {
             json!({ "vehicle_id": v, "need_id": need, "chosen_option_id": null, "decision_reason": "why" }),
         )
         .await;
-    assert!(err.contains("a reason needs a chosen option"), "got: {err}");
+    assert!(
+        err.contains("decision_reason: needs a chosen option unless the shop supplies the need"),
+        "got: {err}"
+    );
 
     assert_eq!(
         t.call(

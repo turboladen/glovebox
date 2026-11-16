@@ -318,10 +318,11 @@ async fn decide(
         "option",
         "choose one of the listed options",
     )?;
-    // The form sends the stored reason along with an empty choice; clearing
-    // the choice drops the reason.
-    let reason = option_id.and(trim_to_none(&form.reason));
-    need::decide(&state.db, vid, id, option_id, reason).await
+    // The reason box is prefilled with the stored reason, so it arrives even
+    // when the owner only cleared the choice. The shared function keeps it
+    // only where the need can still hold it.
+    let reason = trim_to_none(&form.reason);
+    need::decide_dropping_unheld_reason(&state.db, vid, id, option_id, reason).await
 }
 
 #[derive(Deserialize)]

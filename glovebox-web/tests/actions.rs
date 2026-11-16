@@ -1046,6 +1046,107 @@ async fn clearing_a_decision_with_the_prefilled_reason_clears_it() {
     assert!(!after.contains("Quiet."), "{after}");
 }
 
+impl World {
+    async fn supply_from_the_shop(&self, reason: Option<&str>) {
+        need::update(
+            &self.db,
+            self.vehicle,
+            self.need,
+            UpdateNeed {
+                supplied_by: Some(Some(Supplier::Shop)),
+                decision_reason: reason.map(|r| Some(r.into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn saving_no_choice_on_a_shop_need_keeps_its_reason_until_it_is_emptied() {
+    let w = World::new().await;
+    let back = w.page_path();
+    w.supply_from_the_shop(Some("The shop uses OEM pads."))
+        .await;
+
+    let (status, _, body) = w
+        .post(
+            &w.need_path("decision"),
+            &[
+                ("option_id", ""),
+                ("reason", "The shop uses OEM pads."),
+                ("back", &back),
+            ],
+        )
+        .await;
+    assert_eq!(status, StatusCode::SEE_OTHER, "{body}");
+    let (_, after) = w.get(&back).await;
+    assert!(
+        need_summary(&after, w.need).contains("The shop uses OEM pads."),
+        "{after}"
+    );
+
+    w.post(
+        &w.need_path("decision"),
+        &[("option_id", ""), ("reason", ""), ("back", &back)],
+    )
+    .await;
+    let (_, after) = w.get(&back).await;
+    assert!(!after.contains("The shop uses OEM pads."), "{after}");
+}
+
+#[tokio::test]
+async fn clearing_a_shop_needs_choice_drops_that_choices_reason() {
+    let w = World::new().await;
+    let back = w.page_path();
+    w.supply_from_the_shop(None).await;
+    let good = w.good.to_string();
+    w.post(
+        &w.need_path("decision"),
+        &[
+            ("option_id", &good),
+            ("reason", "Cheaper than OEM."),
+            ("back", &back),
+        ],
+    )
+    .await;
+
+    let (status, _, body) = w
+        .post(
+            &w.need_path("decision"),
+            &[
+                ("option_id", ""),
+                ("reason", "Cheaper than OEM."),
+                ("back", &back),
+            ],
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::SEE_OTHER, "{body}");
+    let (_, after) = w.get(&back).await;
+    assert!(!after.contains("Cheaper than OEM."), "{after}");
+}
+
+#[tokio::test]
+async fn moving_a_shop_need_to_the_owner_clears_its_reason() {
+    let w = World::new().await;
+    let back = w.page_path();
+    w.supply_from_the_shop(Some("The shop uses OEM pads."))
+        .await;
+
+    let (status, _, body) = w
+        .post(
+            &w.need_path("supplier"),
+            &[("supplied_by", "self"), ("approach", ""), ("back", &back)],
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::SEE_OTHER, "{body}");
+    let (_, after) = w.get(&back).await;
+    assert!(!after.contains("The shop uses OEM pads."), "{after}");
+}
+
 #[tokio::test]
 async fn a_need_name_with_a_colon_renders_whole() {
     let w = World::new().await;

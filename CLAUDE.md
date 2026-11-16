@@ -216,8 +216,12 @@ open when `need::counts_as_open` says so (an open stage on a planned job); every
 uses it. Rejecting or ruling out a chosen option keeps the need's reason and date on the option as
 `chosen_reason` and `chosen_on` until the option is chosen again, and `past_decisions` lists both
 kinds under `rejected`, so it still reports them. Choosing the option a need
-already has keeps `decided_on`. `mark_ordered` claims the need with a conditional write as the
-first statement of its transaction, so two orders at once create one part, and its default cost
+already has keeps `decided_on`. A need with no chosen option holds a `decision_reason` only while
+the shop supplies it: `need::update` refuses one otherwise and clears the stored one when the
+supplier moves away from `shop`, and the web decision form goes through
+`need::decide_dropping_unheld_reason`, which drops a reason the need cannot hold.
+`mark_ordered` claims the need with a conditional write as the first statement of its transaction,
+so two orders at once create one part, and its default cost
 is the option's unit price times the need's quantity (`need::order_cost_cents`). `update_need` and
 `update_appointment` apply an edit together with a choice or a status change in one transaction
 (`need::update_with_choice`, `appointment::update_with_status`), so a refused choice or status

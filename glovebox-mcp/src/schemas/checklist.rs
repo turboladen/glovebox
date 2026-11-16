@@ -196,7 +196,9 @@ pub struct UpdateNeedInput {
     pub name: Option<String>,
     /// New quantity, at least 1.
     pub quantity: Option<i32>,
-    /// `self` or `shop`. Set it only from the owner's answer.
+    /// `self` or `shop`. Set it only from the owner's answer. Changing it away
+    /// from `shop` on a need with no chosen option clears the stored
+    /// `decision_reason`, so tell the owner before you do.
     ///
     /// Send `null` to clear it; omit the key to leave it unchanged.
     #[serde(default, deserialize_with = "nullable")]
@@ -216,15 +218,18 @@ pub struct UpdateNeedInput {
     /// cleared. An option whose fitment is `does_not_fit`, or that is rejected, is
     /// refused. Choose only what the owner chose.
     ///
-    /// Send `null` to clear the choice, its reason and its date (do not send a
-    /// `decision_reason` with it); omit the key to leave the choice unchanged.
+    /// Send `null` to clear the choice, its reason and its date; a
+    /// `decision_reason` sent with it is kept only for a need the shop
+    /// supplies, and refused otherwise. Omit the key to leave the choice
+    /// unchanged.
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<i32>")]
     pub chosen_option_id: Option<Option<i32>>,
     /// Why the owner decided as they did, in their words. Sent with
     /// `chosen_option_id` it is stored with the choice; sent alone it edits
-    /// the reason of the choice already made. It is refused together with
-    /// `chosen_option_id: null`, because a reason needs a chosen option.
+    /// the reason of the choice already made, or, for a need the shop
+    /// supplies, records why. It is refused when the need is left with no
+    /// chosen option and the shop does not supply it.
     ///
     /// Send `null` to clear it; omit the key to leave it unchanged (unless
     /// `chosen_option_id` is sent).

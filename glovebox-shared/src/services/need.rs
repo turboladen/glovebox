@@ -184,10 +184,15 @@ pub async fn add(
     Ok(model.insert(db).await?)
 }
 
-/// Changes a need's name, quantity, supplier, approach or decision reason.
+/// Changes a need's name, quantity, supplier, approach or decision reason. A
+/// need with no chosen option holds a reason only while the shop supplies it,
+/// judged with the supplier this call leaves: such a reason is refused, and
+/// moving a need with no chosen option away from `shop` clears its stored
+/// reason. Clearing a reason is always allowed.
 ///
 /// # Errors
-/// `NotFound` for a need that is not the vehicle's; `Invalid` as for [`add`].
+/// `NotFound` for a need that is not the vehicle's; `Invalid` as for [`add`],
+/// and on `decision_reason` for a reason the need cannot hold.
 pub async fn update(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -201,6 +206,15 @@ pub async fn update(
     if let Some(quantity) = input.quantity {
         validate_quantity(quantity)?;
     }
+    let supplied_by = input.supplied_by.unwrap_or(existing.supplied_by);
+    let can_hold = holds_reason(supplied_by, existing.chosen_option_id);
+    if matches!(input.decision_reason, Some(Some(_))) && !can_hold {
+        return Err(reason_refused());
+    }
+    // Only a real change of supplier clears, because the web supplier form
+    // resends the stored supplier with every approach edit.
+    let leaves_shop =
+        existing.supplied_by == Some(Supplier::Shop) && supplied_by != existing.supplied_by;
     let mut active: job_need::ActiveModel = existing.into();
     if let Some(name) = input.name {
         active.name = Set(name);
@@ -216,9 +230,29 @@ pub async fn update(
     }
     if let Some(value) = input.decision_reason {
         active.decision_reason = Set(value);
+    } else if leaves_shop && !can_hold {
+        // A reason with no chosen option explains why the shop supplies the
+        // need, so it goes when the shop stops supplying it, the way a
+        // cleared choice takes its reason along.
+        active.decision_reason = Set(None);
     }
     active.updated_at = Set(super::now());
     Ok(active.update(db).await?)
+}
+
+// Whether a need with this supplier and chosen option may hold a decision
+// reason: one with a chosen option always may, and one with none only while
+// the shop supplies it.
+fn holds_reason(supplied_by: Option<Supplier>, chosen_option_id: Option<i32>) -> bool {
+    chosen_option_id.is_some() || supplied_by == Some(Supplier::Shop)
+}
+
+fn reason_refused() -> DomainError {
+    DomainError::invalid(
+        "decision_reason",
+        "needs a chosen option unless the shop supplies the need; choose an option with it, set \
+         supplied_by to shop, or send null",
+    )
 }
 
 /// Deletes a need and, through the database, its options.
@@ -411,7 +445,7 @@ pub async fn delete_option<C: ConnectionTrait + TransactionTrait>(
 ///
 /// # Errors
 /// `NotFound` for a need that is not the vehicle's; `Invalid` as for
-/// [`update`]; `BadRequest` as for [`decide`].
+/// [`update`] and [`decide`]; `BadRequest` as for [`decide`].
 pub async fn update_with_choice<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -440,8 +474,9 @@ pub async fn update_with_choice<C: ConnectionTrait + TransactionTrait>(
 ///
 /// # Errors
 /// `NotFound` for a need that is not the vehicle's; `BadRequest` for an
-/// option of another need, one marked `does_not_fit` or a rejected one, and
-/// for a reason sent without an option.
+/// option of another need, one marked `does_not_fit` or a rejected one;
+/// `Invalid` on `decision_reason` for a reason sent without an option, unless
+/// the shop supplies the need.
 pub async fn decide<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -450,12 +485,9 @@ pub async fn decide<C: ConnectionTrait + TransactionTrait>(
     reason: Option<String>,
 ) -> DomainResult<job_need::Model> {
     let need = require(db, vehicle_id, need_id).await?;
-    if option_id.is_none() && reason.is_some() {
-        return Err(DomainError::BadRequest(
-            "No option is chosen, and a reason needs a chosen option; send the option too, or no \
-             reason"
-                .into(),
-        ));
+    // The choice this call makes decides, never the stored one.
+    if reason.is_some() && !holds_reason(need.supplied_by, option_id) {
+        return Err(reason_refused());
     }
     if let Some(option_id) = option_id {
         let option = need_option::Entity::find_by_id(option_id)
@@ -522,6 +554,35 @@ async fn clear_choice_history(db: &impl ConnectionTrait, option_id: i32) -> Doma
         .exec(db)
         .await?;
     Ok(())
+}
+
+/// Like [`decide`], except that a reason the need cannot hold after the call
+/// is dropped instead of refused, and so is the reason of a choice being
+/// cleared, even on a need the shop supplies.
+///
+/// # Errors
+/// As for [`decide`], apart from the refused reason.
+pub async fn decide_dropping_unheld_reason<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    need_id: i32,
+    option_id: Option<i32>,
+    reason: Option<String>,
+) -> DomainResult<job_need::Model> {
+    let txn = db.begin().await?;
+    let need = require(&txn, vehicle_id, need_id).await?;
+    let keeps = option_id.is_some()
+        || (need.chosen_option_id.is_none() && holds_reason(need.supplied_by, None));
+    let decided = decide(
+        &txn,
+        vehicle_id,
+        need_id,
+        option_id,
+        reason.filter(|_| keeps),
+    )
+    .await?;
+    txn.commit().await?;
+    Ok(decided)
 }
 
 /// A need with the part linked to it and the stage that results.
@@ -1389,9 +1450,7 @@ mod tests {
         let err = decide(&db, vehicle_id, n.id, None, Some("why".into()))
             .await
             .unwrap_err();
-        assert!(
-            matches!(&err, DomainError::BadRequest(m) if m.contains("a reason needs a chosen option"))
-        );
+        assert_reason_refused(&err);
         let err = update_with_choice(
             &db,
             vehicle_id,
@@ -1405,13 +1464,341 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(
-            matches!(&err, DomainError::BadRequest(m) if m.contains("a reason needs a chosen option"))
-        );
+        assert_reason_refused(&err);
         let after = require(&db, vehicle_id, n.id).await.unwrap();
         assert_eq!(after.name, "Pads");
         assert_eq!(after.chosen_option_id, Some(o.id));
         assert_eq!(after.decision_reason.as_deref(), Some("good"));
+    }
+
+    fn assert_reason_refused(err: &DomainError) {
+        assert!(
+            matches!(err, DomainError::Invalid { field, message }
+                if field == "decision_reason" && message.starts_with("needs a chosen option unless the shop supplies the need")),
+            "got: {err}"
+        );
+    }
+
+    fn reason(text: &str) -> UpdateNeed {
+        UpdateNeed {
+            decision_reason: Some(Some(text.into())),
+            ..Default::default()
+        }
+    }
+
+    fn supplier(who: Option<Supplier>) -> UpdateNeed {
+        UpdateNeed {
+            supplied_by: Some(who),
+            ..Default::default()
+        }
+    }
+
+    // Stores a reason on a need with no chosen option, as a row written
+    // before the rule was enforced would hold one.
+    async fn store_reason(db: &DatabaseConnection, need_id: i32, text: &str) {
+        job_need::ActiveModel {
+            id: Unchanged(need_id),
+            decision_reason: Set(Some(text.into())),
+            ..Default::default()
+        }
+        .update(db)
+        .await
+        .unwrap();
+    }
+
+    async fn shop_need(db: &DatabaseConnection, vehicle_id: i32, job_id: i32) -> job_need::Model {
+        add(
+            db,
+            vehicle_id,
+            job_id,
+            NewNeed {
+                supplied_by: Some(Supplier::Shop),
+                ..need("Plugs")
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_reason_without_a_choice_is_refused_unless_the_shop_supplies() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        for who in [None, Some(Supplier::Owner)] {
+            let n = add(
+                &db,
+                vehicle_id,
+                job_id,
+                NewNeed {
+                    supplied_by: who,
+                    ..need("Pads")
+                },
+            )
+            .await
+            .unwrap();
+            let err = update(&db, vehicle_id, n.id, reason("why"))
+                .await
+                .unwrap_err();
+            assert_reason_refused(&err);
+            assert_eq!(
+                require(&db, vehicle_id, n.id)
+                    .await
+                    .unwrap()
+                    .decision_reason,
+                None
+            );
+        }
+
+        let shop = shop_need(&db, vehicle_id, job_id).await;
+        let stored = update(&db, vehicle_id, shop.id, reason("OEM plugs only"))
+            .await
+            .unwrap();
+        assert_eq!(stored.decision_reason.as_deref(), Some("OEM plugs only"));
+
+        // The supplier sent in the same call decides.
+        let n = add(&db, vehicle_id, job_id, need("Fluid")).await.unwrap();
+        let to_shop = update(
+            &db,
+            vehicle_id,
+            n.id,
+            UpdateNeed {
+                supplied_by: Some(Some(Supplier::Shop)),
+                ..reason("shop stocks it")
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(to_shop.decision_reason.as_deref(), Some("shop stocks it"));
+        let err = update(
+            &db,
+            vehicle_id,
+            n.id,
+            UpdateNeed {
+                supplied_by: Some(Some(Supplier::Owner)),
+                ..reason("cheaper")
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_reason_refused(&err);
+        let after = require(&db, vehicle_id, n.id).await.unwrap();
+        assert_eq!(after.supplied_by, Some(Supplier::Shop));
+        assert_eq!(after.decision_reason.as_deref(), Some("shop stocks it"));
+
+        // Clearing a reason is always allowed.
+        let mut clear = reason("");
+        clear.decision_reason = Some(None);
+        let owner = add(&db, vehicle_id, job_id, need("Wipers")).await.unwrap();
+        store_reason(&db, owner.id, "legacy").await;
+        let cleared = update(&db, vehicle_id, owner.id, clear).await.unwrap();
+        assert_eq!(cleared.decision_reason, None);
+    }
+
+    #[tokio::test]
+    async fn a_shop_need_takes_a_reason_with_a_cleared_choice() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let shop = shop_need(&db, vehicle_id, job_id).await;
+        let decided = decide(&db, vehicle_id, shop.id, None, Some("OEM only".into()))
+            .await
+            .unwrap();
+        assert_eq!(decided.decision_reason.as_deref(), Some("OEM only"));
+    }
+
+    #[tokio::test]
+    async fn leaving_shop_supply_without_a_choice_clears_the_reason() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        for who in [None, Some(Supplier::Owner)] {
+            let shop = shop_need(&db, vehicle_id, job_id).await;
+            update(&db, vehicle_id, shop.id, reason("OEM only"))
+                .await
+                .unwrap();
+            let moved = update(&db, vehicle_id, shop.id, supplier(who))
+                .await
+                .unwrap();
+            assert_eq!(moved.supplied_by, who);
+            assert_eq!(moved.decision_reason, None);
+        }
+
+        // With a chosen option the reason belongs to the choice and stays.
+        let shop = shop_need(&db, vehicle_id, job_id).await;
+        let o = add_option(&db, vehicle_id, shop.id, option("NGK plugs"))
+            .await
+            .unwrap();
+        decide(&db, vehicle_id, shop.id, Some(o.id), Some("NGK".into()))
+            .await
+            .unwrap();
+        let moved = update(&db, vehicle_id, shop.id, supplier(Some(Supplier::Owner)))
+            .await
+            .unwrap();
+        assert_eq!(moved.decision_reason.as_deref(), Some("NGK"));
+    }
+
+    #[tokio::test]
+    async fn resending_the_stored_supplier_keeps_the_reason() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let shop = shop_need(&db, vehicle_id, job_id).await;
+        update(&db, vehicle_id, shop.id, reason("OEM only"))
+            .await
+            .unwrap();
+        let same = update(&db, vehicle_id, shop.id, supplier(Some(Supplier::Shop)))
+            .await
+            .unwrap();
+        assert_eq!(same.decision_reason.as_deref(), Some("OEM only"));
+
+        // The web supplier form sends the supplier and the approach together.
+        let owner = add(
+            &db,
+            vehicle_id,
+            job_id,
+            NewNeed {
+                supplied_by: Some(Supplier::Owner),
+                ..need("Pads")
+            },
+        )
+        .await
+        .unwrap();
+        store_reason(&db, owner.id, "legacy").await;
+        let edited = update(
+            &db,
+            vehicle_id,
+            owner.id,
+            UpdateNeed {
+                supplied_by: Some(Some(Supplier::Owner)),
+                approach: Some(Some(job_need::Approach::Upgrade)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(edited.decision_reason.as_deref(), Some("legacy"));
+    }
+
+    #[tokio::test]
+    async fn an_unrelated_edit_keeps_a_stored_reason() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let n = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
+        store_reason(&db, n.id, "legacy").await;
+        let renamed = update(
+            &db,
+            vehicle_id,
+            n.id,
+            UpdateNeed {
+                name: Some("Front pads".into()),
+                quantity: Some(2),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(renamed.name, "Front pads");
+        assert_eq!(renamed.decision_reason.as_deref(), Some("legacy"));
+
+        // Only leaving the shop clears, so deciding an undecided supplier
+        // keeps the stored reason.
+        let owner = update(&db, vehicle_id, n.id, supplier(Some(Supplier::Owner)))
+            .await
+            .unwrap();
+        assert_eq!(owner.decision_reason.as_deref(), Some("legacy"));
+    }
+
+    // Leaving the shop clears its reason inside the transaction, and the
+    // refused reason on the cleared choice then rolls that back.
+    #[tokio::test]
+    async fn leaving_shop_with_a_cleared_choice_and_a_reason_is_refused_whole() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let shop = shop_need(&db, vehicle_id, job_id).await;
+        update(&db, vehicle_id, shop.id, reason("OEM only"))
+            .await
+            .unwrap();
+        let err = update_with_choice(
+            &db,
+            vehicle_id,
+            shop.id,
+            UpdateNeed {
+                supplied_by: Some(Some(Supplier::Owner)),
+                ..reason("cheaper myself")
+            },
+            Some(None),
+        )
+        .await
+        .unwrap_err();
+        assert_reason_refused(&err);
+        let after = require(&db, vehicle_id, shop.id).await.unwrap();
+        assert_eq!(after.supplied_by, Some(Supplier::Shop));
+        assert_eq!(after.decision_reason.as_deref(), Some("OEM only"));
+    }
+
+    #[tokio::test]
+    async fn the_dropping_decide_keeps_only_a_reason_the_need_can_hold() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+
+        // A shop need with no choice keeps the reason the form sends.
+        let shop = shop_need(&db, vehicle_id, job_id).await;
+        add_option(&db, vehicle_id, shop.id, option("NGK plugs"))
+            .await
+            .unwrap();
+        update(&db, vehicle_id, shop.id, reason("OEM only"))
+            .await
+            .unwrap();
+        let kept =
+            decide_dropping_unheld_reason(&db, vehicle_id, shop.id, None, Some("OEM only".into()))
+                .await
+                .unwrap();
+        assert_eq!(kept.decision_reason.as_deref(), Some("OEM only"));
+
+        // Clearing a shop need's choice drops the reason that came with it.
+        let chosen_shop = shop_need(&db, vehicle_id, job_id).await;
+        let o = add_option(&db, vehicle_id, chosen_shop.id, option("NGK plugs"))
+            .await
+            .unwrap();
+        decide(
+            &db,
+            vehicle_id,
+            chosen_shop.id,
+            Some(o.id),
+            Some("cheaper than OEM".into()),
+        )
+        .await
+        .unwrap();
+        let cleared = decide_dropping_unheld_reason(
+            &db,
+            vehicle_id,
+            chosen_shop.id,
+            None,
+            Some("cheaper than OEM".into()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(cleared.chosen_option_id, None);
+        assert_eq!(cleared.decision_reason, None);
+
+        // An owner need clearing its choice drops the reason without refusing.
+        let owner = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
+        let o = add_option(&db, vehicle_id, owner.id, option("Pads"))
+            .await
+            .unwrap();
+        let chosen = decide_dropping_unheld_reason(
+            &db,
+            vehicle_id,
+            owner.id,
+            Some(o.id),
+            Some("quiet".into()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(chosen.decision_reason.as_deref(), Some("quiet"));
+        let cleared =
+            decide_dropping_unheld_reason(&db, vehicle_id, owner.id, None, Some("quiet".into()))
+                .await
+                .unwrap();
+        assert_eq!(cleared.chosen_option_id, None);
+        assert_eq!(cleared.decision_reason, None);
     }
 
     #[tokio::test]

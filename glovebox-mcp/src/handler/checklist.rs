@@ -173,9 +173,10 @@ impl GloveboxMcp {
                        by passing `chosen_option_id` with `decision_reason`, the owner's reason \
                        in their words; this refuses an option that does not fit or is rejected, \
                        and replaces any earlier reason. `chosen_option_id: null` clears the \
-                       choice. Ask the owner first; record their answer, do not make it. A need \
-                       is `to_order` once the supplier is `self` and an option is chosen, and \
-                       `shop_supplies` when the supplier is `shop`. Send only the fields to \
+                       choice. A need with no chosen option keeps a reason only while the shop \
+                       supplies it. Ask the owner first; record their answer, do not make it. A \
+                       need is `to_order` once the supplier is `self` and an option is chosen, \
+                       and `shop_supplies` when the supplier is `shop`. Send only the fields to \
                        change; all changes apply together or not at all. Next, \
                        `mark_need_ordered` when the owner has bought it."
     )]
