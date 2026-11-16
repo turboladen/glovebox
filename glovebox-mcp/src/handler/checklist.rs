@@ -37,13 +37,15 @@ impl GloveboxMcp {
         name = "update_appointment",
         description = "Change an appointment's purpose, shop, planned date or notes, and its \
                        `status`: `done` closes it by hand, `cancelled` cancels it, and `planning` \
-                       reopens either. Closing or cancelling unassigns the jobs that are still \
-                       planned, which return to the unscheduled pool with their needs and \
-                       research intact, and the result lists their ids in `unassigned_job_ids`. \
-                       An appointment also reads `done` by itself once it has jobs and every one \
-                       is done or dropped, so set `done` only to put one away early. Send only \
-                       the fields to change; null clears a field. All changes apply together or \
-                       not at all."
+                       reopens either. Closing is refused while a job is still planned or a to-do \
+                       is open, and the error names each one: ask the owner whether each was done \
+                       (`record_service`, `update_planned_work` or `update_todo`) or should come \
+                       off the appointment, then close it. Cancelling unassigns the planned jobs, \
+                       which return to the unscheduled pool with their needs and research intact, \
+                       and the open to-dos, and lists their ids in `unassigned_job_ids` and \
+                       `unassigned_todo_ids`. An appointment also reads `done` by itself once it \
+                       has jobs and every one is done or dropped. Send only the fields to change; \
+                       null clears a field. All changes apply together or not at all."
     )]
     async fn update_appointment(
         &self,
@@ -343,9 +345,10 @@ impl GloveboxMcp {
         description = "Add a plain to-do (\"Return the HP Plus pads\", \"Ask KW to confirm the \
                        differential\"), optionally on an appointment. Tick it off with \
                        `update_todo`; it appears in `get_checklist` under `todos`. A closed or \
-                       cancelled appointment takes no new to-dos and the call is an error: ask \
-                       the owner whether to reopen it (`update_appointment` with status \
-                       `planning`), then add the to-do, or add it with no appointment."
+                       cancelled appointment takes no new to-dos and the call is an error. For a \
+                       closed one, ask the owner whether to reopen it (`update_appointment` with \
+                       status `planning`) and then add the to-do; for a cancelled one, add the \
+                       to-do with no appointment."
     )]
     async fn add_todo(&self, params: Parameters<AddTodoInput>) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "add_todo");
@@ -359,8 +362,9 @@ impl GloveboxMcp {
                        it with `done: false`, and change its title, notes or appointment. Send \
                        only the fields to change; null clears notes or the appointment. Find \
                        to-do ids in `get_checklist`. Moving a to-do onto a closed or cancelled \
-                       appointment is an error; ask the owner whether to reopen that appointment \
-                       first, as for `add_todo`."
+                       appointment is an error; handle it as for `add_todo`. Un-ticking a to-do \
+                       on a closed appointment reopens the appointment, and un-ticking one on a \
+                       cancelled appointment takes it off, as the result's `appointment_id` shows."
     )]
     async fn update_todo(
         &self,

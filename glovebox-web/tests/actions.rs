@@ -36,6 +36,21 @@ struct World {
 }
 
 impl World {
+    // Closes the appointment once its one job is done, since an appointment
+    // with open work refuses to close.
+    async fn close_appointment(&self) {
+        test_support::set_job_status(
+            &self.db,
+            self.vehicle,
+            self.job,
+            glovebox_shared::entities::work_item::JobStatus::Done,
+        )
+        .await;
+        appointment::close(&self.db, self.vehicle, self.appointment)
+            .await
+            .unwrap();
+    }
+
     async fn new() -> Self {
         let db = db().await;
         let vehicle = VehicleFixture::new().name("Golf GTI").insert_id(&db).await;
@@ -940,9 +955,7 @@ async fn a_closed_appointment_shows_no_add_form_and_refuses_a_new_todo() {
     let w = World::new().await;
     let back = w.page_path();
     let appointment = w.appointment.to_string();
-    appointment::close(&w.db, w.vehicle, w.appointment)
-        .await
-        .unwrap();
+    w.close_appointment().await;
 
     let (_, body) = w.get(&back).await;
     assert!(!body.contains(">Add a to-do<"), "{body}");
@@ -959,7 +972,7 @@ async fn a_closed_appointment_shows_no_add_form_and_refuses_a_new_todo() {
         .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     let expected = format!(
-        r#"<div class="page notice"><p class="error" role="alert"><b>Not saved.</b> Appointment {} is closed; reopen it first</p></div>"#,
+        r#"<div class="page notice"><p class="error" role="alert"><b>Not saved.</b> Appointment {} is closed, so it takes no new work</p><p>The to-do you typed: Bring wheel locks. Add it from the home page.</p></div>"#,
         w.appointment
     );
     assert!(body.contains(&expected), "{body}");
@@ -1120,9 +1133,7 @@ async fn an_undo_onto_a_closed_appointment_returns_home() {
     .id;
     let path = |action: &str| format!("/vehicles/{}/todos/{id}/{action}", w.vehicle);
     w.post(&path("delete"), &[("back", &back)]).await;
-    appointment::close(&w.db, w.vehicle, w.appointment)
-        .await
-        .unwrap();
+    w.close_appointment().await;
 
     let (status, location, _) = w.post(&path("restore"), &[("back", &back)]).await;
     assert_eq!(status, StatusCode::SEE_OTHER);

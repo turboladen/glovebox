@@ -157,20 +157,28 @@ pub async fn complete(
     Ok(active.update(db).await?)
 }
 
-/// Marks a to-do not done.
+/// Marks a to-do not done. A to-do on a hand-closed appointment opens that
+/// appointment again, and one on a cancelled appointment comes off it.
 ///
 /// # Errors
 /// `NotFound` for a to-do that is not the vehicle's.
-pub async fn reopen(
-    db: &impl ConnectionTrait,
+pub async fn reopen<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
     vehicle_id: i32,
     id: i32,
 ) -> DomainResult<todo::Model> {
-    let existing = require(db, vehicle_id, id).await?;
+    let txn = db.begin().await?;
+    claim(&txn, id).await?;
+    let existing = require(&txn, vehicle_id, id).await?;
+    let appointment_id =
+        super::appointment::settle_reopened_todo(&txn, existing.appointment_id).await?;
     let mut active: todo::ActiveModel = existing.into();
     active.done_on = Set(None);
+    active.appointment_id = Set(appointment_id);
     active.updated_at = Set(super::now());
-    Ok(active.update(db).await?)
+    let reopened = active.update(&txn).await?;
+    txn.commit().await?;
+    Ok(reopened)
 }
 
 /// Deletes a to-do and returns the row exactly as this call deleted it, which
@@ -534,12 +542,13 @@ mod tests {
         let kept = add(&db, v, new_todo("Bring the key", Some(closed)))
             .await
             .unwrap();
+        complete(&db, v, kept.id, None).await.unwrap();
         appointment::close(&db, v, closed).await.unwrap();
         appointment::cancel(&db, v, cancelled).await.unwrap();
         let loose = add(&db, v, new_todo("Loose", None)).await.unwrap();
 
         for (id, ending) in [(closed, "closed"), (cancelled, "cancelled")] {
-            let expected = format!("Appointment {id} is {ending}; reopen it first");
+            let expected = format!("Appointment {id} is {ending}, so it takes no new work");
             let err = add(&db, v, new_todo("Late", Some(id))).await.unwrap_err();
             assert_eq!(err.to_string(), expected);
             let move_onto = UpdateTodo {
@@ -571,6 +580,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn un_ticking_a_todo_reopens_a_closed_appointment_and_leaves_a_cancelled_one() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let closed = appointment_id(&db, v, "Brakes").await;
+        let cancelled = appointment_id(&db, v, "Tires").await;
+        let on_closed = add(&db, v, new_todo("Key", Some(closed))).await.unwrap();
+        let on_cancelled = add(&db, v, new_todo("Locks", Some(cancelled)))
+            .await
+            .unwrap();
+        for t in [&on_closed, &on_cancelled] {
+            complete(&db, v, t.id, None).await.unwrap();
+        }
+        appointment::close(&db, v, closed).await.unwrap();
+        appointment::cancel(&db, v, cancelled).await.unwrap();
+
+        let back = reopen(&db, v, on_closed.id).await.unwrap();
+        assert_eq!((back.done_on, back.appointment_id), (None, Some(closed)));
+        let a = appointment::require(&db, v, closed).await.unwrap();
+        assert!(appointment::accepts_work(&a));
+
+        let back = update_with_done(&db, v, on_cancelled.id, UpdateTodo::default(), Some(false))
+            .await
+            .unwrap();
+        assert_eq!((back.done_on, back.appointment_id), (None, None));
+        let a = appointment::require(&db, v, cancelled).await.unwrap();
+        assert!(!appointment::accepts_work(&a));
+    }
+
+    #[tokio::test]
     async fn adding_todos_while_the_appointment_closes_never_fails_on_the_lock() {
         let (_dir, pools) = race_pools().await;
         let first = &pools[0];
@@ -584,7 +622,18 @@ mod tests {
         let closer = pools[1].clone();
         let closed = tokio::spawn(async move { appointment::close(&closer, v, a).await });
         let results = adds.join_all().await;
-        closed.await.unwrap().unwrap();
+        // Either the close came first and refused the adds after it, or an add
+        // came first and the close refused to leave it open on the appointment.
+        match closed.await.unwrap() {
+            Ok(_) => assert!(
+                list(first, v, Some(Some(a)), false)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            ),
+            Err(DomainError::BadRequest(m)) if m.contains("still has open work") => {}
+            Err(other) => panic!("unexpected close result {other:?}"),
+        }
 
         for result in &results {
             match result {

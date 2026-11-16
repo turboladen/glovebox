@@ -2,7 +2,7 @@
 {% block title %}{{ purpose }} - Glovebox{% endblock %}
 {% block banner %}{% if let Some(b) = banner %}{% include "banner.html" %}{% endif %}{% endblock %}
 {% block content %}
-{% if let Some(e) = top_error %}<div class="page notice"><p class="error" role="alert"><b>Not saved.</b> {{ e }}</p></div>{% endif %}
+{% if let Some(e) = top_error %}<div class="page notice"><p class="error" role="alert"><b>Not saved.</b> {{ e }}</p>{% if !takes_todos && !todo_form.title.is_empty() %}<p>The to-do you typed: {{ todo_form.title }}. Add it from the home page.</p>{% endif %}</div>{% endif %}
 <section class="appt page" aria-labelledby="appt-title">
   <h1 id="appt-title">{{ purpose }}</h1>
   <div class="summary">

@@ -836,7 +836,7 @@ async fn a_closed_or_cancelled_appointment_takes_no_new_todos_until_reopened() {
         .await);
 
     for (appt, ending) in [(closed, "closed"), (cancelled, "cancelled")] {
-        let expected = format!("Appointment {appt} is {ending}; reopen it first");
+        let expected = format!("Appointment {appt} is {ending}, so it takes no new work");
         let err = t
             .call_err(
                 "add_todo",
@@ -865,6 +865,53 @@ async fn a_closed_or_cancelled_appointment_takes_no_new_todos_until_reopened() {
         )
         .await;
     assert_eq!(added["appointment_id"], closed);
+}
+
+#[tokio::test]
+async fn closing_waits_for_open_work_and_un_ticking_reopens_the_appointment() {
+    let t = connect().await;
+    let v = add_vehicle(&t, "GTI").await;
+    let appt = plan_appointment(&t, v, "Brakes").await;
+    let todo = id(&t
+        .call(
+            "add_todo",
+            json!({ "vehicle_id": v, "title": "Bring the key", "appointment_id": appt }),
+        )
+        .await);
+    let close = json!({ "vehicle_id": v, "appointment_id": appt, "status": "done" });
+
+    let err = t.call_err("update_appointment", close.clone()).await;
+    assert!(
+        err.contains(&format!("to-do {todo} \"Bring the key\"")),
+        "got: {err}"
+    );
+    t.call(
+        "update_todo",
+        json!({ "vehicle_id": v, "todo_id": todo, "done": true }),
+    )
+    .await;
+    let closed = t.call("update_appointment", close).await;
+    assert_eq!(closed["appointment"]["status"], "done");
+
+    let back = t
+        .call(
+            "update_todo",
+            json!({ "vehicle_id": v, "todo_id": todo, "done": false }),
+        )
+        .await;
+    assert_eq!(back["appointment_id"], appt);
+    let listed = t
+        .call("list_appointments", json!({ "vehicle_id": v }))
+        .await;
+    assert_eq!(listed[0]["status"], "planning", "got: {listed}");
+
+    let cancelled = t
+        .call(
+            "update_appointment",
+            json!({ "vehicle_id": v, "appointment_id": appt, "status": "cancelled" }),
+        )
+        .await;
+    assert_eq!(cancelled["unassigned_todo_ids"], json!([todo]));
 }
 
 #[tokio::test]

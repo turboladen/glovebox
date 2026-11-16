@@ -37,15 +37,19 @@ pub struct AppointmentSummary {
 pub struct ClosedAppointment {
     pub appointment: appointment::Model,
     /// The jobs that were still planned and are now off the appointment.
+    /// Only cancelling takes any off; closing refuses while one is planned.
     pub unassigned_job_ids: Vec<i32>,
+    /// The open to-dos that cancelling took off the appointment.
+    pub unassigned_todo_ids: Vec<i32>,
 }
 
-/// An appointment after edits and a status change, with the jobs that closing
-/// or cancelling took off it.
+/// An appointment after edits and a status change, with the jobs and to-dos
+/// that cancelling took off it.
 #[derive(Debug, Serialize)]
 pub struct RevisedAppointment {
     pub appointment: AppointmentSummary,
     pub unassigned_job_ids: Vec<i32>,
+    pub unassigned_todo_ids: Vec<i32>,
 }
 
 // The shop directory is global, so an id is checked for existence only. A
@@ -173,28 +177,27 @@ pub async fn update_with_status<C: ConnectionTrait + TransactionTrait>(
 ) -> DomainResult<RevisedAppointment> {
     let txn = db.begin().await?;
     update(&txn, vehicle_id, id, input).await?;
-    let unassigned_job_ids = match change {
+    let (unassigned_job_ids, unassigned_todo_ids) = match change {
         Some(StatusChange::Close) => {
-            put_away(&txn, vehicle_id, id, Ending::Closed)
-                .await?
-                .unassigned_job_ids
+            put_away(&txn, vehicle_id, id, Ending::Closed).await?;
+            (Vec::new(), Vec::new())
         }
         Some(StatusChange::Cancel) => {
-            put_away(&txn, vehicle_id, id, Ending::Cancelled)
-                .await?
-                .unassigned_job_ids
+            let cancelled = put_away(&txn, vehicle_id, id, Ending::Cancelled).await?;
+            (cancelled.unassigned_job_ids, cancelled.unassigned_todo_ids)
         }
         Some(StatusChange::Reopen) => {
             reopen(&txn, vehicle_id, id).await?;
-            Vec::new()
+            (Vec::new(), Vec::new())
         }
-        None => Vec::new(),
+        None => (Vec::new(), Vec::new()),
     };
     let appointment = summary(&txn, vehicle_id, id).await?;
     txn.commit().await?;
     Ok(RevisedAppointment {
         appointment,
         unassigned_job_ids,
+        unassigned_todo_ids,
     })
 }
 
@@ -231,7 +234,7 @@ pub(crate) async fn require_assignable(
     let found = require(db, vehicle_id, id).await?;
     if let Some(ending) = Ending::of(&found) {
         return Err(DomainError::BadRequest(format!(
-            "Appointment {id} is {}; reopen it first",
+            "Appointment {id} is {}, so it takes no new work",
             ending.label()
         )));
     }
@@ -495,16 +498,25 @@ async fn put_away(
             current.label()
         )));
     }
-    let today = crate::services::today();
-    let unassigned_job_ids: Vec<i32> = work_item::Entity::find()
+    let planned_jobs = work_item::Entity::find()
         .filter(work_item::Column::AppointmentId.eq(id))
         .filter(work_item::Column::Status.eq(JobStatus::Planned))
         .order_by_asc(work_item::Column::Id)
         .all(db)
-        .await?
-        .into_iter()
-        .map(|j| j.id)
-        .collect();
+        .await?;
+    let open_todos = todo::Entity::find()
+        .filter(todo::Column::AppointmentId.eq(id))
+        .filter(todo::Column::DoneOn.is_null())
+        .order_by_asc(todo::Column::Id)
+        .all(db)
+        .await?;
+    // A closed appointment records a trip that happened, so what is still open
+    // on it needs the owner's word first. A cancelled trip did not happen, so
+    // its open work goes back to the pool.
+    if ending == Ending::Closed && !(planned_jobs.is_empty() && open_todos.is_empty()) {
+        return Err(still_open(id, &planned_jobs, &open_todos));
+    }
+    let unassigned_job_ids: Vec<i32> = planned_jobs.iter().map(|j| j.id).collect();
     if !unassigned_job_ids.is_empty() {
         work_item::Entity::update_many()
             .col_expr(work_item::Column::AppointmentId, Expr::value(None::<i32>))
@@ -513,6 +525,16 @@ async fn put_away(
             .exec(db)
             .await?;
     }
+    let unassigned_todo_ids: Vec<i32> = open_todos.iter().map(|t| t.id).collect();
+    if !unassigned_todo_ids.is_empty() {
+        todo::Entity::update_many()
+            .col_expr(todo::Column::AppointmentId, Expr::value(None::<i32>))
+            .col_expr(todo::Column::UpdatedAt, Expr::value(super::now()))
+            .filter(todo::Column::Id.is_in(unassigned_todo_ids.clone()))
+            .exec(db)
+            .await?;
+    }
+    let today = crate::services::today();
     let mut active: appointment::ActiveModel = existing.into();
     match ending {
         Ending::Cancelled => active.cancelled_on = Set(Some(today)),
@@ -523,7 +545,54 @@ async fn put_away(
     Ok(ClosedAppointment {
         appointment,
         unassigned_job_ids,
+        unassigned_todo_ids,
     })
+}
+
+// The refusal to close an appointment that still holds a planned job or an
+// open to-do, naming each one.
+fn still_open(id: i32, jobs: &[work_item::Model], todos: &[todo::Model]) -> DomainError {
+    let items: Vec<String> = jobs
+        .iter()
+        .map(|j| format!("job {} \"{}\"", j.id, j.title))
+        .chain(
+            todos
+                .iter()
+                .map(|t| format!("to-do {} \"{}\"", t.id, t.title)),
+        )
+        .collect();
+    DomainError::BadRequest(format!(
+        "Appointment {id} still has open work: {}. Mark each one done or move it off the \
+         appointment before closing it",
+        items.join(", ")
+    ))
+}
+
+/// The appointment a to-do keeps when it is marked not done again: a
+/// hand-closed appointment opens again, and a cancelled one gives the to-do
+/// up, so a closed or cancelled appointment never holds an open to-do. The
+/// caller holds the write lock.
+pub(crate) async fn settle_reopened_todo(
+    db: &impl ConnectionTrait,
+    appointment_id: Option<i32>,
+) -> DomainResult<Option<i32>> {
+    let Some(id) = appointment_id else {
+        return Ok(None);
+    };
+    let Some(found) = appointment::Entity::find_by_id(id).one(db).await? else {
+        return Ok(None);
+    };
+    match Ending::of(&found) {
+        None => Ok(Some(id)),
+        Some(Ending::Cancelled) => Ok(None),
+        Some(Ending::Closed) => {
+            let mut active: appointment::ActiveModel = found.into();
+            active.closed_on = Set(None);
+            active.updated_at = Set(super::now());
+            active.update(db).await?;
+            Ok(Some(id))
+        }
+    }
 }
 
 /// What [`settle_reopened_jobs`] changed, with each list sorted by id.
@@ -824,7 +893,7 @@ mod tests {
         assert!(matches!(err, DomainError::BadRequest(_)));
         assert_eq!(
             err.to_string(),
-            format!("Appointment {} is cancelled; reopen it first", a.id)
+            format!("Appointment {} is cancelled, so it takes no new work", a.id)
         );
         let b = create(&db, v, appt("Other")).await.unwrap();
         close(&db, v, b.id).await.unwrap();
@@ -843,7 +912,7 @@ mod tests {
         assert!(matches!(err, DomainError::BadRequest(_)));
         assert_eq!(
             err.to_string(),
-            format!("Appointment {} is closed; reopen it first", b.id)
+            format!("Appointment {} is closed, so it takes no new work", b.id)
         );
     }
 
@@ -957,7 +1026,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn close_unassigns_planned_jobs_and_keeps_their_needs() {
+    async fn close_refuses_open_jobs_and_cancel_takes_them_off_with_their_needs() {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
         let a = create(&db, v, appt("Brakes")).await.unwrap();
@@ -976,10 +1045,20 @@ mod tests {
         .await
         .unwrap();
 
-        let closed = close(&db, v, a.id).await.unwrap();
-        assert_eq!(closed.unassigned_job_ids, vec![planned]);
-        assert!(closed.appointment.closed_on.is_some());
-        assert!(closed.appointment.cancelled_on.is_none());
+        let err = close(&db, v, a.id).await.unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "Appointment {} still has open work: job {planned} \"Brake pads\". Mark each one \
+                 done or move it off the appointment before closing it",
+                a.id
+            )
+        );
+        assert!(require(&db, v, a.id).await.unwrap().closed_on.is_none());
+
+        let cancelled = cancel(&db, v, a.id).await.unwrap();
+        assert_eq!(cancelled.unassigned_job_ids, vec![planned]);
+        assert!(cancelled.appointment.cancelled_on.is_some());
         assert_eq!(
             job::get(&db, v, planned).await.unwrap().appointment_id,
             None
@@ -995,17 +1074,15 @@ mod tests {
             .unwrap();
         assert_eq!(needs.len(), 1);
 
-        let again = cancel(&db, v, a.id).await.unwrap_err();
-        assert!(matches!(again, DomainError::BadRequest(_)));
-        let reopened = reopen(&db, v, a.id).await.unwrap();
-        assert!(reopened.closed_on.is_none() && reopened.cancelled_on.is_none());
-        let cancelled = cancel(&db, v, a.id).await.unwrap();
-        assert!(cancelled.appointment.cancelled_on.is_some());
-        assert!(cancelled.appointment.closed_on.is_none());
         let again = close(&db, v, a.id).await.unwrap_err();
         assert!(matches!(again, DomainError::BadRequest(_)));
         let reopened = reopen(&db, v, a.id).await.unwrap();
         assert!(reopened.cancelled_on.is_none());
+        let closed = close(&db, v, a.id).await.unwrap();
+        assert!(closed.appointment.closed_on.is_some());
+        assert!(closed.unassigned_job_ids.is_empty() && closed.unassigned_todo_ids.is_empty());
+        let again = cancel(&db, v, a.id).await.unwrap_err();
+        assert!(matches!(again, DomainError::BadRequest(_)));
     }
 
     #[tokio::test]
@@ -1324,11 +1401,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn open_list_drops_a_hand_closed_appointment_even_with_an_open_todo() {
+    async fn close_refuses_an_open_todo_and_cancel_takes_it_off() {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
         let a = create(&db, v, appt("Brakes")).await.unwrap();
-        todo_svc::add(
+        let t = todo_svc::add(
             &db,
             v,
             NewTodo {
@@ -1338,9 +1415,22 @@ mod tests {
             },
         )
         .await
-        .unwrap();
-        close(&db, v, a.id).await.unwrap();
+        .unwrap()
+        .id;
+        let err = close(&db, v, a.id).await.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains(&format!("to-do {t} \"Bring wheel locks\"")),
+            "{err}"
+        );
+
+        let cancelled = cancel(&db, v, a.id).await.unwrap();
+        assert_eq!(cancelled.unassigned_todo_ids, vec![t]);
         assert!(list(&db, v, false).await.unwrap().is_empty());
+        assert_eq!(
+            todo_svc::require(&db, v, t).await.unwrap().appointment_id,
+            None
+        );
     }
 
     #[tokio::test]
@@ -1412,7 +1502,8 @@ mod tests {
         );
         txn.commit().await.unwrap();
 
-        let closed = closing.await.unwrap().unwrap();
-        assert_eq!(closed.unassigned_job_ids, [job]);
+        // The close read the job the open write committed, so it refuses.
+        let err = closing.await.unwrap().unwrap_err();
+        assert!(err.to_string().contains(&format!("job {job} ")), "{err}");
     }
 }

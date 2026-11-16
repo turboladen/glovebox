@@ -206,7 +206,7 @@ lists needs, and a need lists researched options. A need's stage (`undecided`, `
 the first matching row wins, so a linked part decides the stage, and a part that is installed or
 replaced reads `installed`. An appointment reads `done` when
 it has jobs and every one is done or dropped; only `cancelled` and a hand-closed date are stored,
-and closing or cancelling unassigns the jobs that are still planned. A closed or cancelled
+closing is refused while a job is still planned, and cancelling unassigns them. A closed or cancelled
 appointment therefore never holds a planned job: when a job on one returns to `planned` (its
 service is deleted, or its status is set back), a hand-closed appointment opens again and a
 cancelled one lets the job go to the unscheduled pool (`appointment::settle_reopened_jobs`).
@@ -232,7 +232,10 @@ leaves the other fields unchanged. An option that is `does_not_fit` or rejected 
 and no tool chooses a supplier or an option for the owner. `return_part` is the only way a part
 becomes `returned`, and its to-do goes on the job's appointment only while that appointment is
 open (no list shows the to-dos of a closed or cancelled one), and `add_todo` and `update_todo`
-refuse to put a to-do on a closed or cancelled appointment (`appointment::require_assignable`). Naming an appointment in `record_service` installs and completes nothing; the
+refuse to put a to-do on a closed or cancelled appointment (`appointment::claim_assignable`).
+Open to-dos follow the same rule as planned jobs: closing is refused while one is open,
+cancelling takes them off, and un-ticking a to-do reopens a hand-closed appointment or takes the
+to-do off a cancelled one (`appointment::settle_reopened_todo`). Naming an appointment in `record_service` installs and completes nothing; the
 result's `unfitted_needs` lists the linked parts the invoice did not install. `need_id` is accepted
 on the inline parts of `record_service` only, and `get_checklist` takes at most one of
 `appointment_id` and `work_item_id`.
