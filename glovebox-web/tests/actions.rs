@@ -730,10 +730,8 @@ async fn a_stale_arrival_post_for_an_installed_part_is_refused() {
 
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{action}");
         assert!(body.contains("Not saved"), "{action}: {body}");
-        let refusal = format!(
-            "Need {} is installed; only an ordered or received part {words}",
-            w.need
-        );
+        let refusal =
+            format!("Part {part_id} is installed; only an ordered or received part {words}");
         assert!(body.contains(&refusal), "{action}: {body}");
         assert!(!body.contains(r#"role="status""#), "{action}: {body}");
         let stored = part::get(&w.db, w.vehicle, part_id).await.unwrap();

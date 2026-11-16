@@ -491,7 +491,9 @@ pub struct MarkNeedReceivedInput {
     /// `true` (the default) records that the part arrived; `false` clears the
     /// arrival date so the need reads `ordered` again.
     pub received: Option<bool>,
-    /// The day it arrived, `YYYY-MM-DD`. Defaults to today. Not allowed with
+    /// The day it arrived, `YYYY-MM-DD`. Defaults to today when the part has
+    /// no arrival date yet; a part that has one is refused unless this names
+    /// the new date. Not allowed with
     /// `received: false`.
     pub received_on: Option<String>,
 }

@@ -386,9 +386,9 @@ async fn a_replaced_part_reads_installed_and_cannot_be_returned_or_redated() {
             json!({ "vehicle_id": v, "need_id": rotors, "reason": "Wrong size" }),
         )
         .await;
-    assert!(
-        err.contains("is installed; only an ordered or received part can be returned"),
-        "got: {err}"
+    assert_eq!(
+        err,
+        format!("Part {part} is replaced; only an ordered or received part can be returned")
     );
 
     // The arrival date of a part on the car stays as it is.
@@ -400,9 +400,7 @@ async fn a_replaced_part_reads_installed_and_cannot_be_returned_or_redated() {
         .await;
     assert_eq!(
         err,
-        format!(
-            "Need {rotors} is installed; only an ordered or received part can be marked received"
-        )
+        format!("Part {part} is replaced; only an ordered or received part can be marked received")
     );
     let err = t
         .call_err(
@@ -413,8 +411,8 @@ async fn a_replaced_part_reads_installed_and_cannot_be_returned_or_redated() {
     assert_eq!(
         err,
         format!(
-            "Need {rotors} is installed; only an ordered or received part can have its arrival \
-             date cleared"
+            "Part {part} is replaced; only an ordered or received part can have its arrival date \
+             cleared"
         )
     );
     let err = t
@@ -427,7 +425,7 @@ async fn a_replaced_part_reads_installed_and_cannot_be_returned_or_redated() {
         .await;
     assert_eq!(
         err,
-        format!("Part {part} is replaced; a part that has been on the car takes no arrival date")
+        format!("Part {part} is replaced; only an ordered or received part can be marked received")
     );
     let parts = t.call("list_parts", json!({ "vehicle_id": v })).await;
     assert_eq!(parts[0]["received_on"], "2026-11-01", "got: {parts}");

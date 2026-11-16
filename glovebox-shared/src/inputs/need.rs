@@ -89,7 +89,8 @@ pub enum PartLink {
 /// A change to the arrival date of a need's part.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ArrivalChange {
-    /// The part arrived on this day, or today when it is `None`.
+    /// The part arrived on this day. `None` means today for a part with no
+    /// arrival date, and is refused for a part that has one.
     Received(Option<chrono::NaiveDate>),
     /// The part has not arrived; its arrival date is cleared.
     NotReceived,

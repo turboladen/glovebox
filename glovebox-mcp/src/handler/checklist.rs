@@ -293,12 +293,12 @@ impl GloveboxMcp {
         name = "mark_need_received",
         description = "Record that a need's part arrived, stamping the part with the date \
                        (`received_on`, default today). Arrival is its own step because checking \
-                       the box is when a wrong part is caught. A part that already has a date \
-                       keeps it unless `received_on` names a new one. `received: false` clears \
-                       the date so the need reads `ordered` again. The need must have a part \
-                       linked, and a part that is installed or replaced is refused; \
-                       `correct_part` corrects its stored date. If the part is wrong, call \
-                       `return_part`."
+                       the box is when a wrong part is caught. For a part that already has a \
+                       date, the call is refused unless `received_on` names the new date. \
+                       `received: false` clears the date so the need reads `ordered` again. The \
+                       need must have a part linked, and a part that is installed or replaced is \
+                       refused; `correct_part` corrects its stored date. If the part is wrong, \
+                       call `return_part`."
     )]
     async fn mark_need_received(
         &self,

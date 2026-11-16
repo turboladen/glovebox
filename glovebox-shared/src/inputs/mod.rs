@@ -1,8 +1,10 @@
 //! Domain input structs (plain data) consumed by service functions.
-//! Callers build most of them directly. `checklist::scope`, `need::part_link`
-//! and `need::arrival` build the checklist scope, part link and arrival
-//! change from optional arguments and refuse a combination that names no
-//! valid one.
+//! Callers build most of them directly.
+//! [`services::checklist::scope`](crate::services::checklist::scope),
+//! [`services::need::part_link`](crate::services::need::part_link) and
+//! [`services::need::arrival`](crate::services::need::arrival) build the
+//! checklist scope, part link and arrival change from optional arguments and
+//! refuse a combination that names no valid one.
 
 pub mod appointment;
 pub mod checklist;
