@@ -265,7 +265,7 @@ pub async fn set_status(
     // The status is read back the way every list reads it, so a recall that a
     // linked service or a done job keeps done refuses any other status.
     let mut proposed = finding.clone();
-    proposed.status = status.stored().to_owned();
+    status.stored().clone_into(&mut proposed.status);
     let shown = with_status(db, vec![proposed]).await?.remove(0);
     let reads_as_asked = shown.status == status.as_str()
         || (status == RecallStatus::Open && shown.status == PLANNED);
