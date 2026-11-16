@@ -1,6 +1,7 @@
 //! To-dos: small tasks for a vehicle, optionally tied to an appointment.
 
 use sea_orm::{sea_query::Expr, *};
+use serde::Serialize;
 
 use crate::{
     entities::todo,
@@ -9,17 +10,19 @@ use crate::{
 };
 
 /// Inserts a to-do for a vehicle, on an appointment when one is given. The
-/// caller has already checked that the appointment belongs to the vehicle.
+/// caller has already checked that the appointment belongs to the vehicle and
+/// takes work, through `appointment::claim_assignable` or
+/// `appointment::open_id`.
 pub(crate) async fn insert(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
-    appointment_id: Option<i32>,
-    title: String,
+    input: NewTodo,
 ) -> DomainResult<todo::Model> {
     let model = todo::ActiveModel {
         vehicle_id: Set(vehicle_id),
-        appointment_id: Set(appointment_id),
-        title: Set(title),
+        appointment_id: Set(input.appointment_id),
+        title: Set(input.title),
+        notes: Set(input.notes),
         ..Default::default()
     };
     Ok(model.insert(db).await?)
@@ -45,46 +48,49 @@ pub async fn require(
 ///
 /// # Errors
 /// `NotFound` for a vehicle or appointment that is not found, with an
-/// appointment of another vehicle reading as missing; `Invalid` for a blank
-/// title.
-pub async fn add(
-    db: &impl ConnectionTrait,
+/// appointment of another vehicle reading as missing; `BadRequest` for an
+/// appointment that is closed or cancelled; `Invalid` for a blank title.
+pub async fn add<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
     vehicle_id: i32,
     input: NewTodo,
 ) -> DomainResult<todo::Model> {
     super::validate_not_blank("title", &input.title)?;
     super::vehicle::require(db, vehicle_id).await?;
-    if let Some(id) = input.appointment_id {
-        super::appointment::require(db, vehicle_id, id).await?;
+    // Claiming the appointment first keeps a close from landing between the
+    // check and the insert.
+    let txn = db.begin().await?;
+    if let Some(appointment_id) = input.appointment_id {
+        super::appointment::claim_assignable(&txn, vehicle_id, appointment_id).await?;
     }
-    let model = todo::ActiveModel {
-        vehicle_id: Set(vehicle_id),
-        appointment_id: Set(input.appointment_id),
-        title: Set(input.title),
-        notes: Set(input.notes),
-        ..Default::default()
-    };
-    Ok(model.insert(db).await?)
+    let created = insert(&txn, vehicle_id, input).await?;
+    txn.commit().await?;
+    Ok(created)
 }
 
-/// Changes a to-do's title or notes, or moves it to another appointment of
-/// the vehicle or off any appointment.
-///
-/// # Errors
-/// `NotFound` as for [`add`] and for a to-do that is not the vehicle's;
-/// `Invalid` for a blank title.
-pub async fn update(
+// Changes a to-do's title or notes, or moves it to another appointment of
+// the vehicle or off any appointment. It runs inside `update_with_done`'s
+// transaction after the to-do's claim, which already holds SQLite's write
+// lock, so the appointment check and the write see the same state.
+// `opening` is true when the same call marks the to-do not done.
+async fn update(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     id: i32,
     input: UpdateTodo,
+    opening: bool,
 ) -> DomainResult<todo::Model> {
     let existing = require(db, vehicle_id, id).await?;
     if let Some(title) = &input.title {
         super::validate_not_blank("title", title)?;
     }
-    if let Some(Some(appointment_id)) = input.appointment_id {
-        super::appointment::require(db, vehicle_id, appointment_id).await?;
+    // Moving a to-do onto a closed or cancelled appointment is refused. One
+    // already there may still be edited, but naming that appointment while
+    // marking the to-do not done asks for open work on it, which is refused.
+    if let Some(Some(appointment_id)) = input.appointment_id
+        && (opening || existing.appointment_id != Some(appointment_id))
+    {
+        super::appointment::require_assignable(db, vehicle_id, appointment_id).await?;
     }
     let mut active: todo::ActiveModel = existing.into();
     if let Some(v) = input.title {
@@ -105,25 +111,52 @@ pub async fn update(
 /// its original `done_on`; otherwise it is stamped with today's date.
 ///
 /// # Errors
-/// As for [`update`].
+/// `NotFound` for a to-do that is not the vehicle's or an appointment that is
+/// not found; `BadRequest` for a move onto an appointment that is closed or
+/// cancelled; `Invalid` for a blank title.
 pub async fn update_with_done<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
     id: i32,
     input: UpdateTodo,
     done: Option<bool>,
-) -> DomainResult<todo::Model> {
+) -> DomainResult<UpdatedTodo> {
     let txn = db.begin().await?;
     claim(&txn, id).await?;
-    let edited = update(&txn, vehicle_id, id, input).await?;
+    let edited = update(&txn, vehicle_id, id, input, done == Some(false)).await?;
     let result = match done {
-        Some(true) if edited.done_on.is_some() => edited,
-        Some(true) => complete(&txn, vehicle_id, id, None).await?,
+        Some(true) if edited.done_on.is_some() => UpdatedTodo::plain(edited),
+        Some(true) => UpdatedTodo::plain(complete(&txn, vehicle_id, id, None).await?),
         Some(false) => reopen(&txn, vehicle_id, id).await?,
-        None => edited,
+        None => UpdatedTodo::plain(edited),
     };
     txn.commit().await?;
     Ok(result)
+}
+
+/// A to-do after an edit, with what marking it not done did to its
+/// appointment.
+#[derive(Debug, Serialize)]
+pub struct UpdatedTodo {
+    #[serde(flatten)]
+    pub todo: todo::Model,
+    /// The hand-closed appointment that opened again because the to-do on it
+    /// is open again.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reopened_appointment_id: Option<i32>,
+    /// The cancelled appointment the to-do came off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub left_appointment_id: Option<i32>,
+}
+
+impl UpdatedTodo {
+    fn plain(todo: todo::Model) -> Self {
+        Self {
+            todo,
+            reopened_appointment_id: None,
+            left_appointment_id: None,
+        }
+    }
 }
 
 // Writes the to-do row without changing it, as `appointment::claim` does for
@@ -155,20 +188,33 @@ pub async fn complete(
     Ok(active.update(db).await?)
 }
 
-/// Marks a to-do not done.
+/// Marks a to-do not done. A to-do on a hand-closed appointment opens that
+/// appointment again, and one on a cancelled appointment comes off it.
 ///
 /// # Errors
 /// `NotFound` for a to-do that is not the vehicle's.
-pub async fn reopen(
-    db: &impl ConnectionTrait,
+pub async fn reopen<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
     vehicle_id: i32,
     id: i32,
-) -> DomainResult<todo::Model> {
-    let existing = require(db, vehicle_id, id).await?;
+) -> DomainResult<UpdatedTodo> {
+    let txn = db.begin().await?;
+    claim(&txn, id).await?;
+    let existing = require(&txn, vehicle_id, id).await?;
+    let was_on = existing.appointment_id;
+    let (appointment_id, reopened_appointment_id) =
+        super::appointment::settle_reopened_todo(&txn, was_on).await?;
     let mut active: todo::ActiveModel = existing.into();
     active.done_on = Set(None);
+    active.appointment_id = Set(appointment_id);
     active.updated_at = Set(super::now());
-    Ok(active.update(db).await?)
+    let todo = active.update(&txn).await?;
+    txn.commit().await?;
+    Ok(UpdatedTodo {
+        todo,
+        reopened_appointment_id,
+        left_appointment_id: was_on.filter(|_| appointment_id.is_none()),
+    })
 }
 
 /// Deletes a to-do and returns the row exactly as this call deleted it, which
@@ -343,7 +389,7 @@ mod tests {
         let today = complete(&db, v, t.id, None).await.unwrap();
         assert_eq!(today.done_on, Some(crate::services::today()));
         let reopened = reopen(&db, v, t.id).await.unwrap();
-        assert!(reopened.done_on.is_none());
+        assert!(reopened.todo.done_on.is_none());
         assert!(list(&db, v, None, false).await.unwrap().len() == 1);
         complete(&db, v, t.id, None).await.unwrap();
         assert!(list(&db, v, None, false).await.unwrap().is_empty());
@@ -362,7 +408,7 @@ mod tests {
         let again = update_with_done(&db, v, t.id, UpdateTodo::default(), Some(true))
             .await
             .unwrap();
-        assert_eq!(again.done_on, Some(date("2026-11-10")));
+        assert_eq!(again.todo.done_on, Some(date("2026-11-10")));
 
         let open = update_with_done(
             &db,
@@ -376,17 +422,17 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(open.done_on, None);
-        assert_eq!(open.notes.as_deref(), Some("two coats"));
+        assert_eq!(open.todo.done_on, None);
+        assert_eq!(open.todo.notes.as_deref(), Some("two coats"));
 
         let ticked = update_with_done(&db, v, t.id, UpdateTodo::default(), Some(true))
             .await
             .unwrap();
-        assert_eq!(ticked.done_on, Some(crate::services::today()));
+        assert_eq!(ticked.todo.done_on, Some(crate::services::today()));
         let untouched = update_with_done(&db, v, t.id, UpdateTodo::default(), None)
             .await
             .unwrap();
-        assert_eq!(untouched.done_on, ticked.done_on);
+        assert_eq!(untouched.todo.done_on, ticked.todo.done_on);
     }
 
     #[tokio::test]
@@ -444,6 +490,7 @@ mod tests {
                 title: Some(String::new()),
                 ..Default::default()
             },
+            false,
         )
         .await
         .unwrap_err();
@@ -457,6 +504,7 @@ mod tests {
                 notes: Some(Some("two coats".into())),
                 ..Default::default()
             },
+            false,
         )
         .await
         .unwrap();
@@ -503,6 +551,7 @@ mod tests {
                 appointment_id: Some(None),
                 ..Default::default()
             },
+            false,
         )
         .await
         .unwrap();
@@ -521,6 +570,139 @@ mod tests {
         .await
         .unwrap()
         .id
+    }
+
+    #[tokio::test]
+    async fn a_todo_cannot_be_added_to_or_moved_onto_a_closed_or_cancelled_appointment() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let closed = appointment_id(&db, v, "Brakes").await;
+        let cancelled = appointment_id(&db, v, "Tires").await;
+        let kept = add(&db, v, new_todo("Bring the key", Some(closed)))
+            .await
+            .unwrap();
+        complete(&db, v, kept.id, None).await.unwrap();
+        appointment::close(&db, v, closed).await.unwrap();
+        appointment::cancel(&db, v, cancelled).await.unwrap();
+        let loose = add(&db, v, new_todo("Loose", None)).await.unwrap();
+
+        for (id, ending) in [(closed, "closed"), (cancelled, "cancelled")] {
+            let expected = format!("Appointment {id} is {ending}, so it takes no new work");
+            let err = add(&db, v, new_todo("Late", Some(id))).await.unwrap_err();
+            assert_eq!(err.to_string(), expected);
+            let move_onto = UpdateTodo {
+                appointment_id: Some(Some(id)),
+                ..Default::default()
+            };
+            let err = update_with_done(&db, v, loose.id, move_onto, None)
+                .await
+                .unwrap_err();
+            assert_eq!(err.to_string(), expected);
+        }
+        assert_eq!(row_count::<todo::Entity>(&db).await, 2);
+        assert_eq!(
+            require(&db, v, loose.id).await.unwrap().appointment_id,
+            None
+        );
+
+        // A to-do already on a closed appointment can still be edited.
+        let edit = UpdateTodo {
+            title: Some("Bring both keys".into()),
+            appointment_id: Some(Some(closed)),
+            ..Default::default()
+        };
+        let edited = update_with_done(&db, v, kept.id, edit, None).await.unwrap();
+        assert_eq!(
+            (edited.todo.title.as_str(), edited.todo.appointment_id),
+            ("Bring both keys", Some(closed))
+        );
+    }
+
+    #[tokio::test]
+    async fn un_ticking_a_todo_reopens_a_closed_appointment_and_leaves_a_cancelled_one() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let closed = appointment_id(&db, v, "Brakes").await;
+        let cancelled = appointment_id(&db, v, "Tires").await;
+        let on_closed = add(&db, v, new_todo("Key", Some(closed))).await.unwrap();
+        let on_cancelled = add(&db, v, new_todo("Locks", Some(cancelled)))
+            .await
+            .unwrap();
+        for t in [&on_closed, &on_cancelled] {
+            complete(&db, v, t.id, None).await.unwrap();
+        }
+        appointment::close(&db, v, closed).await.unwrap();
+        appointment::cancel(&db, v, cancelled).await.unwrap();
+
+        let back = reopen(&db, v, on_closed.id).await.unwrap();
+        assert_eq!(
+            (back.todo.done_on, back.todo.appointment_id),
+            (None, Some(closed))
+        );
+        assert_eq!(
+            (back.reopened_appointment_id, back.left_appointment_id),
+            (Some(closed), None)
+        );
+        let a = appointment::require(&db, v, closed).await.unwrap();
+        assert!(appointment::accepts_work(&a));
+
+        // Naming the cancelled appointment while un-ticking asks for open work
+        // on it, which is refused.
+        let keep_on = UpdateTodo {
+            appointment_id: Some(Some(cancelled)),
+            ..Default::default()
+        };
+        let err = update_with_done(&db, v, on_cancelled.id, keep_on, Some(false))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("is cancelled"), "{err}");
+
+        let back = update_with_done(&db, v, on_cancelled.id, UpdateTodo::default(), Some(false))
+            .await
+            .unwrap();
+        assert_eq!((back.todo.done_on, back.todo.appointment_id), (None, None));
+        assert_eq!(
+            (back.reopened_appointment_id, back.left_appointment_id),
+            (None, Some(cancelled))
+        );
+        let a = appointment::require(&db, v, cancelled).await.unwrap();
+        assert!(!appointment::accepts_work(&a));
+    }
+
+    #[tokio::test]
+    async fn adding_todos_while_the_appointment_closes_never_fails_on_the_lock() {
+        let (_dir, pools) = race_pools().await;
+        let first = &pools[0];
+        let v = VehicleFixture::new().insert_id(first).await;
+        let a = appointment_id(first, v, "Brakes").await;
+
+        let mut adds = tokio::task::JoinSet::new();
+        for (i, db) in pools.iter().chain(pools.iter()).cloned().enumerate() {
+            adds.spawn(async move { add(&db, v, new_todo(&format!("To-do {i}"), Some(a))).await });
+        }
+        let closer = pools[1].clone();
+        let closed = tokio::spawn(async move { appointment::close(&closer, v, a).await });
+        let results = adds.join_all().await;
+        // Either the close came first and refused the adds after it, or an add
+        // came first and the close refused to leave it open on the appointment.
+        match closed.await.unwrap() {
+            Ok(_) => assert!(
+                list(first, v, Some(Some(a)), false)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            ),
+            Err(DomainError::BadRequest(m)) if m.contains("still has open work") => {}
+            Err(other) => panic!("unexpected close result {other:?}"),
+        }
+
+        for result in &results {
+            match result {
+                Ok(_) => {}
+                Err(DomainError::BadRequest(m)) if m.contains("is closed") => {}
+                other => panic!("unexpected result {other:?}"),
+            }
+        }
     }
 
     #[tokio::test]
@@ -769,6 +951,7 @@ mod tests {
                 appointment_id: Some(Some(theirs.id)),
                 ..Default::default()
             },
+            false,
         )
         .await
         .unwrap_err();
@@ -786,7 +969,7 @@ mod tests {
         let v2 = VehicleFixture::new().name("Other").insert_id(&db).await;
         let t = add(&db, v1, new_todo("mine", None)).await.unwrap();
         let missing = delete(&db, v1, 99_999).await.unwrap_err().to_string();
-        let wrong = update(&db, v2, t.id, UpdateTodo::default())
+        let wrong = update(&db, v2, t.id, UpdateTodo::default(), false)
             .await
             .unwrap_err();
         assert!(matches!(wrong, DomainError::NotFound(_)));

@@ -4150,7 +4150,7 @@ mod tests {
             assert_eq!(
                 err.to_string(),
                 format!(
-                    "Appointment {} is cancelled; reopen it first",
+                    "Appointment {} is cancelled, so it takes no new work",
                     f.appointment
                 )
             );

@@ -819,6 +819,104 @@ async fn get_checklist_rejects_both_ids_and_reads_the_unscheduled_view() {
 }
 
 #[tokio::test]
+async fn a_closed_or_cancelled_appointment_takes_no_new_todos_until_reopened() {
+    let t = connect().await;
+    let v = add_vehicle(&t, "GTI").await;
+    let closed = plan_appointment(&t, v, "Brakes").await;
+    let cancelled = plan_appointment(&t, v, "Tires").await;
+    for (appt, status) in [(closed, "done"), (cancelled, "cancelled")] {
+        t.call(
+            "update_appointment",
+            json!({ "vehicle_id": v, "appointment_id": appt, "status": status }),
+        )
+        .await;
+    }
+    let loose = id(&t
+        .call("add_todo", json!({ "vehicle_id": v, "title": "Loose" }))
+        .await);
+
+    for (appt, ending) in [(closed, "closed"), (cancelled, "cancelled")] {
+        let expected = format!("Appointment {appt} is {ending}, so it takes no new work");
+        let err = t
+            .call_err(
+                "add_todo",
+                json!({ "vehicle_id": v, "title": "Late", "appointment_id": appt }),
+            )
+            .await;
+        assert!(err.contains(&expected), "got: {err}");
+        let err = t
+            .call_err(
+                "update_todo",
+                json!({ "vehicle_id": v, "todo_id": loose, "appointment_id": appt }),
+            )
+            .await;
+        assert!(err.contains(&expected), "got: {err}");
+    }
+
+    t.call(
+        "update_appointment",
+        json!({ "vehicle_id": v, "appointment_id": closed, "status": "planning" }),
+    )
+    .await;
+    let added = t
+        .call(
+            "add_todo",
+            json!({ "vehicle_id": v, "title": "Late", "appointment_id": closed }),
+        )
+        .await;
+    assert_eq!(added["appointment_id"], closed);
+}
+
+#[tokio::test]
+async fn closing_waits_for_open_work_and_un_ticking_reopens_the_appointment() {
+    let t = connect().await;
+    let v = add_vehicle(&t, "GTI").await;
+    let appt = plan_appointment(&t, v, "Brakes").await;
+    let todo = id(&t
+        .call(
+            "add_todo",
+            json!({ "vehicle_id": v, "title": "Bring the key", "appointment_id": appt }),
+        )
+        .await);
+    let close = json!({ "vehicle_id": v, "appointment_id": appt, "status": "done" });
+
+    let err = t.call_err("update_appointment", close.clone()).await;
+    assert!(
+        err.contains(&format!("to-do {todo} \"Bring the key\"")),
+        "got: {err}"
+    );
+    t.call(
+        "update_todo",
+        json!({ "vehicle_id": v, "todo_id": todo, "done": true }),
+    )
+    .await;
+    let closed = t.call("update_appointment", close).await;
+    assert_eq!(closed["appointment"]["status"], "done");
+
+    let back = t
+        .call(
+            "update_todo",
+            json!({ "vehicle_id": v, "todo_id": todo, "done": false }),
+        )
+        .await;
+    assert_eq!(back["appointment_id"], appt);
+    assert_eq!(back["reopened_appointment_id"], appt);
+    assert!(back.get("left_appointment_id").is_none(), "got: {back}");
+    let listed = t
+        .call("list_appointments", json!({ "vehicle_id": v }))
+        .await;
+    assert_eq!(listed[0]["status"], "planning", "got: {listed}");
+
+    let cancelled = t
+        .call(
+            "update_appointment",
+            json!({ "vehicle_id": v, "appointment_id": appt, "status": "cancelled" }),
+        )
+        .await;
+    assert_eq!(cancelled["unassigned_todo_ids"], json!([todo]));
+}
+
+#[tokio::test]
 async fn todos_tick_untick_move_and_delete() {
     let t = connect().await;
     let v = add_vehicle(&t, "GTI").await;

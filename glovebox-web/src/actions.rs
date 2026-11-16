@@ -523,8 +523,16 @@ pub async fn post_todo_undo(
     Path((vid, id)): Path<(i32, i32)>,
     Form(form): Form<BackOnly>,
 ) -> Response {
-    let post = Post::new(&state, vid, form.back.as_deref(), Target::Todo, "todo_undo");
+    let mut post = Post::new(&state, vid, form.back.as_deref(), Target::Todo, "todo_undo");
     let result = todo::reopen(&state.db, vid, id).await;
+    // A to-do that comes off a cancelled appointment shows only on the home
+    // page.
+    if result
+        .as_ref()
+        .is_ok_and(|r| r.left_appointment_id.is_some())
+    {
+        "/".clone_into(&mut post.back);
+    }
     post.answer(result).await
 }
 

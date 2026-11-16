@@ -110,6 +110,8 @@ struct AppointmentPage {
     todos_open: Count,
     job_count: Count,
     steps: Steps,
+    /// False for a closed or cancelled appointment, which shows no add form.
+    takes_todos: bool,
     todo_form: TodoForm,
     jobs: Vec<JobCard>,
 }
@@ -435,10 +437,11 @@ async fn appointment_page(
     };
     let jobs: Vec<JobCard> = list.jobs.iter().map(|j| job_card(j, &ctx)).collect();
     let grouped = steps(&list, &jobs, &ctx);
+    let takes_todos = appointment::accepts_work(&summary.appointment);
 
     let top_error = top_error(failure, |target| match target {
         Target::Need(need_id) => jobs.iter().any(|j| j.needs.iter().any(|n| n.id == need_id)),
-        Target::TodoAdd => true,
+        Target::TodoAdd => takes_todos,
         Target::Todo => false,
     });
 
@@ -469,6 +472,7 @@ async fn appointment_page(
         todos_open: Count::new(summary.todos_open, "to-do open", "to-dos open"),
         job_count: Count::new(summary.jobs, "job", "jobs"),
         steps: grouped,
+        takes_todos,
         todo_form: TodoForm::after(failure),
         jobs,
         back,

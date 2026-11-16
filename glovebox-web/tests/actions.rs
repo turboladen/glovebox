@@ -36,6 +36,21 @@ struct World {
 }
 
 impl World {
+    // Closes the appointment once its one job is done, since an appointment
+    // with open work refuses to close.
+    async fn close_appointment(&self) {
+        test_support::set_job_status(
+            &self.db,
+            self.vehicle,
+            self.job,
+            glovebox_shared::entities::work_item::JobStatus::Done,
+        )
+        .await;
+        appointment::close(&self.db, self.vehicle, self.appointment)
+            .await
+            .unwrap();
+    }
+
     async fn new() -> Self {
         let db = db().await;
         let vehicle = VehicleFixture::new().name("Golf GTI").insert_id(&db).await;
@@ -936,6 +951,40 @@ async fn todo_add_tick_undo_delete() {
 }
 
 #[tokio::test]
+async fn a_closed_appointment_shows_no_add_form_and_refuses_a_new_todo() {
+    let w = World::new().await;
+    let back = w.page_path();
+    let appointment = w.appointment.to_string();
+    w.close_appointment().await;
+
+    let (_, body) = w.get(&back).await;
+    assert!(!body.contains(">Add a to-do<"), "{body}");
+
+    let (status, _, body) = w
+        .post(
+            &format!("/vehicles/{}/todos", w.vehicle),
+            &[
+                ("title", "Bring wheel locks"),
+                ("appointment_id", &appointment),
+                ("back", &back),
+            ],
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let expected = format!(
+        r#"<div class="page notice"><p class="error" role="alert"><b>Not saved.</b> Appointment {} is closed, so it takes no new work</p><p>The to-do you typed: Bring wheel locks. Add it from the home page.</p></div>"#,
+        w.appointment
+    );
+    assert!(body.contains(&expected), "{body}");
+    assert!(
+        todo::list(&w.db, w.vehicle, None, true)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn home_todos_can_be_added_ticked_and_deleted() {
     let w = World::new().await;
     let add_path = format!("/vehicles/{}/todos", w.vehicle);
@@ -1084,11 +1133,38 @@ async fn an_undo_onto_a_closed_appointment_returns_home() {
     .id;
     let path = |action: &str| format!("/vehicles/{}/todos/{id}/{action}", w.vehicle);
     w.post(&path("delete"), &[("back", &back)]).await;
-    appointment::close(&w.db, w.vehicle, w.appointment)
+    w.close_appointment().await;
+
+    let (status, location, _) = w.post(&path("restore"), &[("back", &back)]).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(location.as_deref(), Some("/"));
+    let (_, home) = w.get("/").await;
+    assert!(home.contains("Bring wheel locks"), "{home}");
+}
+
+#[tokio::test]
+async fn un_ticking_a_todo_on_a_cancelled_appointment_returns_home() {
+    let w = World::new().await;
+    let back = w.page_path();
+    let id = todo::add(
+        &w.db,
+        w.vehicle,
+        NewTodo {
+            title: "Bring wheel locks".into(),
+            appointment_id: Some(w.appointment),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    todo::complete(&w.db, w.vehicle, id, None).await.unwrap();
+    appointment::cancel(&w.db, w.vehicle, w.appointment)
         .await
         .unwrap();
 
-    let (status, location, _) = w.post(&path("restore"), &[("back", &back)]).await;
+    let undo = format!("/vehicles/{}/todos/{id}/done/undo", w.vehicle);
+    let (status, location, _) = w.post(&undo, &[("back", &back)]).await;
     assert_eq!(status, StatusCode::SEE_OTHER);
     assert_eq!(location.as_deref(), Some("/"));
     let (_, home) = w.get("/").await;

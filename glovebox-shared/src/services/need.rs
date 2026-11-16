@@ -20,6 +20,7 @@ use crate::{
             UpdateOption,
         },
         part::NewPart,
+        todo::NewTodo,
     },
 };
 
@@ -1071,7 +1072,16 @@ pub async fn return_part<C: ConnectionTrait + TransactionTrait>(
         )
         .await?;
     }
-    let todo = super::todo::insert(&txn, vehicle_id, appointment_id, title).await?;
+    let todo = super::todo::insert(
+        &txn,
+        vehicle_id,
+        NewTodo {
+            title,
+            appointment_id,
+            ..Default::default()
+        },
+    )
+    .await?;
     let need = require(&txn, vehicle_id, need_id).await?;
     txn.commit().await?;
     let stage = stage(&need, None);
