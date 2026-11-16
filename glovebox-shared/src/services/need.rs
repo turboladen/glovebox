@@ -61,16 +61,9 @@ impl Stage {
         self == Stage::Received
     }
 
-    /// Whether the need's part can be sent back; [`return_part`] refuses
-    /// every other stage.
-    #[must_use]
-    pub fn can_return(self) -> bool {
-        self.has_unfitted_part()
-    }
-
     /// Whether the need has a linked part that is not yet on the car: it is
     /// `ordered` or `received`. Only such a part can be returned or have its
-    /// arrival date changed.
+    /// arrival date set or cleared through the need.
     #[must_use]
     pub fn has_unfitted_part(self) -> bool {
         matches!(self, Stage::Ordered | Stage::Received)
@@ -759,8 +752,8 @@ pub async fn mark_ordered<C: ConnectionTrait + TransactionTrait>(
 ///
 /// # Errors
 /// `NotFound` for a need or part that is not the vehicle's; `BadRequest` for
-/// a returned part, a part linked to another need or a need that already has
-/// a part.
+/// a returned part, a part linked to another need, a need that already has
+/// another part, or an arrival date given for an installed or replaced part.
 pub async fn link_part<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -790,6 +783,9 @@ pub async fn link_part<C: ConnectionTrait + TransactionTrait>(
         return Err(DomainError::BadRequest(format!(
             "Need {need_id} already has part {current} linked; unlink it first"
         )));
+    }
+    if received_on.is_some() {
+        require_unfitted(need_id, stage(&need, Some(&found)), "be marked received")?;
     }
     let supplier = need.supplied_by.is_none().then_some(found.supplied_by);
     let txn = db.begin().await?;
@@ -2506,6 +2502,13 @@ mod tests {
         let db = test_db().await;
         let (vehicle_id, job_id) = seed_job(&db).await;
         let (n, _) = ordered_need(&db, vehicle_id, job_id).await;
+        // Clearing a date the part does not have is allowed.
+        let cleared = clear_received(&db, vehicle_id, n.id).await.unwrap();
+        assert_eq!(cleared.stage, Stage::Ordered);
+        mark_received(&db, vehicle_id, n.id, Some(date("2026-11-06")))
+            .await
+            .unwrap();
+        // A received part takes a new date.
         let got = mark_received(&db, vehicle_id, n.id, Some(date("2026-11-07")))
             .await
             .unwrap();
@@ -2737,22 +2740,18 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
         let (m, _) = ordered_need(&db, vehicle_id, job_id).await;
-        let part_id = m.part_id.unwrap();
-        crate::services::part::update(
-            &db,
-            vehicle_id,
-            part_id,
-            crate::inputs::part::UpdatePart {
-                status: Some(PartStatus::Installed),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
+        fit(&db, vehicle_id, m.part_id.unwrap(), PartStatus::Installed).await;
         let err = return_part(&db, vehicle_id, m.id, input())
             .await
             .unwrap_err();
         assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "Need {} is installed; only an ordered or received part can be returned",
+                m.id
+            )
+        );
         assert_eq!(row_count::<todo::Entity>(&db).await, 0);
     }
 
@@ -2921,11 +2920,13 @@ mod tests {
         .unwrap();
     }
 
-    async fn received_on(db: &DatabaseConnection, part_id: i32) -> Option<chrono::NaiveDate> {
-        part::Entity::find_by_id(part_id)
-            .one(db)
+    async fn received_on(
+        db: &DatabaseConnection,
+        vehicle_id: i32,
+        part_id: i32,
+    ) -> Option<chrono::NaiveDate> {
+        crate::services::part::get(db, vehicle_id, part_id)
             .await
-            .unwrap()
             .unwrap()
             .received_on
     }
@@ -2966,76 +2967,24 @@ mod tests {
             );
             assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
             assert_eq!(
-                received_on(&db, part_id).await,
+                received_on(&db, vehicle_id, part_id).await,
                 Some(date("2026-11-01")),
                 "{status:?}"
             );
         }
     }
 
-    #[tokio::test]
-    async fn an_ordered_or_received_part_can_be_dated_and_cleared() {
-        let db = test_db().await;
-        let (vehicle_id, job_id) = seed_job(&db).await;
-        let (n, _) = ordered_need(&db, vehicle_id, job_id).await;
-        let part_id = n.part_id.unwrap();
-
-        let cleared = clear_received(&db, vehicle_id, n.id).await.unwrap();
-        assert_eq!(cleared.stage, Stage::Ordered);
-        let first = mark_received(&db, vehicle_id, n.id, Some(date("2026-11-01")))
-            .await
-            .unwrap();
-        assert_eq!(first.stage, Stage::Received);
-        let redated = mark_received(&db, vehicle_id, n.id, Some(date("2026-11-02")))
-            .await
-            .unwrap();
-        assert_eq!(redated.stage, Stage::Received);
-        assert_eq!(received_on(&db, part_id).await, Some(date("2026-11-02")));
-        let cleared = clear_received(&db, vehicle_id, n.id).await.unwrap();
-        assert_eq!(cleared.stage, Stage::Ordered);
-        assert_eq!(received_on(&db, part_id).await, None);
-    }
-
-    #[tokio::test]
-    async fn returning_an_installed_part_names_the_stage() {
-        let db = test_db().await;
-        let (vehicle_id, job_id) = seed_job(&db).await;
-        let (n, _) = ordered_need(&db, vehicle_id, job_id).await;
-        fit(&db, vehicle_id, n.part_id.unwrap(), PartStatus::Installed).await;
-        let err = return_part(
-            &db,
-            vehicle_id,
-            n.id,
-            ReturnInput {
-                reason: "x".into(),
-                option_was_wrong: false,
-            },
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            format!(
-                "Need {} is installed; only an ordered or received part can be returned",
-                n.id
-            )
-        );
-    }
-
     #[test]
     fn has_unfitted_part_holds_for_ordered_and_received_only() {
-        let all = [
-            Stage::Undecided,
-            Stage::ToOrder,
-            Stage::ShopSupplies,
-            Stage::Ordered,
-            Stage::Received,
-            Stage::Installed,
-        ];
-        for s in all {
-            let expected = matches!(s, Stage::Ordered | Stage::Received);
+        for (s, expected) in [
+            (Stage::Undecided, false),
+            (Stage::ToOrder, false),
+            (Stage::ShopSupplies, false),
+            (Stage::Ordered, true),
+            (Stage::Received, true),
+            (Stage::Installed, false),
+        ] {
             assert_eq!(s.has_unfitted_part(), expected, "{s:?}");
-            assert_eq!(s.can_return(), expected, "{s:?}");
         }
     }
 
@@ -3146,9 +3095,53 @@ mod tests {
             .unwrap();
         assert_eq!(got.part.received_on, None);
         assert_eq!(got.stage, Stage::Ordered);
-        let got = set_arrival(&db, vehicle_id, n.id, ArrivalChange::Received(None))
+    }
+
+    #[tokio::test]
+    async fn linking_with_a_date_refuses_a_fitted_part() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        // The need's own part, installed, linked again with a new date.
+        let (n, _) = ordered_need(&db, vehicle_id, job_id).await;
+        let own = n.part_id.unwrap();
+        mark_received(&db, vehicle_id, n.id, Some(date("2026-11-01")))
             .await
             .unwrap();
-        assert_eq!(got.part.received_on, Some(crate::services::today()));
+        fit(&db, vehicle_id, own, PartStatus::Installed).await;
+        let err = link_part(&db, vehicle_id, n.id, own, Some(date("2026-11-03")))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "Need {} is installed; only an ordered or received part can be marked received",
+                n.id
+            )
+        );
+        assert_eq!(
+            received_on(&db, vehicle_id, own).await,
+            Some(date("2026-11-01"))
+        );
+
+        // A replaced part linked to no need, linked to a bare need with a date.
+        let bare = add(&db, vehicle_id, job_id, need("Fluid")).await.unwrap();
+        let loose = new_part(&db, vehicle_id, "Fluid").await;
+        fit(&db, vehicle_id, loose.id, PartStatus::Replaced).await;
+        let err = link_part(&db, vehicle_id, bare.id, loose.id, Some(date("2026-11-03")))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
+        assert_eq!(received_on(&db, vehicle_id, loose.id).await, None);
+        assert_eq!(
+            require(&db, vehicle_id, bare.id).await.unwrap().part_id,
+            None
+        );
+
+        // Without a date, a fitted part still links and reads installed.
+        let linked = link_part(&db, vehicle_id, bare.id, loose.id, None)
+            .await
+            .unwrap();
+        assert_eq!(linked.stage, Stage::Installed);
+        assert_eq!(linked.part.received_on, None);
     }
 }

@@ -680,7 +680,7 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
         can_order: stage.can_order(),
         can_receive: stage.can_receive(),
         can_unreceive: stage.can_unreceive(),
-        can_return: stage.can_return(),
+        can_return: stage.has_unfitted_part(),
         error: failure.map(|f| FormError {
             form: f.form,
             message: f.message.clone(),

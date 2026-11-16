@@ -417,6 +417,20 @@ async fn a_replaced_part_reads_installed_and_cannot_be_returned_or_redated() {
              date cleared"
         )
     );
+    let err = t
+        .call_err(
+            "link_part_to_need",
+            json!({
+                "vehicle_id": v, "need_id": rotors, "part_id": part, "received_on": "2026-11-03"
+            }),
+        )
+        .await;
+    assert_eq!(
+        err,
+        format!(
+            "Need {rotors} is installed; only an ordered or received part can be marked received"
+        )
+    );
     let parts = t.call("list_parts", json!({ "vehicle_id": v })).await;
     assert_eq!(parts[0]["received_on"], "2026-11-01", "got: {parts}");
 }
@@ -485,7 +499,6 @@ async fn existing_part_links_without_reentry() {
             json!({ "vehicle_id": v, "need_id": need, "part_id": null, "received_on": "2026-11-02" }),
         )
         .await;
-    assert!(err.contains("received_on"), "got: {err}");
     assert_eq!(err, "received_on: cannot be given when unlinking a part");
 
     // The key is required: leaving it out is not the same as unlinking.
@@ -495,7 +508,6 @@ async fn existing_part_links_without_reentry() {
             json!({ "vehicle_id": v, "need_id": need }),
         )
         .await;
-    assert!(err.contains("part_id"), "got: {err}");
     assert_eq!(
         err,
         "part_id: is required: name a part to link, or unlink the need's current part"
@@ -780,10 +792,6 @@ async fn get_checklist_rejects_both_ids_and_reads_the_unscheduled_view() {
             json!({ "vehicle_id": v, "appointment_id": appt, "work_item_id": job }),
         )
         .await;
-    assert!(
-        err.contains("appointment_id") && err.contains("work_item_id"),
-        "got: {err}"
-    );
     assert_eq!(
         err,
         "appointment_id: pass either appointment_id or work_item_id, not both"

@@ -1926,19 +1926,20 @@ mod tests {
         assert_eq!(json(&got)["jobs"][0]["job"]["id"], loose);
 
         let other = VehicleFixture::new().name("Other").insert_id(&db).await;
-        for (scope, missing) in [
+        for (scope, missing, id) in [
             (
                 ChecklistScope::Appointment(a),
                 ChecklistScope::Appointment(99_999),
+                a,
             ),
-            (ChecklistScope::Job(loose), ChecklistScope::Job(99_999)),
+            (
+                ChecklistScope::Job(loose),
+                ChecklistScope::Job(99_999),
+                loose,
+            ),
         ] {
             let wrong = get(&db, other, scope).await.unwrap_err().to_string();
             let absent = get(&db, v, missing).await.unwrap_err().to_string();
-            let id = match scope {
-                ChecklistScope::Appointment(id) | ChecklistScope::Job(id) => id,
-                ChecklistScope::Unscheduled => unreachable!(),
-            };
             assert_eq!(
                 wrong.replace(&id.to_string(), "N"),
                 absent.replace("99999", "N"),

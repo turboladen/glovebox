@@ -577,7 +577,8 @@ pub struct CorrectPartInput {
     #[schemars(with = "Option<String>")]
     pub order_ref: Option<Option<String>>,
     /// The date the part arrived, `YYYY-MM-DD`. For a part linked to a need,
-    /// prefer `mark_need_received`.
+    /// prefer `mark_need_received`. This corrects the stored date whatever
+    /// the part's status, installed and replaced included.
     ///
     /// Send `null` to clear it; omit the key to leave it unchanged.
     #[serde(default, deserialize_with = "nullable")]

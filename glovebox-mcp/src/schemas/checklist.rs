@@ -465,7 +465,7 @@ pub struct LinkPartToNeedInput {
     pub part_id: Option<Option<i32>>,
     /// The day the part arrived, `YYYY-MM-DD`, when linking a part that is
     /// already in hand. Ask the owner once and set it here. Not allowed when
-    /// `part_id` is `null`.
+    /// `part_id` is `null`, or for a part that is installed or replaced.
     pub received_on: Option<String>,
 }
 
