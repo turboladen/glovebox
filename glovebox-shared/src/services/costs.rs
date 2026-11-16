@@ -1109,17 +1109,27 @@ mod tests {
         .await;
         insert_part(&db, vid, Supplier::Owner, 3_000, Some("2026-10-05"), None).await;
 
-        let s = summary(&db, vid).await.unwrap();
-        assert_eq!(s.total_cost_cents, 12_000 + 90_000 + 50_000 + 3_000);
-        assert_eq!(s.covered_cents, 80_000 + 45_000);
-        assert_eq!(s.out_of_pocket_cents, 12_000 + 10_000 + 5_000 + 3_000);
-        assert_eq!(s.out_of_pocket_cents + s.covered_cents, s.total_cost_cents);
-        let months_total: i64 = s.monthly_costs.iter().map(|m| m.total_cents).sum();
-        let months_covered: i64 = s.monthly_costs.iter().map(|m| m.covered_cents).sum();
-        let months_oop: i64 = s.monthly_costs.iter().map(|m| m.out_of_pocket_cents).sum();
-        assert_eq!(months_total + s.unbucketed_parts_cents, s.total_cost_cents);
-        assert_eq!(months_covered, s.covered_cents);
-        assert_eq!(months_oop, s.out_of_pocket_cents);
-        assert_eq!(s.covered_work_count, 4);
+        let totals = summary(&db, vid).await.unwrap();
+        assert_eq!(totals.total_cost_cents, 12_000 + 90_000 + 50_000 + 3_000);
+        assert_eq!(totals.covered_cents, 80_000 + 45_000);
+        assert_eq!(totals.out_of_pocket_cents, 12_000 + 10_000 + 5_000 + 3_000);
+        assert_eq!(
+            totals.out_of_pocket_cents + totals.covered_cents,
+            totals.total_cost_cents
+        );
+        let months_total: i64 = totals.monthly_costs.iter().map(|m| m.total_cents).sum();
+        let months_covered: i64 = totals.monthly_costs.iter().map(|m| m.covered_cents).sum();
+        let months_oop: i64 = totals
+            .monthly_costs
+            .iter()
+            .map(|m| m.out_of_pocket_cents)
+            .sum();
+        assert_eq!(
+            months_total + totals.unbucketed_parts_cents,
+            totals.total_cost_cents
+        );
+        assert_eq!(months_covered, totals.covered_cents);
+        assert_eq!(months_oop, totals.out_of_pocket_cents);
+        assert_eq!(totals.covered_work_count, 4);
     }
 }

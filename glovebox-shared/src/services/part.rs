@@ -531,12 +531,8 @@ mod tests {
                 .unwrap_err(),
             DomainError::NotFound(_)
         ));
-        assert!(
-            list(&db, owner, PartFilter::default())
-                .await
-                .unwrap()
-                .is_empty()
-        );
+        let left = list(&db, owner, PartFilter::default()).await.unwrap();
+        assert!(left.is_empty(), "{left:?}");
     }
 
     #[tokio::test]

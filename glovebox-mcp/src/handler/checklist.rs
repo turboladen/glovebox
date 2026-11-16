@@ -321,8 +321,8 @@ impl GloveboxMcp {
                        cancelled. The need goes back to `to_order`, or to `undecided` with the \
                        chosen option rejected for the same reason when `option_was_wrong` is \
                        true, so set it when the option itself was the mistake (the wrong size or \
-                       fitment) and leave it false for a damaged or mis-shipped part. The reason \
-                       the owner gave for choosing a rejected option stays on it as \
+                       fitment) and leave it false for a damaged or wrongly shipped part. The \
+                       reason the owner gave for choosing a rejected option stays on it as \
                        `chosen_reason` until the option is chosen again. To undo a return made by \
                        mistake, three calls are needed: `correct_part` with status `purchased`, \
                        `link_part_to_need` to link the part again, and `delete_todo` for the \

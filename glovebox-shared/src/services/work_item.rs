@@ -932,7 +932,8 @@ mod tests {
             create(&db, vid, item("   ")).await.unwrap_err(),
             DomainError::Invalid { field, .. } if field == "title"
         ));
-        assert!(list(&db, vid, true).await.unwrap().is_empty());
+        let left = list(&db, vid, true).await.unwrap();
+        assert!(left.is_empty(), "{left:?}");
     }
 
     #[tokio::test]
@@ -965,7 +966,8 @@ mod tests {
             .unwrap_err(),
             DomainError::NotFound(_)
         ));
-        assert!(list(&db, owner, true).await.unwrap().is_empty());
+        let left = list(&db, owner, true).await.unwrap();
+        assert!(left.is_empty(), "{left:?}");
     }
 
     #[tokio::test]
@@ -987,7 +989,8 @@ mod tests {
             .unwrap_err(),
             DomainError::NotFound(_)
         ));
-        assert!(list(&db, owner, true).await.unwrap().is_empty());
+        let left = list(&db, owner, true).await.unwrap();
+        assert!(left.is_empty(), "{left:?}");
     }
 
     #[tokio::test]
@@ -1009,7 +1012,8 @@ mod tests {
             .unwrap_err(),
             DomainError::NotFound(_)
         ));
-        assert!(list(&db, owner, true).await.unwrap().is_empty());
+        let left = list(&db, owner, true).await.unwrap();
+        assert!(left.is_empty(), "{left:?}");
     }
 
     #[tokio::test]

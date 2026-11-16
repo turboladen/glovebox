@@ -525,6 +525,7 @@ mod tests {
         let rems = reminders::calculate_reminders(&db, vid).await.unwrap();
         let f = forecast_from(&db, vid, &rems).await.unwrap();
         assert!(!f.lines.is_empty(), "rate {}", rems.avg_daily_miles);
+        #[allow(clippy::cast_possible_truncation)] // a day count in the thousands
         let first_in_days = (6_000.0 / rems.avg_daily_miles).ceil() as i64;
         assert_eq!(
             f.lines[0].when,

@@ -365,7 +365,8 @@ mod tests {
         let conn = db::connect(path.to_str().unwrap()).await.unwrap();
 
         daily(&conn, &path, at(13, 9)).await;
-        assert!(list(&path).is_empty());
+        let left = list(&path);
+        assert!(left.is_empty(), "{left:?}");
 
         VehicleFixture::new().insert(&conn).await;
         daily(&conn, &path, at(13, 9)).await;

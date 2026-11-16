@@ -1591,7 +1591,7 @@ mod tests {
             .all(&db)
             .await
             .unwrap();
-        assert!(links.is_empty());
+        assert!(links.is_empty(), "{links:?}");
     }
 
     #[tokio::test]
@@ -1640,7 +1640,7 @@ mod tests {
             .all(&db)
             .await
             .unwrap();
-        assert!(links.is_empty());
+        assert!(links.is_empty(), "{links:?}");
         // The incident itself survives.
         assert!(
             incident::Entity::find_by_id(inc.id)
@@ -1769,14 +1769,12 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(
-            mileage_log::Entity::find()
-                .filter(mileage_log::Column::ServiceRecordId.eq(created.record.id))
-                .all(&db)
-                .await
-                .unwrap()
-                .is_empty()
-        );
+        let left = mileage_log::Entity::find()
+            .filter(mileage_log::Column::ServiceRecordId.eq(created.record.id))
+            .all(&db)
+            .await
+            .unwrap();
+        assert!(left.is_empty(), "{left:?}");
 
         // Setting mileage again (no log left) creates a fresh linked auto-log.
         update(
@@ -2285,7 +2283,11 @@ mod tests {
             format!("Schedule item {foreign_item} not found")
         );
         let fetched = get(&db, owner, mine.record.id).await.unwrap();
-        assert!(fetched.schedule_item_ids.is_empty());
+        assert!(
+            fetched.schedule_item_ids.is_empty(),
+            "{:?}",
+            fetched.schedule_item_ids
+        );
     }
 
     #[test]
@@ -3059,10 +3061,10 @@ mod tests {
         let work_item_after = work_item_svc::get(&db, v, work_item.id).await.unwrap();
         assert_eq!(work_item_after.status, JobStatus::Planned);
         assert_eq!(work_item_after.completed_service_id, None);
-        let incident_a_after = incident::get(&db, v, incident_a).await.unwrap();
-        let incident_b_after = incident::get(&db, v, incident_b).await.unwrap();
-        assert!(!incident_a_after.incident.resolved);
-        assert!(incident_b_after.incident.resolved);
+        let reopened_incident = incident::get(&db, v, incident_a).await.unwrap();
+        let kept_incident = incident::get(&db, v, incident_b).await.unwrap();
+        assert!(!reopened_incident.incident.resolved);
+        assert!(kept_incident.incident.resolved);
         assert_eq!(recall::list(&db, v).await.unwrap()[0].status, "open");
     }
 
@@ -3201,7 +3203,11 @@ mod tests {
         let out = delete(&db, v, svc, UNDO).await.unwrap();
 
         assert_eq!(out.reopened_recall_ids, vec![finding_id]);
-        assert!(out.kept_done_recall_ids.is_empty());
+        assert!(
+            out.kept_done_recall_ids.is_empty(),
+            "{:?}",
+            out.kept_done_recall_ids
+        );
         assert_eq!(recall_status(&db, v).await, vec![("open".into(), None)]);
     }
 
@@ -3217,7 +3223,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(out.kept_done_recall_ids, vec![finding_id]);
-        assert!(out.reopened_recall_ids.is_empty());
+        assert!(
+            out.reopened_recall_ids.is_empty(),
+            "{:?}",
+            out.reopened_recall_ids
+        );
         assert_eq!(recall_status(&db, v).await, vec![("done".into(), None)]);
     }
 
@@ -3243,7 +3253,11 @@ mod tests {
 
         let out = delete(&db, v, first, UNDO).await.unwrap();
 
-        assert!(out.reopened_recall_ids.is_empty());
+        assert!(
+            out.reopened_recall_ids.is_empty(),
+            "{:?}",
+            out.reopened_recall_ids
+        );
         assert_eq!(out.still_done_elsewhere_recall_ids, vec![finding_id]);
         assert_eq!(
             recall_status(&db, v).await,
@@ -3844,8 +3858,16 @@ mod tests {
                 .unwrap();
 
             // An appointment that read done from its jobs had no date to clear.
-            assert!(deleted.reopened_appointment_ids.is_empty());
-            assert!(deleted.unassigned_job_ids.is_empty());
+            assert!(
+                deleted.reopened_appointment_ids.is_empty(),
+                "{:?}",
+                deleted.reopened_appointment_ids
+            );
+            assert!(
+                deleted.unassigned_job_ids.is_empty(),
+                "{:?}",
+                deleted.unassigned_job_ids
+            );
             assert_eq!(appointment_status(&f).await, "planning");
             assert_eq!(job_status(&f, job_id).await, JobStatus::Planned);
             assert_eq!(stage_of(&f, need_id).await, need::Stage::Received);
@@ -3871,7 +3893,11 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(deleted.reopened_appointment_ids, vec![f.appointment]);
-            assert!(deleted.unassigned_job_ids.is_empty());
+            assert!(
+                deleted.unassigned_job_ids.is_empty(),
+                "{:?}",
+                deleted.unassigned_job_ids
+            );
 
             let summary = appointment::summary(&f.db, f.vehicle, f.appointment)
                 .await
@@ -3908,7 +3934,11 @@ mod tests {
             let deleted = delete(&f.db, f.vehicle, created.record.id, UNDO)
                 .await
                 .unwrap();
-            assert!(deleted.reopened_appointment_ids.is_empty());
+            assert!(
+                deleted.reopened_appointment_ids.is_empty(),
+                "{:?}",
+                deleted.reopened_appointment_ids
+            );
             assert_eq!(deleted.unassigned_job_ids, vec![job_id]);
 
             assert_eq!(appointment_status(&f).await, "cancelled");
@@ -4079,7 +4109,11 @@ mod tests {
             .unwrap();
 
             assert_eq!(deleted.kept_part_ids, vec![part_id]);
-            assert!(deleted.reopened_appointment_ids.is_empty());
+            assert!(
+                deleted.reopened_appointment_ids.is_empty(),
+                "{:?}",
+                deleted.reopened_appointment_ids
+            );
             let p = part_svc::get(&f.db, f.vehicle, part_id).await.unwrap();
             assert_eq!(
                 (p.status, p.installed_service_id, p.installed_date),

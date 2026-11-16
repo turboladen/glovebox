@@ -205,13 +205,8 @@ mod tests {
             DomainError::NotFound(_)
         ));
         // Nothing was written for the bogus vehicle id.
-        assert!(
-            vehicle_attribute::Entity::find()
-                .all(&db)
-                .await
-                .unwrap()
-                .is_empty()
-        );
+        let left = vehicle_attribute::Entity::find().all(&db).await.unwrap();
+        assert!(left.is_empty(), "{left:?}");
     }
 
     #[tokio::test]

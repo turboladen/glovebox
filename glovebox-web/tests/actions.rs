@@ -976,11 +976,9 @@ async fn a_closed_appointment_shows_no_add_form_and_refuses_a_new_todo() {
         w.appointment
     );
     assert!(body.contains(&expected), "{body}");
-    assert!(
-        todo::list(&w.db, w.vehicle, None, true)
-            .await
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        todo::list(&w.db, w.vehicle, None, true).await.unwrap(),
+        [] as [glovebox_shared::entities::todo::Model; 0]
     );
 }
 
@@ -1271,11 +1269,9 @@ async fn a_delete_undo_belongs_to_its_vehicle() {
         body.contains("That delete can no longer be undone."),
         "{body}"
     );
-    assert!(
-        todo::list(&w.db, other, None, true)
-            .await
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        todo::list(&w.db, other, None, true).await.unwrap(),
+        [] as [glovebox_shared::entities::todo::Model; 0]
     );
 
     let (_, home) = w.get(&format!("/?done=deleted-todo-{id}")).await;

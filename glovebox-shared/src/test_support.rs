@@ -178,7 +178,7 @@ impl VehicleFixture {
     }
 
     #[must_use]
-    pub fn purchase_date(mut self, v: impl ToString) -> Self {
+    pub fn purchase_date(mut self, v: &(impl ToString + ?Sized)) -> Self {
         self.purchase_date = Some(date(&v.to_string()));
         self
     }
@@ -190,7 +190,7 @@ impl VehicleFixture {
     }
 
     #[must_use]
-    pub fn warranty_expires_on(mut self, v: impl ToString) -> Self {
+    pub fn warranty_expires_on(mut self, v: &(impl ToString + ?Sized)) -> Self {
         self.warranty_expires_on = Some(date(&v.to_string()));
         self
     }

@@ -1,0 +1,16 @@
+# typos-cli config, enforced by CI's `typos` job and `just typos`.
+
+[default]
+# US English everywhere, enforced rather than remembered: agents drift toward
+# UK spellings ("behaviour", "serialise", "judgement") unprompted.
+locale = "en-us"
+
+[files]
+# The generated tracker mirror's issue ids and hashes false-positive freely.
+extend-exclude = [".beads/", "data/", "target/"]
+
+[default.extend-words]
+# Car and page vocabulary, not typos:
+gti = "gti" # the VW Golf GTI
+pn = "pn" # "part number", a CSS class in the design mockups
+fewd = "fewd" # a sibling project, named in a resource-URI test

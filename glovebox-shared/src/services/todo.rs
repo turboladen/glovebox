@@ -374,9 +374,10 @@ mod tests {
         assert_eq!(today.done_on, Some(crate::services::today()));
         let reopened = reopen(&db, v, t.id).await.unwrap();
         assert!(reopened.todo.done_on.is_none());
-        assert!(list(&db, v, None, false).await.unwrap().len() == 1);
+        assert_eq!(list(&db, v, None, false).await.unwrap().len(), 1);
         complete(&db, v, t.id, None).await.unwrap();
-        assert!(list(&db, v, None, false).await.unwrap().is_empty());
+        let left = list(&db, v, None, false).await.unwrap();
+        assert!(left.is_empty(), "{left:?}");
         assert_eq!(list(&db, v, None, true).await.unwrap().len(), 1);
     }
 
@@ -664,18 +665,16 @@ mod tests {
         for (i, db) in pools.iter().chain(pools.iter()).cloned().enumerate() {
             adds.spawn(async move { add(&db, v, new_todo(&format!("To-do {i}"), Some(a))).await });
         }
-        let closer = pools[1].clone();
-        let closed = tokio::spawn(async move { appointment::close(&closer, v, a).await });
+        let closing_pool = pools[1].clone();
+        let closed = tokio::spawn(async move { appointment::close(&closing_pool, v, a).await });
         let results = adds.join_all().await;
         // Either the close came first and refused the adds after it, or an add
         // came first and the close refused to leave it open on the appointment.
         match closed.await.unwrap() {
-            Ok(_) => assert!(
-                list(first, v, Some(Some(a)), false)
-                    .await
-                    .unwrap()
-                    .is_empty()
-            ),
+            Ok(_) => {
+                let left = list(first, v, Some(Some(a)), false).await.unwrap();
+                assert!(left.is_empty(), "{left:?}");
+            }
             Err(DomainError::BadRequest(m)) if m.contains("still has open work") => {}
             Err(other) => panic!("unexpected close result {other:?}"),
         }
@@ -969,6 +968,7 @@ mod tests {
                 missing.replace("99999", "N")
             );
         }
-        assert!(list(&db, v2, None, true).await.unwrap().is_empty());
+        let left = list(&db, v2, None, true).await.unwrap();
+        assert!(left.is_empty(), "{left:?}");
     }
 }

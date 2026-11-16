@@ -656,7 +656,7 @@ mod tests {
     ) -> i32 {
         let mut fixture = VehicleFixture::new();
         if let Some(on) = warranty_expires_on {
-            fixture = fixture.warranty_expires_on(on);
+            fixture = fixture.warranty_expires_on(&on);
         }
         if let Some(miles) = warranty_expires_miles {
             fixture = fixture.warranty_expires_miles(miles);
@@ -884,6 +884,7 @@ mod tests {
             .await
     }
 
+    #[allow(clippy::cast_precision_loss)] // a day count in the thousands
     fn days_since_purchase() -> f64 {
         (crate::services::today() - day("2017-03-05")).num_days() as f64
     }

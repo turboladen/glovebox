@@ -482,8 +482,7 @@ async fn a_vocabulary_argument_lists_its_values_in_the_schema() {
         let input = tools
             .iter()
             .find(|t| t["name"] == tool)
-            .map(|t| &t["inputSchema"])
-            .unwrap_or_else(|| panic!("{tool} must be listed"));
+            .map_or_else(|| panic!("{tool} must be listed"), |t| &t["inputSchema"]);
         let schema = path.split('.').try_fold(input, step_into);
         assert_eq!(
             schema.and_then(listed_values).as_ref(),
