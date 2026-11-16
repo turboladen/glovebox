@@ -1056,6 +1056,32 @@ async fn clearing_a_decision_with_the_prefilled_reason_clears_it() {
     assert!(!after.contains("Quiet."), "{after}");
 }
 
+// A page rendered before the form carried the stored reason posts none, and
+// its reason box counts as unedited.
+#[tokio::test]
+async fn a_decision_post_without_the_stored_reason_reads_the_box_as_unedited() {
+    let w = World::new().await;
+    let back = w.page_path();
+    let good = w.good.to_string();
+    w.post(
+        &w.need_path("decision"),
+        &[("option_id", &good), ("reason", "Quiet."), ("back", &back)],
+    )
+    .await;
+
+    let (status, _, body) = w
+        .post(
+            &w.need_path("decision"),
+            &[("option_id", ""), ("reason", "Quiet."), ("back", &back)],
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::SEE_OTHER, "{body}");
+    let stored = need::require(&w.db, w.vehicle, w.need).await.unwrap();
+    assert_eq!(stored.chosen_option_id, None);
+    assert_eq!(stored.decision_reason, None);
+}
+
 #[tokio::test]
 async fn a_reason_typed_with_no_choice_on_an_owner_need_is_refused() {
     let w = World::new().await;
@@ -1081,7 +1107,11 @@ async fn a_reason_typed_with_no_choice_on_an_owner_need_is_refused() {
 
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     assert!(
-        body.contains("needs a chosen option unless the shop supplies the need"),
+        body.contains("Reason: needs a chosen option unless the shop supplies the need"),
+        "{body}"
+    );
+    assert!(
+        body.contains(r#"<textarea name="reason" aria-invalid="true">"#),
         "{body}"
     );
     let stored = need::require(&w.db, w.vehicle, w.need).await.unwrap();

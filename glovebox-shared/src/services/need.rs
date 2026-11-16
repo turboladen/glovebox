@@ -193,7 +193,23 @@ pub async fn add(
 /// # Errors
 /// `NotFound` for a need that is not the vehicle's; `Invalid` as for [`add`],
 /// and on `decision_reason` for a reason the need cannot hold.
-pub async fn update(
+pub async fn update<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    need_id: i32,
+    input: UpdateNeed,
+) -> DomainResult<job_need::Model> {
+    let txn = db.begin().await?;
+    claim(&txn, need_id).await?;
+    let updated = apply_update(&txn, vehicle_id, need_id, input).await?;
+    txn.commit().await?;
+    Ok(updated)
+}
+
+// The body of `update`, run inside a transaction that has claimed the need,
+// so the checks below read the committed row and nothing changes it before
+// the write.
+async fn apply_update(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     need_id: i32,
@@ -213,7 +229,9 @@ pub async fn update(
     }
     // Only a real change of supplier clears, because the web supplier form
     // resends the stored supplier with every approach edit.
-    let leaves_shop_unchosen = existing.supplied_by == Some(Supplier::Shop)
+    let clears_reason = input.decision_reason.is_none()
+        && existing.decision_reason.is_some()
+        && existing.supplied_by == Some(Supplier::Shop)
         && supplied_by != existing.supplied_by
         && existing.chosen_option_id.is_none();
     let mut active: job_need::ActiveModel = existing.into();
@@ -229,34 +247,16 @@ pub async fn update(
     if let Some(value) = input.approach {
         active.approach = Set(value);
     }
-    let clears_reason = input.decision_reason.is_none() && leaves_shop_unchosen;
     if let Some(value) = input.decision_reason {
         active.decision_reason = Set(value);
-    }
-    let now = super::now();
-    active.updated_at = Set(now);
-    let mut updated = active.update(db).await?;
-    if clears_reason {
+    } else if clears_reason {
         // A reason with no chosen option explains why the shop supplies the
         // need, so it goes when the shop stops supplying it, the way a
-        // cleared choice takes its reason along. The write is conditional so
-        // that a choice made since the read keeps its reason.
-        let cleared = job_need::Entity::update_many()
-            .col_expr(
-                job_need::Column::DecisionReason,
-                Expr::value(None::<String>),
-            )
-            .col_expr(job_need::Column::UpdatedAt, Expr::value(now))
-            .filter(job_need::Column::Id.eq(need_id))
-            .filter(job_need::Column::ChosenOptionId.is_null())
-            .exec(db)
-            .await?
-            .rows_affected;
-        if cleared > 0 {
-            updated.decision_reason = None;
-        }
+        // cleared choice takes its reason along.
+        active.decision_reason = Set(None);
     }
-    Ok(updated)
+    active.updated_at = Set(super::now());
+    Ok(active.update(db).await?)
 }
 
 // Whether a need with this supplier and chosen option may hold a decision
@@ -269,8 +269,8 @@ fn holds_reason(supplied_by: Option<Supplier>, chosen_option_id: Option<i32>) ->
 fn reason_refused() -> DomainError {
     DomainError::invalid(
         "decision_reason",
-        "needs a chosen option unless the shop supplies the need; choose an option with it, set \
-         supplied_by to shop, or send null",
+        "needs a chosen option unless the shop supplies the need; choose an option first, or \
+         clear the reason",
     )
 }
 
@@ -481,7 +481,7 @@ pub async fn update_with_choice<C: ConnectionTrait + TransactionTrait>(
     let reason = input.decision_reason.take();
     let txn = db.begin().await?;
     claim(&txn, need_id).await?;
-    let updated = update(&txn, vehicle_id, need_id, input).await?;
+    let updated = apply_update(&txn, vehicle_id, need_id, input).await?;
     if option_id.is_none() && reason.is_none() && updated.chosen_option_id.is_none() {
         txn.commit().await?;
         return Ok(updated);
@@ -496,15 +496,16 @@ pub async fn update_with_choice<C: ConnectionTrait + TransactionTrait>(
 /// option stamps `decided_on` with today's date, choosing the option already
 /// chosen keeps the date and replaces only the reason, and clearing removes
 /// the date. Choosing an option clears the `chosen_reason` and `chosen_on` it
-/// kept from an earlier choice.
+/// kept from an earlier choice. The writes are atomic only inside a
+/// transaction the caller holds, as [`update_with_choice`] does.
 ///
 /// # Errors
 /// `NotFound` for a need that is not the vehicle's; `BadRequest` for an
 /// option of another need, one marked `does_not_fit` or a rejected one;
 /// `Invalid` on `decision_reason` for a reason sent without an option, unless
 /// the shop supplies the need.
-pub async fn decide<C: ConnectionTrait + TransactionTrait>(
-    db: &C,
+pub async fn decide(
+    db: &impl ConnectionTrait,
     vehicle_id: i32,
     need_id: i32,
     option_id: Option<i32>,
@@ -548,16 +549,10 @@ pub async fn decide<C: ConnectionTrait + TransactionTrait>(
     active.decision_reason = Set(reason);
     active.decided_on = Set(decided_on);
     active.updated_at = Set(super::now());
-    let Some(option_id) = option_id.filter(|_| has_history) else {
-        return Ok(active.update(db).await?);
-    };
-    // The history clear and the choice commit together, so a failed choice
-    // never erases the history of the option it named.
-    let txn = db.begin().await?;
-    clear_choice_history(&txn, option_id).await?;
-    let decided = active.update(&txn).await?;
-    txn.commit().await?;
-    Ok(decided)
+    if let Some(option_id) = option_id.filter(|_| has_history) {
+        clear_choice_history(db, option_id).await?;
+    }
+    Ok(active.update(db).await?)
 }
 
 // Clears the reason and date an option kept from an earlier choice, which
@@ -579,13 +574,16 @@ async fn clear_choice_history(db: &impl ConnectionTrait, option_id: i32) -> Doma
     Ok(())
 }
 
-// Takes SQLite's write lock for the transaction by making its first
-// statement a write, so a commit by the other program between this
-// transaction's first read and its first write cannot fail it with a busy
-// snapshot. `mark_ordered` claims its need the same way.
+// Writes the need row without changing it, as `appointment::claim` does for
+// an appointment. A write as the transaction's first statement takes SQLite's
+// write lock, so a commit by the other program between this transaction's
+// first read and its first write cannot fail it with a busy snapshot.
 async fn claim(txn: &impl ConnectionTrait, need_id: i32) -> DomainResult<()> {
     job_need::Entity::update_many()
-        .col_expr(job_need::Column::UpdatedAt, Expr::value(super::now()))
+        .col_expr(
+            job_need::Column::UpdatedAt,
+            Expr::col(job_need::Column::UpdatedAt),
+        )
         .filter(job_need::Column::Id.eq(need_id))
         .exec(txn)
         .await?;
@@ -1782,7 +1780,7 @@ mod tests {
         assert_eq!(kept.decision_reason.as_deref(), Some("OEM only"));
     }
 
-    // An older owner need with a reason and no choice is not refused when the
+    // An owner need that holds a reason and no choice is not refused when the
     // choice it does not have is cleared.
     #[tokio::test]
     async fn clearing_no_choice_on_an_owner_need_changes_nothing() {
@@ -2168,6 +2166,31 @@ mod tests {
         assert!(other.chosen_on.is_some());
     }
 
+    // A choice made without a reason leaves the option a date and no reason.
+    #[tokio::test]
+    async fn choosing_again_clears_a_date_kept_without_a_reason() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let n = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
+        let o = add_option(&db, vehicle_id, n.id, option("Pads"))
+            .await
+            .unwrap();
+        decide(&db, vehicle_id, n.id, Some(o.id), None)
+            .await
+            .unwrap();
+        reject(&db, vehicle_id, o.id, Some("wrong size")).await;
+        let kept = option_row(&db, o.id).await;
+        assert_eq!(kept.chosen_reason, None);
+        assert!(kept.chosen_on.is_some());
+
+        reject(&db, vehicle_id, o.id, None).await;
+        decide(&db, vehicle_id, n.id, Some(o.id), None)
+            .await
+            .unwrap();
+
+        assert_eq!(option_row(&db, o.id).await.chosen_on, None);
+    }
+
     #[tokio::test]
     async fn an_ordinary_choice_leaves_the_option_untouched() {
         let db = test_db().await;
@@ -2236,8 +2259,8 @@ mod tests {
         assert_eq!(row_count::<part::Entity>(&pools[0]).await, 1);
     }
 
-    // Decisions racing on one file from several pools all succeed: each
-    // transaction takes the write lock before it reads.
+    // Decisions and need edits racing on one file from several pools all
+    // succeed: each transaction takes the write lock before it reads.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn concurrent_decisions_on_one_need_all_succeed() {
         let dir = tempfile::tempdir().unwrap();
@@ -2258,7 +2281,11 @@ mod tests {
                     decision_reason: Some(Some(format!("reason {i}"))),
                     ..Default::default()
                 };
-                update_with_choice(&db, vehicle_id, n.id, input, Some(Some(o.id))).await
+                if i % 2 == 0 {
+                    update_with_choice(&db, vehicle_id, n.id, input, Some(Some(o.id))).await
+                } else {
+                    update(&db, vehicle_id, n.id, input).await
+                }
             });
         }
         let results = decisions.join_all().await;
