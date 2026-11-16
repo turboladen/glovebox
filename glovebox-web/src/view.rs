@@ -53,7 +53,7 @@ impl Failure {
     }
 }
 
-/// The undo strip shown after a tick or a "received".
+/// The undo strip shown after a tick, a "received" or a delete.
 pub struct Banner {
     pub message: String,
     /// Where the undo form posts.

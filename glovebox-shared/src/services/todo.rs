@@ -1,6 +1,6 @@
 //! To-dos: small tasks for a vehicle, optionally tied to an appointment.
 
-use sea_orm::*;
+use sea_orm::{sea_query::Expr, *};
 
 use crate::{
     entities::todo,
@@ -38,7 +38,7 @@ pub async fn require(
         .filter(todo::Column::VehicleId.eq(vehicle_id))
         .one(db)
         .await?
-        .ok_or_else(|| DomainError::NotFound(format!("To-do {id} not found")))
+        .ok_or_else(|| not_found(id))
 }
 
 /// Adds a to-do to a vehicle, optionally on one of its appointments.
@@ -114,6 +114,7 @@ pub async fn update_with_done<C: ConnectionTrait + TransactionTrait>(
     done: Option<bool>,
 ) -> DomainResult<todo::Model> {
     let txn = db.begin().await?;
+    claim(&txn, id).await?;
     let edited = update(&txn, vehicle_id, id, input).await?;
     let result = match done {
         Some(true) if edited.done_on.is_some() => edited,
@@ -123,6 +124,17 @@ pub async fn update_with_done<C: ConnectionTrait + TransactionTrait>(
     };
     txn.commit().await?;
     Ok(result)
+}
+
+// Writes the to-do row without changing it, as `appointment::claim` does for
+// an appointment, so a transaction takes the write lock before it reads.
+async fn claim(txn: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
+    todo::Entity::update_many()
+        .col_expr(todo::Column::UpdatedAt, Expr::col(todo::Column::UpdatedAt))
+        .filter(todo::Column::Id.eq(id))
+        .exec(txn)
+        .await?;
+    Ok(())
 }
 
 /// Marks a to-do done on `on`, or today when `on` is absent.
@@ -159,13 +171,95 @@ pub async fn reopen(
     Ok(active.update(db).await?)
 }
 
-/// Deletes a to-do.
+/// Deletes a to-do and returns the row exactly as this call deleted it, which
+/// [`restore`] can put back.
 ///
 /// # Errors
 /// `NotFound` for a to-do that is not the vehicle's.
-pub async fn delete(db: &impl ConnectionTrait, vehicle_id: i32, id: i32) -> DomainResult<()> {
-    require(db, vehicle_id, id).await?.delete(db).await?;
-    Ok(())
+pub async fn delete(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    id: i32,
+) -> DomainResult<todo::Model> {
+    // One statement deletes and returns the row, so the row returned is the
+    // one deleted even when the other program edits or deletes it at once.
+    todo::Entity::delete_many()
+        .filter(todo::Column::Id.eq(id))
+        .filter(todo::Column::VehicleId.eq(vehicle_id))
+        .exec_with_returning(db)
+        .await?
+        .pop()
+        .ok_or_else(|| not_found(id))
+}
+
+/// Puts back to-do `id`, which [`delete`] returned as `deleted`, at its own id
+/// and with its own title, notes, done date and creation stamp, so it lists
+/// where it was. It goes back on its appointment only while that appointment
+/// is open, and on no appointment otherwise. With `deleted` absent, because
+/// the caller no longer holds the row, a to-do that is already back is
+/// returned as it is.
+///
+/// # Errors
+/// `NotFound` for a `deleted` row that is not to-do `id` of the vehicle, or
+/// for a vehicle that is not found; `BadRequest` when `deleted` is absent and
+/// the to-do is not back, or when `deleted` is given and the to-do is already
+/// back.
+pub async fn restore<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    id: i32,
+    deleted: Option<todo::Model>,
+) -> DomainResult<todo::Model> {
+    let Some(deleted) = deleted else {
+        return match require(db, vehicle_id, id).await {
+            Err(DomainError::NotFound(_)) => Err(DomainError::BadRequest(
+                "That delete can no longer be undone.".to_owned(),
+            )),
+            found => found,
+        };
+    };
+    if deleted.vehicle_id != vehicle_id || deleted.id != id {
+        return Err(not_found(id));
+    }
+    super::vehicle::require(db, vehicle_id).await?;
+    let txn = db.begin().await?;
+    // The insert is the transaction's first statement, so it takes the write
+    // lock before anything is read, and a row already at the id makes it
+    // insert nothing instead of failing on the primary key.
+    let mut restored = todo::Model {
+        appointment_id: None,
+        updated_at: super::now(),
+        ..deleted
+    };
+    let row: todo::ActiveModel = restored.clone().into();
+    let inserted = todo::Entity::insert(row.reset_all())
+        .on_conflict_do_nothing()
+        .exec_without_returning(&txn)
+        .await?;
+    if !matches!(inserted, TryInsertResult::Inserted(n) if n > 0) {
+        return Err(DomainError::BadRequest(format!(
+            "To-do {id} is already back on the list."
+        )));
+    }
+    // Appointment ids are never reused and an appointment never changes
+    // vehicle, so the stored id can only name this vehicle's appointment.
+    restored.appointment_id = super::appointment::open_id(&txn, deleted.appointment_id).await?;
+    if restored.appointment_id.is_some() {
+        todo::Entity::update_many()
+            .col_expr(
+                todo::Column::AppointmentId,
+                Expr::value(restored.appointment_id),
+            )
+            .filter(todo::Column::Id.eq(id))
+            .exec(&txn)
+            .await?;
+    }
+    txn.commit().await?;
+    Ok(restored)
+}
+
+fn not_found(id: i32) -> DomainError {
+    DomainError::NotFound(format!("To-do {id} not found"))
 }
 
 /// Lists a vehicle's to-dos, oldest first. `appointment_id` of `None` lists
@@ -222,7 +316,7 @@ mod tests {
             todo::{NewTodo, UpdateTodo},
         },
         services::appointment,
-        test_support::{VehicleFixture, date, test_db},
+        test_support::{VehicleFixture, date, race_pools, row_count, test_db},
     };
 
     fn new_todo(title: &str, appointment_id: Option<i32>) -> NewTodo {
@@ -410,6 +504,217 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(moved.appointment_id, None);
+    }
+
+    async fn appointment_id(db: &DatabaseConnection, v: i32, purpose: &str) -> i32 {
+        appointment::create(
+            db,
+            v,
+            NewAppointment {
+                purpose: purpose.into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .id
+    }
+
+    #[tokio::test]
+    async fn restore_puts_a_deleted_todo_back_as_it_was() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let a = appointment_id(&db, v, "Brakes").await;
+        let first = add(&db, v, new_todo("First", Some(a))).await.unwrap();
+        let t = add(
+            &db,
+            v,
+            NewTodo {
+                title: "Return the pads".into(),
+                notes: Some("RMA 42".into()),
+                appointment_id: Some(a),
+            },
+        )
+        .await
+        .unwrap();
+        let last = add(&db, v, new_todo("Last", Some(a))).await.unwrap();
+        // The web page never deletes a done to-do; ticking first covers the
+        // restore contract for any caller, not a path the page takes.
+        let t = complete(&db, v, t.id, Some(date("2026-11-10")))
+            .await
+            .unwrap();
+        // An older creation stamp than its neighbors' makes it list first, so
+        // the order below shows the stamp survived.
+        let mut older: todo::ActiveModel = t.into();
+        older.created_at = Set("2026-01-01T00:00:00Z".parse().unwrap());
+        let t = older.update(&db).await.unwrap();
+
+        let deleted = delete(&db, v, t.id).await.unwrap();
+        assert_eq!(deleted, t);
+        assert!(require(&db, v, t.id).await.is_err());
+
+        let back = restore(&db, v, t.id, Some(deleted)).await.unwrap();
+        assert_eq!(back.id, t.id);
+        assert_eq!(
+            (
+                back.vehicle_id,
+                back.appointment_id,
+                &back.title,
+                &back.notes,
+                back.done_on,
+                back.created_at
+            ),
+            (v, Some(a), &t.title, &t.notes, t.done_on, t.created_at)
+        );
+        assert!(back.updated_at >= t.updated_at);
+        assert_eq!(require(&db, v, t.id).await.unwrap(), back);
+        let ids = list(&db, v, Some(Some(a)), true)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|t| t.id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec![t.id, first.id, last.id]);
+
+        let newer = add(&db, v, new_todo("Newer", None)).await.unwrap();
+        assert!(newer.id > last.id, "{} after {}", newer.id, last.id);
+    }
+
+    #[tokio::test]
+    async fn restore_leaves_a_closed_cancelled_or_deleted_appointment_off() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        for ending in ["closed", "cancelled", "deleted"] {
+            let a = appointment_id(&db, v, ending).await;
+            let t = add(&db, v, new_todo(ending, Some(a))).await.unwrap();
+            let deleted = delete(&db, v, t.id).await.unwrap();
+            match ending {
+                "closed" => drop(appointment::close(&db, v, a).await.unwrap()),
+                "cancelled" => drop(appointment::cancel(&db, v, a).await.unwrap()),
+                _ => appointment::delete(&db, v, a).await.unwrap(),
+            }
+            let back = restore(&db, v, t.id, Some(deleted)).await.unwrap();
+            assert_eq!((back.id, back.appointment_id), (t.id, None), "{ending}");
+            assert_eq!(require(&db, v, t.id).await.unwrap().appointment_id, None);
+        }
+    }
+
+    #[tokio::test]
+    async fn restore_reads_a_wrong_vehicle_todo_as_missing() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let other = VehicleFixture::new().name("Other").insert_id(&db).await;
+        let t = add(&db, v, new_todo("Wash", None)).await.unwrap();
+        let deleted = delete(&db, v, t.id).await.unwrap();
+        let missing = require(&db, other, 99_999).await.unwrap_err();
+        let wrong = restore(&db, other, t.id, Some(deleted.clone()))
+            .await
+            .unwrap_err();
+        assert!(matches!(wrong, DomainError::NotFound(_)));
+        assert_eq!(
+            wrong.to_string().replace(&t.id.to_string(), "N"),
+            missing.to_string().replace("99999", "N")
+        );
+        assert!(require(&db, v, t.id).await.is_err());
+        assert!(require(&db, other, t.id).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn restoring_twice_is_refused_and_changes_nothing() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let t = add(&db, v, new_todo("Wash", None)).await.unwrap();
+        let deleted = delete(&db, v, t.id).await.unwrap();
+        let back = restore(&db, v, t.id, Some(deleted.clone())).await.unwrap();
+        let mut edited = deleted;
+        edited.title = "Changed".into();
+        let err = restore(&db, v, t.id, Some(edited)).await.unwrap_err();
+        assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
+        assert_eq!(
+            err.to_string(),
+            format!("To-do {} is already back on the list.", t.id)
+        );
+        assert_eq!(require(&db, v, t.id).await.unwrap(), back);
+    }
+
+    #[tokio::test]
+    async fn restore_without_the_row_accepts_only_a_todo_already_back() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let t = add(&db, v, new_todo("Wash", None)).await.unwrap();
+        let deleted = delete(&db, v, t.id).await.unwrap();
+
+        let err = restore(&db, v, t.id, None).await.unwrap_err();
+        assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
+        assert_eq!(err.to_string(), "That delete can no longer be undone.");
+        assert!(require(&db, v, t.id).await.is_err());
+
+        let back = restore(&db, v, t.id, Some(deleted)).await.unwrap();
+        assert_eq!(restore(&db, v, t.id, None).await.unwrap(), back);
+    }
+
+    #[tokio::test]
+    async fn restore_refuses_a_row_that_is_not_the_named_todo() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let a = add(&db, v, new_todo("Wash", None)).await.unwrap();
+        let b = add(&db, v, new_todo("Wax", None)).await.unwrap();
+        let deleted = delete(&db, v, a.id).await.unwrap();
+        let err = restore(&db, v, b.id, Some(deleted)).await.unwrap_err();
+        assert!(matches!(err, DomainError::NotFound(_)), "{err:?}");
+        assert!(require(&db, v, a.id).await.is_err());
+    }
+
+    // `restore` and its appointment check rely on SQLite never handing a
+    // deleted id out again, which AUTOINCREMENT guarantees for both tables.
+    #[tokio::test]
+    async fn deleted_todo_and_appointment_ids_are_not_reused() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let t = add(&db, v, new_todo("Wash", None)).await.unwrap();
+        delete(&db, v, t.id).await.unwrap();
+        assert!(add(&db, v, new_todo("Wax", None)).await.unwrap().id > t.id);
+        let a = appointment_id(&db, v, "Brakes").await;
+        appointment::delete(&db, v, a).await.unwrap();
+        assert!(appointment_id(&db, v, "Tires").await > a);
+    }
+
+    #[tokio::test]
+    async fn restore_for_a_deleted_vehicle_is_not_found() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let t = add(&db, v, new_todo("Wash", None)).await.unwrap();
+        let deleted = delete(&db, v, t.id).await.unwrap();
+        crate::services::vehicle::delete_unused(&db, v)
+            .await
+            .unwrap();
+        let err = restore(&db, v, t.id, Some(deleted)).await.unwrap_err();
+        assert!(matches!(err, DomainError::NotFound(_)), "{err:?}");
+        assert_eq!(row_count::<todo::Entity>(&db).await, 0);
+    }
+
+    // Ticks and edits racing on one to-do from several pools all succeed:
+    // each transaction takes the write lock before it reads.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_ticks_and_edits_on_one_todo_all_succeed() {
+        let (_dir, pools) = race_pools().await;
+        let first = &pools[0];
+        let v = VehicleFixture::new().insert_id(first).await;
+        let t = add(first, v, new_todo("Wash", None)).await.unwrap();
+
+        let mut writes = tokio::task::JoinSet::new();
+        for (i, db) in pools.iter().chain(pools.iter()).cloned().enumerate() {
+            writes.spawn(async move {
+                let input = UpdateTodo {
+                    notes: Some(Some(format!("note {i}"))),
+                    ..Default::default()
+                };
+                update_with_done(&db, v, t.id, input, Some(i % 2 == 0)).await
+            });
+        }
+        let results = writes.join_all().await;
+
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
     }
 
     #[tokio::test]

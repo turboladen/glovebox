@@ -3,7 +3,7 @@
 
 use std::{net::Ipv4Addr, path::PathBuf};
 
-use glovebox_web::{AppState, router};
+use glovebox_web::{AppState, DeletedTodo, router};
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
@@ -47,6 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         db_file: environment.overridden_file(),
         env_name: environment.name,
         today: glovebox_shared::services::today,
+        deleted_todo: DeletedTodo::default(),
     };
     axum::serve(listener, router(state)).await?;
     Ok(())

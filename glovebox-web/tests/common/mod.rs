@@ -8,7 +8,7 @@ use axum::{
 };
 use chrono::NaiveDate;
 use glovebox_shared::{db::DatabaseConnection, test_support::test_db};
-use glovebox_web::{AppState, router};
+use glovebox_web::{AppState, DeletedTodo, router};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
@@ -31,6 +31,7 @@ pub fn app(db: DatabaseConnection, env_name: &str) -> Router {
         env_name: env_name.to_owned(),
         db_file: None,
         today,
+        deleted_todo: DeletedTodo::default(),
     })
 }
 
@@ -42,6 +43,7 @@ pub fn app_with_file(db: DatabaseConnection, env_name: &str, file: &str) -> Rout
         env_name: env_name.to_owned(),
         db_file: Some(file.to_owned()),
         today,
+        deleted_todo: DeletedTodo::default(),
     })
 }
 
@@ -103,20 +105,14 @@ pub fn form_post(path: &str, fields: &[(&str, &str)]) -> Request<Body> {
         .unwrap()
 }
 
-/// Loads `path` from the application over `db` and returns the status and
-/// body.
-pub async fn get_page(db: &DatabaseConnection, path: &str) -> (StatusCode, String) {
-    page(app(db.clone(), "test"), get(path)).await
-}
-
-/// Posts `fields` to `path` on the application over `db` and returns the
-/// status, the redirect location if there is one, and the body.
-pub async fn post_form(
-    db: &DatabaseConnection,
+/// Posts `fields` to `path` on `app` and returns the status, the redirect
+/// location if there is one, and the body.
+pub async fn post_to(
+    app: Router,
     path: &str,
     fields: &[(&str, &str)],
 ) -> (StatusCode, Option<String>, String) {
-    let (res, body) = send(app(db.clone(), "test"), form_post(path, fields)).await;
+    let (res, body) = send(app, form_post(path, fields)).await;
     let location = res
         .headers()
         .get("location")

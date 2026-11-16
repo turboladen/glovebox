@@ -539,7 +539,48 @@ pub async fn post_todo_delete(
         form.back.as_deref(),
         Target::Todo,
         "todo_delete",
+    )
+    .undo(format!("deleted-todo-{id}"));
+    let result = match todo::delete(&state.db, vid, id).await {
+        Ok(deleted) => {
+            state.deleted_todo.put(deleted);
+            Ok(())
+        }
+        // A second post of the same delete finds the row gone. While the
+        // first post's undo is held, it answers as the first did.
+        Err(DomainError::NotFound(_)) if state.deleted_todo.get(vid, id).is_some() => Ok(()),
+        Err(e) => Err(e),
+    };
+    post.answer(result).await
+}
+
+pub async fn post_todo_restore(
+    State(state): State<AppState>,
+    Path((vid, id)): Path<(i32, i32)>,
+    Form(form): Form<BackOnly>,
+) -> Response {
+    let mut post = Post::new(
+        &state,
+        vid,
+        form.back.as_deref(),
+        Target::Todo,
+        "todo_restore",
     );
-    let result = todo::delete(&state.db, vid, id).await;
+    let deleted = state.deleted_todo.take(vid, id);
+    let had_appointment = deleted.as_ref().is_some_and(|t| t.appointment_id.is_some());
+    let result = todo::restore(&state.db, vid, id, deleted.clone()).await;
+    match &result {
+        // A to-do whose appointment closed meanwhile comes back on no
+        // appointment, which only the home page lists.
+        Ok(restored) if had_appointment && restored.appointment_id.is_none() => {
+            "/".clone_into(&mut post.back);
+        }
+        Ok(_) => {}
+        Err(_) => {
+            if let Some(deleted) = deleted {
+                state.deleted_todo.put_back(deleted);
+            }
+        }
+    }
     post.answer(result).await
 }
