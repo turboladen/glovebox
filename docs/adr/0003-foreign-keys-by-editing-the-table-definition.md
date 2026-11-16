@@ -42,9 +42,10 @@ and does not rebuild the table**, when the table has dependents that a rebuild w
    count is logged as a warning.
 3. Edits `sqlite_schema` with `PRAGMA writable_schema` on, turns the pragma off whether or not
    the edit worked, and raises `PRAGMA schema_version` so every connection reloads the schema.
+   `migration::schema::edit_definitions` does this step and the comparison in step 4.
 4. Judges the edit by what SQLite reads back (`pragma_foreign_key_list`), and by
-   `PRAGMA integrity_check` and `PRAGMA foreign_key_check` compared with their results before the
-   edit. Any difference returns an error, which rolls the transaction back.
+   `PRAGMA integrity_check` and `PRAGMA foreign_key_check` on the edited table compared with their
+   results before the edit. Any difference returns an error, which rolls the transaction back.
 5. Skips the edit when the keys are already present, so it is safe to run again.
 
 ## Alternatives

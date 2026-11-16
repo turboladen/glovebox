@@ -134,17 +134,21 @@ async fn count_unreadable(
 /// No row is touched and no table is rebuilt.
 async fn remove_defaults<C: ConnectionTrait>(txn: &C) -> Result<(), DbErr> {
     const DEFAULT: &str = " DEFAULT (datetime(''now''))";
-    // The edit touches every table, so the checks cover the whole database,
-    // and a fault that was already there is not this edit's doing.
-    let (before, after) = edit_definitions(txn, &[], async |txn: &C| {
-        let edited = txn
-            .execute_unprepared(&format!(
-                "UPDATE sqlite_schema SET sql = replace(sql, '{DEFAULT}', '') WHERE type = \
-                 'table' AND instr(sql, '{DEFAULT}') > 0"
-            ))
-            .await?;
-        Ok(edited.rows_affected() > 0)
-    })
+    // The edit touches every table, so the checks cover the whole database.
+    edit_definitions(
+        txn,
+        "removing the timestamp defaults",
+        &[],
+        async |txn: &C| {
+            let edited = txn
+                .execute_unprepared(&format!(
+                    "UPDATE sqlite_schema SET sql = replace(sql, '{DEFAULT}', '') WHERE type = \
+                     'table' AND instr(sql, '{DEFAULT}') > 0"
+                ))
+                .await?;
+            Ok(edited.rows_affected() > 0)
+        },
+    )
     .await?;
 
     let left = scalar::<i64>(
@@ -152,11 +156,10 @@ async fn remove_defaults<C: ConnectionTrait>(txn: &C) -> Result<(), DbErr> {
         "SELECT count(*) FROM sqlite_schema WHERE instr(sql, 'datetime(') > 0",
     )
     .await?;
-    if left > 0 || after != before {
+    if left > 0 {
         return Err(DbErr::Migration(format!(
-            "removing the timestamp defaults did not leave the database as expected ({left} \
-             definitions still name datetime(); integrity check and broken foreign keys were \
-             {before:?} and are {after:?}). Nothing was changed."
+            "removing the timestamp defaults left {left} definitions that still name datetime(). \
+             Nothing was changed."
         )));
     }
     Ok(())

@@ -107,20 +107,24 @@ async fn add_foreign_keys<C: ConnectionTrait>(txn: &C) -> Result<(), DbErr> {
     if missing.is_empty() {
         return Ok(());
     }
-    // Only `work_items` changes, so only it is checked, and a fault elsewhere
-    // is not this edit's doing.
-    let (before, after) = edit_definitions(txn, &["work_items"], async |txn: &C| {
-        for (column, parent, _) in &missing {
-            // The comma keeps the edit to a column that carries no clause yet.
-            txn.execute_unprepared(&format!(
-                "UPDATE sqlite_schema SET sql = replace(sql, '\"{column}\" integer,', \
-                 '\"{column}\" integer REFERENCES \"{parent}\" (\"id\") ON DELETE SET NULL,') \
-                 WHERE type = 'table' AND name = 'work_items'"
-            ))
-            .await?;
-        }
-        Ok(true)
-    })
+    // Only `work_items` changes, so only it is checked.
+    edit_definitions(
+        txn,
+        "adding the foreign keys of work_items",
+        &["work_items"],
+        async |txn: &C| {
+            for (column, parent, _) in &missing {
+                // The comma keeps the edit to a column that carries no clause yet.
+                txn.execute_unprepared(&format!(
+                    "UPDATE sqlite_schema SET sql = replace(sql, '\"{column}\" integer,', \
+                     '\"{column}\" integer REFERENCES \"{parent}\" (\"id\") ON DELETE SET NULL,') \
+                     WHERE type = 'table' AND name = 'work_items'"
+                ))
+                .await?;
+            }
+            Ok(true)
+        },
+    )
     .await?;
 
     // The edit is judged by what SQLite reads back, because a definition
@@ -130,11 +134,10 @@ async fn add_foreign_keys<C: ConnectionTrait>(txn: &C) -> Result<(), DbErr> {
         .iter()
         .map(|(column, ..)| *column)
         .collect();
-    if !absent.is_empty() || after != before {
+    if !absent.is_empty() {
         return Err(DbErr::Migration(format!(
-            "adding the foreign keys of work_items did not leave the database as expected (no key \
-             was added for: [{}]; integrity check and broken foreign keys were {before:?} and are \
-             {after:?}). Nothing was changed.",
+            "adding the foreign keys of work_items did not finish: no key was added for: [{}]. \
+             Nothing was changed.",
             absent.join(", ")
         )));
     }

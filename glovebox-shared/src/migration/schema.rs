@@ -99,16 +99,18 @@ pub(super) async fn soundness(
     db: &impl ConnectionTrait,
     tables: &[&str],
 ) -> Result<Soundness, DbErr> {
-    let scopes: Vec<String> = if tables.is_empty() {
-        vec![String::new()]
+    // No table named means the whole database.
+    let scopes: Vec<Option<&str>> = if tables.is_empty() {
+        vec![None]
     } else {
-        tables.iter().map(|t| format!("({t})")).collect()
+        tables.iter().copied().map(Some).collect()
     };
     let mut out = Soundness {
         integrity: Vec::new(),
         broken_links: Vec::new(),
     };
-    for scope in scopes {
+    for table in scopes {
+        let scope = table.map_or_else(String::new, |t| format!("({t})"));
         for row in rows(db, &format!("PRAGMA integrity_check{scope}")).await? {
             out.integrity.push(row.try_get_by_index::<String>(0)?);
         }
@@ -132,13 +134,18 @@ async fn rows(db: &impl ConnectionTrait, sql: &str) -> Result<Vec<sea_orm::Query
 /// a transaction holding the write lock. `edit` runs with
 /// `PRAGMA writable_schema` on and returns whether it changed a definition;
 /// when it did, `schema_version` is raised so every connection reloads the
-/// schema. Returns the soundness of `tables` (the whole database when empty)
-/// before and after, for the caller to compare.
+/// schema. `what` names the change in the error.
+///
+/// # Errors
+/// The error `edit` returns, or `DbErr::Migration` when the soundness of
+/// `tables` (the whole database when empty) differs after the edit. Either
+/// rolls the caller's transaction back once it returns the error.
 pub(super) async fn edit_definitions<C, F>(
     txn: &C,
+    what: &str,
     tables: &[&str],
     edit: F,
-) -> Result<(Soundness, Soundness), DbErr>
+) -> Result<(), DbErr>
 where
     C: ConnectionTrait,
     F: AsyncFnOnce(&C) -> Result<bool, DbErr>,
@@ -156,8 +163,16 @@ where
         txn.execute_unprepared(&format!("PRAGMA schema_version = {}", version + 1))
             .await?;
     }
+    // A fault that was there before the edit is not the edit's doing, so only
+    // a change stops it.
     let after = soundness(txn, tables).await?;
-    Ok((before, after))
+    if after != before {
+        return Err(DbErr::Migration(format!(
+            "{what} changed the database's integrity or foreign-key checks (they were {before:?} \
+             and are {after:?}). Nothing was changed."
+        )));
+    }
+    Ok(())
 }
 
 pub(super) async fn scalar<T: sea_orm::TryGetable>(
@@ -211,18 +226,13 @@ pub(super) mod testing {
 mod tests {
     use sea_orm::ConnectionTrait;
 
-    use super::{soundness, testing::migrated_to};
-    use crate::migration::Migrator;
+    use super::soundness;
 
     // Two jobs name a vehicle that does not exist. The check of `work_items`
     // reports both, and the check of `todos` reports neither.
     #[tokio::test]
     async fn soundness_reports_every_broken_link_of_the_tables_named() {
-        let db = migrated_to(
-            u32::try_from(<Migrator as sea_orm_migration::MigratorTrait>::migrations().len())
-                .unwrap(),
-        )
-        .await;
+        let db = crate::test_support::test_db().await;
         db.execute_unprepared(
             "PRAGMA foreign_keys = OFF;
              INSERT INTO work_items (id, vehicle_id, title, status, created_at, updated_at)
