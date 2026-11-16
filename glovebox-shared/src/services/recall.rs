@@ -399,15 +399,6 @@ pub(crate) async fn link_service(
     Ok(())
 }
 
-/// What happens to the recalls a deleted service performed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RecallsOnDelete {
-    /// Each recall reads `open` again, unless another service also performed it.
-    Reopen,
-    /// Each recall reads `done` with no service, as `recall::set_status` stores `done`.
-    KeepDone,
-}
-
 /// The recalls a deleted service performed, by what became of them.
 #[derive(Debug, Default)]
 pub(crate) struct ReleasedRecalls {
@@ -423,15 +414,15 @@ pub(crate) struct ReleasedRecalls {
 pub(crate) async fn release_from_deleted_service(
     db: &impl ConnectionTrait,
     finding_ids: Vec<i32>,
-    choice: RecallsOnDelete,
+    choice: super::service_record::CompletedWork,
 ) -> DomainResult<ReleasedRecalls> {
     let mut out = ReleasedRecalls::default();
     if finding_ids.is_empty() {
         return Ok(out);
     }
     let shown = match choice {
-        RecallsOnDelete::Reopen => RecallStatus::Open,
-        RecallsOnDelete::KeepDone => RecallStatus::Done,
+        super::service_record::CompletedWork::DidNotHappen => RecallStatus::Open,
+        super::service_record::CompletedWork::DoneAnotherWay => RecallStatus::Done,
     };
     research_finding::Entity::update_many()
         .set(research_finding::ActiveModel {
@@ -442,7 +433,7 @@ pub(crate) async fn release_from_deleted_service(
         .filter(research_finding::Column::Id.is_in(finding_ids.clone()))
         .exec(db)
         .await?;
-    if choice == RecallsOnDelete::KeepDone {
+    if choice == super::service_record::CompletedWork::DoneAnotherWay {
         out.kept_done = finding_ids;
         return Ok(out);
     }

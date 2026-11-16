@@ -213,7 +213,11 @@ cancelled one lets the job go to the unscheduled pool (`appointment::settle_reop
 The `delete_service` and `update_planned_work` replies name the appointment that reopened and the
 jobs that left a cancelled one. Re-recording the service does not close the appointment again.
 Deleting a service, or correcting its `part_ids`, also unlinks from its need every shop-supplied
-part the service stops installing. A need is
+part the service stops installing that goes back to purchased; a part a later service replaced
+keeps its status and its need. `delete_service` refuses a service that recorded work as done
+(jobs, installed parts, resolved incidents, recalls) until `completed_work` says whether that
+work did not happen, which undoes it, or was done another way, which keeps it and drops only the
+invoice. `docs/adr/0005-deleting-a-service-asks-what-happened.md` records why. A need is
 open when `need::counts_as_open` says so (an open stage on a planned job); every open-needs count
 uses it. Rejecting or ruling out a chosen option keeps the need's reason and date on the option as
 `chosen_reason` and `chosen_on` until the option is chosen again, and `past_decisions` lists both
@@ -337,8 +341,11 @@ opens a form and the button that submits it carry the same words. Every date is 
   `UPDATE ... SET updated_at = updated_at`), or a conditional write like `mark_ordered`'s, and the
   reads and checks follow inside the transaction. A transaction that begins with a read holds a
   snapshot, and when the other program commits before the first write, SQLite fails it with a
-  busy-snapshot error at once; the busy timeout does not help. A race test opens several pools on
-  one file (`test_support::race_pools`) and fails when the claim is removed.
+  busy-snapshot error at once; the busy timeout does not help. A claim on a table with an FTS5
+  trigger (vehicles, service records and their lines, incidents and follow-ups, research
+  findings, schedule items, work items) fails the same way, so a transaction that writes such a
+  row opens with `services::begin_write`, which takes the lock with `BEGIN IMMEDIATE`. A race test
+  opens several pools on one file (`test_support::race_pools`) and fails when the claim is removed.
 - **Stamps are set by code, never by the database.** No stamp column has a default. An entity
   fills `created_at` and `updated_at` on insert (`stamp_on_insert!` in `entities/mod.rs`), and
   every update function sets `active.updated_at = Set(services::now())`, because SeaORM
@@ -386,8 +393,9 @@ opens a form and the button that submits it carry the same words. Every date is 
   rebuilt with it, because an older binary cannot read a row that holds the new value. Removing
   or renaming one needs a migration that rewrites the rows, placed after
   `m20261115_000001_vocabulary_values`, whose lists stay as written.
-  `services::recall::RecallStatus` is the one enum no column stores: `set_recall_status` takes
-  it, and the recall service maps it to and from the stored finding status.
+  Two enums are stored in no column: `services::recall::RecallStatus`, which `set_recall_status`
+  takes and the recall service maps to and from the stored finding status, and
+  `services::service_record::CompletedWork`, the answer `delete_service` takes.
   `docs/adr/0004-typed-vocabularies.md` records why.
 - **Migrations**: new migrations go after `m20261115_000001_vocabulary_values`; the
   `new-migration` skill has the templates. Use `Expr::cust()` for expressions inside builder queries; raw

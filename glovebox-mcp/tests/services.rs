@@ -601,6 +601,62 @@ async fn correct_service_changes_the_cost_and_replaces_the_lines() {
 }
 
 #[tokio::test]
+async fn delete_service_done_another_way_keeps_the_incident_and_work_done() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let incident = t
+        .call(
+            "log_incident",
+            json!({ "vehicle_id": v.id, "title": "Squeak", "category": "noise" }),
+        )
+        .await;
+    let work = t
+        .call(
+            "plan_work",
+            json!({ "vehicle_id": v.id, "title": "Fix squeak" }),
+        )
+        .await;
+    let recorded = t
+        .call(
+            "record_service",
+            json!({
+                "vehicle_id": v.id,
+                "service_date": "2026-06-01",
+                "resolved_incident_ids": [incident["id"]],
+                "work_item_ids": [work["id"]]
+            }),
+        )
+        .await;
+    let args = json!({ "vehicle_id": v.id, "service_id": recorded["id"] });
+    let refused = t.call_err("delete_service", args.clone()).await;
+    assert!(
+        refused.contains("\"Fix squeak\"") && refused.contains("\"Squeak\""),
+        "got: {refused}"
+    );
+
+    t.call(
+        "delete_service",
+        json!({ "vehicle_id": v.id, "service_id": recorded["id"], "completed_work": "done_another_way" }),
+    )
+    .await;
+
+    let kept = t
+        .call(
+            "get_incident",
+            json!({ "vehicle_id": v.id, "incident_id": incident["id"] }),
+        )
+        .await;
+    assert_eq!(kept["resolved"], true);
+    let work = t
+        .call(
+            "list_planned_work",
+            json!({ "vehicle_id": v.id, "include_done": true }),
+        )
+        .await;
+    assert_eq!(work["items"][0]["status"], "done", "got: {work}");
+}
+
+#[tokio::test]
 async fn delete_service_reopens_the_incident_and_work_it_closed() {
     let t = connect().await;
     let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
@@ -638,7 +694,7 @@ async fn delete_service_reopens_the_incident_and_work_it_closed() {
     let deleted = t
         .call(
             "delete_service",
-            json!({ "vehicle_id": v.id, "service_id": recorded["id"] }),
+            json!({ "vehicle_id": v.id, "service_id": recorded["id"], "completed_work": "did_not_happen" }),
         )
         .await;
     assert_eq!(deleted["appointments_reopened"], json!([]));
@@ -700,7 +756,7 @@ async fn delete_service_names_the_appointments_it_moves() {
     let deleted = t
         .call(
             "delete_service",
-            json!({ "vehicle_id": v.id, "service_id": recorded["id"] }),
+            json!({ "vehicle_id": v.id, "service_id": recorded["id"], "completed_work": "did_not_happen" }),
         )
         .await;
     assert_eq!(deleted["appointments_reopened"], json!([jobs[0].0]));
@@ -921,7 +977,7 @@ async fn record_service_installs_parts_recorded_earlier() {
     let deleted = t
         .call(
             "delete_service",
-            json!({ "vehicle_id": v.id, "service_id": service["id"] }),
+            json!({ "vehicle_id": v.id, "service_id": service["id"], "completed_work": "did_not_happen" }),
         )
         .await;
     assert_eq!(deleted["kept_part_ids"], json!([pads["id"]]));
@@ -1100,7 +1156,7 @@ async fn malformed_dates_are_refused_naming_the_field() {
 }
 
 #[tokio::test]
-async fn delete_service_asks_what_to_do_with_the_recalls_it_performed() {
+async fn delete_service_asks_what_happened_to_the_recalls_it_performed() {
     let t = connect().await;
     let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
     let recall = common::seed_recall(&t.db, v.id, "24V110000").await;
@@ -1120,7 +1176,7 @@ async fn delete_service_asks_what_to_do_with_the_recalls_it_performed() {
     assert!(refused.contains("24V110000"), "got: {refused}");
     assert!(refused.contains(&recall.to_string()), "got: {refused}");
     assert!(
-        refused.contains("reopen") && refused.contains("keep_done"),
+        refused.contains("did not happen or was done another way"),
         "got: {refused}"
     );
     t.call("get_service", args.clone()).await;
@@ -1128,11 +1184,11 @@ async fn delete_service_asks_what_to_do_with_the_recalls_it_performed() {
     let invalid = t
         .call_err(
             "delete_service",
-            json!({ "vehicle_id": v.id, "service_id": service["id"], "recalls": "ignore" }),
+            json!({ "vehicle_id": v.id, "service_id": service["id"], "completed_work": "ignore" }),
         )
         .await;
     assert!(
-        invalid.contains("reopen") && invalid.contains("keep_done"),
+        invalid.contains("did_not_happen") && invalid.contains("done_another_way"),
         "got: {invalid}"
     );
     t.call("get_service", args.clone()).await;
@@ -1140,7 +1196,7 @@ async fn delete_service_asks_what_to_do_with_the_recalls_it_performed() {
     let deleted = t
         .call(
             "delete_service",
-            json!({ "vehicle_id": v.id, "service_id": service["id"], "recalls": "keep_done" }),
+            json!({ "vehicle_id": v.id, "service_id": service["id"], "completed_work": "done_another_way" }),
         )
         .await;
     assert_eq!(deleted["recalls_kept_done"], json!([recall]));

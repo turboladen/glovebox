@@ -13,7 +13,10 @@ use crate::{
     },
     error::{DomainError, DomainResult},
     inputs::work_item::{NewWorkItem, UpdateWorkItem},
-    services::schedule::{DEFAULT_WARNING_DAYS, DEFAULT_WARNING_MILES},
+    services::{
+        schedule::{DEFAULT_WARNING_DAYS, DEFAULT_WARNING_MILES},
+        service_record::CompletedWork,
+    },
 };
 
 /// Days before a revisit date, and miles before a revisit odometer reading,
@@ -261,31 +264,36 @@ pub(crate) async fn load_completed_by(
     Ok(out)
 }
 
-/// Returns to `planned` every work item a service that is about to be
-/// deleted completed, on the caller's transaction, and settles their
-/// appointments as `appointment::settle_reopened_jobs` describes.
-pub(crate) async fn reopen_completed_by(
+/// Releases the jobs a service that is about to be deleted completed, on the
+/// caller's transaction. After `did_not_happen` they return to `planned`,
+/// which reopens a hand-closed appointment or takes a job off a cancelled one.
+/// After `done_another_way` they stay done with no completing service.
+pub(crate) async fn release_completed(
     db: &impl ConnectionTrait,
-    service_record_id: i32,
+    job_ids: &[i32],
+    completed: CompletedWork,
 ) -> DomainResult<super::appointment::SettledJobs> {
-    let reopened: Vec<i32> = work_item::Entity::find()
-        .filter(work_item::Column::CompletedServiceId.eq(service_record_id))
-        .all(db)
-        .await?
-        .into_iter()
-        .map(|item| item.id)
-        .collect();
+    if job_ids.is_empty() {
+        return Ok(super::appointment::SettledJobs::default());
+    }
+    let status = match completed {
+        CompletedWork::DidNotHappen => Set(JobStatus::Planned),
+        CompletedWork::DoneAnotherWay => NotSet,
+    };
     work_item::Entity::update_many()
         .set(work_item::ActiveModel {
-            status: Set(JobStatus::Planned),
+            status,
             completed_service_id: Set(None),
             updated_at: Set(super::now()),
             ..Default::default()
         })
-        .filter(work_item::Column::Id.is_in(reopened.clone()))
+        .filter(work_item::Column::Id.is_in(job_ids.to_vec()))
         .exec(db)
         .await?;
-    super::appointment::settle_reopened_jobs(db, &reopened).await
+    if completed == CompletedWork::DoneAnotherWay {
+        return Ok(super::appointment::SettledJobs::default());
+    }
+    super::appointment::settle_reopened_jobs(db, job_ids).await
 }
 
 pub async fn get(

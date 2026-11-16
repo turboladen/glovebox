@@ -439,31 +439,10 @@ pub struct DeleteServiceInput {
     pub vehicle_id: i32,
     /// Service record id, from `list_services` or `summarize_recent_activity`.
     pub service_id: i32,
-    /// What to do with the recalls the service performed: `reopen` or `keep_done`.
-    ///
-    /// Needed only when the service performed recalls. Ask the owner which they want; never
-    /// choose on your own.
+    /// What happened to the work this service recorded as done: `did_not_happen` or
+    /// `done_another_way`. Needed only when the service recorded work as done; ask the owner.
     #[serde(default)]
-    pub recalls: Option<DeleteRecallsChoice>,
-}
-
-/// The owner's choice for the recalls a deleted service performed.
-#[derive(Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum DeleteRecallsChoice {
-    /// The recalls read open again.
-    Reopen,
-    /// The recalls stay done, with no service attached.
-    KeepDone,
-}
-
-impl From<DeleteRecallsChoice> for glovebox_shared::services::service_record::RecallsOnDelete {
-    fn from(choice: DeleteRecallsChoice) -> Self {
-        match choice {
-            DeleteRecallsChoice::Reopen => Self::Reopen,
-            DeleteRecallsChoice::KeepDone => Self::KeepDone,
-        }
-    }
+    pub completed_work: Option<glovebox_shared::services::service_record::CompletedWork>,
 }
 
 #[derive(Deserialize, JsonSchema)]

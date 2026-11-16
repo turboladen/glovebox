@@ -315,7 +315,7 @@ mod tests {
             .await
             .unwrap();
 
-        svc_svc::delete(&db, vid, created.record.id, None)
+        svc_svc::delete(&db, vid, created.record.id, svc_svc::UNDO)
             .await
             .unwrap();
 

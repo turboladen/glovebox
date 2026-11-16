@@ -162,26 +162,32 @@ impl GloveboxMcp {
     #[tool(
         name = "delete_service",
         description = "Permanently delete a service record, for one that was filed by mistake or \
-                       against the wrong car. If the service performed recalls, this tool refuses \
-                       and lists them until you pass `recalls`: ask the owner whether those \
-                       recalls should be reopened (`\"reopen\"`) or kept as done \
-                       (`\"keep_done\"`), and never choose on your own. The result lists \
-                       `recalls_reopened`, `recalls_kept_done`, and \
-                       `recalls_still_done_elsewhere` for reopened recalls that stay done because \
-                       another service performed them too. Deleting also reopens what else it \
-                       closed: an incident it fixed goes back to unresolved unless another \
-                       service also fixed it, and to-dos it completed return to planned. Its \
-                       schedule links, line items and odometer reading are removed. Parts it \
-                       installed are kept, reverted to purchased with their install details \
-                       cleared, and the result lists their ids in `kept_part_ids`: when re-filing \
-                       the invoice, attach them with `record_service`'s `part_ids`; otherwise \
-                       remove them with `delete_part`. A kept part the shop supplied is unlinked \
-                       from its need, so re-filing the invoice can name the need again. If its \
-                       appointment was closed by hand, it opens again and the result lists it in \
-                       `appointments_reopened`; re-filing the invoice does not close it again, so \
-                       offer `update_appointment` with `status: \"done\"` afterwards. A job it \
-                       completed on a cancelled appointment goes back to the unscheduled jobs and \
-                       is listed in `jobs_unassigned`. To change a record rather than remove it, \
+                       against the wrong car. When the service recorded work as done (jobs it \
+                       completed, parts it installed, incidents it resolved, recalls it \
+                       performed), this tool refuses and names each item until you pass \
+                       `completed_work`. Ask the owner what happened and never choose on your \
+                       own: `did_not_happen` when the work was never done on this invoice, or \
+                       `done_another_way` when it was done but has no invoice to file (the owner \
+                       did it, or the paperwork is lost). When the owner has the invoice that did \
+                       the work, choose `did_not_happen` and then record that invoice with the \
+                       same jobs, parts and schedule items, since only a recorded service keeps a \
+                       reminder's baseline. After `did_not_happen`, the jobs return to planned, \
+                       the incidents go back to unresolved unless another service also fixed \
+                       them, the recalls read open (`recalls_reopened`, or \
+                       `recalls_still_done_elsewhere` when another service performed them too), \
+                       and installed parts go back to purchased with their install details \
+                       cleared; a part a later service replaced stays replaced. A hand-closed \
+                       appointment of a reopened job opens again (`appointments_reopened`; \
+                       re-filing does not close it, so offer `update_appointment` with `status: \
+                       \"done\"` afterwards), and a job on a cancelled appointment goes back to \
+                       the unscheduled jobs (`jobs_unassigned`). After `done_another_way` that \
+                       work stays done (`recalls_kept_done`) and only the invoice goes. Either \
+                       way the service's schedule links, line items and odometer reading are \
+                       removed, so its schedule items fall back to an earlier service for their \
+                       reminders, and its parts are kept and listed in `kept_part_ids`: when \
+                       re-filing the invoice, attach the ones that read purchased with \
+                       `record_service`'s `part_ids` (never one that reads replaced); otherwise \
+                       remove them with `delete_part`. To change a record rather than remove it, \
                        use `correct_service`."
     )]
     async fn delete_service(
@@ -190,25 +196,20 @@ impl GloveboxMcp {
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "delete_service");
         domain_result(
-            service_record::delete(
-                &*self.db,
-                p.vehicle_id,
-                p.service_id,
-                p.recalls.map(Into::into),
-            )
-            .await
-            .map(|out| {
-                serde_json::json!({
-                    "deleted": "service",
-                    "id": p.service_id,
-                    "kept_part_ids": out.kept_part_ids,
-                    "recalls_reopened": out.reopened_recall_ids,
-                    "recalls_still_done_elsewhere": out.still_done_elsewhere_recall_ids,
-                    "recalls_kept_done": out.kept_done_recall_ids,
-                    "appointments_reopened": out.reopened_appointment_ids,
-                    "jobs_unassigned": out.unassigned_job_ids,
-                })
-            }),
+            service_record::delete(&*self.db, p.vehicle_id, p.service_id, p.completed_work)
+                .await
+                .map(|out| {
+                    serde_json::json!({
+                        "deleted": "service",
+                        "id": p.service_id,
+                        "kept_part_ids": out.kept_part_ids,
+                        "recalls_reopened": out.reopened_recall_ids,
+                        "recalls_still_done_elsewhere": out.still_done_elsewhere_recall_ids,
+                        "recalls_kept_done": out.kept_done_recall_ids,
+                        "appointments_reopened": out.reopened_appointment_ids,
+                        "jobs_unassigned": out.unassigned_job_ids,
+                    })
+                }),
         )
     }
 }

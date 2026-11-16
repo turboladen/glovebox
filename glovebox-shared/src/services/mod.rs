@@ -24,6 +24,23 @@ pub mod vin_decode;
 pub mod waiting;
 pub mod work_item;
 
+/// Opens a transaction that holds SQLite's write lock from its `BEGIN`, so
+/// everything it reads is the committed state and no other program can write
+/// until it ends. A caller that writes inside the transaction uses this rather
+/// than `begin`.
+pub(crate) async fn begin_write<C: sea_orm::TransactionTrait>(
+    db: &C,
+) -> Result<C::Transaction, sea_orm::DbErr> {
+    // A claim (a no-op UPDATE as the first statement) on a table with an FTS5
+    // trigger fails with "database is locked" at once instead of waiting out
+    // the busy timeout, so the lock is taken by the BEGIN itself.
+    db.begin_with_options(sea_orm::TransactionOptions {
+        sqlite_transaction_mode: Some(sea_orm::SqliteTransactionMode::Immediate),
+        ..Default::default()
+    })
+    .await
+}
+
 /// The current instant in UTC, to the second, for a bookkeeping stamp
 /// (`created_at`, `updated_at`). Whole seconds give every stored stamp the
 /// same width, so the stored text sorts in time order.
