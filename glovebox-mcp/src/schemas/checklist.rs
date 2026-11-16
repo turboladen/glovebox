@@ -220,7 +220,8 @@ pub struct UpdateNeedInput {
     ///
     /// Send `null` to clear the choice, its reason and its date; on a need
     /// with no chosen option it changes nothing unless `decision_reason` is
-    /// sent too. A `decision_reason` sent with `null` is kept only for a need
+    /// sent too, though a `supplied_by` change away from `shop` in the same
+    /// call still clears the reason. A `decision_reason` sent with `null` is kept only for a need
     /// the shop supplies, and refused otherwise. Omit the key to leave the
     /// choice unchanged.
     #[serde(default, deserialize_with = "nullable")]

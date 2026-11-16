@@ -1056,8 +1056,68 @@ async fn clearing_a_decision_with_the_prefilled_reason_clears_it() {
     assert!(!after.contains("Quiet."), "{after}");
 }
 
-// A page rendered before the form carried the stored reason posts none, and
-// its reason box counts as unedited.
+// Undoes the escaping the page applies to text in markup.
+fn unescape(html: &str) -> String {
+    html.replace("&quot;", "\"")
+        .replace("&#34;", "\"")
+        .replace("&#39;", "'")
+        .replace("&#x27;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+}
+
+// A browser posts every line break in a form field as CRLF.
+fn as_posted(value: &str) -> String {
+    value.replace("\r\n", "\n").replace('\n', "\r\n")
+}
+
+#[tokio::test]
+async fn an_unedited_multi_line_reason_round_trips_as_unedited() {
+    let w = World::new().await;
+    let back = w.page_path();
+    need::decide(
+        &w.db,
+        w.vehicle,
+        w.need,
+        Some(w.good),
+        Some("Quiet on the highway.\nCheaper than OEM & \"close\".".into()),
+    )
+    .await
+    .unwrap();
+
+    let (_, page) = w.get(&back).await;
+    let hidden = r#"name="stored_reason" value=""#;
+    let start = page.find(hidden).expect("hidden stored_reason") + hidden.len();
+    let stored = unescape(&page[start..start + page[start..].find('"').unwrap()]);
+    let open = r#"<textarea name="reason">"#;
+    let start = page.find(open).expect("reason box") + open.len();
+    let shown = unescape(&page[start..start + page[start..].find("</textarea>").unwrap()]);
+    assert_eq!(stored, shown);
+    assert!(stored.contains('\n'), "{stored:?}");
+
+    // Choosing no option with the box as rendered clears the owner's choice
+    // and its reason; an edited box would be refused instead.
+    let (status, _, body) = w
+        .post(
+            &w.need_path("decision"),
+            &[
+                ("option_id", ""),
+                ("reason", &as_posted(&shown)),
+                ("stored_reason", &as_posted(&stored)),
+                ("back", &back),
+            ],
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::SEE_OTHER, "{body}");
+    let after = need::require(&w.db, w.vehicle, w.need).await.unwrap();
+    assert_eq!(after.chosen_option_id, None);
+    assert_eq!(after.decision_reason, None);
+}
+
+// A decision post without stored_reason, as from a stale tab, reads its
+// reason box as unedited.
 #[tokio::test]
 async fn a_decision_post_without_the_stored_reason_reads_the_box_as_unedited() {
     let w = World::new().await;
