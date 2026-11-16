@@ -213,8 +213,9 @@ pub async fn update(
     }
     // Only a real change of supplier clears, because the web supplier form
     // resends the stored supplier with every approach edit.
-    let leaves_shop =
-        existing.supplied_by == Some(Supplier::Shop) && supplied_by != existing.supplied_by;
+    let leaves_shop_unchosen = existing.supplied_by == Some(Supplier::Shop)
+        && supplied_by != existing.supplied_by
+        && existing.chosen_option_id.is_none();
     let mut active: job_need::ActiveModel = existing.into();
     if let Some(name) = input.name {
         active.name = Set(name);
@@ -230,7 +231,7 @@ pub async fn update(
     }
     if let Some(value) = input.decision_reason {
         active.decision_reason = Set(value);
-    } else if leaves_shop && !can_hold {
+    } else if leaves_shop_unchosen {
         // A reason with no chosen option explains why the shop supplies the
         // need, so it goes when the shop stops supplying it, the way a
         // cleared choice takes its reason along.
@@ -1586,10 +1587,12 @@ mod tests {
         assert_eq!(after.decision_reason.as_deref(), Some("shop stocks it"));
 
         // Clearing a reason is always allowed.
-        let mut clear = reason("");
-        clear.decision_reason = Some(None);
         let owner = add(&db, vehicle_id, job_id, need("Wipers")).await.unwrap();
         store_reason(&db, owner.id, "legacy").await;
+        let clear = UpdateNeed {
+            decision_reason: Some(None),
+            ..Default::default()
+        };
         let cleared = update(&db, vehicle_id, owner.id, clear).await.unwrap();
         assert_eq!(cleared.decision_reason, None);
     }
