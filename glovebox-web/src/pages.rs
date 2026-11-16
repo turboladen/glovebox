@@ -281,9 +281,19 @@ fn todo_banner(vid: i32, back: &str, todo: &todo::Model) -> Option<Banner> {
     })
 }
 
-// The undo strip for a deleted to-do, while the server still holds it.
-fn deleted_banner(vid: i32, back: &str, deleted: &DeletedTodo, id: i32) -> Option<Banner> {
-    let todo = deleted.get(vid, id)?;
+// The undo strip for a deleted to-do, while the server still holds it and
+// only on the page that listed it: the page of `appointment`, or the home
+// page for `None`.
+fn deleted_banner(
+    vid: i32,
+    back: &str,
+    deleted: &DeletedTodo,
+    id: i32,
+    appointment: Option<i32>,
+) -> Option<Banner> {
+    let todo = deleted
+        .get(vid, id)
+        .filter(|t| t.appointment_id == appointment)?;
     Some(Banner {
         message: format!("Deleted \u{201c}{}\u{201d}.", todo.title),
         action: format!("/vehicles/{vid}/todos/{id}/restore"),
@@ -291,14 +301,16 @@ fn deleted_banner(vid: i32, back: &str, deleted: &DeletedTodo, id: i32) -> Optio
     })
 }
 
-// The undo strip for a page whose needs and to-dos are in hand. A value that
-// names nothing on the page shows no strip.
+// The undo strip for a page whose needs and to-dos are in hand, where
+// `appointment` names the appointment whose to-dos the page lists, if any. A
+// value that names nothing on the page shows no strip.
 fn page_banner<'a>(
     vid: i32,
     back: &str,
     done: Option<&str>,
     needs: impl IntoIterator<Item = &'a NeedView>,
     todos: &[todo::Model],
+    appointment: Option<i32>,
     state: &AppState,
 ) -> Option<Banner> {
     match Done::parse(done)? {
@@ -310,7 +322,9 @@ fn page_banner<'a>(
             .iter()
             .find(|t| t.id == id)
             .and_then(|t| todo_banner(vid, back, t)),
-        Done::DeletedTodo(id) => deleted_banner(vid, back, &state.deleted_todo, id),
+        Done::DeletedTodo(id) => {
+            deleted_banner(vid, back, &state.deleted_todo, id, Some(appointment?))
+        }
     }
 }
 
@@ -328,7 +342,7 @@ async fn home_banner(state: &AppState, vid: i32, done: Option<&str>) -> Option<B
             let found = todo_svc::require(&state.db, vid, id).await.ok()?;
             todo_banner(vid, "/", &found)
         }
-        Done::DeletedTodo(id) => deleted_banner(vid, "/", &state.deleted_todo, id),
+        Done::DeletedTodo(id) => deleted_banner(vid, "/", &state.deleted_todo, id, None),
     }
 }
 
@@ -435,6 +449,7 @@ async fn appointment_page(
             done,
             list.jobs.iter().flat_map(|j| &j.needs),
             &list.todos,
+            Some(id),
             state,
         ),
         top_error,
@@ -516,7 +531,7 @@ async fn job_page(state: &AppState, vid: i32, id: i32, view: Page<'_>) -> Domain
     });
     Ok(JobPage {
         chrome: Chrome::of(state),
-        banner: page_banner(vid, &back, done, &view.needs, &[], state),
+        banner: page_banner(vid, &back, done, &view.needs, &[], None, state),
         top_error,
         vid,
         vehicle: car.name,

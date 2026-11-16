@@ -193,11 +193,10 @@ pub async fn delete(
 }
 
 /// Puts back to-do `id`, which [`delete`] returned as `deleted`, at its own id
-/// and with its own title, notes, done date and creation stamp, so it lists
-/// where it was. It goes back on its appointment only while that appointment
-/// is open, and on no appointment otherwise. With `deleted` absent, because
-/// the caller no longer holds the row, a to-do that is already back is
-/// returned as it is.
+/// with its own title, notes, done date and creation stamp. It goes back on
+/// its appointment only while that appointment is the vehicle's and open, and
+/// on no appointment otherwise. With `deleted` absent, a to-do that is already
+/// back is returned as it is.
 ///
 /// # Errors
 /// `NotFound` for a `deleted` row that is not to-do `id` of the vehicle, or
@@ -210,6 +209,9 @@ pub async fn restore<C: ConnectionTrait + TransactionTrait>(
     id: i32,
     deleted: Option<todo::Model>,
 ) -> DomainResult<todo::Model> {
+    // A caller that no longer holds the row, such as the page answering a
+    // second undo, learns whether the to-do is already back. The kept
+    // creation stamp keeps the to-do's place in its list.
     let Some(deleted) = deleted else {
         return match require(db, vehicle_id, id).await {
             Err(DomainError::NotFound(_)) => Err(DomainError::BadRequest(
@@ -241,9 +243,8 @@ pub async fn restore<C: ConnectionTrait + TransactionTrait>(
             "To-do {id} is already back on the list."
         )));
     }
-    // Appointment ids are never reused and an appointment never changes
-    // vehicle, so the stored id can only name this vehicle's appointment.
-    restored.appointment_id = super::appointment::open_id(&txn, deleted.appointment_id).await?;
+    restored.appointment_id =
+        super::appointment::open_id(&txn, vehicle_id, deleted.appointment_id).await?;
     if restored.appointment_id.is_some() {
         todo::Entity::update_many()
             .col_expr(
@@ -597,6 +598,22 @@ mod tests {
             assert_eq!((back.id, back.appointment_id), (t.id, None), "{ending}");
             assert_eq!(require(&db, v, t.id).await.unwrap().appointment_id, None);
         }
+    }
+
+    // A row naming another vehicle's open appointment comes back on no
+    // appointment, as one naming a missing appointment does.
+    #[tokio::test]
+    async fn restore_puts_no_todo_on_another_vehicles_appointment() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let other = VehicleFixture::new().name("Other").insert_id(&db).await;
+        let theirs = appointment_id(&db, other, "Theirs").await;
+        let t = add(&db, v, new_todo("Wash", None)).await.unwrap();
+        let mut deleted = delete(&db, v, t.id).await.unwrap();
+        deleted.appointment_id = Some(theirs);
+        let back = restore(&db, v, t.id, Some(deleted)).await.unwrap();
+        assert_eq!(back.appointment_id, None);
+        assert_eq!(require(&db, v, t.id).await.unwrap().appointment_id, None);
     }
 
     #[tokio::test]

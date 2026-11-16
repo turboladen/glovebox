@@ -1124,6 +1124,64 @@ async fn a_refused_undo_keeps_its_row() {
 }
 
 #[tokio::test]
+async fn a_delete_undo_shows_only_on_the_page_that_listed_the_todo() {
+    let w = World::new().await;
+    let id = todo::add(
+        &w.db,
+        w.vehicle,
+        NewTodo {
+            title: "Bring wheel locks".into(),
+            appointment_id: Some(w.appointment),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    let other = appointment::create(
+        &w.db,
+        w.vehicle,
+        NewAppointment {
+            purpose: "Tires".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    w.post(
+        &format!("/vehicles/{}/todos/{id}/delete", w.vehicle),
+        &[("back", &w.page_path())],
+    )
+    .await;
+
+    let done = format!("?done=deleted-todo-{id}");
+    let (_, listed) = w.get(&format!("{}{done}", w.page_path())).await;
+    assert!(listed.contains(r#"role="status""#), "{listed}");
+    for page in [
+        format!("/vehicles/{}/appointments/{other}{done}", w.vehicle),
+        format!("{}{done}", w.job_path()),
+        format!("/{done}"),
+    ] {
+        let (_, body) = w.get(&page).await;
+        assert!(!body.contains(r#"role="status""#), "{page}: {body}");
+    }
+
+    // A to-do on no appointment is listed on the home page, never a job's.
+    let home_todo = add_todo(&w, "Wash").await;
+    w.post(
+        &format!("/vehicles/{}/todos/{home_todo}/delete", w.vehicle),
+        &[("back", "/")],
+    )
+    .await;
+    let done = format!("?done=deleted-todo-{home_todo}");
+    let (_, home) = w.get(&format!("/{done}")).await;
+    assert!(home.contains(r#"role="status""#), "{home}");
+    let (_, job) = w.get(&format!("{}{done}", w.job_path())).await;
+    assert!(!job.contains(r#"role="status""#), "{job}");
+}
+
+#[tokio::test]
 async fn a_delete_undo_belongs_to_its_vehicle() {
     let w = World::new().await;
     let other = VehicleFixture::new().name("Other").insert_id(&w.db).await;

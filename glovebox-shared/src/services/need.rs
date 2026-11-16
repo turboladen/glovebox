@@ -1047,7 +1047,7 @@ pub async fn return_part<C: ConnectionTrait + TransactionTrait>(
     let found = linked_part(&txn, &need).await?;
     require_unfitted(&found, PartAction::Return)?;
     let job = super::work_item::get(&txn, vehicle_id, need.work_item_id).await?;
-    let appointment_id = super::appointment::open_id(&txn, job.appointment_id).await?;
+    let appointment_id = super::appointment::open_id(&txn, vehicle_id, job.appointment_id).await?;
     let title = match found.seller.as_deref().and_then(super::trim_to_none) {
         Some(seller) => format!("Return {} to {seller}", found.name),
         None => format!("Return {}", found.name),

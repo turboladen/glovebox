@@ -18,7 +18,8 @@ use glovebox_shared::{db::DatabaseConnection, entities::todo};
 
 /// What every handler reads: the database, the name of the environment the
 /// process serves and the file it serves from, and the clock that says what
-/// day it is.
+/// day it is. Its one mutable part, and the page's one state outside the
+/// database, is `deleted_todo`, which the delete and undo posts write.
 #[derive(Clone)]
 pub struct AppState {
     pub db: DatabaseConnection,
@@ -39,6 +40,9 @@ pub struct DeletedTodo(Arc<Mutex<Option<todo::Model>>>);
 // The slot holds only a row this server deleted, so the restore trusts
 // nothing a form sent, and one slot is enough because a banner offers the
 // undo of the last action alone. The lock is never held across an await.
+// Accepted limits: a double-clicked Delete or Undo can answer with an error
+// or another page although the action worked, and a failed undo keeps its
+// row without showing the banner again (the browser's back button reaches it).
 impl DeletedTodo {
     fn lock(&self) -> std::sync::MutexGuard<'_, Option<todo::Model>> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)

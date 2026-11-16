@@ -258,17 +258,22 @@ async fn claim(txn: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
     Ok(())
 }
 
-/// Returns `id` when it names an appointment that is neither closed by hand
-/// nor cancelled, and `None` otherwise. A record filed for the owner to act
-/// on goes on an appointment only while a list still shows that appointment.
+/// Returns `id` when it names an appointment of `vehicle_id` that is neither
+/// closed by hand nor cancelled, and `None` otherwise. A record filed for the
+/// owner to act on goes on an appointment only while a list still shows that
+/// appointment.
 pub(crate) async fn open_id(
     db: &impl ConnectionTrait,
+    vehicle_id: i32,
     id: Option<i32>,
 ) -> DomainResult<Option<i32>> {
     let Some(id) = id else {
         return Ok(None);
     };
-    let found = appointment::Entity::find_by_id(id).one(db).await?;
+    let found = appointment::Entity::find_by_id(id)
+        .filter(appointment::Column::VehicleId.eq(vehicle_id))
+        .one(db)
+        .await?;
     Ok(found.filter(|a| Ending::of(a).is_none()).map(|a| a.id))
 }
 
