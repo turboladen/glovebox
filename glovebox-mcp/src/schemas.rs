@@ -479,8 +479,8 @@ pub struct PlanWorkInput {
     /// reminder.
     pub schedule_item_id: Option<i32>,
     /// The research finding (e.g. a recall from `whats_coming` or `check_recalls`) this
-    /// addresses. The recall reads as planned while the work is open, and
-    /// completing the work through `record_service` links the service to it.
+    /// addresses. The recall reads as planned while the work is open and as done once the
+    /// work is done. Completing the work through `record_service` also links the service to it.
     pub research_finding_id: Option<i32>,
     /// The incident this fixes (from `log_incident`) — completing the work
     /// links the incident to the service record.
