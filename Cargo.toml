@@ -6,8 +6,8 @@ members = ["glovebox-shared", "glovebox-mcp", "glovebox-cli", "glovebox-web"]
 edition = "2024"
 version = "0.1.0"
 
-# Every crate denies clippy's pedantic group, so plain `cargo clippy` matches the
-# CI gate.
+# Every crate denies clippy's pedantic group. The CI gate adds `--all-targets`
+# (tests) and `-D warnings` (rustc warnings and unfulfilled expectations).
 [workspace.lints.clippy]
 pedantic = { level = "deny", priority = -1 }
 

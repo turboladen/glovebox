@@ -926,11 +926,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(reopened.appointment.status, "planning");
-        assert!(
-            reopened.unassigned_job_ids.is_empty(),
-            "{:?}",
-            reopened.unassigned_job_ids
-        );
+        crate::test_support::assert_empty(&reopened.unassigned_job_ids);
 
         let closed = update_with_status(
             &db,

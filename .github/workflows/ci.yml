@@ -81,9 +81,11 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
+      # Pinned so a new dictionary release cannot turn an unchanged tree red;
+      # keep it in step with the version `just typos` runs locally.
       - uses: taiki-e/install-action@v2
         with:
-          tool: typos
+          tool: typos@1.50.3
       - run: typos
 
   # Single required status check for branch protection. Passes when every needed

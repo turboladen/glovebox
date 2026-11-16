@@ -1,16 +1,18 @@
-# typos-cli config, enforced by CI's `typos` job and `just typos`.
+# CI's `typos` job and `just typos` both read this typos-cli config.
 
 [default]
-# US English everywhere, enforced rather than remembered: agents drift toward
-# UK spellings ("behaviour", "serialise", "judgement") unprompted.
+# The whole tree is checked for US English, because agents drift toward UK
+# spellings ("behaviour", "serialise", "judgement") unprompted.
 locale = "en-us"
 
 [files]
+# Hidden paths hold the CI workflow and the agent skills, so they are read too.
+ignore-hidden = false
 # The generated tracker mirror's issue ids and hashes false-positive freely.
-extend-exclude = [".beads/"]
+extend-exclude = [".beads/", ".git/"]
 
 [default.extend-words]
-# Car and page vocabulary, not typos:
-gti = "gti" # the VW Golf GTI
-pn = "pn" # "part number", a CSS class in the design mockups
-fewd = "fewd" # a sibling project, named in a resource-URI test
+# These are car and page words, not typos:
+gti = "gti" # It names the VW Golf GTI.
+pn = "pn" # It is the "part number" CSS class in the design mockups.
+fewd = "fewd" # It is a sibling project that a resource-URI test names.

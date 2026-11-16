@@ -432,7 +432,8 @@ reason. `[workspace.lints.clippy]` in the root `Cargo.toml` denies the pedantic 
 crate. Run `cargo clippy --workspace --all-targets --locked -- -D warnings` to verify zero
 warnings; it lints test code too. Add a per-function `#[expect(..., reason = "...")]` for
 unavoidable cases, such as a test that tells one long story. A test checks a list is empty with
-`test_support::assert_empty`, which prints the list when it is not.
+`test_support::assert_empty`, which prints the list when it is not, in preference to a bare
+`assert!(… .is_empty())`.
 
 ## Non-Interactive Shell Commands
 
