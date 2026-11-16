@@ -1,5 +1,5 @@
-//! Column, foreign-key and index builders and the whole-database checks
-//! shared by the migrations.
+//! Column, foreign-key and index builders, the soundness checks and the
+//! stored-definition edit shared by the migrations.
 
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 use sea_orm_migration::prelude::*;
@@ -87,18 +87,77 @@ pub(super) fn partial_index(
         .to_owned()
 }
 
-/// The result of `PRAGMA integrity_check` and the number of rows
-/// `PRAGMA foreign_key_check` reports.
-pub(super) async fn soundness(db: &impl ConnectionTrait) -> Result<(String, usize), DbErr> {
-    let integrity = scalar::<String>(db, "PRAGMA integrity_check").await?;
-    let broken_links = db
-        .query_all_raw(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            "PRAGMA foreign_key_check",
-        ))
-        .await?
-        .len();
-    Ok((integrity, broken_links))
+/// Every row `PRAGMA integrity_check` and `PRAGMA foreign_key_check` report,
+/// for `tables` or, when it is empty, the whole database.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct Soundness {
+    pub integrity: Vec<String>,
+    pub broken_links: Vec<String>,
+}
+
+pub(super) async fn soundness(
+    db: &impl ConnectionTrait,
+    tables: &[&str],
+) -> Result<Soundness, DbErr> {
+    let scopes: Vec<String> = if tables.is_empty() {
+        vec![String::new()]
+    } else {
+        tables.iter().map(|t| format!("({t})")).collect()
+    };
+    let mut out = Soundness {
+        integrity: Vec::new(),
+        broken_links: Vec::new(),
+    };
+    for scope in scopes {
+        for row in rows(db, &format!("PRAGMA integrity_check{scope}")).await? {
+            out.integrity.push(row.try_get_by_index::<String>(0)?);
+        }
+        for row in rows(db, &format!("PRAGMA foreign_key_check{scope}")).await? {
+            let table = row.try_get_by_index::<String>(0)?;
+            let rowid = row.try_get_by_index::<Option<i64>>(1)?;
+            let parent = row.try_get_by_index::<String>(2)?;
+            out.broken_links
+                .push(format!("{table} row {rowid:?} names a missing {parent}"));
+        }
+    }
+    Ok(out)
+}
+
+async fn rows(db: &impl ConnectionTrait, sql: &str) -> Result<Vec<sea_orm::QueryResult>, DbErr> {
+    db.query_all_raw(Statement::from_string(DatabaseBackend::Sqlite, sql))
+        .await
+}
+
+/// Edits stored table definitions in `sqlite_schema` on `txn`, which must be
+/// a transaction holding the write lock. `edit` runs with
+/// `PRAGMA writable_schema` on and returns whether it changed a definition;
+/// when it did, `schema_version` is raised so every connection reloads the
+/// schema. Returns the soundness of `tables` (the whole database when empty)
+/// before and after, for the caller to compare.
+pub(super) async fn edit_definitions<C, F>(
+    txn: &C,
+    tables: &[&str],
+    edit: F,
+) -> Result<(Soundness, Soundness), DbErr>
+where
+    C: ConnectionTrait,
+    F: AsyncFnOnce(&C) -> Result<bool, DbErr>,
+{
+    let version = scalar::<i64>(txn, "PRAGMA schema_version").await?;
+    let before = soundness(txn, tables).await?;
+    txn.execute_unprepared("PRAGMA writable_schema = ON")
+        .await?;
+    let edited = edit(txn).await;
+    // The pragma belongs to the connection, which goes back to the pool, so it
+    // is cleared whether or not the edit worked.
+    txn.execute_unprepared("PRAGMA writable_schema = OFF")
+        .await?;
+    if edited? {
+        txn.execute_unprepared(&format!("PRAGMA schema_version = {}", version + 1))
+            .await?;
+    }
+    let after = soundness(txn, tables).await?;
+    Ok((before, after))
 }
 
 pub(super) async fn scalar<T: sea_orm::TryGetable>(
@@ -145,5 +204,39 @@ pub(super) mod testing {
             .await
             .unwrap()
             .unwrap()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sea_orm::ConnectionTrait;
+
+    use super::{soundness, testing::migrated_to};
+    use crate::migration::Migrator;
+
+    // Two jobs name a vehicle that does not exist. The check of `work_items`
+    // reports both, and the check of `todos` reports neither.
+    #[tokio::test]
+    async fn soundness_reports_every_broken_link_of_the_tables_named() {
+        let db = migrated_to(
+            u32::try_from(<Migrator as sea_orm_migration::MigratorTrait>::migrations().len())
+                .unwrap(),
+        )
+        .await;
+        db.execute_unprepared(
+            "PRAGMA foreign_keys = OFF;
+             INSERT INTO work_items (id, vehicle_id, title, status, created_at, updated_at)
+                 VALUES (1, 98, 'A', 'planned', 'x', 'x'), (2, 99, 'B', 'planned', 'x', 'x');
+             PRAGMA foreign_keys = ON;",
+        )
+        .await
+        .unwrap();
+
+        let jobs = soundness(&db, &["work_items"]).await.unwrap();
+        assert_eq!(jobs.integrity, ["ok"]);
+        assert_eq!(jobs.broken_links.len(), 2, "{:?}", jobs.broken_links);
+        let todos = soundness(&db, &["todos"]).await.unwrap();
+        crate::test_support::assert_empty(&todos.broken_links);
+        assert_eq!(soundness(&db, &[]).await.unwrap().broken_links.len(), 2);
     }
 }
