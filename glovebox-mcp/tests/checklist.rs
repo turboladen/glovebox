@@ -427,9 +427,7 @@ async fn a_replaced_part_reads_installed_and_cannot_be_returned_or_redated() {
         .await;
     assert_eq!(
         err,
-        format!(
-            "Need {rotors} is installed; only an ordered or received part can be marked received"
-        )
+        format!("Part {part} is replaced; a part that has been on the car takes no arrival date")
     );
     let parts = t.call("list_parts", json!({ "vehicle_id": v })).await;
     assert_eq!(parts[0]["received_on"], "2026-11-01", "got: {parts}");
@@ -470,6 +468,26 @@ async fn existing_part_links_without_reentry() {
         )
         .await;
     assert!(err.contains("already linked"), "got: {err}");
+
+    // A second arrival with no date keeps the stored one; a named date
+    // replaces it.
+    let err = t
+        .call_err(
+            "mark_need_received",
+            json!({ "vehicle_id": v, "need_id": need }),
+        )
+        .await;
+    assert_eq!(
+        err,
+        format!("Need {need}'s part was already received on 2026-11-01")
+    );
+    let redated = t
+        .call(
+            "mark_need_received",
+            json!({ "vehicle_id": v, "need_id": need, "received_on": "2026-11-02" }),
+        )
+        .await;
+    assert_eq!(redated["part"]["received_on"], "2026-11-02");
 
     // Clearing the arrival date reads as ordered again.
     let ordered = t

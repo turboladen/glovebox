@@ -486,7 +486,7 @@ pub struct MarkNeedReceivedInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
     /// Need id, from `get_checklist`. It must have a part linked that is not
-    /// installed.
+    /// installed or replaced.
     pub need_id: i32,
     /// `true` (the default) records that the part arrived; `false` clears the
     /// arrival date so the need reads `ordered` again.

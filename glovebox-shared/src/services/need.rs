@@ -761,8 +761,12 @@ pub async fn link_part<C: ConnectionTrait + TransactionTrait>(
     part_id: i32,
     received_on: Option<chrono::NaiveDate>,
 ) -> DomainResult<NeedPurchase> {
-    let need = require(db, vehicle_id, need_id).await?;
-    let found = super::part::get(db, vehicle_id, part_id).await?;
+    let txn = db.begin().await?;
+    // The claim takes the write lock before anything is read, so the checks
+    // below and the writes see one snapshot.
+    claim(&txn, need_id).await?;
+    let need = require(&txn, vehicle_id, need_id).await?;
+    let found = super::part::get(&txn, vehicle_id, part_id).await?;
     if super::part::is_returned(&found) {
         return Err(DomainError::BadRequest(format!(
             "Part {part_id} was returned and cannot be linked"
@@ -771,7 +775,7 @@ pub async fn link_part<C: ConnectionTrait + TransactionTrait>(
     if let Some(other) = job_need::Entity::find()
         .filter(job_need::Column::PartId.eq(part_id))
         .filter(job_need::Column::Id.ne(need_id))
-        .one(db)
+        .one(&txn)
         .await?
     {
         return Err(DomainError::BadRequest(format!(
@@ -784,11 +788,13 @@ pub async fn link_part<C: ConnectionTrait + TransactionTrait>(
             "Need {need_id} already has part {current} linked; unlink it first"
         )));
     }
-    if received_on.is_some() {
-        require_unfitted(need_id, stage(&need, Some(&found)), "be marked received")?;
+    if received_on.is_some() && super::part::was_fitted(&found) {
+        return Err(DomainError::BadRequest(format!(
+            "Part {part_id} is {}; a part that has been on the car takes no arrival date",
+            found.status
+        )));
     }
     let supplier = need.supplied_by.is_none().then_some(found.supplied_by);
-    let txn = db.begin().await?;
     let found = match received_on {
         Some(date) => {
             let mut active: part::ActiveModel = found.into();
@@ -868,34 +874,52 @@ pub async fn set_part<C: ConnectionTrait + TransactionTrait>(
 /// # Errors
 /// `NotFound` for a need that is not the vehicle's; `BadRequest` when it has
 /// no part.
-pub async fn unlink_part(
-    db: &impl ConnectionTrait,
+pub async fn unlink_part<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
     vehicle_id: i32,
     need_id: i32,
 ) -> DomainResult<job_need::Model> {
-    let need = require(db, vehicle_id, need_id).await?;
-    linked_part(db, &need).await?;
-    set_need_part(db, need, None, None).await
+    let txn = db.begin().await?;
+    claim(&txn, need_id).await?;
+    let need = require(&txn, vehicle_id, need_id).await?;
+    linked_part(&txn, &need).await?;
+    let need = set_need_part(&txn, need, None, None).await?;
+    txn.commit().await?;
+    Ok(need)
 }
 
-// Refuses a need whose part is not `ordered` or `received`; `action` ends
-// the sentence "only an ordered or received part can ...".
-fn require_unfitted(need_id: i32, current: Stage, action: &str) -> DomainResult<()> {
+// What a caller of `require_unfitted` is about to do with the need's part.
+#[derive(Clone, Copy)]
+enum PartAction {
+    MarkReceived,
+    ClearReceived,
+    Return,
+}
+
+// Refuses a need whose part is not `ordered` or `received`.
+fn require_unfitted(need_id: i32, current: Stage, action: PartAction) -> DomainResult<()> {
     if current.has_unfitted_part() {
         return Ok(());
     }
+    let what = match action {
+        PartAction::MarkReceived => "be marked received",
+        PartAction::ClearReceived => "have its arrival date cleared",
+        PartAction::Return => "be returned",
+    };
     Err(DomainError::BadRequest(format!(
-        "Need {need_id} is {}; only an ordered or received part can {action}",
+        "Need {need_id} is {}; only an ordered or received part can {what}",
         current.label()
     )))
 }
 
+// Writes the date `date_for` picks for the need's part, after the stage
+// check. `date_for` sees the stored part and may refuse it.
 async fn set_received<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
     need_id: i32,
-    on: Option<chrono::NaiveDate>,
-    action: &str,
+    action: PartAction,
+    date_for: impl FnOnce(&part::Model) -> DomainResult<Option<chrono::NaiveDate>>,
 ) -> DomainResult<NeedPurchase> {
     let txn = db.begin().await?;
     // The claim takes the write lock before the stage is read, so a part the
@@ -904,6 +928,7 @@ async fn set_received<C: ConnectionTrait + TransactionTrait>(
     let need = require(&txn, vehicle_id, need_id).await?;
     let found = linked_part(&txn, &need).await?;
     require_unfitted(need_id, stage(&need, Some(&found)), action)?;
+    let on = date_for(&found)?;
     let mut active: part::ActiveModel = found.into();
     active.received_on = Set(on);
     active.updated_at = Set(super::now());
@@ -913,19 +938,32 @@ async fn set_received<C: ConnectionTrait + TransactionTrait>(
 }
 
 /// Records the day a need's part arrived, today when `on` is `None`. A part
-/// that already has a date takes the new one.
+/// that already has a date takes a new one only when `on` names it.
 ///
 /// # Errors
 /// `NotFound` for a need that is not the vehicle's; `BadRequest` when it has
-/// no part or its part is installed or replaced.
+/// no part, its part is installed or replaced, or `on` is `None` and the
+/// part already has a date.
 pub async fn mark_received<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
     need_id: i32,
     on: Option<chrono::NaiveDate>,
 ) -> DomainResult<NeedPurchase> {
-    let on = on.unwrap_or_else(crate::services::today);
-    set_received(db, vehicle_id, need_id, Some(on), "be marked received").await
+    set_received(
+        db,
+        vehicle_id,
+        need_id,
+        PartAction::MarkReceived,
+        |found| match (on, found.received_on) {
+            (Some(date), _) => Ok(Some(date)),
+            (None, None) => Ok(Some(crate::services::today())),
+            (None, Some(stored)) => Err(DomainError::BadRequest(format!(
+                "Need {need_id}'s part was already received on {stored}"
+            ))),
+        },
+    )
+    .await
 }
 
 /// Clears the arrival date of a need's part, so the need reads `ordered`
@@ -939,13 +977,9 @@ pub async fn clear_received<C: ConnectionTrait + TransactionTrait>(
     vehicle_id: i32,
     need_id: i32,
 ) -> DomainResult<NeedPurchase> {
-    set_received(
-        db,
-        vehicle_id,
-        need_id,
-        None,
-        "have its arrival date cleared",
-    )
+    set_received(db, vehicle_id, need_id, PartAction::ClearReceived, |_| {
+        Ok(None)
+    })
     .await
 }
 
@@ -1003,18 +1037,21 @@ pub async fn return_part<C: ConnectionTrait + TransactionTrait>(
     input: ReturnInput,
 ) -> DomainResult<ReturnOutcome> {
     super::validate_not_blank("reason", &input.reason)?;
-    let need = require(db, vehicle_id, need_id).await?;
-    let found = linked_part(db, &need).await?;
-    require_unfitted(need_id, stage(&need, Some(&found)), "be returned")?;
-    let job = super::work_item::get(db, vehicle_id, need.work_item_id).await?;
-    let appointment_id = super::appointment::open_id(db, job.appointment_id).await?;
+    let txn = db.begin().await?;
+    // The claim takes the write lock before the stage is read, so a part the
+    // other program installs cannot be returned.
+    claim(&txn, need_id).await?;
+    let need = require(&txn, vehicle_id, need_id).await?;
+    let found = linked_part(&txn, &need).await?;
+    require_unfitted(need_id, stage(&need, Some(&found)), PartAction::Return)?;
+    let job = super::work_item::get(&txn, vehicle_id, need.work_item_id).await?;
+    let appointment_id = super::appointment::open_id(&txn, job.appointment_id).await?;
     let title = match found.seller.as_deref().and_then(super::trim_to_none) {
         Some(seller) => format!("Return {} to {seller}", found.name),
         None => format!("Return {}", found.name),
     };
     let chosen_option_id = need.chosen_option_id;
 
-    let txn = db.begin().await?;
     let returned_part =
         super::part::mark_returned(&txn, found, input.reason.clone(), need_id).await?;
     set_need_part(&txn, need, None, None).await?;
@@ -2435,7 +2472,7 @@ mod tests {
         for (i, db) in pools.iter().chain(pools.iter()).cloned().enumerate() {
             writes.spawn(async move {
                 if i % 2 == 0 {
-                    mark_received(&db, vehicle_id, n.id, None).await
+                    mark_received(&db, vehicle_id, n.id, Some(date("2026-11-01"))).await
                 } else {
                     clear_received(&db, vehicle_id, n.id).await
                 }
@@ -2444,6 +2481,88 @@ mod tests {
         let results = writes.join_all().await;
 
         assert!(results.iter().all(Result::is_ok), "{results:?}");
+    }
+
+    // Links and unlinks racing on one file from several pools never fail on
+    // the database: each one succeeds or is refused for the need's state.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_links_and_unlinks_on_one_need_never_fail_on_the_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("glovebox.db");
+        let path = path.to_str().unwrap();
+        let first = crate::db::connect(path).await.unwrap();
+        let (vehicle_id, job_id) = seed_job(&first).await;
+        let n = add(&first, vehicle_id, job_id, need("Fluid"))
+            .await
+            .unwrap();
+        let p = new_part(&first, vehicle_id, "Fluid").await;
+        let mut pools = vec![first];
+        for _ in 1..3 {
+            pools.push(crate::db::connect(path).await.unwrap());
+        }
+
+        let mut writes = tokio::task::JoinSet::new();
+        for (i, db) in pools.iter().chain(pools.iter()).cloned().enumerate() {
+            writes.spawn(async move {
+                let mut results = Vec::new();
+                for round in 0..30 {
+                    let result = if (i + round) % 2 == 0 {
+                        link_part(&db, vehicle_id, n.id, p.id, Some(date("2026-11-01")))
+                            .await
+                            .map(|_| ())
+                    } else {
+                        unlink_part(&db, vehicle_id, n.id).await.map(|_| ())
+                    };
+                    results.push(result);
+                }
+                results
+            });
+        }
+        let results: Vec<_> = writes.join_all().await.into_iter().flatten().collect();
+
+        for result in &results {
+            assert!(
+                matches!(result, Ok(()) | Err(DomainError::BadRequest(_))),
+                "{results:?}"
+            );
+        }
+    }
+
+    // Returns racing on one file from several pools return the part once.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_returns_of_one_part_return_it_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("glovebox.db");
+        let path = path.to_str().unwrap();
+        let first = crate::db::connect(path).await.unwrap();
+        let (vehicle_id, job_id) = seed_job(&first).await;
+        let (n, _) = ordered_need(&first, vehicle_id, job_id).await;
+        let mut pools = vec![first];
+        for _ in 1..3 {
+            pools.push(crate::db::connect(path).await.unwrap());
+        }
+
+        let mut returns = tokio::task::JoinSet::new();
+        for db in pools.iter().chain(pools.iter()).cloned() {
+            returns.spawn(async move {
+                let input = ReturnInput {
+                    reason: "Wrong size".into(),
+                    option_was_wrong: false,
+                };
+                return_part(&db, vehicle_id, n.id, input).await.map(|_| ())
+            });
+        }
+        let results = returns.join_all().await;
+
+        assert_eq!(
+            results.iter().filter(|r| r.is_ok()).count(),
+            1,
+            "{results:?}"
+        );
+        for err in results.iter().filter_map(|r| r.as_ref().err()) {
+            assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
+        }
+        assert_eq!(row_count::<todo::Entity>(&pools[0]).await, 1);
     }
 
     #[tokio::test]
@@ -2550,6 +2669,17 @@ mod tests {
         let today = crate::services::today();
         let got = mark_received(&db, vehicle_id, n.id, None).await.unwrap();
         assert_eq!(got.part.received_on, Some(today));
+        // With no date given, a part that has one keeps it.
+        let err = mark_received(&db, vehicle_id, n.id, None)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!("Need {}'s part was already received on {today}", n.id)
+        );
+        assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
+        let part_id = got.part.id;
+        assert_eq!(received_on(&db, vehicle_id, part_id).await, Some(today));
 
         let bare = add(&db, vehicle_id, job_id, need("Fluid")).await.unwrap();
         let err = mark_received(&db, vehicle_id, bare.id, None)
@@ -3131,7 +3261,8 @@ mod tests {
     async fn linking_with_a_date_refuses_a_fitted_part() {
         let db = test_db().await;
         let (vehicle_id, job_id) = seed_job(&db).await;
-        // The need's own part, installed, linked again with a new date.
+        // The need's own part goes on the car and is linked again with a new
+        // date.
         let (n, _) = ordered_need(&db, vehicle_id, job_id).await;
         let own = n.part_id.unwrap();
         mark_received(&db, vehicle_id, n.id, Some(date("2026-11-01")))
@@ -3144,8 +3275,7 @@ mod tests {
         assert_eq!(
             err.to_string(),
             format!(
-                "Need {} is installed; only an ordered or received part can be marked received",
-                n.id
+                "Part {own} is installed; a part that has been on the car takes no arrival date"
             )
         );
         assert_eq!(
@@ -3153,14 +3283,21 @@ mod tests {
             Some(date("2026-11-01"))
         );
 
-        // A replaced part linked to no need, linked to a bare need with a date.
+        // A replaced part that no need holds is linked to a bare need with a
+        // date.
         let bare = add(&db, vehicle_id, job_id, need("Fluid")).await.unwrap();
         let loose = new_part(&db, vehicle_id, "Fluid").await;
         fit(&db, vehicle_id, loose.id, PartStatus::Replaced).await;
         let err = link_part(&db, vehicle_id, bare.id, loose.id, Some(date("2026-11-03")))
             .await
             .unwrap_err();
-        assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "Part {} is replaced; a part that has been on the car takes no arrival date",
+                loose.id
+            )
+        );
         assert_eq!(received_on(&db, vehicle_id, loose.id).await, None);
         assert_eq!(
             require(&db, vehicle_id, bare.id).await.unwrap().part_id,

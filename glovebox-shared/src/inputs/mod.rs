@@ -1,5 +1,8 @@
 //! Domain input structs (plain data) consumed by service functions.
-//! The MCP surface builds them directly.
+//! Callers build most of them directly. `checklist::scope`, `need::part_link`
+//! and `need::arrival` build the checklist scope, part link and arrival
+//! change from optional arguments and refuse a combination that names no
+//! valid one.
 
 pub mod appointment;
 pub mod checklist;

@@ -274,9 +274,11 @@ impl GloveboxMcp {
                        it is not entered again, or detach it with `part_id: null` (the part is \
                        kept). Linking needs no chosen option; a need with no supplier takes the \
                        part's. Pass `received_on` when the part is already in hand; ask the owner \
-                       once and set it here. A part reads `ordered` until someone marks it \
-                       received, and a part linked to one need cannot be linked to another. \
-                       `part_id` is required: send null to unlink, never leave it out."
+                       once and set it here. A part that is installed or replaced takes no \
+                       `received_on` here; `correct_part` corrects a stored date. A part reads \
+                       `ordered` until someone marks it received, and a part linked to one need \
+                       cannot be linked to another. `part_id` is required: send null to unlink, \
+                       never leave it out."
     )]
     async fn link_part_to_need(
         &self,
@@ -291,9 +293,11 @@ impl GloveboxMcp {
         name = "mark_need_received",
         description = "Record that a need's part arrived, stamping the part with the date \
                        (`received_on`, default today). Arrival is its own step because checking \
-                       the box is when a wrong part is caught. `received: false` clears the date \
-                       so the need reads `ordered` again. The need must have a part linked, and a \
-                       part that is installed is refused. If the part is wrong, call \
+                       the box is when a wrong part is caught. A part that already has a date \
+                       keeps it unless `received_on` names a new one. `received: false` clears \
+                       the date so the need reads `ordered` again. The need must have a part \
+                       linked, and a part that is installed or replaced is refused; \
+                       `correct_part` corrects its stored date. If the part is wrong, call \
                        `return_part`."
     )]
     async fn mark_need_received(
