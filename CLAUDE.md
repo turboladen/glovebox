@@ -236,7 +236,7 @@ leaves the other fields unchanged. An option that is `does_not_fit` or rejected 
 and no tool chooses a supplier or an option for the owner. `return_part` is the only way a part
 becomes `returned`, and its to-do goes on the job's appointment only while that appointment is
 open (no list shows the to-dos of a closed or cancelled one), and `add_todo` and `update_todo`
-refuse to put a to-do on a closed or cancelled appointment (`appointment::claim_assignable`).
+refuse to put a to-do on a closed or cancelled appointment (`appointment::require_assignable`).
 Open to-dos follow the same rule as planned jobs: closing is refused while one is open,
 cancelling takes them off, and un-ticking a to-do reopens a hand-closed appointment or takes the
 to-do off a cancelled one (`appointment::settle_reopened_todo`). Naming an appointment in `record_service` installs and completes nothing; the
@@ -336,16 +336,14 @@ opens a form and the button that submits it carry the same words. Every date is 
   `BadRequest` renders its message verbatim; `Db` and `Internal` are opaque to the client.
   A service's message reads correctly on both the web page and in a tool result, so it carries no
   argument syntax such as "send null". The MCP tool and field descriptions carry the wire syntax.
-- **A transaction that writes claims its row first.** Its first statement is a write that takes
-  SQLite's write lock, such as `need::claim`, `appointment::claim` or `todo::claim` (a no-op
-  `UPDATE ... SET updated_at = updated_at`), or a conditional write like `mark_ordered`'s, and the
-  reads and checks follow inside the transaction. A transaction that begins with a read holds a
-  snapshot, and when the other program commits before the first write, SQLite fails it with a
-  busy-snapshot error at once; the busy timeout does not help. A claim on a table with an FTS5
-  trigger (vehicles, service records and their lines, incidents and follow-ups, research
-  findings, schedule items, work items) fails the same way, so a transaction that writes such a
-  row opens with `services::begin_write`, which takes the lock with `BEGIN IMMEDIATE`. A race test
-  opens several pools on one file (`test_support::race_pools`) and fails when the claim is removed.
+- **A transaction that writes opens with `services::begin_write`.** It issues `BEGIN IMMEDIATE`,
+  so the transaction holds SQLite's write lock before its first read, and the reads and checks
+  that follow see the committed state. A transaction from plain `begin` holds a snapshot from its
+  first read, and when the other program commits before its first write, SQLite fails it with a
+  busy-snapshot error at once. A no-op `UPDATE` as the first statement does not fix that on the
+  eight tables with an FTS5 trigger, which fail with "database is locked" without waiting out the
+  busy timeout. A race test opens several pools on one file (`test_support::race_pools`) and
+  fails when the transaction opens with plain `begin`.
 - **Stamps are set by code, never by the database.** No stamp column has a default. An entity
   fills `created_at` and `updated_at` on insert (`stamp_on_insert!` in `entities/mod.rs`), and
   every update function sets `active.updated_at = Set(services::now())`, because SeaORM

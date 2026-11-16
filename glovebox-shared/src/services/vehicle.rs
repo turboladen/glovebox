@@ -125,7 +125,7 @@ pub async fn create_with_vin_decode<C: ConnectionTrait + TransactionTrait>(
         input.transmission = input.transmission.or_else(|| d.transmission.clone());
         input.drivetrain = input.drivetrain.or_else(|| d.drivetrain.clone());
     }
-    let txn = db.begin().await?;
+    let txn = super::begin_write(db).await?;
     let created = create(&txn, input).await?;
     if let Some(d) = decoded {
         vin_decode::store_attributes(&txn, created.id, d).await?;

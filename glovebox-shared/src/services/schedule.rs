@@ -203,7 +203,7 @@ pub async fn create_for_vehicle<C: ConnectionTrait + TransactionTrait>(
     if input.name.trim().is_empty() {
         return Err(DomainError::invalid("name", "must not be blank"));
     }
-    let txn = db.begin().await?;
+    let txn = super::begin_write(db).await?;
     if let Some(own) = own_item_named(&txn, vehicle_id, &input.name).await? {
         return Err(DomainError::BadRequest(format!(
             "This vehicle already has a schedule item named '{}' (id {}). Change it with \
@@ -250,7 +250,7 @@ pub async fn update_for_vehicle<C: ConnectionTrait + TransactionTrait>(
     if input.name.as_deref().is_some_and(|n| n.trim().is_empty()) {
         return Err(DomainError::invalid("name", "must not be blank"));
     }
-    let txn = db.begin().await?;
+    let txn = super::begin_write(db).await?;
     let item = require_in_vehicle_scope(&txn, vehicle_id, schedule_item_id).await?;
     let v = crate::services::vehicle::require(&txn, vehicle_id).await?;
 
@@ -788,7 +788,7 @@ pub async fn dismiss_for_vehicle<C: ConnectionTrait + TransactionTrait>(
     schedule_item_id: i32,
     reason: Option<String>,
 ) -> DomainResult<maintenance_schedule_item::Model> {
-    let txn = db.begin().await?;
+    let txn = super::begin_write(db).await?;
     let item = require_in_vehicle_scope(&txn, vehicle_id, schedule_item_id).await?;
     let v = crate::services::vehicle::require(&txn, vehicle_id).await?;
 

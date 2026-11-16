@@ -750,7 +750,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
         appointment::require_assignable(db, vehicle_id, appointment_id).await?;
     }
 
-    let txn = db.begin().await?;
+    let txn = super::begin_write(db).await?;
 
     // Resolved before the record is written so a bad schedule id is reported
     // ahead of any error the insert itself could raise.
@@ -882,7 +882,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         appointment::require_assignable(db, vehicle_id, appointment_id).await?;
     }
 
-    let txn = db.begin().await?;
+    let txn = super::begin_write(db).await?;
 
     let (date_before, mileage_before) = (existing.service_date, existing.mileage);
     let mut active: service_record::ActiveModel = existing.into();
@@ -1040,7 +1040,7 @@ pub async fn link_schedule_items<C: ConnectionTrait + TransactionTrait>(
 ) -> DomainResult<ServiceRecordWithLinks> {
     let existing = require(db, vehicle_id, id).await?;
 
-    let txn = db.begin().await?;
+    let txn = super::begin_write(db).await?;
     schedule::link_service(&txn, vehicle_id, existing.id, item_ids, mode).await?;
 
     // Linking changes what the record accounts for — stamp it like update().
@@ -3356,6 +3356,30 @@ mod tests {
     }
 
     // ─── invoices against appointments ───
+
+    // Invoices filed at once from several pools are all recorded: each opens
+    // with the write lock before it reads the schedule it links.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_services_on_one_vehicle_are_all_recorded() {
+        let (_dir, pools) = crate::test_support::race_pools().await;
+        let first = &pools[0];
+        let v = seed_vehicle(first).await;
+
+        let mut filings = tokio::task::JoinSet::new();
+        for (i, db) in pools.iter().chain(pools.iter()).cloned().enumerate() {
+            filings.spawn(async move {
+                let input = NewServiceRecord {
+                    service_date: date("2024-06-01"),
+                    invoice_ref: Some(format!("INV-{i}")),
+                    ..Default::default()
+                };
+                create(&db, v, input).await.map(|_| ())
+            });
+        }
+        let results = filings.join_all().await;
+
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
+    }
 
     // Deletes racing on one file from several pools delete the service once,
     // and the rest find it gone: each takes the write lock before it reads.

@@ -204,16 +204,14 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     need_id: i32,
     input: UpdateNeed,
 ) -> DomainResult<job_need::Model> {
-    let txn = db.begin().await?;
-    claim(&txn, need_id).await?;
+    let txn = super::begin_write(db).await?;
     let updated = apply_update(&txn, vehicle_id, need_id, input).await?;
     txn.commit().await?;
     Ok(updated)
 }
 
-// The body of `update`, run inside a transaction that has claimed the need,
-// so the checks below read the committed row and nothing changes it before
-// the write.
+// The body of `update`, run on its write transaction, so the checks below
+// read the committed row and nothing changes it before the write.
 async fn apply_update(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -432,7 +430,7 @@ pub async fn update_option<C: ConnectionTrait + TransactionTrait>(
         || input.rejected_reason.as_ref().is_some_and(Option::is_some);
     // The option write and the choice clearing commit together, so a need
     // never keeps a choice that was just rejected.
-    let txn = db.begin().await?;
+    let txn = super::begin_write(db).await?;
     let mut updated = active.update(&txn).await?;
     if now_unusable {
         keep_choice_on_option(&txn, updated.need_id, updated.id).await?;
@@ -454,7 +452,7 @@ pub async fn delete_option<C: ConnectionTrait + TransactionTrait>(
     option_id: i32,
 ) -> DomainResult<()> {
     let option = require_option(db, vehicle_id, option_id).await?;
-    let txn = db.begin().await?;
+    let txn = super::begin_write(db).await?;
     clear_choice(&txn, option.need_id, option.id).await?;
     option.delete(&txn).await?;
     txn.commit().await?;
@@ -484,8 +482,7 @@ pub async fn update_with_choice<C: ConnectionTrait + TransactionTrait>(
     };
     // `decide` writes the reason itself, so the edit leaves it alone.
     let reason = input.decision_reason.take();
-    let txn = db.begin().await?;
-    claim(&txn, need_id).await?;
+    let txn = super::begin_write(db).await?;
     let updated = apply_update(&txn, vehicle_id, need_id, input).await?;
     if option_id.is_none() && reason.is_none() && updated.chosen_option_id.is_none() {
         txn.commit().await?;
@@ -575,22 +572,6 @@ async fn clear_choice_history(db: &impl ConnectionTrait, option_id: i32) -> Doma
         .col_expr(need_option::Column::UpdatedAt, Expr::value(super::now()))
         .filter(need_option::Column::Id.eq(option_id))
         .exec(db)
-        .await?;
-    Ok(())
-}
-
-// Writes the need row without changing it, as `appointment::claim` does for
-// an appointment. A write as the transaction's first statement takes SQLite's
-// write lock, so a commit by the other program between this transaction's
-// first read and its first write cannot fail it with a busy snapshot.
-async fn claim(txn: &impl ConnectionTrait, need_id: i32) -> DomainResult<()> {
-    job_need::Entity::update_many()
-        .col_expr(
-            job_need::Column::UpdatedAt,
-            Expr::col(job_need::Column::UpdatedAt),
-        )
-        .filter(job_need::Column::Id.eq(need_id))
-        .exec(txn)
         .await?;
     Ok(())
 }
@@ -692,11 +673,9 @@ pub async fn mark_ordered<C: ConnectionTrait + TransactionTrait>(
     details: OrderDetails,
 ) -> DomainResult<NeedPurchase> {
     validate_price(details.cost_cents)?;
-    let txn = db.begin().await?;
-    // The claim is the transaction's first statement and a write, so SQLite
-    // gives it the write lock (waiting out the busy timeout) before anything
-    // is read. A second order for the same need then sees the first one's
-    // part and claims nothing.
+    let txn = super::begin_write(db).await?;
+    // Only the first of two orders for one need links a part: the second
+    // finds the part linked and its conditional write changes nothing.
     let claimed = job_need::Entity::update_many()
         .col_expr(job_need::Column::UpdatedAt, Expr::value(super::now()))
         .filter(job_need::Column::Id.eq(need_id))
@@ -762,10 +741,7 @@ pub async fn link_part<C: ConnectionTrait + TransactionTrait>(
     part_id: i32,
     received_on: Option<chrono::NaiveDate>,
 ) -> DomainResult<NeedPurchase> {
-    let txn = db.begin().await?;
-    // The claim takes the write lock before anything is read, so the checks
-    // below and the writes see one snapshot.
-    claim(&txn, need_id).await?;
+    let txn = super::begin_write(db).await?;
     let need = require(&txn, vehicle_id, need_id).await?;
     let found = super::part::get(&txn, vehicle_id, part_id).await?;
     if super::part::is_returned(&found) {
@@ -877,8 +853,7 @@ pub async fn unlink_part<C: ConnectionTrait + TransactionTrait>(
     vehicle_id: i32,
     need_id: i32,
 ) -> DomainResult<job_need::Model> {
-    let txn = db.begin().await?;
-    claim(&txn, need_id).await?;
+    let txn = super::begin_write(db).await?;
     let need = require(&txn, vehicle_id, need_id).await?;
     linked_part(&txn, &need).await?;
     let need = set_need_part(&txn, need, None, None).await?;
@@ -921,10 +896,7 @@ async fn set_received<C: ConnectionTrait + TransactionTrait>(
     action: PartAction,
     date_for: impl FnOnce(&part::Model) -> DomainResult<Option<chrono::NaiveDate>>,
 ) -> DomainResult<NeedPurchase> {
-    let txn = db.begin().await?;
-    // The claim takes the write lock before the part is read, so nothing
-    // else commits between the checks and the write.
-    claim(&txn, need_id).await?;
+    let txn = super::begin_write(db).await?;
     let need = require(&txn, vehicle_id, need_id).await?;
     let found = linked_part(&txn, &need).await?;
     require_unfitted(&found, action)?;
@@ -1040,10 +1012,7 @@ pub async fn return_part<C: ConnectionTrait + TransactionTrait>(
     input: ReturnInput,
 ) -> DomainResult<ReturnOutcome> {
     super::validate_not_blank("reason", &input.reason)?;
-    let txn = db.begin().await?;
-    // The claim takes the write lock before the part is read, so nothing
-    // else commits between this check and the writes below.
-    claim(&txn, need_id).await?;
+    let txn = super::begin_write(db).await?;
     let need = require(&txn, vehicle_id, need_id).await?;
     let found = linked_part(&txn, &need).await?;
     require_unfitted(&found, PartAction::Return)?;
@@ -2582,7 +2551,7 @@ mod tests {
         let (n, _) = ordered_need(first, vehicle_id, job_id).await;
         let part_id = n.part_id.unwrap();
 
-        let txn = first.begin().await.unwrap();
+        let txn = crate::services::begin_write(first).await.unwrap();
         let input = ReturnInput {
             reason: "Wrong size".into(),
             option_was_wrong: false,

@@ -222,7 +222,7 @@ async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
     );
     let raw_data = serde_json::to_string(&new_findings).ok();
 
-    let txn = db.begin().await?;
+    let txn = super::begin_write(db).await?;
 
     let report = research_report::ActiveModel {
         vehicle_id: Set(vehicle_id),

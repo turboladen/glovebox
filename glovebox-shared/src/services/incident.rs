@@ -245,7 +245,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     super::vehicle::require(db, vehicle_id).await?;
     require_links_owned(db, vehicle_id, input.recurrence_of_id).await?;
 
-    let txn = db.begin().await?;
+    let txn = super::begin_write(db).await?;
 
     let model = incident::ActiveModel {
         vehicle_id: Set(vehicle_id),
@@ -329,7 +329,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         }
     }
 
-    let txn = db.begin().await?;
+    let txn = super::begin_write(db).await?;
 
     let mut active: incident::ActiveModel = existing.into();
 
@@ -462,7 +462,7 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
 ) -> DomainResult<()> {
     let existing = require_incident(db, vehicle_id, id).await?;
 
-    let txn = db.begin().await?;
+    let txn = super::begin_write(db).await?;
 
     incident_followup::Entity::delete_many()
         .filter(incident_followup::Column::IncidentId.eq(existing.id))
