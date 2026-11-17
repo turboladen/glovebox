@@ -950,6 +950,77 @@ async fn todo_add_tick_undo_delete() {
     assert!(body.contains("Not saved"), "{body}");
 }
 
+// A shop-supplied need with no researched options still has a form for the
+// reason the shop supplies it.
+#[tokio::test]
+async fn a_shop_need_with_no_options_takes_a_reason() {
+    let w = World::new().await;
+    let fluid = need::add(
+        &w.db,
+        w.vehicle,
+        w.job,
+        NewNeed {
+            name: "Brake fluid".into(),
+            supplied_by: Some(Supplier::Shop),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    let action = format!("/vehicles/{}/needs/{fluid}/decision", w.vehicle);
+    let (_, page) = w.get(&w.page_path()).await;
+    assert!(page.contains(&format!(r#"action="{action}""#)), "{page}");
+    assert!(page.contains("No options researched."), "{page}");
+
+    let back = w.page_path();
+    let (status, _, _) = w
+        .post(
+            &action,
+            &[
+                ("stored_reason", ""),
+                ("reason", "They bleed it with their own"),
+                ("back", &back),
+            ],
+        )
+        .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let saved = need::require(&w.db, w.vehicle, fluid).await.unwrap();
+    assert_eq!(
+        saved.decision_reason.as_deref(),
+        Some("They bleed it with their own")
+    );
+}
+
+// A refused order date marks the date input, not the price input.
+#[tokio::test]
+async fn a_bad_order_date_marks_the_date_input() {
+    let w = World::new().await;
+    w.choose_good().await;
+    let back = w.page_path();
+    let (status, _, body) = w
+        .post(
+            &w.need_path("ordered"),
+            &[
+                ("seller", "FCP Euro"),
+                ("purchase_date", "2026-13-45"),
+                ("cost", "74.99"),
+                ("back", &back),
+            ],
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        body.contains(r#"name="purchase_date" value="2026-13-45" aria-invalid="true""#),
+        "{body}"
+    );
+    assert!(
+        !body.contains(r#"name="cost" value="74.99" aria-invalid="true""#),
+        "{body}"
+    );
+}
+
 #[tokio::test]
 async fn a_closed_appointment_shows_no_add_form_and_refuses_a_new_todo() {
     let w = World::new().await;

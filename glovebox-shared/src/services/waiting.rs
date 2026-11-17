@@ -137,13 +137,17 @@ impl Cover {
     }
 }
 
-/// What is waiting on one vehicle.
+/// What is waiting on one vehicle as of `today`.
 ///
 /// # Errors
 /// `NotFound` for a vehicle that does not exist.
-pub async fn waiting(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult<Waiting> {
-    let reminders = reminders::calculate_reminders(db, vehicle_id).await?;
-    let planned = upcoming::planned_work(db, vehicle_id).await?;
+pub async fn waiting(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    today: chrono::NaiveDate,
+) -> DomainResult<Waiting> {
+    let reminders = reminders::calculate_reminders_on(db, vehicle_id, today).await?;
+    let planned = upcoming::planned_work(db, vehicle_id, today).await?;
     let covering = |link: fn(&work_item::Model) -> Option<i32>, id: i32| {
         Cover::of(
             planned
@@ -317,6 +321,74 @@ mod tests {
         v
     }
 
+    // A job planned against a platform item that the model template shadows
+    // by name covers the template's reminder, and leaves it once booked.
+    #[tokio::test]
+    async fn a_job_on_a_shadowed_platform_item_covers_the_template_reminder() {
+        use crate::entities::maintenance_schedule_item as item;
+
+        let db = test_db().await;
+        let v = gti_at_64k(&db).await;
+        let platform_plugs = item::Entity::find()
+            .filter(item::Column::Name.eq("Spark Plugs"))
+            .filter(item::Column::PlatformId.is_not_null())
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        let template_id = crate::services::vehicle::require(&db, v)
+            .await
+            .unwrap()
+            .model_template_id
+            .unwrap();
+        let template_plugs = item::ActiveModel {
+            model_template_id: Set(Some(template_id)),
+            name: Set("Spark Plugs".into()),
+            interval_miles: Set(Some(60_000)),
+            enabled: Set(true),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap()
+        .id;
+
+        let planned = job(
+            &db,
+            v,
+            NewWorkItem {
+                schedule_item_id: Some(platform_plugs.id),
+                ..work("Plugs")
+            },
+        )
+        .await;
+        let w = waiting(&db, v, crate::services::today()).await.unwrap();
+        let plugs = w
+            .maintenance
+            .iter()
+            .find(|m| m.name == "Spark Plugs")
+            .expect("the plugs are due");
+        assert_eq!(
+            (plugs.schedule_item_id, plugs.job_id),
+            (template_plugs, Some(planned))
+        );
+
+        let a = open_appointment(&db, v).await;
+        work_item_svc::update(
+            &db,
+            v,
+            planned,
+            UpdateWorkItem {
+                appointment_id: Some(Some(a)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let w = waiting(&db, v, crate::services::today()).await.unwrap();
+        assert!(w.maintenance.iter().all(|m| m.name != "Spark Plugs"));
+    }
+
     async fn job(db: &DatabaseConnection, v: i32, input: NewWorkItem) -> i32 {
         work_item_svc::create(db, v, input).await.unwrap().id
     }
@@ -365,7 +437,7 @@ mod tests {
         let db = test_db().await;
         let v = gti_at_64k(&db).await;
 
-        let w = waiting(&db, v).await.unwrap();
+        let w = waiting(&db, v, crate::services::today()).await.unwrap();
 
         assert!(!w.maintenance.is_empty());
         assert!(
@@ -450,7 +522,7 @@ mod tests {
         .await
         .unwrap();
 
-        let w = waiting(&db, v).await.unwrap();
+        let w = waiting(&db, v, crate::services::today()).await.unwrap();
 
         let rows: Vec<_> = w
             .jobs
@@ -471,7 +543,7 @@ mod tests {
     async fn a_covered_item_names_its_job_and_a_booked_one_is_left_out() {
         let db = test_db().await;
         let v = gti_at_64k(&db).await;
-        let plugs_id = plugs(&waiting(&db, v).await.unwrap())
+        let plugs_id = plugs(&waiting(&db, v, crate::services::today()).await.unwrap())
             .unwrap()
             .schedule_item_id;
         let recalls = research::record_recalls(&db, v, &[recall_info("A1"), recall_info("B2")])
@@ -518,7 +590,7 @@ mod tests {
         )
         .await;
 
-        let w = waiting(&db, v).await.unwrap();
+        let w = waiting(&db, v, crate::services::today()).await.unwrap();
         assert_eq!(plugs(&w).unwrap().job_id, Some(plug_job));
         assert_eq!(w.recalls.len(), 1, "the done recall is not waiting");
         assert_eq!(
@@ -552,7 +624,7 @@ mod tests {
             .unwrap();
         }
 
-        let w = waiting(&db, v).await.unwrap();
+        let w = waiting(&db, v, crate::services::today()).await.unwrap();
         assert!(plugs(&w).is_none());
         assert!(!w.maintenance.is_empty(), "other due items still wait");
         assert!(w.recalls.is_empty() && w.incidents.is_empty() && w.jobs.is_empty());
@@ -573,7 +645,7 @@ mod tests {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
 
-        let w = waiting(&db, v).await.unwrap();
+        let w = waiting(&db, v, crate::services::today()).await.unwrap();
 
         assert!(w.maintenance.is_empty() && w.jobs.is_empty());
         assert!(w.recalls.is_empty() && w.incidents.is_empty());
@@ -583,7 +655,9 @@ mod tests {
     async fn a_missing_vehicle_is_not_found() {
         let db = test_db().await;
         assert!(matches!(
-            waiting(&db, 999).await.unwrap_err(),
+            waiting(&db, 999, crate::services::today())
+                .await
+                .unwrap_err(),
             DomainError::NotFound(_)
         ));
     }

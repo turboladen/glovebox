@@ -534,8 +534,9 @@ pub(crate) async fn insert_service_links(
 }
 
 /// Checks that every id is in the vehicle's schedule scope and maps each one
-/// to the item the vehicle actually tracks: an inherited id the vehicle has
-/// its own same-named item for becomes that item's id. Duplicates are
+/// to the item the vehicle actually tracks, the one [`resolve`] shows under
+/// that name: the vehicle's own item, else the model template's, else the
+/// platform's. Duplicates are
 /// dropped, first occurrence kept. An id outside the scope reads as
 /// nonexistent.
 pub(crate) async fn tracked_ids(
@@ -567,19 +568,17 @@ pub(crate) async fn tracked_ids(
         )));
     }
 
-    let mut own_by_name: HashMap<String, i32> = HashMap::new();
-    if found.values().any(|i| i.vehicle_id != Some(vehicle_id)) {
-        let own = maintenance_schedule_item::Entity::find()
-            .filter(maintenance_schedule_item::Column::VehicleId.eq(vehicle_id))
-            .order_by_desc(maintenance_schedule_item::Column::Id)
-            .all(db)
-            .await?;
-        // Descending ids, so the lowest id wins when a name repeats.
-        for item in own {
-            own_by_name.insert(name_key(&item.name), item.id);
-        }
-    }
-
+    // An inherited id maps to the item `resolve` shows under its name.
+    let tracked_by_name: HashMap<String, i32> =
+        if found.values().any(|i| i.vehicle_id != Some(vehicle_id)) {
+            resolve_for_listing(db, vehicle_id, true)
+                .await?
+                .into_iter()
+                .map(|r| (name_key(&r.effective_item.name), r.effective_item.id))
+                .collect()
+        } else {
+            HashMap::new()
+        };
     let mapped: Vec<i32> = ids
         .iter()
         .map(|id| {
@@ -587,7 +586,7 @@ pub(crate) async fn tracked_ids(
             if item.vehicle_id == Some(vehicle_id) {
                 *id
             } else {
-                own_by_name
+                tracked_by_name
                     .get(&name_key(&item.name))
                     .copied()
                     .unwrap_or(*id)
@@ -622,6 +621,9 @@ pub async fn resolve(
 /// [`resolve`], keeping disabled items when `include_dismissed` is true. A
 /// dismissed item then appears as the vehicle's disabled row, whose id is
 /// what [`undismiss_for_vehicle`] takes.
+// Each layer is read in descending id order, so when a name repeats the
+// lowest id is the one kept, as `own_item_named` picks; `tracked_ids` and the
+// reminders' `resolve_schedule` must agree with it.
 pub async fn resolve_for_listing(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -642,6 +644,7 @@ pub async fn resolve_for_listing(
             if let Some(platform_id) = mt.platform_id {
                 let platform_items = maintenance_schedule_item::Entity::find()
                     .filter(maintenance_schedule_item::Column::PlatformId.eq(platform_id))
+                    .order_by_desc(maintenance_schedule_item::Column::Id)
                     .all(db)
                     .await?;
 
@@ -660,6 +663,7 @@ pub async fn resolve_for_listing(
             // Layer 2: Model template items override platform items by name
             let template_items = maintenance_schedule_item::Entity::find()
                 .filter(maintenance_schedule_item::Column::ModelTemplateId.eq(mt_id))
+                .order_by_desc(maintenance_schedule_item::Column::Id)
                 .all(db)
                 .await?;
 
@@ -679,6 +683,7 @@ pub async fn resolve_for_listing(
     // Layer 3: Vehicle-level items override everything
     let vehicle_items = maintenance_schedule_item::Entity::find()
         .filter(maintenance_schedule_item::Column::VehicleId.eq(vehicle_id))
+        .order_by_desc(maintenance_schedule_item::Column::Id)
         .all(db)
         .await?;
 
@@ -1424,7 +1429,9 @@ mod tests {
         // for the first projected occurrence.
         let moved = work_item::get(&db, vid, planned.id).await.unwrap();
         assert_eq!(moved.schedule_item_id, Some(over.id));
-        let f = budget::forecast_from(&db, vid, &rems).await.unwrap();
+        let f = budget::forecast_from(&db, vid, &rems, crate::services::today())
+            .await
+            .unwrap();
         assert!(
             !f.lines.iter().any(|l| l.label == "Spark Plugs"),
             "first occurrence is already planned: {:?}",

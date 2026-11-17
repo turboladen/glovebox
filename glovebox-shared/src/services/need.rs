@@ -191,9 +191,10 @@ pub async fn add(
 
 /// Changes a need's name, quantity, supplier, approach or decision reason. A
 /// need with no chosen option holds a reason only while the shop supplies it,
-/// judged with the supplier this call leaves: such a reason is refused, and
-/// moving a need with no chosen option away from `shop` clears its stored
-/// reason. Clearing a reason is always allowed.
+/// judged with the supplier this call leaves: such a reason is refused unless
+/// it is the one the need already holds, which changes nothing. Moving a need
+/// with no chosen option away from `shop` clears its stored reason, whether or
+/// not the call sends that reason back. Clearing a reason is always allowed.
 ///
 /// # Errors
 /// `NotFound` for a need that is not the vehicle's; `Invalid` as for [`add`],
@@ -227,12 +228,19 @@ async fn apply_update(
     }
     let supplied_by = input.supplied_by.unwrap_or(existing.supplied_by);
     let can_hold = holds_reason(supplied_by, existing.chosen_option_id);
-    if matches!(input.decision_reason, Some(Some(_))) && !can_hold {
+    // A need may hold a reason it could not take now. Sending that reason
+    // back is no change, so the need stays editable.
+    let resent = matches!(
+        &input.decision_reason,
+        Some(Some(reason)) if existing.decision_reason.as_ref() == Some(reason)
+    );
+    if matches!(input.decision_reason, Some(Some(_))) && !resent && !can_hold {
         return Err(reason_refused());
     }
     // Only a real change of supplier clears, because the web supplier form
-    // resends the stored supplier with every approach edit.
-    let clears_reason = input.decision_reason.is_none()
+    // resends the stored supplier with every approach edit. A resent reason
+    // clears the same way an absent one does.
+    let clears_reason = (input.decision_reason.is_none() || resent)
         && existing.decision_reason.is_some()
         && existing.supplied_by == Some(Supplier::Shop)
         && supplied_by != existing.supplied_by
@@ -250,13 +258,13 @@ async fn apply_update(
     if let Some(value) = input.approach {
         active.approach = Set(value);
     }
-    if let Some(value) = input.decision_reason {
-        active.decision_reason = Set(value);
-    } else if clears_reason {
+    if clears_reason {
         // A reason with no chosen option explains why the shop supplies the
         // need, so it goes when the shop stops supplying it, the way a
         // cleared choice takes its reason along.
         active.decision_reason = Set(None);
+    } else if let Some(value) = input.decision_reason {
+        active.decision_reason = Set(value);
     }
     active.updated_at = Set(super::now());
     Ok(active.update(db).await?)
@@ -1082,6 +1090,101 @@ mod tests {
             name: name.into(),
             ..Default::default()
         }
+    }
+
+    // A need with no choice and no shop supplier may hold a reason it could
+    // not take now. An edit that sends that reason back is no change, and a
+    // new reason is still refused.
+    #[tokio::test]
+    async fn a_reason_a_need_already_holds_can_be_sent_back() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let n = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
+        job_need::ActiveModel {
+            id: Unchanged(n.id),
+            decision_reason: Set(Some("old reason".into())),
+            ..Default::default()
+        }
+        .update(&db)
+        .await
+        .unwrap();
+
+        let resent = update(
+            &db,
+            vehicle_id,
+            n.id,
+            UpdateNeed {
+                name: Some("Front pads".into()),
+                decision_reason: Some(Some("old reason".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (resent.name.as_str(), resent.decision_reason.as_deref()),
+            ("Front pads", Some("old reason"))
+        );
+
+        let err = update(
+            &db,
+            vehicle_id,
+            n.id,
+            UpdateNeed {
+                decision_reason: Some(Some("new reason".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Invalid { .. }), "{err:?}");
+    }
+
+    // A shop need's reason goes when the shop stops supplying it, even when
+    // the same call sends that reason back.
+    #[tokio::test]
+    async fn moving_off_the_shop_clears_a_resent_reason() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let n = add(
+            &db,
+            vehicle_id,
+            job_id,
+            NewNeed {
+                supplied_by: Some(Supplier::Shop),
+                ..need("Brake fluid")
+            },
+        )
+        .await
+        .unwrap();
+        update(
+            &db,
+            vehicle_id,
+            n.id,
+            UpdateNeed {
+                decision_reason: Some(Some("They bleed it".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let moved = update(
+            &db,
+            vehicle_id,
+            n.id,
+            UpdateNeed {
+                supplied_by: Some(Some(Supplier::Owner)),
+                decision_reason: Some(Some("They bleed it".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (moved.supplied_by, moved.decision_reason),
+            (Some(Supplier::Owner), None)
+        );
     }
 
     fn option(description: &str) -> NewOption {

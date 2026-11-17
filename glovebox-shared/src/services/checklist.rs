@@ -703,7 +703,10 @@ pub struct HomeAppointment {
 ///
 /// # Errors
 /// `Db` when a query fails.
-pub async fn home(db: &impl ConnectionTrait) -> DomainResult<Vec<VehicleHome>> {
+pub async fn home(
+    db: &impl ConnectionTrait,
+    today: chrono::NaiveDate,
+) -> DomainResult<Vec<VehicleHome>> {
     // Every vehicle's rows come from the same batched queries, through the
     // functions the per-vehicle lists use, so the page and the tools agree.
     let vehicles: Vec<vehicle::Model> = super::vehicle::list(db)
@@ -720,7 +723,7 @@ pub async fn home(db: &impl ConnectionTrait) -> DomainResult<Vec<VehicleHome>> {
     let mut homes = Vec::with_capacity(vehicles.len());
     for vehicle in vehicles {
         homes.push(VehicleHome {
-            waiting: waiting::waiting(db, vehicle.id).await?,
+            waiting: waiting::waiting(db, vehicle.id, today).await?,
             appointments: appointments
                 .remove(&vehicle.id)
                 .unwrap_or_default()
@@ -1834,7 +1837,7 @@ mod tests {
             .await
             .unwrap();
 
-        let home = home(&db).await.unwrap();
+        let home = home(&db, crate::services::today()).await.unwrap();
 
         let names: Vec<&str> = home.iter().map(|h| h.vehicle.name.as_str()).collect();
         assert_eq!(

@@ -152,12 +152,13 @@ pub async fn list(
 }
 
 /// Lists a vehicle's to-do items, each with its revisit status judged against
-/// today and the estimated odometer. A vehicle with no mileage data is
+/// `today` and the estimated odometer. A vehicle with no mileage data is
 /// judged on dates alone.
 pub async fn list_with_status(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     include_done: bool,
+    today: chrono::NaiveDate,
 ) -> DomainResult<Vec<PlannedItem>> {
     let items = list(db, vehicle_id, include_done).await?;
     let estimated = if items.iter().any(|i| i.revisit_by_miles.is_some()) {
@@ -169,7 +170,7 @@ pub async fn list_with_status(
             > 0;
         if has_readings || v.purchase_mileage.is_some() {
             Some(
-                crate::services::reminders::estimate_mileage(db, vehicle_id, &v)
+                crate::services::reminders::estimate_mileage(db, vehicle_id, &v, today)
                     .await?
                     .0,
             )
@@ -179,7 +180,6 @@ pub async fn list_with_status(
     } else {
         None
     };
-    let today = crate::services::today();
     Ok(items
         .into_iter()
         .map(|item| PlannedItem {
@@ -889,7 +889,9 @@ mod tests {
         .await
         .unwrap();
 
-        let listed = list_with_status(&db, v, false).await.unwrap();
+        let listed = list_with_status(&db, v, false, crate::services::today())
+            .await
+            .unwrap();
         let by_title = |t: &str| listed.iter().find(|p| p.item.title == t).unwrap();
         assert_eq!(by_title("late").revisit_status, Some("overdue"));
         assert_eq!(by_title("plain").revisit_status, None);
