@@ -14,6 +14,7 @@ use crate::{
     error::{DomainError, DomainResult},
     inputs::work_item::{NewWorkItem, UpdateWorkItem},
     services::{
+        reminders::DueStatus,
         schedule::{DEFAULT_WARNING_DAYS, DEFAULT_WARNING_MILES},
         service_record::CompletedWork,
     },
@@ -34,44 +35,40 @@ fn validate_revisit(miles: Option<i32>) -> DomainResult<()> {
     Ok(())
 }
 
-/// How close an item's revisit-by is: `None` when it has no revisit date or
-/// mileage, else `"overdue"`, `"due_soon"` (within 30 days or 1000 miles) or
-/// `"ok"`. The worse of the date and mileage readings wins. With no
-/// estimated mileage, only the date is judged, so an item with only a
-/// revisit mileage reads `"ok"`.
+/// How close an item's revisit-by is. It is `None` when the item has no
+/// revisit date or mileage. Otherwise a reading past its revisit point is
+/// overdue, one within 30 days or 1000 miles of it is due soon, and any
+/// other is ok, and the more urgent of the date and mileage readings wins.
+/// With no estimated mileage only the date is judged, so an item with only a
+/// revisit mileage reads ok.
 #[must_use]
 pub fn revisit_status(
     item: &work_item::Model,
     today: chrono::NaiveDate,
     estimated_mileage: Option<i32>,
-) -> Option<&'static str> {
-    let by_date = item.revisit_by_date.map(|due| {
-        let days = (due - today).num_days();
-        if days < 0 {
-            2
-        } else {
-            i32::from(days <= i64::from(DUE_SOON_DAYS))
-        }
-    });
-    let by_miles = item
-        .revisit_by_miles
-        .zip(estimated_mileage)
-        .map(|(due, est)| {
-            let remaining = due - est;
-            if remaining < 0 {
-                2
-            } else {
-                i32::from(remaining <= DUE_SOON_MILES)
-            }
-        });
+) -> Option<DueStatus> {
     if item.revisit_by_date.is_none() && item.revisit_by_miles.is_none() {
         return None;
     }
-    Some(match Ord::max(by_date, by_miles).unwrap_or(0) {
-        2 => "overdue",
-        1 => "due_soon",
-        _ => "ok",
-    })
+    // Only a negative remainder is overdue here; reminders count zero as
+    // overdue too.
+    let judge = |remaining: i64, warning: i64| {
+        if remaining < 0 {
+            DueStatus::Overdue
+        } else if remaining <= warning {
+            DueStatus::DueSoon
+        } else {
+            DueStatus::NotDue
+        }
+    };
+    let by_date = item
+        .revisit_by_date
+        .map(|due| judge((due - today).num_days(), i64::from(DUE_SOON_DAYS)));
+    let by_miles = item
+        .revisit_by_miles
+        .zip(estimated_mileage)
+        .map(|(due, est)| judge(i64::from(due - est), i64::from(DUE_SOON_MILES)));
+    Some(DueStatus::most_urgent(by_date.into_iter().chain(by_miles)))
 }
 
 /// A to-do item with its revisit reading, as `list_with_status` returns it.
@@ -81,7 +78,7 @@ pub struct PlannedItem {
     pub item: work_item::Model,
     /// See [`revisit_status`]; omitted when the item has no revisit-by.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub revisit_status: Option<&'static str>,
+    pub revisit_status: Option<DueStatus>,
 }
 
 /// Verify a referenced research finding belongs to the vehicle (via its
@@ -659,7 +656,7 @@ mod tests {
         }
     }
 
-    async fn reminder_status(db: &DatabaseConnection, vehicle_id: i32, name: &str) -> String {
+    async fn reminder_status(db: &DatabaseConnection, vehicle_id: i32, name: &str) -> DueStatus {
         reminders::calculate_reminders(db, vehicle_id)
             .await
             .unwrap()
@@ -679,15 +676,15 @@ mod tests {
         );
         assert_eq!(
             revisit_status(&with_revisit(Some("2026-10-01"), None), today, None),
-            Some("overdue")
+            Some(DueStatus::Overdue)
         );
         assert_eq!(
             revisit_status(&with_revisit(Some("2026-12-01"), None), today, None),
-            Some("due_soon")
+            Some(DueStatus::DueSoon)
         );
         assert_eq!(
             revisit_status(&with_revisit(Some("2027-06-01"), None), today, None),
-            Some("ok")
+            Some(DueStatus::NotDue)
         );
         assert_eq!(
             revisit_status(
@@ -695,15 +692,15 @@ mod tests {
                 today,
                 Some(64000)
             ),
-            Some("due_soon")
+            Some(DueStatus::DueSoon)
         );
         assert_eq!(
             revisit_status(&with_revisit(None, Some(60000)), today, Some(64000)),
-            Some("overdue")
+            Some(DueStatus::Overdue)
         );
         assert_eq!(
             revisit_status(&with_revisit(None, Some(60000)), today, None),
-            Some("ok")
+            Some(DueStatus::NotDue)
         );
     }
 
@@ -711,17 +708,17 @@ mod tests {
     fn revisit_status_boundaries() {
         let today = NaiveDate::from_ymd_opt(2026, 11, 12).unwrap();
         let by_date = |d: &str| revisit_status(&with_revisit(Some(d), None), today, None);
-        assert_eq!(by_date("2026-11-12"), Some("due_soon"));
-        assert_eq!(by_date("2026-12-12"), Some("due_soon"));
-        assert_eq!(by_date("2026-12-13"), Some("ok"));
-        assert_eq!(by_date("2026-11-11"), Some("overdue"));
+        assert_eq!(by_date("2026-11-12"), Some(DueStatus::DueSoon));
+        assert_eq!(by_date("2026-12-12"), Some(DueStatus::DueSoon));
+        assert_eq!(by_date("2026-12-13"), Some(DueStatus::NotDue));
+        assert_eq!(by_date("2026-11-11"), Some(DueStatus::Overdue));
 
         let by_miles =
             |est: i32| revisit_status(&with_revisit(None, Some(64000)), today, Some(est));
-        assert_eq!(by_miles(64000), Some("due_soon"));
-        assert_eq!(by_miles(64001), Some("overdue"));
-        assert_eq!(by_miles(63000), Some("due_soon"));
-        assert_eq!(by_miles(62999), Some("ok"));
+        assert_eq!(by_miles(64000), Some(DueStatus::DueSoon));
+        assert_eq!(by_miles(64001), Some(DueStatus::Overdue));
+        assert_eq!(by_miles(63000), Some(DueStatus::DueSoon));
+        assert_eq!(by_miles(62999), Some(DueStatus::NotDue));
     }
 
     #[tokio::test]
@@ -744,7 +741,7 @@ mod tests {
         .id;
         assert_eq!(
             reminder_status(&db, v, "Brake fluid flush").await,
-            "overdue"
+            DueStatus::Overdue
         );
         let planned = create(
             &db,
@@ -765,7 +762,10 @@ mod tests {
         let item_after = get(&db, v, planned.id).await.unwrap();
         assert_eq!(item_after.status, JobStatus::Done);
         assert_eq!(item_after.completed_service_id, Some(svc.record.id));
-        assert_eq!(reminder_status(&db, v, "Brake fluid flush").await, "ok");
+        assert_eq!(
+            reminder_status(&db, v, "Brake fluid flush").await,
+            DueStatus::NotDue
+        );
     }
 
     #[tokio::test]
@@ -893,11 +893,14 @@ mod tests {
             .await
             .unwrap();
         let by_title = |t: &str| listed.iter().find(|p| p.item.title == t).unwrap();
-        assert_eq!(by_title("late").revisit_status, Some("overdue"));
+        assert_eq!(by_title("late").revisit_status, Some(DueStatus::Overdue));
         assert_eq!(by_title("plain").revisit_status, None);
         // With no odometer reading and no purchase mileage, a miles-only
         // revisit cannot be judged yet and reads `ok`.
-        assert_eq!(by_title("miles only").revisit_status, Some("ok"));
+        assert_eq!(
+            by_title("miles only").revisit_status,
+            Some(DueStatus::NotDue)
+        );
     }
 
     #[tokio::test]

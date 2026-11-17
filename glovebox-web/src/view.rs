@@ -18,7 +18,7 @@ use glovebox_shared::{
         checklist::{self, Checklist, HomeAppointment, JobView, NeedView, StepRow},
         date_label,
         need::{self, Stage},
-        reminders,
+        reminders::{self, DueStatus},
         waiting::{Waiting, booked_note},
         work_sheet::{SheetLine, WorkSheet},
     },
@@ -495,14 +495,11 @@ impl PillKind {
         }
     }
 
-    // A reminder's and a revisit's status are still text (`overdue`,
-    // `due_soon`, `ok`), so this match cannot be exhaustive until bead
-    // glovebox-whhy types them; any other text reads as a plain fact.
-    fn of_due(status: &str) -> Self {
+    fn of_due(status: DueStatus) -> Self {
         match status {
-            "overdue" => Self::Bad,
-            "due_soon" => Self::Todo,
-            _ => Self::Plain,
+            DueStatus::Overdue => Self::Bad,
+            DueStatus::DueSoon => Self::Todo,
+            DueStatus::NotDue => Self::Plain,
         }
     }
 }
@@ -514,11 +511,16 @@ pub struct Tag {
 }
 
 impl Tag {
-    /// Reads `overdue` as "Overdue" and `due_soon` as "Due soon".
-    fn of(status: &str) -> Self {
+    /// Builds the tag a due status shows, such as "Due soon".
+    fn of(status: DueStatus) -> Self {
         Self {
             kind: PillKind::of_due(status).class(),
-            text: sentence_case(&status.replace('_', " ")),
+            text: match status {
+                DueStatus::Overdue => "Overdue",
+                DueStatus::DueSoon => "Due soon",
+                DueStatus::NotDue => "Ok",
+            }
+            .to_owned(),
         }
     }
 }
@@ -586,7 +588,7 @@ impl From<&Waiting> for WaitingRows {
                 .iter()
                 .map(|m| DueRow {
                     name: m.name.clone(),
-                    status: Tag::of(&m.status),
+                    status: Tag::of(m.status),
                     due_at: reminders::due_at(m.due_at_miles, m.due_at_date),
                     how_far: m.how_far.clone(),
                     last_done: m.last_done.map(date_label),
@@ -601,7 +603,7 @@ impl From<&Waiting> for WaitingRows {
                     title: j.title.clone(),
                     revisit: j
                         .revisit_status
-                        .filter(|status| *status != "ok")
+                        .filter(|status| status.is_due())
                         .map(Tag::of),
                     estimate: j.est_cost_cents.map(format_cents),
                     needs_open: j.needs_open,

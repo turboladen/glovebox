@@ -19,7 +19,7 @@ use crate::{
         work_item::{self, JobStatus},
     },
     error::DomainResult,
-    services::reminders::RemindersResponse,
+    services::reminders::{DueStatus, RemindersResponse},
 };
 
 /// Forecast horizon: days `0..HORIZON_DAYS` from today (an occurrence
@@ -153,7 +153,7 @@ pub async fn forecast_from(
         };
 
         // Days until the first occurrence; overdue counts as one now.
-        let first_due: Option<i64> = if r.status == "overdue" {
+        let first_due: Option<i64> = if r.status == DueStatus::Overdue {
             Some(0)
         } else {
             [r.days_remaining, r.miles_remaining.and_then(miles_to_days)]
