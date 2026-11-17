@@ -99,11 +99,14 @@ pub struct RemindersResponse {
 
 /// Derive the warranty flag from the vehicle record and the estimated
 /// current mileage. `None` when neither expiry field is set.
-fn warranty_status(v: &vehicle::Model, estimated_mileage: i32) -> Option<WarrantyStatus> {
+fn warranty_status(
+    v: &vehicle::Model,
+    estimated_mileage: i32,
+    today: NaiveDate,
+) -> Option<WarrantyStatus> {
     if v.warranty_expires_on.is_none() && v.warranty_expires_miles.is_none() {
         return None;
     }
-    let today = crate::services::today();
     let date_covers = v
         .warranty_expires_on
         .is_some_and(|expires| today <= expires);
@@ -169,6 +172,7 @@ pub(crate) async fn estimate_mileage(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     v: &vehicle::Model,
+    today: NaiveDate,
 ) -> DomainResult<(i32, NaiveDate, f64, bool)> {
     let entries = mileage_log::Entity::find()
         .filter(mileage_log::Column::VehicleId.eq(vehicle_id))
@@ -176,8 +180,6 @@ pub(crate) async fn estimate_mileage(
         .limit(RATE_WINDOW_READINGS)
         .all(db)
         .await?;
-
-    let today = crate::services::today();
 
     if entries.is_empty() {
         let mileage = v.purchase_mileage.unwrap_or(0);
@@ -210,11 +212,20 @@ pub(crate) async fn estimate_mileage(
     Ok((estimated, latest_date, avg_daily, is_estimate))
 }
 
-/// Calculate reminders for a vehicle.
-#[allow(clippy::too_many_lines)]
+/// Calculate reminders for a vehicle as of today.
 pub async fn calculate_reminders(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
+) -> DomainResult<RemindersResponse> {
+    calculate_reminders_on(db, vehicle_id, crate::services::today()).await
+}
+
+/// [`calculate_reminders`] as of `today`.
+#[allow(clippy::too_many_lines)]
+pub async fn calculate_reminders_on(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    today: NaiveDate,
 ) -> DomainResult<RemindersResponse> {
     let v = vehicle::Entity::find_by_id(vehicle_id)
         .one(db)
@@ -222,12 +233,10 @@ pub async fn calculate_reminders(
         .ok_or_else(|| DomainError::NotFound(format!("Vehicle {vehicle_id} not found")))?;
 
     let (estimated_mileage, mileage_as_of, avg_daily_miles, mileage_is_estimate) =
-        estimate_mileage(db, vehicle_id, &v).await?;
+        estimate_mileage(db, vehicle_id, &v, today).await?;
 
     // The same layering as `schedule::resolve`: vehicle over template over platform.
     let effective_items = resolve_schedule(db, &v).await?;
-
-    let today = crate::services::today();
 
     // Batch-load all schedule links and service records for this vehicle (avoids N+1)
     let item_ids: Vec<i32> = effective_items.iter().map(|i| i.id).collect();
@@ -381,7 +390,7 @@ pub async fn calculate_reminders(
         mileage_is_estimate,
         mileage_as_of,
         avg_daily_miles,
-        warranty: warranty_status(&v, estimated_mileage),
+        warranty: warranty_status(&v, estimated_mileage, today),
         reminders,
         bundle_suggestions,
     })
@@ -901,7 +910,9 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let (estimated, _, rate, _) = estimate_mileage(&db, vid, &v).await.unwrap();
+        let (estimated, _, rate, _) = estimate_mileage(&db, vid, &v, crate::services::today())
+            .await
+            .unwrap();
         let expected = 63_960.0 / days_since_purchase();
         assert!(
             (rate - expected).abs() < 0.5,
@@ -962,7 +973,9 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let (_, _, rate, _) = estimate_mileage(&db, vid, &v).await.unwrap();
+        let (_, _, rate, _) = estimate_mileage(&db, vid, &v, crate::services::today())
+            .await
+            .unwrap();
         assert!((rate - 10.0).abs() < 1e-9, "rate {rate}");
     }
 
@@ -983,7 +996,9 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let (_, _, rate, _) = estimate_mileage(&db, vid, &v).await.unwrap();
+        let (_, _, rate, _) = estimate_mileage(&db, vid, &v, crate::services::today())
+            .await
+            .unwrap();
         assert!((rate - 10_000.0 / 400.0).abs() < 1e-9, "rate {rate}");
     }
 
@@ -999,7 +1014,9 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let (estimated, _, rate, _) = estimate_mileage(&db, vid, &v).await.unwrap();
+        let (estimated, _, rate, _) = estimate_mileage(&db, vid, &v, crate::services::today())
+            .await
+            .unwrap();
         assert!(rate.abs() < f64::EPSILON, "rate {rate}");
         assert_eq!(estimated, 50_400);
     }
@@ -1015,7 +1032,9 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let (_, _, rate, _) = estimate_mileage(&db, vid, &v).await.unwrap();
+        let (_, _, rate, _) = estimate_mileage(&db, vid, &v, crate::services::today())
+            .await
+            .unwrap();
         let expected = 63_960.0 / days_since_purchase();
         assert!(
             (rate - expected).abs() < 0.5,
@@ -1034,7 +1053,9 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let (_, _, rate, _) = estimate_mileage(&db, vid, &v).await.unwrap();
+        let (_, _, rate, _) = estimate_mileage(&db, vid, &v, crate::services::today())
+            .await
+            .unwrap();
         assert!(rate.abs() < f64::EPSILON, "rate {rate}");
     }
 

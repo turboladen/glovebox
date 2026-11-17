@@ -227,7 +227,13 @@ async fn apply_update(
     }
     let supplied_by = input.supplied_by.unwrap_or(existing.supplied_by);
     let can_hold = holds_reason(supplied_by, existing.chosen_option_id);
-    if matches!(input.decision_reason, Some(Some(_))) && !can_hold {
+    // Sending back the reason the need already holds changes nothing, so a
+    // row written before the rule can still be edited.
+    let new_reason = matches!(
+        &input.decision_reason,
+        Some(Some(reason)) if existing.decision_reason.as_ref() != Some(reason)
+    );
+    if new_reason && !can_hold {
         return Err(reason_refused());
     }
     // Only a real change of supplier clears, because the web supplier form
@@ -1082,6 +1088,54 @@ mod tests {
             name: name.into(),
             ..Default::default()
         }
+    }
+
+    // A need written before the reason rule holds a reason with no choice
+    // and no shop supplier. An edit that sends that reason back is no change,
+    // and a new reason is still refused.
+    #[tokio::test]
+    async fn a_reason_a_need_already_holds_can_be_sent_back() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let n = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
+        job_need::ActiveModel {
+            id: Unchanged(n.id),
+            decision_reason: Set(Some("old reason".into())),
+            ..Default::default()
+        }
+        .update(&db)
+        .await
+        .unwrap();
+
+        let resent = update(
+            &db,
+            vehicle_id,
+            n.id,
+            UpdateNeed {
+                name: Some("Front pads".into()),
+                decision_reason: Some(Some("old reason".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (resent.name.as_str(), resent.decision_reason.as_deref()),
+            ("Front pads", Some("old reason"))
+        );
+
+        let err = update(
+            &db,
+            vehicle_id,
+            n.id,
+            UpdateNeed {
+                decision_reason: Some(Some("new reason".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Invalid { .. }), "{err:?}");
     }
 
     fn option(description: &str) -> NewOption {

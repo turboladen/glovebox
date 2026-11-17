@@ -171,7 +171,7 @@ pub async fn get_home(State(state): State<AppState>, Query(query): Query<PageQue
 /// Renders the home page with `status`. A failed to-do add is shown in its
 /// vehicle's form, and any other failure at the top of the page.
 pub async fn home_response(state: &AppState, view: Page<'_>, status: StatusCode) -> Response {
-    let homes = match checklist::home(&state.db).await {
+    let homes = match checklist::home(&state.db, (state.today)()).await {
         Ok(homes) => homes,
         Err(e) => return internal(&e),
     };

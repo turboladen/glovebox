@@ -159,6 +159,16 @@ pub async fn list_with_status(
     vehicle_id: i32,
     include_done: bool,
 ) -> DomainResult<Vec<PlannedItem>> {
+    list_with_status_on(db, vehicle_id, include_done, crate::services::today()).await
+}
+
+/// [`list_with_status`] judging each revisit as of `today`.
+pub async fn list_with_status_on(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    include_done: bool,
+    today: chrono::NaiveDate,
+) -> DomainResult<Vec<PlannedItem>> {
     let items = list(db, vehicle_id, include_done).await?;
     let estimated = if items.iter().any(|i| i.revisit_by_miles.is_some()) {
         let v = crate::services::vehicle::require(db, vehicle_id).await?;
@@ -169,7 +179,7 @@ pub async fn list_with_status(
             > 0;
         if has_readings || v.purchase_mileage.is_some() {
             Some(
-                crate::services::reminders::estimate_mileage(db, vehicle_id, &v)
+                crate::services::reminders::estimate_mileage(db, vehicle_id, &v, today)
                     .await?
                     .0,
             )
@@ -179,7 +189,6 @@ pub async fn list_with_status(
     } else {
         None
     };
-    let today = crate::services::today();
     Ok(items
         .into_iter()
         .map(|item| PlannedItem {

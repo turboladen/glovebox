@@ -200,7 +200,7 @@ async fn gti_at_64k(db: &DatabaseConnection) -> i32 {
         v,
         NewMileageEntry {
             mileage: 64000,
-            recorded_at: Some(glovebox_shared::services::today().into()),
+            recorded_at: Some(common::today().into()),
             source: None,
             notes: None,
         },
@@ -208,6 +208,45 @@ async fn gti_at_64k(db: &DatabaseConnection) -> i32 {
     .await
     .unwrap();
     v
+}
+
+// The waiting lists judge by the page's clock, not the machine's: a GTI
+// bought 2024-11-23 has its 24-month air filter due 2026-11-23, ten days
+// after the test clock's 2026-11-13.
+#[tokio::test]
+async fn home_judges_what_is_due_by_the_page_clock() {
+    let db = db().await;
+    let template = model_template::list(&db)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|t| t.model.as_deref() == Some("Golf GTI"))
+        .expect("seeded GTI template");
+    let v = VehicleFixture::new()
+        .name("Golf GTI")
+        .model_template_id(template.id)
+        .purchase_date("2024-11-23")
+        .purchase_mileage(40)
+        .insert_id(&db)
+        .await;
+    mileage::create(
+        &db,
+        v,
+        NewMileageEntry {
+            mileage: 1000,
+            recorded_at: Some(common::today().into()),
+            source: None,
+            notes: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let (_, body) = page(app(db, "live"), get("/")).await;
+
+    let block = waiting_block(&body);
+    assert!(block.contains("Air Filter"), "{block}");
+    assert!(block.contains("in 10 days"), "{block}");
 }
 
 // The part of the home page from the first waiting sheet up to Appointments.
@@ -225,7 +264,7 @@ fn waiting_block(body: &str) -> &str {
 async fn home_shows_what_is_waiting_before_the_appointments() {
     let db = db().await;
     let v = gti_at_64k(&db).await;
-    let plugs = waiting::waiting(&db, v)
+    let plugs = waiting::waiting(&db, v, common::today())
         .await
         .unwrap()
         .maintenance
@@ -365,7 +404,10 @@ async fn home_says_so_when_nothing_is_waiting() {
 async fn home_says_how_many_due_items_are_already_on_an_appointment() {
     let db = db().await;
     let v = gti_at_64k(&db).await;
-    let due = waiting::waiting(&db, v).await.unwrap().maintenance;
+    let due = waiting::waiting(&db, v, common::today())
+        .await
+        .unwrap()
+        .maintenance;
     let appt = appointment::create(
         &db,
         v,

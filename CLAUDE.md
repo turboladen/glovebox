@@ -224,7 +224,7 @@ uses it. Rejecting or ruling out a chosen option keeps the need's reason and dat
 `chosen_reason` and `chosen_on` until the option is chosen again, and `past_decisions` lists both
 kinds under `rejected`, so it still reports them. Choosing the option a need
 already has keeps `decided_on`. A need with no chosen option holds a `decision_reason` only while
-the shop supplies it: `need::update` refuses one otherwise and clears the stored one when the
+the shop supplies it: `need::update` refuses a new one otherwise (sending back the reason it already holds is no change) and clears the stored one when the
 supplier moves away from `shop`. Clearing a choice the need does not have keeps its reason. The web
 decision form sends back the reason it showed, so with no option chosen an unedited reason counts
 as none sent, and the form goes through `need::update_with_choice` like `update_need`.

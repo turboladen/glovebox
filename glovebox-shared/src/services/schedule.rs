@@ -534,8 +534,9 @@ pub(crate) async fn insert_service_links(
 }
 
 /// Checks that every id is in the vehicle's schedule scope and maps each one
-/// to the item the vehicle actually tracks: an inherited id the vehicle has
-/// its own same-named item for becomes that item's id. Duplicates are
+/// to the item the vehicle actually tracks, the one [`resolve`] shows under
+/// that name: the vehicle's own item, else the model template's, else the
+/// platform's. Duplicates are
 /// dropped, first occurrence kept. An id outside the scope reads as
 /// nonexistent.
 pub(crate) async fn tracked_ids(
@@ -547,9 +548,10 @@ pub(crate) async fn tracked_ids(
         return Ok(Vec::new());
     }
     let v = crate::services::vehicle::require(db, vehicle_id).await?;
+    let inherited = inherited_owner(db, &v).await?;
     let mut owner =
         Condition::any().add(maintenance_schedule_item::Column::VehicleId.eq(vehicle_id));
-    if let Some(inherited) = inherited_owner(db, &v).await? {
+    if let Some(inherited) = inherited.clone() {
         owner = owner.add(inherited);
     }
     let found: HashMap<i32, maintenance_schedule_item::Model> =
@@ -567,16 +569,34 @@ pub(crate) async fn tracked_ids(
         )));
     }
 
-    let mut own_by_name: HashMap<String, i32> = HashMap::new();
-    if found.values().any(|i| i.vehicle_id != Some(vehicle_id)) {
+    // An inherited id maps to the item the vehicle tracks under its name.
+    let mut tracked_by_name: HashMap<String, i32> = HashMap::new();
+    if let Some(inherited) =
+        inherited.filter(|_| found.values().any(|i| i.vehicle_id != Some(vehicle_id)))
+    {
+        let mut by_name: HashMap<String, Vec<maintenance_schedule_item::Model>> = HashMap::new();
+        for item in maintenance_schedule_item::Entity::find()
+            .filter(inherited)
+            .order_by_asc(maintenance_schedule_item::Column::Id)
+            .all(db)
+            .await?
+        {
+            by_name.entry(name_key(&item.name)).or_default().push(item);
+        }
+        for (name, items) in &by_name {
+            if let Some(shown) = effective_inherited(items) {
+                tracked_by_name.insert(name.clone(), shown.id);
+            }
+        }
         let own = maintenance_schedule_item::Entity::find()
             .filter(maintenance_schedule_item::Column::VehicleId.eq(vehicle_id))
             .order_by_desc(maintenance_schedule_item::Column::Id)
             .all(db)
             .await?;
-        // Descending ids, so the lowest id wins when a name repeats.
+        // Descending ids, so the lowest id wins when a name repeats, and the
+        // vehicle's own item shadows every inherited one.
         for item in own {
-            own_by_name.insert(name_key(&item.name), item.id);
+            tracked_by_name.insert(name_key(&item.name), item.id);
         }
     }
 
@@ -587,7 +607,7 @@ pub(crate) async fn tracked_ids(
             if item.vehicle_id == Some(vehicle_id) {
                 *id
             } else {
-                own_by_name
+                tracked_by_name
                     .get(&name_key(&item.name))
                     .copied()
                     .unwrap_or(*id)
