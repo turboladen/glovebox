@@ -3,15 +3,15 @@
 
 use rmcp::{ErrorData as McpError, model::CallToolResult, tool, tool_router};
 
-use glovebox_shared::services::{appointment, checklist, need, todo};
+use glovebox_shared::services::{appointment, checklist, need, todo, work_sheet};
 
 use super::{GloveboxMcp, Parameters, deleted_result, domain_result};
 use crate::schemas::{
     AddNeedInput, AddNeedOptionInput, AddTodoInput, DeleteAppointmentInput, DeleteNeedInput,
-    DeleteNeedOptionInput, DeleteTodoInput, GetChecklistInput, LinkPartToNeedInput,
-    ListAppointmentsInput, MarkNeedOrderedInput, MarkNeedReceivedInput, PastDecisionsInput,
-    PlanAppointmentInput, ReturnPartInput, UpdateAppointmentInput, UpdateNeedInput,
-    UpdateNeedOptionInput, UpdateTodoInput,
+    DeleteNeedOptionInput, DeleteTodoInput, GetChecklistInput, GetWorkSheetInput,
+    LinkPartToNeedInput, ListAppointmentsInput, MarkNeedOrderedInput, MarkNeedReceivedInput,
+    PastDecisionsInput, PlanAppointmentInput, ReturnPartInput, UpdateAppointmentInput,
+    UpdateNeedInput, UpdateNeedOptionInput, UpdateTodoInput,
 };
 
 #[tool_router(router = checklist_router, vis = "pub(super)")]
@@ -115,6 +115,25 @@ impl GloveboxMcp {
         let p = tool_input!(params, "get_checklist");
         let (vehicle_id, scope) = domain_input!(p.into_domain());
         domain_result(checklist::get(&*self.db, vehicle_id, scope).await)
+    }
+
+    #[tool(
+        name = "get_work_sheet",
+        description = "The work sheet to hand the mechanic for an appointment: each planned job, \
+                       the parts the owner brings (`owner_supplies`, with `part_number` when \
+                       known) and the parts the shop should supply (`shop_supplies`, name only). \
+                       `unsettled` lists needs that are undecided or not yet ordered, which are \
+                       not on the sheet. Tell the owner about those first and offer to settle \
+                       them with the existing tools, or set `supplied_by` to `shop` with \
+                       `update_need`. Present the sheet as a plain checklist: a checkbox per job, \
+                       then the two part lists."
+    )]
+    async fn get_work_sheet(
+        &self,
+        params: Parameters<GetWorkSheetInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = tool_input!(params, "get_work_sheet");
+        domain_result(work_sheet::for_appointment(&*self.db, p.vehicle_id, p.appointment_id).await)
     }
 
     #[tool(

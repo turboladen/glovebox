@@ -188,6 +188,7 @@ async fn the_server_offers_exactly_the_expected_tools() {
             "get_incident",
             "get_service",
             "get_vehicle",
+            "get_work_sheet",
             "link_part_to_need",
             "link_service_to_maintenance",
             "list_appointments",

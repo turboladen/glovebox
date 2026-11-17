@@ -1194,6 +1194,10 @@ async fn unknown_field_is_a_tool_error_naming_it() {
         ("delete_todo", json!({ "vehicle_id": 1, "todo_id": 1 })),
         ("past_decisions", json!({ "query": "x" })),
         (
+            "get_work_sheet",
+            json!({ "vehicle_id": 1, "appointment_id": 1 }),
+        ),
+        (
             "record_service",
             json!({ "vehicle_id": 1, "service_date": "2026-11-10", "parts": [{ "name": "x" }] }),
         ),
@@ -1386,4 +1390,102 @@ async fn wrong_vehicle_ids_read_as_missing() {
             "{tool} must not tell a wrong-vehicle id from a missing one"
         );
     }
+}
+
+// An appointment with one job: "Front pads" chosen and ordered by the owner
+// (Akebono ACT1633), "Brake fluid" supplied by the shop, and "Wiper blades"
+// undecided. Returns (vehicle, appointment).
+async fn work_sheet_fixture(t: &TestClient) -> (i64, i64) {
+    let v = add_vehicle(t, "Golf GTI").await;
+    let appt = plan_appointment(t, v, "Brakes").await;
+    let job = plan_job(t, v, "Front brakes", Some(appt)).await;
+    let pads = add_need(t, v, job, "Front pads").await;
+    let option = add_option(
+        t,
+        v,
+        pads,
+        json!({ "description": "Ceramic pads", "manufacturer": "Akebono", "part_number": "ACT1633" }),
+    )
+    .await;
+    t.call(
+        "update_need",
+        json!({ "vehicle_id": v, "need_id": pads, "supplied_by": "self", "chosen_option_id": option }),
+    )
+    .await;
+    t.call(
+        "mark_need_ordered",
+        json!({ "vehicle_id": v, "need_id": pads }),
+    )
+    .await;
+    let fluid = add_need(t, v, job, "Brake fluid").await;
+    t.call(
+        "update_need",
+        json!({ "vehicle_id": v, "need_id": fluid, "supplied_by": "shop" }),
+    )
+    .await;
+    add_need(t, v, job, "Wiper blades").await;
+    (v, appt)
+}
+
+#[tokio::test]
+async fn work_sheet_groups_parts_by_supplier() {
+    let t = connect().await;
+    let (v, appt) = work_sheet_fixture(&t).await;
+
+    let sheet = t
+        .call(
+            "get_work_sheet",
+            json!({ "vehicle_id": v, "appointment_id": appt }),
+        )
+        .await;
+
+    let job = &sheet["jobs"][0];
+    assert_eq!(job["title"], "Front brakes", "got: {sheet}");
+    assert_eq!(job["owner_supplies"][0]["name"], "Front pads");
+    assert_eq!(job["owner_supplies"][0]["part_number"], "Akebono ACT1633");
+    assert_eq!(job["shop_supplies"][0]["name"], "Brake fluid");
+    assert_eq!(job["shop_supplies"][0]["part_number"], Value::Null);
+    assert_eq!(sheet["vehicle"], "Golf GTI");
+}
+
+#[tokio::test]
+async fn work_sheet_lists_unsettled_needs() {
+    let t = connect().await;
+    let (v, appt) = work_sheet_fixture(&t).await;
+
+    let sheet = t
+        .call(
+            "get_work_sheet",
+            json!({ "vehicle_id": v, "appointment_id": appt }),
+        )
+        .await;
+
+    assert_eq!(
+        sheet["unsettled"][0]["name"], "Wiper blades",
+        "got: {sheet}"
+    );
+    assert_eq!(sheet["unsettled"][0]["stage"], "undecided");
+    assert_eq!(sheet["unsettled"][0]["job_title"], "Front brakes");
+}
+
+#[tokio::test]
+async fn work_sheet_of_another_vehicles_appointment_is_a_tool_error() {
+    let t = connect().await;
+    let (_, appt) = work_sheet_fixture(&t).await;
+    let other = add_vehicle(&t, "Other").await;
+
+    let wrong = t
+        .call_err(
+            "get_work_sheet",
+            json!({ "vehicle_id": other, "appointment_id": appt }),
+        )
+        .await;
+    let missing = t
+        .call_err(
+            "get_work_sheet",
+            json!({ "vehicle_id": other, "appointment_id": 9999 }),
+        )
+        .await;
+
+    assert_eq!(wrong, missing.replace("9999", &appt.to_string()));
 }
