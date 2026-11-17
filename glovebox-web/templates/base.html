@@ -289,6 +289,24 @@
     .step > .act, .step > .drawer--end:not([open]) { justify-self: start; }
     .step > .drawer[open], .step > .more { grid-column: 1 / -1; }
   }
+
+  /* The work sheet is plain text a mechanic reads on paper, not a panel of
+     the ledger; ADR 0009 records why. */
+  .ws { padding-block: 1rem 2rem; display: grid; gap: 1.25rem; }
+  .ws h1 { font-size: 1.4rem; }
+  .ws-job { break-inside: avoid; display: grid; gap: 0.35rem; }
+  .ws-title { display: flex; gap: 0.6rem; align-items: baseline; font-size: 1.15rem; font-weight: 600; }
+  .ws-box { flex: none; display: inline-block; width: 0.9em; height: 0.9em; border: 1.5px solid currentColor; }
+  .ws-job h2 { font-size: var(--s-data); margin-left: 1.5rem; }
+  .ws-job ul { margin-left: 2.5rem; list-style: disc; }
+  .ws-job .pn { margin-left: 1rem; }
+  .ws-warn { background: var(--panel); border: 1px solid var(--rule); padding: 0.75rem 1rem; display: grid; gap: 0.5rem; }
+  .ws-warn li { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; align-items: baseline; }
+  @media print {
+    .chrome, .hint, .noprint { display: none; }
+    body { background: #fff; color: #000; }
+    .ws { padding: 0; }
+  }
 </style>
 </head>
 <body>
