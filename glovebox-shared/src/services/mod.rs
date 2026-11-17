@@ -23,6 +23,7 @@ pub mod vehicle;
 pub mod vin_decode;
 pub mod waiting;
 pub mod work_item;
+pub mod work_sheet;
 
 /// Opens a transaction that holds SQLite's write lock from its `BEGIN`, so
 /// everything it reads is the committed state and no other program can write
