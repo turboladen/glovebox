@@ -1,5 +1,5 @@
-//! Column, foreign-key and index builders and the whole-database checks
-//! shared by the migrations.
+//! Column, foreign-key and index builders, the soundness checks and the
+//! stored-definition edit shared by the migrations.
 
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 use sea_orm_migration::prelude::*;
@@ -87,18 +87,90 @@ pub(super) fn partial_index(
         .to_owned()
 }
 
-/// The result of `PRAGMA integrity_check` and the number of rows
-/// `PRAGMA foreign_key_check` reports.
-pub(super) async fn soundness(db: &impl ConnectionTrait) -> Result<(String, usize), DbErr> {
-    let integrity = scalar::<String>(db, "PRAGMA integrity_check").await?;
-    let broken_links = db
-        .query_all_raw(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            "PRAGMA foreign_key_check",
-        ))
-        .await?
-        .len();
-    Ok((integrity, broken_links))
+/// Every row `PRAGMA integrity_check` and `PRAGMA foreign_key_check` report
+/// over the whole database, each list sorted.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct Soundness {
+    pub integrity: Vec<String>,
+    pub broken_links: Vec<String>,
+}
+
+// More rows than any database here could report, because the check stops at
+// 100 by default and a cut-off list could hide a new fault.
+const INTEGRITY_ROWS: u32 = 1_000_000;
+
+/// Runs both checks over the whole database. The rows are sorted, because
+/// SQLite lists them in an order that can change when the schema reloads.
+pub(super) async fn soundness(db: &impl ConnectionTrait) -> Result<Soundness, DbErr> {
+    let mut integrity = Vec::new();
+    for row in rows(db, &format!("PRAGMA integrity_check({INTEGRITY_ROWS})")).await? {
+        integrity.push(row.try_get_by_index::<String>(0)?);
+    }
+    let mut broken_links = Vec::new();
+    for row in rows(db, "PRAGMA foreign_key_check").await? {
+        let table = row.try_get_by_index::<String>(0)?;
+        let rowid = row.try_get_by_index::<Option<i64>>(1)?;
+        let parent = row.try_get_by_index::<String>(2)?;
+        broken_links.push(format!("{table} row {rowid:?} names a missing {parent}"));
+    }
+    integrity.sort_unstable();
+    broken_links.sort_unstable();
+    Ok(Soundness {
+        integrity,
+        broken_links,
+    })
+}
+
+async fn rows(db: &impl ConnectionTrait, sql: &str) -> Result<Vec<sea_orm::QueryResult>, DbErr> {
+    db.query_all_raw(Statement::from_string(DatabaseBackend::Sqlite, sql))
+        .await
+}
+
+/// Edits stored table definitions in `sqlite_schema` on `txn`, which must be
+/// a transaction holding the write lock. `edit` runs with
+/// `PRAGMA writable_schema` on and returns whether it changed a definition;
+/// when it did, `schema_version` is raised so every connection reloads the
+/// schema. `what` names the change in the error.
+///
+/// # Errors
+/// The error `edit` returns, or `DbErr::Migration` when the integrity or
+/// foreign-key checks of the whole database differ after the edit. The
+/// caller drops its transaction on either error, which rolls the edit back.
+pub(super) async fn edit_definitions<C, F>(txn: &C, what: &str, edit: F) -> Result<(), DbErr>
+where
+    C: ConnectionTrait,
+    F: AsyncFnOnce(&C) -> Result<bool, DbErr>,
+{
+    // The checks cover the whole database, because foreign keys that point
+    // into an edited table and `sqlite_schema` itself can break as well.
+    let version = scalar::<i64>(txn, "PRAGMA schema_version").await?;
+    let before = soundness(txn).await?;
+    txn.execute_unprepared("PRAGMA writable_schema = ON")
+        .await?;
+    let edited = edit(txn).await;
+    // The pragma belongs to the connection, which goes back to the pool, so it
+    // is cleared whether or not the edit worked.
+    txn.execute_unprepared("PRAGMA writable_schema = OFF")
+        .await?;
+    if edited? {
+        txn.execute_unprepared(&format!("PRAGMA schema_version = {}", version + 1))
+            .await?;
+    }
+    // A fault that was there before the edit is not the edit's doing, so only
+    // a change stops it.
+    let after = soundness(txn).await?;
+    if after != before {
+        return Err(DbErr::Migration(format!(
+            "{what} changed the database's checks: integrity_check reported {} rows and reports \
+             {}, and foreign_key_check reported {} broken links and reports {}. Nothing was \
+             changed.",
+            before.integrity.len(),
+            after.integrity.len(),
+            before.broken_links.len(),
+            after.broken_links.len()
+        )));
+    }
+    Ok(())
 }
 
 pub(super) async fn scalar<T: sea_orm::TryGetable>(
@@ -145,5 +217,68 @@ pub(super) mod testing {
             .await
             .unwrap()
             .unwrap()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sea_orm::ConnectionTrait;
+
+    use super::{edit_definitions, scalar, soundness};
+
+    // Rows that already break a key are reported in a stable order, and an
+    // edit that breaks another key is refused with writable_schema off and,
+    // once the transaction drops, the definition as it was.
+    #[tokio::test]
+    async fn an_edit_that_breaks_a_key_is_refused() {
+        use sea_orm::TransactionTrait;
+
+        let db = crate::test_support::test_db().await;
+        db.execute_unprepared(
+            "PRAGMA foreign_keys = OFF;
+             INSERT INTO work_items (id, vehicle_id, title, status, est_cost_cents, created_at,
+                 updated_at)
+                 VALUES (1, 98, 'A', 'planned', 12345, 'x', 'x'),
+                        (2, 99, 'B', 'planned', NULL, 'x', 'x');
+             PRAGMA foreign_keys = ON;",
+        )
+        .await
+        .unwrap();
+        let checked = soundness(&db).await.unwrap();
+        assert_eq!(checked.integrity, ["ok"]);
+        assert_eq!(checked.broken_links.len(), 2, "{:?}", checked.broken_links);
+        let definition = || async {
+            scalar::<String>(
+                &db,
+                "SELECT sql FROM sqlite_schema WHERE name = 'work_items'",
+            )
+            .await
+            .unwrap()
+        };
+        let before = definition().await;
+
+        let txn = db.begin().await.unwrap();
+        let err = edit_definitions(&txn, "the test edit", async |txn| {
+            txn.execute_unprepared(
+                "UPDATE sqlite_schema SET sql = replace(sql, '\"est_cost_cents\" integer,', \
+                 '\"est_cost_cents\" integer REFERENCES \"vehicles\" (\"id\"),') WHERE name = \
+                 'work_items'",
+            )
+            .await?;
+            Ok(true)
+        })
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("reported 2 broken links and reports 3"),
+            "{err}"
+        );
+        assert_eq!(
+            scalar::<i64>(&txn, "PRAGMA writable_schema").await.unwrap(),
+            0
+        );
+        drop(txn);
+        assert_eq!(definition().await, before);
     }
 }

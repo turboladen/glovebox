@@ -14,7 +14,7 @@
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement, TransactionTrait};
 use sea_orm_migration::prelude::*;
 
-use super::schema::{scalar, soundness};
+use super::schema::{edit_definitions, scalar};
 
 /// Every column that holds a bookkeeping stamp.
 const STAMPS: &[(&str, &[&str])] = &[
@@ -132,42 +132,28 @@ async fn count_unreadable(
 /// allows this change by editing that text (the second procedure under "Making
 /// Other Kinds Of Table Schema Changes" in its `ALTER TABLE` documentation).
 /// No row is touched and no table is rebuilt.
-async fn remove_defaults(txn: &impl ConnectionTrait) -> Result<(), DbErr> {
+async fn remove_defaults<C: ConnectionTrait>(txn: &C) -> Result<(), DbErr> {
     const DEFAULT: &str = " DEFAULT (datetime(''now''))";
-    let version = scalar::<i64>(txn, "PRAGMA schema_version").await?;
-    let before = soundness(txn).await?;
-
-    txn.execute_unprepared("PRAGMA writable_schema = ON")
-        .await?;
-    let edited = txn
-        .execute_unprepared(&format!(
-            "UPDATE sqlite_schema SET sql = replace(sql, '{DEFAULT}', '') WHERE type = 'table' \
-             AND instr(sql, '{DEFAULT}') > 0"
-        ))
-        .await;
-    // The pragma belongs to the connection, which goes back to the pool, so it
-    // is cleared whether or not the edit worked.
-    txn.execute_unprepared("PRAGMA writable_schema = OFF")
-        .await?;
-    if edited?.rows_affected() > 0 {
-        // Every connection reloads the schema when it sees a new version.
-        txn.execute_unprepared(&format!("PRAGMA schema_version = {}", version + 1))
+    edit_definitions(txn, "removing the timestamp defaults", async |txn: &C| {
+        let edited = txn
+            .execute_unprepared(&format!(
+                "UPDATE sqlite_schema SET sql = replace(sql, '{DEFAULT}', '') WHERE type = \
+                 'table' AND instr(sql, '{DEFAULT}') > 0"
+            ))
             .await?;
-    }
+        Ok(edited.rows_affected() > 0)
+    })
+    .await?;
 
     let left = scalar::<i64>(
         txn,
         "SELECT count(*) FROM sqlite_schema WHERE instr(sql, 'datetime(') > 0",
     )
     .await?;
-    // Both checks cover the whole database, so a fault that was already there
-    // is not this edit's doing and does not stop it.
-    let after = soundness(txn).await?;
-    if left > 0 || after != before {
+    if left > 0 {
         return Err(DbErr::Migration(format!(
-            "removing the timestamp defaults did not leave the database as expected ({left} \
-             definitions still name datetime(); integrity check and broken foreign keys were \
-             {before:?} and are {after:?}). Nothing was changed."
+            "removing the timestamp defaults left {left} definitions that still name datetime(). \
+             Nothing was changed."
         )));
     }
     Ok(())

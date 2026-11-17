@@ -12,7 +12,7 @@
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement, TransactionTrait};
 use sea_orm_migration::prelude::*;
 
-use super::schema::{scalar, soundness};
+use super::schema::edit_definitions;
 
 /// Each linking column of `work_items`, the table it points at and the name
 /// of its index.
@@ -97,8 +97,9 @@ async fn clear_dangling(db: &impl ConnectionTrait) -> Result<Vec<(&'static str, 
 
 /// Adds the foreign key of every link that lacks one by editing the stored
 /// definition of `work_items`. No row moves. It returns an error when a key
-/// is still absent afterwards or the database's soundness checks changed.
-async fn add_foreign_keys(txn: &impl ConnectionTrait) -> Result<(), DbErr> {
+/// is still absent afterwards or the database's integrity or foreign-key
+/// checks changed.
+async fn add_foreign_keys<C: ConnectionTrait>(txn: &C) -> Result<(), DbErr> {
     // A foreign key lives only in the table's stored `CREATE TABLE` text, so
     // the edit leaves the table's triggers, indexes and search index alone.
     // `docs/adr/0003-foreign-keys-by-editing-the-table-definition.md` records
@@ -107,34 +108,27 @@ async fn add_foreign_keys(txn: &impl ConnectionTrait) -> Result<(), DbErr> {
     if missing.is_empty() {
         return Ok(());
     }
-    let version = scalar::<i64>(txn, "PRAGMA schema_version").await?;
-    let before = soundness(txn).await?;
-
-    txn.execute_unprepared("PRAGMA writable_schema = ON")
-        .await?;
-    let mut edited = Ok(());
-    for (column, parent, _) in missing {
-        // The comma keeps the edit to a column that carries no clause yet.
-        let edit = txn
-            .execute_unprepared(&format!(
-                "UPDATE sqlite_schema SET sql = replace(sql, '\"{column}\" integer,', \
-                 '\"{column}\" integer REFERENCES \"{parent}\" (\"id\") ON DELETE SET NULL,') \
-                 WHERE type = 'table' AND name = 'work_items'"
-            ))
-            .await;
-        if let Err(e) = edit {
-            edited = Err(e);
-            break;
-        }
-    }
-    // The pragma belongs to the connection, which goes back to the pool, so it
-    // is cleared whether or not the edit worked.
-    txn.execute_unprepared("PRAGMA writable_schema = OFF")
-        .await?;
-    edited?;
-    // Every connection reloads the schema when it sees a new version.
-    txn.execute_unprepared(&format!("PRAGMA schema_version = {}", version + 1))
-        .await?;
+    edit_definitions(
+        txn,
+        "adding the foreign keys of work_items",
+        async |txn: &C| {
+            let mut changed = false;
+            for (column, parent, _) in &missing {
+                // The comma keeps the edit to a column that carries no clause yet.
+                let edit = txn
+                    .execute_unprepared(&format!(
+                        "UPDATE sqlite_schema SET sql = replace(sql, '\"{column}\" integer,', \
+                         '\"{column}\" integer REFERENCES \"{parent}\" (\"id\") ON DELETE SET \
+                         NULL,') WHERE type = 'table' AND name = 'work_items' AND instr(sql, \
+                         '\"{column}\" integer,') > 0"
+                    ))
+                    .await?;
+                changed |= edit.rows_affected() > 0;
+            }
+            Ok(changed)
+        },
+    )
+    .await?;
 
     // The edit is judged by what SQLite reads back, because a definition
     // spelled another way would leave the replacement with nothing to match.
@@ -143,14 +137,10 @@ async fn add_foreign_keys(txn: &impl ConnectionTrait) -> Result<(), DbErr> {
         .iter()
         .map(|(column, ..)| *column)
         .collect();
-    // Both checks cover the whole database, so a fault that was already there
-    // is not this edit's doing and does not stop it.
-    let after = soundness(txn).await?;
-    if !absent.is_empty() || after != before {
+    if !absent.is_empty() {
         return Err(DbErr::Migration(format!(
-            "adding the foreign keys of work_items did not leave the database as expected (no key \
-             was added for: [{}]; integrity check and broken foreign keys were {before:?} and are \
-             {after:?}). Nothing was changed.",
+            "adding the foreign keys of work_items did not finish: no key was added for: [{}]. \
+             Nothing was changed.",
             absent.join(", ")
         )));
     }
