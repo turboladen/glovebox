@@ -127,29 +127,29 @@ async fn home_lists_open_appointments_and_jobs_not_scheduled() {
     );
     assert!(
         body.contains(
-            r#"<span data-l="Status"><span class="pill pill--planning">Planning</span></span>"#
+            r#"<span data-l="Status"><span class="pill pill--plain">Planning</span></span>"#
         ),
         "{body}"
     );
     assert!(
-        body.contains(r#"<span class="num" data-l="Jobs">1</span>"#),
+        body.contains(r#"<span class="num" data-l="Jobs"><span class="vh">Jobs </span>1</span>"#),
         "{body}"
     );
     assert!(
         body.contains(
-            r#"<span class="num" data-l="Needs open"><span class="n n--todo">2</span></span>"#
+            r#"<span class="num" data-l="Needs open"><span class="vh">Needs open </span><span class="n n--todo">2</span></span>"#
         ),
         "{body}"
     );
     assert!(
         body.contains(
-            r#"<span class="num" data-l="To-dos open"><span class="n n--todo">1</span></span>"#
+            r#"<span class="num" data-l="To-dos open"><span class="vh">To-dos open </span><span class="n n--todo">1</span></span>"#
         ),
         "{body}"
     );
     // An appointment with nothing open shows plain zeros.
     assert!(
-        body.contains(r#"<span class="num" data-l="Needs open"><span class="n">0</span></span>"#),
+        body.contains(r#"<span class="num" data-l="Needs open"><span class="vh">Needs open </span><span class="n">0</span></span>"#),
         "{body}"
     );
     assert!(body.contains("Winter tires"), "{body}");
@@ -162,7 +162,7 @@ async fn home_lists_open_appointments_and_jobs_not_scheduled() {
     assert!(body.contains("<span>Job</span>"), "{body}");
     assert!(
         body.contains(
-            r#"<span class="at-job num" data-l="Needs open"><span class="n n--todo">1</span></span>"#
+            r#"<span class="at-job num" data-l="Needs open"><span class="vh">Needs open </span><span class="n n--todo">1</span></span>"#
         ),
         "{body}"
     );
@@ -314,7 +314,7 @@ async fn home_shows_what_is_waiting_before_the_appointments() {
     assert!(block.contains("Judged at 64,000 mi"), "{block}");
     assert!(block.contains("Spark Plugs"), "{block}");
     assert!(
-        block.contains(r#"<span class="pill pill--overdue">Overdue</span>"#),
+        block.contains(r#"<span class="pill pill--bad">Overdue</span>"#),
         "{block}"
     );
     assert!(block.contains("60,040 mi"), "{block}");
@@ -342,7 +342,7 @@ async fn home_shows_what_is_waiting_before_the_appointments() {
         "{jobs}"
     );
     assert!(
-        jobs.contains(r#"<span class="pill pill--overdue">Overdue</span>"#),
+        jobs.contains(r#"<span class="pill pill--bad">Overdue</span>"#),
         "{jobs}"
     );
     assert!(
@@ -569,6 +569,17 @@ async fn font_files_are_served_as_woff2() {
             "{path}"
         );
         assert!(body.starts_with(b"wOF2"), "{path}");
+
+        // A request that names the font's tag gets 304 and no body.
+        let etag = res.headers()["etag"].to_str().unwrap().to_owned();
+        assert!(etag.starts_with('"') && etag.len() == 18, "{etag}");
+        let again = request("GET", path)
+            .header("if-none-match", &etag)
+            .body(Body::empty())
+            .unwrap();
+        let (res, body) = send_bytes(app(db().await, "live"), again).await;
+        assert_eq!(res.status(), StatusCode::NOT_MODIFIED, "{path}");
+        assert!(body.is_empty(), "{path}");
     }
 }
 

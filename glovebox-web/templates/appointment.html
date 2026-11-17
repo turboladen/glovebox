@@ -9,7 +9,7 @@
     <div><span class="l">Vehicle</span>{{ vehicle }}</div>
     {% if let Some(shop) = shop %}<div><span class="l">Shop</span>{{ shop }}</div>{% endif %}
     {% if let Some(date) = date %}<div><span class="l">Date</span>{{ date }}</div>{% endif %}
-    <div><span class="l">Status</span><span class="pill pill--{{ status_class }}">{{ status_text }}</span></div>
+    <div><span class="l">Status</span><span class="pill pill--{{ status_kind }}">{{ status_text }}</span></div>
     <div><span class="l cap">{{ needs_open.text }}</span>{{ needs_open.n }}</div>
     <div><span class="l cap">{{ todos_open.text }}</span>{{ todos_open.n }}</div>
     <div><span class="l cap">{{ job_count.text }}</span>{{ job_count.n }}</div>
@@ -25,7 +25,7 @@
     <ul>
       {% for c in steps.check %}
       <li class="step"><span>{{ c.job_title }}</span><span class="key">{{ c.name }}</span><span class="say">{{ c.note }}</span>
-        <span class="act"><a class="btn" href="{{ back }}?open=need-{{ c.need_id }}#need-{{ c.need_id }}">Open</a></span>
+        <div class="act"><a class="btn" href="{{ back }}?open=need-{{ c.need_id }}#need-{{ c.need_id }}">Open</a></div>
       </li>
       {% endfor %}
     </ul>
@@ -64,26 +64,15 @@
     <ol>
       {% for t in steps.todos %}{% include "todo_row.html" %}{% endfor %}
       {% if takes_todos %}
-      <li class="step step--todo">
-        <span aria-hidden="true"></span>
-        <details class="drawer drawer--quiet"{% if todo_form.error.is_some() %} open{% endif %}>
-          <summary>Add a to-do</summary>
-          <form class="formbox" method="post" action="/vehicles/{{ vid }}/todos">
-            {% if let Some(e) = todo_form.error %}<p class="error" role="alert"><b>Not saved.</b> {{ e }}</p>{% endif %}
-            <input type="hidden" name="appointment_id" value="{{ appointment_id }}">
-            <input type="hidden" name="back" value="{{ back }}">
-            <label class="field"><span>To-do</span><input type="text" name="title" value="{{ todo_form.title }}" required autocomplete="off"{% if todo_form.error.is_some() %} aria-invalid="true"{% endif %}></label>
-            <div class="form-actions"><button class="btn" type="submit">Add a to-do</button></div>
-          </form>
-        </details>
-      </li>
+      {% let add = todo_form %}{% let add_vid = vid %}{% let add_back = back %}{% let add_appointment = appointment_id.to_string() %}
+      {% include "todo_add.html" %}
       {% endif %}
     </ol>
   </section>
 
   {% if steps.done_count() > 0 %}
   <details class="sheet">
-    <summary><div class="sheet-head"><h3 id="g-done">Done</h3><span class="n">{{ steps.done_count() }}</span></div></summary>
+    <summary class="sheet-head"><h3 id="g-done">Done</h3><span class="n">{{ steps.done_count() }}</span></summary>
     <ol>
       {% for s in steps.done %}{% include "step_row.html" %}{% endfor %}
       {% for t in steps.done_todos %}{% include "todo_row.html" %}{% endfor %}

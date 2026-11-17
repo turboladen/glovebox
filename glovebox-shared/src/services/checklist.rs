@@ -577,14 +577,8 @@ fn next_steps(jobs: &[JobView], todos: &[todo::Model]) -> NextSteps {
             JobStatus::Planned => false,
         };
         for view in &job.needs {
-            // Every need of a done job is done; one still open says so.
             let (group, detail) = if job_done {
-                let detail = if view.stage.is_open() {
-                    "the job is done".to_owned()
-                } else {
-                    step_detail(view)
-                };
-                (&mut steps.done, detail)
+                (&mut steps.done, need_detail(view, job.job.status))
             } else {
                 let group = match view.stage {
                     Stage::Undecided => &mut steps.decide,
@@ -622,6 +616,17 @@ fn option_label(option: &need_option::Model) -> String {
     .flatten()
     .collect::<Vec<_>>()
     .join(" ")
+}
+
+/// The sentence a need's row shows, without the need's name: what is asked of
+/// the owner, or what settled it. Every need of a done job is done, so one
+/// still open there reads "the job is done".
+pub fn need_detail(view: &NeedView, job_status: JobStatus) -> String {
+    if job_status == JobStatus::Done && view.stage.is_open() {
+        "the job is done".to_owned()
+    } else {
+        step_detail(view)
+    }
 }
 
 /// Returns what is asked of the owner for a need of a job that is not done,

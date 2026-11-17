@@ -950,6 +950,26 @@ async fn todo_add_tick_undo_delete() {
     assert!(body.contains("Not saved"), "{body}");
 }
 
+// An undecided need of a done job reads the same in its job row as in Next
+// steps.
+#[tokio::test]
+async fn an_open_need_of_a_done_job_says_the_job_is_done_in_its_row() {
+    let w = World::new().await;
+    test_support::set_job_status(
+        &w.db,
+        w.vehicle,
+        w.job,
+        glovebox_shared::entities::work_item::JobStatus::Done,
+    )
+    .await;
+
+    let (_, body) = w.get(&w.page_path()).await;
+
+    let row = need_summary(&body, w.need);
+    assert!(row.contains("the job is done"), "{row}");
+    assert!(!row.contains("no part chosen"), "{row}");
+}
+
 // A shop-supplied need with no researched options still has a form for the
 // reason the shop supplies it.
 #[tokio::test]
@@ -2477,7 +2497,7 @@ async fn a_done_step_row_keeps_its_stage_pill() {
 
     let done = group(&body, "done");
     assert!(
-        done.contains(r#"<span class="pill pill--received">Received</span>"#),
+        done.contains(r#"<span class="pill pill--ok">Received</span>"#),
         "{done}"
     );
     assert!(done.contains(">Return it<"), "{done}");

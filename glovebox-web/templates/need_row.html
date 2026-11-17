@@ -2,10 +2,10 @@
   <details class="need" id="need-{{ n.id }}"{% if n.open %} open{% endif %}>
     <summary class="row">
       <span class="key">{{ n.name }}{% if let Some(q) = n.quantity %} <span class="qty">{{ q }}</span>{% endif %}</span>
-      <span data-l="Stage"><span class="pill pill--{{ n.stage_class }}">{{ n.stage_text }}</span></span>
+      <span data-l="Stage"><span class="pill pill--{{ n.stage_kind }}">{{ n.stage_text }}</span></span>
       {% if let Some(c) = n.chosen %}
       {% let o = c %}{% include "part_cells.html" %}
-      <span data-l="Fit"><span class="pill fit--{{ c.fit_class }}">{{ c.fit_text }}</span></span>
+      <span data-l="Fit"><span class="pill pill--{{ c.fit_kind }}">{{ c.fit_text }}</span></span>
       {% else if let Some(p) = n.linked %}
       {% let o = p %}{% include "part_cells.html" %}
       <span></span>
@@ -19,9 +19,9 @@
         {% if let Some(r) = n.decision_reason %}<span><span class="l">Reason</span>{{ r }}</span>{% endif %}
         {% if let Some(p) = n.purchase %}<span class="line">{{ p }}{% if n.no_decision %} <span class="pill">No decision recorded</span>{% endif %}</span>{% else if n.no_decision %}<span class="line"><span class="pill">No decision recorded</span></span>{% endif %}
         {% for note in n.notes %}<span class="line note">{{ note }}</span>{% endfor %}
-        {% if let Some(c) = n.chosen %}{% if let Some(href) = c.link %}<span class="line"><a href="{{ href }}" target="_blank" rel="noopener noreferrer">Open the listing</a></span>{% endif %}{% endif %}
       </span>
     </summary>
+    {% if let Some(c) = n.chosen %}{% if let Some(href) = c.link %}<div class="work"><span class="l">Listing</span><a href="{{ href }}" target="_blank" rel="noopener noreferrer">Open the listing</a></div>{% endif %}{% endif %}
 
     {% if let Some(e) = n.error_elsewhere() %}<div class="work"><p class="error" role="alert"><b>Not saved.</b> {{ e }}</p></div>{% endif %}
     {% if n.can_decide %}
@@ -38,10 +38,10 @@
         {% if loop.first %}<span class="l" aria-hidden="true">Options</span>{% else %}<span></span>{% endif %}
         <span class="pick"><input type="radio" name="option_id" value="{{ o.id }}"{% if o.checked %} checked{% endif %}{% if o.blocked %} disabled aria-describedby="opt-{{ o.id }}-why opt-{{ o.id }}-note"{% endif %}></span>
         {% include "part_cells.html" %}
-        <span data-l="Fit" id="opt-{{ o.id }}-why"><span class="pill fit--{{ o.fit_class }}">{{ o.fit_text }}</span></span>
+        <span data-l="Fit" id="opt-{{ o.id }}-why"><span class="pill pill--{{ o.fit_kind }}">{{ o.fit_text }}</span></span>
         <span></span>
         <span class="memo" id="opt-{{ o.id }}-note">
-          {% if let Some(why) = o.rejected_reason %}<span><span class="pill pill--rejected">Rejected</span> {{ why }}</span>{% endif %}
+          {% if let Some(why) = o.rejected_reason %}<span><span class="pill pill--bad">Rejected</span> {{ why }}</span>{% endif %}
           {% if let Some(note) = o.fit_note %}<span>{{ note }}</span>{% endif %}
           {% if let Some(href) = o.link %}<span><a href="{{ href }}" target="_blank" rel="noopener noreferrer">Open the listing</a></span>{% endif %}
         </span>

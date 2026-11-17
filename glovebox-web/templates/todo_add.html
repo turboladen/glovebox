@@ -1,0 +1,13 @@
+<li class="step step--todo">
+  <span aria-hidden="true"></span>
+  <details class="drawer drawer--quiet"{% if add.error.is_some() %} open{% endif %}>
+    <summary>Add a to-do</summary>
+    <form class="formbox" method="post" action="/vehicles/{{ add_vid }}/todos">
+      {% if let Some(e) = add.error %}<p class="error" role="alert"><b>Not saved.</b> {{ e }}</p>{% endif %}
+      {% if !add_appointment.is_empty() %}<input type="hidden" name="appointment_id" value="{{ add_appointment }}">{% endif %}
+      <input type="hidden" name="back" value="{{ add_back }}">
+      <label class="field"><span>To-do</span><input type="text" name="title" value="{{ add.title }}" required autocomplete="off"{% if add.error.is_some() %} aria-invalid="true"{% endif %}></label>
+      <div class="form-actions"><button class="btn" type="submit">Add a to-do</button></div>
+    </form>
+  </details>
+</li>

@@ -1,8 +1,8 @@
 {% let n = s.need %}
-<li class="step"><span>{{ s.job_title }}</span><span class="key">{{ n.name }}</span><span class="say">{{ s.detail }}{% if s.is("done") %} <span class="pill pill--{{ s.need.stage_class }}">{{ s.need.stage_text }}</span>{% endif %}</span>
+<li class="step"><span>{{ s.job_title }}</span><span class="key">{{ n.name }}</span><span class="say">{{ s.detail }}{% if s.is("done") %} <span class="pill pill--{{ s.need.stage_kind }}">{{ s.need.stage_text }}</span>{% endif %}</span>
   {% if s.is("decide") %}
   {% if let Some(href) = s.decide_href %}
-  <span class="act"><a class="btn" href="{{ href }}">{{ s.decide_label }}</a></span>
+  <div class="act"><a class="btn" href="{{ href }}">{{ s.decide_label }}</a></div>
   {% else %}
   <p class="form-note more">No options researched yet; ask Claude to research options for this part.</p>
   {% endif %}
@@ -12,9 +12,9 @@
     {% include "order_form.html" %}
   </details>
   {% else if s.is("arriving") %}
-  <span class="act">
+  <div class="act">
     {% include "received_form.html" %}
-  </span>
+  </div>
   {% endif %}
   {% if let Some(e) = n.error_elsewhere() %}<p class="error more" role="alert"><b>Not saved.</b> {{ e }}</p>{% endif %}
   {% if n.can_return && (s.is("arriving") || s.is("done")) %}

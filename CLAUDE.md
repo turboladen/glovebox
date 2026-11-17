@@ -322,7 +322,7 @@ with an empty box needs the owner, blue with a chevron is on its way, green with
 settled, red with a cross is a problem, gray with a circle is a plain fact), so no state is told
 apart by color alone. Only form fields have a boxed outline. A solid button commits something, an
 outlined button opens a form or a row, and underlined text does minor things. The control that
-opens a form and the button that submits it carry the same words. Every date is `YYYY-MM-DD`.
+opens a form and the button that submits it carry the same words. Every date is `YYYY-MM-DD`. Part numbers and prices set a slashed zero; other text does not.
 
 ## Conventions
 
