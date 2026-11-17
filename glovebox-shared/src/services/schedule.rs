@@ -837,7 +837,10 @@ pub async fn undismiss_for_vehicle(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{VehicleFixture, days_ago, test_db};
+    use crate::{
+        services::reminders::DueStatus,
+        test_support::{VehicleFixture, days_ago, test_db},
+    };
 
     async fn seed_vehicle(db: &impl ConnectionTrait, model_template_id: Option<i32>) -> i32 {
         let mut fixture = VehicleFixture::new();
@@ -917,7 +920,7 @@ mod tests {
         .await
         .unwrap();
         let resp = calculate_reminders(&db, vid).await.unwrap();
-        assert_eq!(resp.reminders[0].status, "due_soon");
+        assert_eq!(resp.reminders[0].status, DueStatus::DueSoon);
     }
 
     #[tokio::test]
@@ -1422,7 +1425,7 @@ mod tests {
         let rems = reminders::calculate_reminders(&db, vid).await.unwrap();
         let plugs = reminder_for(&rems, "Spark Plugs");
         assert_eq!(plugs.schedule_item.id, over.id);
-        assert_eq!(plugs.status, "ok");
+        assert_eq!(plugs.status, DueStatus::NotDue);
         assert_eq!(plugs.last_service.as_ref().map(|s| s.id), Some(svc));
 
         // The planned work now points at the override, so it still stands in

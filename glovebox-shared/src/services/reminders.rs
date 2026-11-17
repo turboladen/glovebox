@@ -12,6 +12,45 @@ use crate::{
     services::schedule::{DEFAULT_WARNING_DAYS, DEFAULT_WARNING_MILES, name_key},
 };
 
+crate::vocab::vocabulary! {
+    /// How close a schedule item or a planned job is to due.
+    // A reminder is due soon inside its schedule item's warning miles or
+    // days, and a planned job inside the fixed 30 days or 1000 miles that
+    // `work_item::revisit_status` uses. No column stores these texts.
+    pub enum DueStatus {
+        Overdue => "overdue",
+        DueSoon => "due_soon",
+        NotDue => "ok",
+    }
+}
+
+impl DueStatus {
+    /// Returns 0 for overdue, 1 for due soon and 2 for ok, so an ascending
+    /// sort puts the most urgent first.
+    #[must_use]
+    pub const fn urgency_rank(self) -> u8 {
+        match self {
+            Self::Overdue => 0,
+            Self::DueSoon => 1,
+            Self::NotDue => 2,
+        }
+    }
+
+    /// The most urgent of `statuses`, or ok when there are none.
+    pub fn most_urgent(statuses: impl IntoIterator<Item = Self>) -> Self {
+        statuses
+            .into_iter()
+            .min_by_key(|s| s.urgency_rank())
+            .unwrap_or(Self::NotDue)
+    }
+
+    /// Whether the status is overdue or due soon.
+    #[must_use]
+    pub const fn is_due(self) -> bool {
+        !matches!(self, Self::NotDue)
+    }
+}
+
 /// What a reminder's due point was measured from.
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -30,9 +69,9 @@ pub enum Baseline {
 #[derive(Debug, Serialize, Clone)]
 pub struct ReminderStatus {
     pub schedule_item: ScheduleItemSummary,
-    /// `overdue`, `due_soon` (within the item's warning miles or days) or
-    /// `ok`: the same words planned work's `revisit_status` uses.
-    pub status: String,
+    /// How close the item is to due, by the more urgent of its mileage and
+    /// time readings. An item with neither reading is ok.
+    pub status: DueStatus,
     /// What `due_at_miles` and `due_at_date` count from.
     pub baseline: Baseline,
     pub last_service: Option<LastServiceInfo>,
@@ -66,7 +105,7 @@ pub struct BundleSuggestion {
 pub struct BundleItem {
     pub id: i32,
     pub name: String,
-    pub status: String,
+    pub status: DueStatus,
     pub due_in_miles: Option<i32>,
 }
 
@@ -314,38 +353,27 @@ pub async fn calculate_reminders_on(
         let warning_miles = item.warning_miles.unwrap_or(DEFAULT_WARNING_MILES);
         let warning_days = item.warning_days.unwrap_or(DEFAULT_WARNING_DAYS);
 
-        let miles_status = miles_remaining.map(|r| {
-            if r <= 0 {
-                "overdue"
-            } else if r <= warning_miles {
-                "due_soon"
+        let judge = |remaining: i64, warning: i64| {
+            if remaining <= 0 {
+                DueStatus::Overdue
+            } else if remaining <= warning {
+                DueStatus::DueSoon
             } else {
-                "ok"
+                DueStatus::NotDue
             }
-        });
-
-        let time_status = days_remaining.map(|r| {
-            if r <= 0 {
-                "overdue"
-            } else if r <= i64::from(warning_days) {
-                "due_soon"
-            } else {
-                "ok"
-            }
-        });
+        };
+        let miles_status = miles_remaining.map(|r| judge(i64::from(r), i64::from(warning_miles)));
+        let time_status = days_remaining.map(|r| judge(r, i64::from(warning_days)));
 
         // Use the more urgent status
-        let status = match (miles_status, time_status) {
-            (Some("overdue"), _) | (_, Some("overdue")) => "overdue",
-            (Some("due_soon"), _) | (_, Some("due_soon")) => "due_soon",
-            _ => "ok",
-        };
+        let status = DueStatus::most_urgent(miles_status.into_iter().chain(time_status));
 
         let trigger = match (miles_status, time_status) {
             (Some(m), Some(t)) if m == t => Some("both"),
-            (Some("overdue" | "due_soon"), _) | (Some(_), None) => Some("mileage"),
-            (_, Some("overdue" | "due_soon")) | (None, Some(_)) => Some("time"),
-            _ => None,
+            (Some(m), Some(_)) if !m.is_due() => Some("time"),
+            (Some(_), _) => Some("mileage"),
+            (None, Some(_)) => Some("time"),
+            (None, None) => None,
         };
 
         reminders.push(ReminderStatus {
@@ -353,7 +381,7 @@ pub async fn calculate_reminders_on(
                 id: item.id,
                 name: item.name.clone(),
             },
-            status: status.to_string(),
+            status,
             baseline: match (&last_service, &v.purchase_date, &v.purchase_mileage) {
                 (Some(_), _, _) => Baseline::LastService,
                 (None, None, None) => Baseline::None,
@@ -374,13 +402,9 @@ pub async fn calculate_reminders_on(
 
     // Sort: overdue first, then due soon, then ok
     reminders.sort_by(|a, b| {
-        let priority = |s: &str| match s {
-            "overdue" => 0,
-            "due_soon" => 1,
-            _ => 2,
-        };
-        priority(&a.status)
-            .cmp(&priority(&b.status))
+        a.status
+            .urgency_rank()
+            .cmp(&b.status.urgency_rank())
             .then(a.schedule_item.name.cmp(&b.schedule_item.name))
     });
 
@@ -566,11 +590,11 @@ pub fn judged_at(miles: i32, is_estimate: bool) -> String {
 fn calculate_bundles(reminders: &[ReminderStatus]) -> Vec<BundleSuggestion> {
     let items: Vec<BundleItem> = reminders
         .iter()
-        .filter(|r| r.status == "overdue" || r.status == "due_soon")
+        .filter(|r| r.status.is_due())
         .map(|r| BundleItem {
             id: r.schedule_item.id,
             name: r.schedule_item.name.clone(),
-            status: r.status.clone(),
+            status: r.status,
             due_in_miles: r.miles_remaining,
         })
         .collect();
@@ -798,7 +822,7 @@ mod tests {
         .unwrap();
 
         let resp = calculate_reminders(&db, vid).await.unwrap();
-        assert_eq!(resp.reminders[0].status, "due_soon");
+        assert_eq!(resp.reminders[0].status, DueStatus::DueSoon);
         assert_eq!(resp.reminders[0].trigger.as_deref(), Some("time"));
     }
 
@@ -855,7 +879,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             calculate_reminders(&db, vid).await.unwrap().reminders[0].status,
-            "overdue"
+            DueStatus::Overdue
         );
 
         // The invoice had no odometer reading on it.
@@ -876,7 +900,7 @@ mod tests {
         .unwrap();
 
         let plugs = &calculate_reminders(&db, vid).await.unwrap().reminders[0];
-        assert_eq!(plugs.status, "ok");
+        assert_eq!(plugs.status, DueStatus::NotDue);
         assert_eq!(plugs.due_at_miles, Some(124_000));
     }
 
@@ -964,7 +988,7 @@ mod tests {
 
         let resp = calculate_reminders(&db, vid).await.unwrap();
         assert!(resp.avg_daily_miles > 10.0, "rate {}", resp.avg_daily_miles);
-        assert_eq!(resp.reminders[0].status, "due_soon");
+        assert_eq!(resp.reminders[0].status, DueStatus::DueSoon);
         assert_eq!(resp.reminders[0].miles_remaining, Some(500));
     }
 
@@ -1106,7 +1130,7 @@ mod tests {
         let mut names: Vec<&str> = bundle.items.iter().map(|i| i.name.as_str()).collect();
         names.sort_unstable();
         assert_eq!(names, vec!["Brake fluid", "Cabin filter", "Spark plugs"]);
-        assert!(bundle.items.iter().all(|i| i.status == "overdue"));
+        assert!(bundle.items.iter().all(|i| i.status == DueStatus::Overdue));
         assert!(bundle.reason.contains('3'), "{}", bundle.reason);
     }
 

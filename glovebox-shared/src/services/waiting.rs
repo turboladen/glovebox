@@ -11,7 +11,12 @@ use crate::{
     dates::DayOrTime,
     entities::{incident::IncidentCategory, work_item},
     error::DomainResult,
-    services::{checklist, reminders, upcoming, work_item::PlannedItem},
+    services::{
+        checklist,
+        reminders::{self, DueStatus},
+        upcoming,
+        work_item::PlannedItem,
+    },
 };
 
 /// Everything on one vehicle that is not yet on an appointment.
@@ -58,8 +63,8 @@ pub fn booked_note(booked: usize) -> Option<String> {
 pub struct WaitingMaintenance {
     pub schedule_item_id: i32,
     pub name: String,
-    /// `overdue` or `due_soon`.
-    pub status: String,
+    /// The item is overdue or due soon; an ok item is not listed.
+    pub status: DueStatus,
     pub due_at_miles: Option<i32>,
     pub due_at_date: Option<NaiveDate>,
     /// How far past or short of due the item is, as
@@ -76,8 +81,9 @@ pub struct WaitingMaintenance {
 pub struct WaitingJob {
     pub id: i32,
     pub title: String,
-    /// `overdue`, `due_soon` or `ok` for a job with a revisit date or mileage.
-    pub revisit_status: Option<&'static str>,
+    /// How close the job's revisit-by is. It is `None` when the job has no
+    /// revisit date or mileage.
+    pub revisit_status: Option<DueStatus>,
     pub est_cost_cents: Option<i32>,
     /// Counts the job's needs that are still open.
     pub needs_open: usize,
@@ -161,7 +167,7 @@ pub async fn waiting(
     let due: Vec<_> = reminders
         .reminders
         .iter()
-        .filter(|r| r.status == "overdue" || r.status == "due_soon")
+        .filter(|r| r.status.is_due())
         .collect();
     let maintenance: Vec<WaitingMaintenance> = due
         .iter()
@@ -170,7 +176,7 @@ pub async fn waiting(
             Some(WaitingMaintenance {
                 schedule_item_id: r.schedule_item.id,
                 name: r.schedule_item.name.clone(),
-                status: r.status.clone(),
+                status: r.status,
                 due_at_miles: r.due_at_miles,
                 due_at_date: r.due_at_date,
                 how_far: reminders::how_far(r.miles_remaining, r.days_remaining),
@@ -440,13 +446,9 @@ mod tests {
         let w = waiting(&db, v, crate::services::today()).await.unwrap();
 
         assert!(!w.maintenance.is_empty());
-        assert!(
-            w.maintenance
-                .iter()
-                .all(|m| m.status == "overdue" || m.status == "due_soon")
-        );
+        assert!(w.maintenance.iter().all(|m| m.status.is_due()));
         let all = reminders::calculate_reminders(&db, v).await.unwrap();
-        let due = all.reminders.iter().filter(|r| r.status != "ok").count();
+        let due = all.reminders.iter().filter(|r| r.status.is_due()).count();
         assert!(
             due < all.reminders.len(),
             "the fixture has items not yet due"
@@ -454,7 +456,7 @@ mod tests {
         assert_eq!(w.maintenance.len(), due);
 
         let plugs = plugs(&w).expect("spark plugs are overdue");
-        assert_eq!(plugs.status, "overdue");
+        assert_eq!(plugs.status, DueStatus::Overdue);
         assert_eq!(plugs.due_at_miles, Some(60040));
         assert!(
             plugs.how_far.starts_with("3,960 mi over"),
@@ -532,7 +534,7 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                ("Replace N80 valve", Some("overdue"), 0),
+                ("Replace N80 valve", Some(DueStatus::Overdue), 0),
                 ("Rear wiper", None, 1),
             ]
         );

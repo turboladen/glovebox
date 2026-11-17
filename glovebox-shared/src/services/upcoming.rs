@@ -15,7 +15,7 @@ use crate::{
         budget::{self, BudgetForecast},
         incident as incident_svc,
         recall::{self, RecallWithStatus},
-        reminders::{self, RemindersResponse},
+        reminders::{self, DueStatus, RemindersResponse},
         work_item::{self, PlannedItem},
     },
 };
@@ -41,15 +41,6 @@ pub struct Upcoming {
     /// Appointments still being prepared, soonest first, each with its open
     /// counts.
     pub appointments: Vec<AppointmentSummary>,
-}
-
-fn urgency(status: Option<&str>) -> u8 {
-    match status {
-        Some("overdue") => 0,
-        Some("due_soon") => 1,
-        Some("ok") => 2,
-        _ => 3,
-    }
 }
 
 /// Answers "what is coming" for a vehicle in one read.
@@ -100,7 +91,12 @@ pub(crate) async fn planned_work(
         .into_iter()
         .filter(|p| p.item.status == JobStatus::Planned)
         .collect();
-    planned.sort_by_key(|p| (urgency(p.revisit_status), p.item.id));
+    planned.sort_by_key(|p| {
+        (
+            p.revisit_status.map_or(u8::MAX, DueStatus::urgency_rank),
+            p.item.id,
+        )
+    });
     Ok(planned)
 }
 
@@ -355,13 +351,13 @@ mod tests {
             u.reminders
                 .reminders
                 .iter()
-                .any(|r| r.schedule_item.name == "Spark Plugs" && r.status == "overdue")
+                .any(|r| r.schedule_item.name == "Spark Plugs" && r.status == DueStatus::Overdue)
         );
         assert_eq!(
             titles(&u.planned_work),
             vec!["Replace N80 valve", "Rear wiper"]
         );
-        assert_eq!(u.planned_work[0].revisit_status, Some("overdue"));
+        assert_eq!(u.planned_work[0].revisit_status, Some(DueStatus::Overdue));
         assert_eq!(u.planned_work[1].revisit_status, None);
         assert_eq!(u.planned_work_est_cost_cents, 20500);
         assert_eq!(u.recalls.len(), 1);
@@ -428,7 +424,7 @@ mod tests {
         .await
         .unwrap();
         let u = upcoming(&db, v).await.unwrap();
-        assert_eq!(u.planned_work[0].revisit_status, Some("overdue"));
+        assert_eq!(u.planned_work[0].revisit_status, Some(DueStatus::Overdue));
     }
 
     #[tokio::test]
