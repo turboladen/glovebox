@@ -134,21 +134,15 @@ async fn count_unreadable(
 /// No row is touched and no table is rebuilt.
 async fn remove_defaults<C: ConnectionTrait>(txn: &C) -> Result<(), DbErr> {
     const DEFAULT: &str = " DEFAULT (datetime(''now''))";
-    // The edit touches every table, so the checks cover the whole database.
-    edit_definitions(
-        txn,
-        "removing the timestamp defaults",
-        &[],
-        async |txn: &C| {
-            let edited = txn
-                .execute_unprepared(&format!(
-                    "UPDATE sqlite_schema SET sql = replace(sql, '{DEFAULT}', '') WHERE type = \
-                     'table' AND instr(sql, '{DEFAULT}') > 0"
-                ))
-                .await?;
-            Ok(edited.rows_affected() > 0)
-        },
-    )
+    edit_definitions(txn, "removing the timestamp defaults", async |txn: &C| {
+        let edited = txn
+            .execute_unprepared(&format!(
+                "UPDATE sqlite_schema SET sql = replace(sql, '{DEFAULT}', '') WHERE type = \
+                 'table' AND instr(sql, '{DEFAULT}') > 0"
+            ))
+            .await?;
+        Ok(edited.rows_affected() > 0)
+    })
     .await?;
 
     let left = scalar::<i64>(

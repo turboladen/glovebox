@@ -97,7 +97,8 @@ async fn clear_dangling(db: &impl ConnectionTrait) -> Result<Vec<(&'static str, 
 
 /// Adds the foreign key of every link that lacks one by editing the stored
 /// definition of `work_items`. No row moves. It returns an error when a key
-/// is still absent afterwards or the database's soundness checks changed.
+/// is still absent afterwards or the database's integrity or foreign-key
+/// checks changed.
 async fn add_foreign_keys<C: ConnectionTrait>(txn: &C) -> Result<(), DbErr> {
     // A foreign key lives only in the table's stored `CREATE TABLE` text, so
     // the edit leaves the table's triggers, indexes and search index alone.
@@ -107,22 +108,24 @@ async fn add_foreign_keys<C: ConnectionTrait>(txn: &C) -> Result<(), DbErr> {
     if missing.is_empty() {
         return Ok(());
     }
-    // Only `work_items` changes, so only it is checked.
     edit_definitions(
         txn,
         "adding the foreign keys of work_items",
-        &["work_items"],
         async |txn: &C| {
+            let mut changed = false;
             for (column, parent, _) in &missing {
                 // The comma keeps the edit to a column that carries no clause yet.
-                txn.execute_unprepared(&format!(
-                    "UPDATE sqlite_schema SET sql = replace(sql, '\"{column}\" integer,', \
-                     '\"{column}\" integer REFERENCES \"{parent}\" (\"id\") ON DELETE SET NULL,') \
-                     WHERE type = 'table' AND name = 'work_items'"
-                ))
-                .await?;
+                let edit = txn
+                    .execute_unprepared(&format!(
+                        "UPDATE sqlite_schema SET sql = replace(sql, '\"{column}\" integer,', \
+                         '\"{column}\" integer REFERENCES \"{parent}\" (\"id\") ON DELETE SET \
+                         NULL,') WHERE type = 'table' AND name = 'work_items' AND instr(sql, \
+                         '\"{column}\" integer,') > 0"
+                    ))
+                    .await?;
+                changed |= edit.rows_affected() > 0;
             }
-            Ok(true)
+            Ok(changed)
         },
     )
     .await?;
