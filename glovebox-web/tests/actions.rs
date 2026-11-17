@@ -2570,14 +2570,15 @@ impl World {
         format!("{}/print", self.page_path())
     }
 
-    async fn ask_the_shop(&self, approach: &str) -> (StatusCode, Option<String>, String) {
+    // Posts what the sheet's "Ask the shop" form sends.
+    async fn ask_the_shop(&self) -> (StatusCode, Option<String>, String) {
+        self.ask_from_the_sheet("shop").await
+    }
+
+    async fn ask_from_the_sheet(&self, supplied_by: &str) -> (StatusCode, Option<String>, String) {
         self.post(
             &self.need_path("supplier"),
-            &[
-                ("supplied_by", "shop"),
-                ("approach", approach),
-                ("back", &self.sheet_path()),
-            ],
+            &[("supplied_by", supplied_by), ("back", &self.sheet_path())],
         )
         .await
     }
@@ -2595,7 +2596,7 @@ async fn ask_the_shop_from_the_sheet_settles_an_undecided_need() {
     let (_, before) = w.get(&w.sheet_path()).await;
     assert!(before.contains("Front pads (Brakes)"), "{before}");
 
-    let (status, location, _) = w.ask_the_shop("").await;
+    let (status, location, _) = w.ask_the_shop().await;
 
     assert_eq!(status, StatusCode::SEE_OTHER);
     assert_eq!(location.as_deref(), Some(w.sheet_path().as_str()));
@@ -2609,7 +2610,7 @@ async fn ask_the_shop_from_the_sheet_settles_a_need_to_order() {
     let w = World::new().await;
     w.choose_good().await;
 
-    w.ask_the_shop("").await;
+    w.ask_the_shop().await;
 
     let (_, body) = w.get(&w.sheet_path()).await;
     assert!(body.contains("Everything is settled."), "{body}");
@@ -2621,7 +2622,7 @@ async fn ask_the_shop_failure_shows_the_sheet_again() {
     let w = World::new().await;
     need::delete(&w.db, w.vehicle, w.need).await.unwrap();
 
-    let (status, _, body) = w.ask_the_shop("").await;
+    let (status, _, body) = w.ask_the_shop().await;
 
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(body.contains("Everything is settled."), "{body}");
@@ -2630,8 +2631,11 @@ async fn ask_the_shop_failure_shows_the_sheet_again() {
 }
 
 #[tokio::test]
-async fn ask_the_shop_keeps_the_approach() {
+async fn ask_the_shop_leaves_a_newer_approach_alone() {
     let w = World::new().await;
+    let (_, sheet) = w.get(&w.sheet_path()).await;
+    assert!(!sheet.contains(r#"name="approach""#), "{sheet}");
+    // The approach changes after the sheet was loaded.
     need::update(
         &w.db,
         w.vehicle,
@@ -2643,13 +2647,8 @@ async fn ask_the_shop_keeps_the_approach() {
     )
     .await
     .unwrap();
-    let (_, sheet) = w.get(&w.sheet_path()).await;
-    assert!(
-        sheet.contains(r#"name="approach" value="upgrade""#),
-        "{sheet}"
-    );
 
-    w.ask_the_shop("upgrade").await;
+    w.ask_the_shop().await;
 
     let need = need::require(&w.db, w.vehicle, w.need).await.unwrap();
     assert_eq!(need.approach, Some(Approach::Upgrade));
@@ -2660,7 +2659,7 @@ async fn ask_the_shop_keeps_the_approach() {
 async fn ask_the_shop_refusal_shows_beside_its_row() {
     let w = World::new().await;
 
-    let (status, _, body) = w.ask_the_shop("bogus").await;
+    let (status, _, body) = w.ask_from_the_sheet("bogus").await;
 
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body.matches("Not saved.").count(), 1, "{body}");
@@ -2669,5 +2668,5 @@ async fn ask_the_shop_refusal_shows_beside_its_row() {
         .and_then(|(_, rest)| rest.split_once("</li>"))
         .map_or("", |(row, _)| row);
     assert!(row.contains("Not saved."), "{body}");
-    assert!(row.contains("Approach"), "{body}");
+    assert!(row.contains("Supplier:"), "{body}");
 }

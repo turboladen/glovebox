@@ -7,12 +7,15 @@ use sea_orm::*;
 use serde::Serialize;
 
 use crate::{
-    entities::{job_need::Approach, part::Supplier, work_item::JobStatus},
+    entities::{
+        part::{self, Supplier},
+        work_item::JobStatus,
+    },
     error::{DomainError, DomainResult},
     services::{
         checklist::{self, NeedView},
         need::Stage,
-        vehicle,
+        part as part_svc, vehicle,
     },
 };
 
@@ -46,9 +49,9 @@ pub struct SheetLine {
     pub need_id: i32,
     pub name: String,
     pub quantity: i32,
-    /// The manufacturer and part number, as [`part_label`] writes them. A
-    /// shop line never carries one.
-    pub part_number: Option<String>,
+    /// The manufacturer and part number together, such as `Mann HU 7020 z`,
+    /// as [`part_svc::label`] writes them. A shop line never carries one.
+    pub label: Option<String>,
 }
 
 /// A need that is not settled enough to print.
@@ -60,7 +63,6 @@ pub struct Unsettled {
     pub name: String,
     /// The need's stage, which is `undecided` or `to_order`.
     pub stage: Stage,
-    pub approach: Option<Approach>,
     /// What is asked of the owner, as the checklist says it.
     pub detail: String,
 }
@@ -96,8 +98,14 @@ pub async fn for_appointment(
         for need in &view.needs {
             match placement(need) {
                 Placement::Off => {}
-                Placement::Owner => job.owner_supplies.push(SheetLine {
-                    part_number: owner_label(need),
+                // The label comes from the part's own record, so the sheet
+                // never prints a researched option's number beside a part
+                // that may not be that option.
+                Placement::Owner(part) => job.owner_supplies.push(SheetLine {
+                    label: part_svc::label(
+                        part.manufacturer.as_deref(),
+                        part.part_number.as_deref(),
+                    ),
                     ..line(need)
                 }),
                 Placement::Shop => job.shop_supplies.push(line(need)),
@@ -107,7 +115,6 @@ pub async fn for_appointment(
                     job_title: view.job.title.clone(),
                     name: need.need.name.clone(),
                     stage: need.stage,
-                    approach: need.need.approach,
                     detail: checklist::need_detail(need, JobStatus::Planned),
                 }),
             }
@@ -124,31 +131,20 @@ pub async fn for_appointment(
     })
 }
 
-/// A part's manufacturer and number joined by a space, such as
-/// `ATE 13.0460-2788.2`, or `None` without a number. Blank text counts as
-/// absent.
-pub fn part_label(manufacturer: Option<&str>, part_number: Option<&str>) -> Option<String> {
-    let number = part_number.map(str::trim).filter(|n| !n.is_empty())?;
-    match manufacturer.map(str::trim).filter(|m| !m.is_empty()) {
-        Some(m) => Some(format!("{m} {number}")),
-        None => Some(number.to_owned()),
-    }
-}
-
-enum Placement {
+enum Placement<'a> {
     Off,
-    Owner,
+    Owner(&'a part::Model),
     Shop,
     Unsettled,
 }
 
 // A linked part decides the side, so a shop part recorded against a need
 // prints under the shop's list whatever the need says.
-fn placement(view: &NeedView) -> Placement {
+fn placement(view: &NeedView) -> Placement<'_> {
     match (view.stage, &view.part) {
         (Stage::Installed, _) => Placement::Off,
         (_, Some(part)) => match part.supplied_by {
-            Supplier::Owner => Placement::Owner,
+            Supplier::Owner => Placement::Owner(part),
             Supplier::Shop => Placement::Shop,
         },
         (Stage::ShopSupplies, None) => Placement::Shop,
@@ -161,34 +157,8 @@ fn line(view: &NeedView) -> SheetLine {
         need_id: view.need.id,
         name: view.need.name.clone(),
         quantity: view.need.quantity,
-        part_number: None,
+        label: None,
     }
-}
-
-// The manufacturer and number come from one record, so a bought part's
-// number never prints beside a researched option's brand. The option fills
-// in only for a part that names no brand or the option's own.
-fn owner_label(view: &NeedView) -> Option<String> {
-    let part = view.part.as_ref();
-    if let Some(label) =
-        part.and_then(|p| part_label(p.manufacturer.as_deref(), p.part_number.as_deref()))
-    {
-        return Some(label);
-    }
-    let option = view.chosen.as_ref()?;
-    let brand = |m: Option<&str>| {
-        m.map(str::trim)
-            .filter(|m| !m.is_empty())
-            .map(str::to_ascii_lowercase)
-    };
-    let part_brand = part.and_then(|p| brand(p.manufacturer.as_deref()));
-    if part_brand.is_some() && part_brand != brand(option.manufacturer.as_deref()) {
-        return None;
-    }
-    part_label(
-        option.manufacturer.as_deref(),
-        option.part_number.as_deref(),
-    )
 }
 
 #[cfg(test)]
@@ -329,10 +299,7 @@ mod tests {
 
         let job = only_job(&sheet);
         assert_eq!(job.owner_supplies.len(), 1);
-        assert_eq!(
-            job.owner_supplies[0].part_number.as_deref(),
-            Some("ATE 13.0460")
-        );
+        assert_eq!(job.owner_supplies[0].label.as_deref(), Some("ATE 13.0460"));
         assert_empty(&job.shop_supplies);
     }
 
@@ -360,7 +327,7 @@ mod tests {
         let job = only_job(&sheet);
         assert_eq!(job.owner_supplies[0].name, "Rotors");
         assert_eq!(
-            job.owner_supplies[0].part_number.as_deref(),
+            job.owner_supplies[0].label.as_deref(),
             Some("Zimmermann 100.3380")
         );
         assert_empty(&sheet.unsettled);
@@ -388,28 +355,14 @@ mod tests {
         )
         .await;
         let sheet = for_appointment(&db, v, a).await.unwrap();
-        only_job(&sheet).owner_supplies[0].part_number.clone()
+        only_job(&sheet).owner_supplies[0].label.clone()
     }
 
     #[tokio::test]
-    async fn option_number_fills_a_part_with_no_brand() {
-        assert_eq!(
-            label_for_unnumbered_part(None).await.as_deref(),
-            Some("Mann HU 7020 z")
-        );
-    }
-
-    #[tokio::test]
-    async fn option_number_fills_a_part_of_the_same_brand() {
-        assert_eq!(
-            label_for_unnumbered_part(Some(" mann ")).await.as_deref(),
-            Some("Mann HU 7020 z")
-        );
-    }
-
-    #[tokio::test]
-    async fn another_brands_number_is_never_printed_beside_the_part() {
-        assert_eq!(label_for_unnumbered_part(Some("Bosch")).await, None);
+    async fn an_unnumbered_part_never_borrows_the_options_number() {
+        for brand in [None, Some(" mann "), Some("Bosch")] {
+            assert_eq!(label_for_unnumbered_part(brand).await, None, "{brand:?}");
+        }
     }
 
     #[tokio::test]
@@ -427,7 +380,7 @@ mod tests {
 
         let line = &only_job(&sheet).owner_supplies[0];
         assert_eq!(line.name, "Oil filter");
-        assert_eq!(line.part_number, None);
+        assert_eq!(line.label, None);
     }
 
     #[tokio::test]
@@ -456,7 +409,7 @@ mod tests {
         let job = only_job(&sheet);
         assert_empty(&job.owner_supplies);
         assert_eq!(job.shop_supplies[0].name, "Brake fluid");
-        assert_eq!(job.shop_supplies[0].part_number, None);
+        assert_eq!(job.shop_supplies[0].label, None);
     }
 
     #[tokio::test]
@@ -473,7 +426,7 @@ mod tests {
         let job = only_job(&sheet);
         assert_eq!(job.shop_supplies.len(), 1);
         assert_eq!(job.shop_supplies[0].name, "Oil");
-        assert_eq!(job.shop_supplies[0].part_number, None);
+        assert_eq!(job.shop_supplies[0].label, None);
         assert_empty(&sheet.unsettled);
     }
 
@@ -608,14 +561,5 @@ mod tests {
             .replace("9999", &a.to_string());
 
         assert_eq!(wrong, missing);
-    }
-
-    #[test]
-    fn part_label_joins_manufacturer_and_number() {
-        assert_eq!(part_label(Some("ATE"), Some("1")).as_deref(), Some("ATE 1"));
-        assert_eq!(part_label(None, Some("1")).as_deref(), Some("1"));
-        assert_eq!(part_label(Some("ATE"), None), None);
-        assert_eq!(part_label(Some(""), Some(" ")), None);
-        assert_eq!(part_label(Some(" "), Some("1")).as_deref(), Some("1"));
     }
 }

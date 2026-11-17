@@ -239,8 +239,8 @@ fn optional_id(text: &str, field: &str, message: &str) -> DomainResult<Option<i3
 pub struct SupplierForm {
     #[serde(default)]
     supplied_by: String,
-    #[serde(default)]
-    approach: String,
+    // Absent on the work sheet's form, which leaves the approach alone.
+    approach: Option<String>,
     back: Option<String>,
 }
 
@@ -256,15 +256,17 @@ pub async fn post_supplier(
         Target::Need(id),
         "supplier",
     )
-    .typed(&[
-        ("supplied_by", &form.supplied_by),
-        ("approach", &form.approach),
-    ]);
+    .typed(&[("supplied_by", &form.supplied_by)]);
+    let post = match &form.approach {
+        Some(approach) => post.typed(&[("approach", approach)]),
+        None => post,
+    };
     let result = supplier(&state, vid, id, &form).await;
     post.answer(result).await
 }
 
-// An empty field clears the stored value.
+// An empty field clears the stored value, and an absent approach is left
+// alone.
 async fn supplier(
     state: &AppState,
     vid: i32,
@@ -272,13 +274,17 @@ async fn supplier(
     form: &SupplierForm,
 ) -> DomainResult<job_need::Model> {
     let supplied_by = trim_to_none(&form.supplied_by);
-    let approach = trim_to_none(&form.approach);
+    let approach = form
+        .approach
+        .as_deref()
+        .map(|a| vocab::parse_optional("approach", trim_to_none(a).as_deref()))
+        .transpose()?;
     let input = UpdateNeed {
         supplied_by: Some(vocab::parse_optional(
             "supplied_by",
             supplied_by.as_deref(),
         )?),
-        approach: Some(vocab::parse_optional("approach", approach.as_deref())?),
+        approach,
         ..Default::default()
     };
     need::update(&state.db, vid, id, input).await

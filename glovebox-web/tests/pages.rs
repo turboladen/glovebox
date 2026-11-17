@@ -612,18 +612,15 @@ async fn every_page_loads_the_bundled_typeface_and_labels_the_database() {
 // bought (rotors × 2, ATE 13.0460) and a shop need (brake fluid); "Cabin
 // filter" whose only need is installed; and a done job "Old job". Returns
 // (vehicle, appointment, brakes job).
-#[expect(
-    clippy::too_many_lines,
-    reason = "one appointment holding a need at every stage the sheet places"
-)]
 async fn sheet_fixture(db: &DatabaseConnection) -> (i32, i32, i32) {
     use glovebox_shared::{
         entities::{
             part::{PartStatus, Supplier},
             work_item::JobStatus,
         },
-        inputs::{need::UpdateNeed, part::NewPart, work_item::UpdateWorkItem},
+        inputs::{need::UpdateNeed, part::NewPart},
         services::part,
+        test_support::{add_job, set_job_status},
     };
     let v = VehicleFixture::new().name("Golf GTI").insert_id(db).await;
     let a = appointment::create(
@@ -639,20 +636,9 @@ async fn sheet_fixture(db: &DatabaseConnection) -> (i32, i32, i32) {
     .await
     .unwrap()
     .id;
-    let job = |title: &'static str| NewWorkItem {
-        title: title.into(),
-        appointment_id: Some(a),
-        ..Default::default()
-    };
-    let brakes = work_item::create(db, v, job("Front brakes"))
-        .await
-        .unwrap()
-        .id;
-    let cabin = work_item::create(db, v, job("Cabin filter"))
-        .await
-        .unwrap()
-        .id;
-    let old = work_item::create(db, v, job("Old job")).await.unwrap().id;
+    let brakes = add_job(db, v, "Front brakes", Some(a)).await;
+    let cabin = add_job(db, v, "Cabin filter", Some(a)).await;
+    let old = add_job(db, v, "Old job", Some(a)).await;
     let add = |job_id: i32, name: &'static str, quantity: i32| {
         need::add(
             db,
@@ -711,17 +697,7 @@ async fn sheet_fixture(db: &DatabaseConnection) -> (i32, i32, i32) {
     need::link_part(db, v, filter, fitted.id, None)
         .await
         .unwrap();
-    work_item::update(
-        db,
-        v,
-        old,
-        UpdateWorkItem {
-            status: Some(JobStatus::Done),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
+    set_job_status(db, v, old, JobStatus::Done).await;
     (v, a, brakes)
 }
 
@@ -818,6 +794,31 @@ async fn print_sheet_says_everything_is_settled() {
 
     assert!(body.contains("Everything is settled."), "{body}");
     assert!(!body.contains("Before you print"), "{body}");
+}
+
+#[tokio::test]
+async fn print_sheet_with_no_planned_jobs_says_so() {
+    let db = db().await;
+    let v = VehicleFixture::new().name("Golf GTI").insert_id(&db).await;
+    let a = appointment::create(
+        &db,
+        v,
+        NewAppointment {
+            purpose: "Brakes".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+
+    let (_, body) = page(app(db, "test"), get(&sheet_path(v, a))).await;
+
+    assert!(
+        body.contains("No planned jobs on this appointment."),
+        "{body}"
+    );
+    assert!(!body.contains("Everything is settled."), "{body}");
 }
 
 #[tokio::test]

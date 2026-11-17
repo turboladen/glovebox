@@ -309,11 +309,11 @@ A page is a view of the shared library, and a future page follows the same rules
   forms. An item a planned job covers links to the job, and an item whose job is on an
   appointment is left out. `docs/adr/0002-home-page-shows-waiting-work.md` records why.
 - **The work sheet** (`/vehicles/{vid}/appointments/{id}/print`, `work_sheet::for_appointment`)
-  lists each planned job with the owner's parts (received or ordered, with manufacturer and part
-  number from one record: the linked part, else the chosen option when the part names no other
-  brand) and the shop's parts by name.
+  lists each planned job with the owner's parts (received or ordered, with the manufacturer and
+  part number the linked part records, never a researched option's) and the shop's parts by name.
   Undecided and to-order needs are left off and shown in an on-screen "Before you print" box,
-  whose "Ask the shop" posts the existing supplier form. `docs/adr/0009-the-work-sheet-prints-plain.md`
+  whose "Ask the shop" posts the existing supplier form without an approach, which leaves the
+  stored approach alone. `docs/adr/0009-the-work-sheet-prints-plain.md`
   records why.
 - **Marking a need ordered has no undo**, because it creates a purchase record. A to-do tick, a
   received date and a deleted to-do show a banner with an undo form. The undo of a delete puts

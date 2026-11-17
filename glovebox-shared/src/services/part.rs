@@ -11,6 +11,20 @@ use crate::{
     services::service_record::CompletedWork,
 };
 
+/// A part's manufacturer and number joined by a space, such as
+/// `ATE 13.0460-2788.2`, or `None` without a number. Blank text counts as
+/// absent.
+pub fn label(manufacturer: Option<&str>, part_number: Option<&str>) -> Option<String> {
+    fn nonblank(s: Option<&str>) -> Option<&str> {
+        s.map(str::trim).filter(|s| !s.is_empty())
+    }
+    let number = nonblank(part_number)?;
+    Some(match nonblank(manufacturer) {
+        Some(m) => format!("{m} {number}"),
+        None => number.to_owned(),
+    })
+}
+
 /// Whether `p` was sent back from its need.
 pub(crate) fn is_returned(p: &part::Model) -> bool {
     p.status == PartStatus::Returned
@@ -366,6 +380,18 @@ pub async fn delete(db: &impl ConnectionTrait, vehicle_id: i32, id: i32) -> Doma
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn label_joins_manufacturer_and_number() {
+        assert_eq!(
+            super::label(Some("ATE"), Some("1")).as_deref(),
+            Some("ATE 1")
+        );
+        assert_eq!(super::label(None, Some("1")).as_deref(), Some("1"));
+        assert_eq!(super::label(Some("ATE"), None), None);
+        assert_eq!(super::label(Some(""), Some(" ")), None);
+        assert_eq!(super::label(Some(" "), Some("1")).as_deref(), Some("1"));
+    }
+
     use super::*;
     use crate::test_support::{VehicleFixture, date, row_count, test_db};
 

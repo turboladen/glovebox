@@ -940,9 +940,6 @@ pub struct UnsettledRow {
     pub detail: String,
     /// The need on its job's page, where it is decided.
     pub decide_href: String,
-    /// The need's approach as stored, or empty, which the supplier form sends
-    /// back so asking the shop leaves it unchanged.
-    pub approach: String,
     pub error: Option<String>,
 }
 
@@ -962,7 +959,7 @@ pub fn sheet_jobs(sheet: &WorkSheet) -> Vec<SheetJobCard> {
         } else {
             line.name.clone()
         },
-        label: line.part_number.clone(),
+        label: line.label.clone(),
     };
     sheet
         .jobs
@@ -985,13 +982,10 @@ pub fn unsettled_rows(sheet: &WorkSheet, vid: i32, failure: Option<&Failure>) ->
             job_title: u.job_title.clone(),
             detail: u.detail.clone(),
             decide_href: format!(
-                "/vehicles/{vid}/jobs/{}?open=need-{id}#need-{id}",
-                u.job_id,
+                "{}?open=need-{id}#need-{id}",
+                crate::pages::job_path(vid, u.job_id),
                 id = u.need_id
             ),
-            approach: u
-                .approach
-                .map_or_else(String::new, |a| a.as_str().to_owned()),
             error: failure
                 .filter(|f| f.target == Target::Need(u.need_id))
                 .map(|f| f.message.clone()),

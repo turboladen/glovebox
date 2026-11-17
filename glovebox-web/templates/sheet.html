@@ -1,10 +1,12 @@
 {% extends "base.html" %}
 {% block title %}Work sheet - Glovebox{% endblock %}
 {% block content %}
-<div class="noprint page ws-screen">
+<div class="noprint page">
   <p><a href="{{ appointment_href }}">Back to the appointment</a></p>
   {% if let Some(e) = top_error %}<p class="error" role="alert"><b>Not saved.</b> {{ e }}</p>{% endif %}
-  {% if unsettled.is_empty() %}
+  {% if jobs.is_empty() && unsettled.is_empty() %}
+  <p>No planned jobs on this appointment.</p>
+  {% else if unsettled.is_empty() %}
   <p>Everything is settled.</p>
   {% else %}
   <section class="ws-warn" aria-labelledby="ws-warn-title">
@@ -18,7 +20,6 @@
         <form method="post" action="/vehicles/{{ vid }}/needs/{{ u.need_id }}/supplier">
           <input type="hidden" name="back" value="{{ back }}">
           <input type="hidden" name="supplied_by" value="shop">
-          <input type="hidden" name="approach" value="{{ u.approach }}">
           <button class="btn" type="submit">Ask the shop</button>
         </form>
         {% if let Some(e) = u.error %}<p class="error" role="alert"><b>Not saved.</b> {{ e }}</p>{% endif %}

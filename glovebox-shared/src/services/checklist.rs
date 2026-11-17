@@ -602,17 +602,11 @@ fn next_steps(jobs: &[JobView], todos: &[todo::Model]) -> NextSteps {
 // Names an option in a sentence: by manufacturer and part number when it has
 // a part number, otherwise by its description.
 fn option_label(option: &need_option::Model) -> String {
-    if option.part_number.is_none() {
-        return option.description.clone();
-    }
-    [
+    super::part::label(
         option.manufacturer.as_deref(),
         option.part_number.as_deref(),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>()
-    .join(" ")
+    )
+    .unwrap_or_else(|| option.description.clone())
 }
 
 /// Whether a need is still open on a job that is done or dropped, so it asks
