@@ -31,11 +31,12 @@ fmt:
 check-layering:
     ./scripts/check-layering.sh
 
-# The backend gates run clippy over every target first, so a lint fails fast,
-# then build and test. Cargo.toml sets the pedantic level.
+# The backend gates run clippy over every target and then rustdoc first, so a
+# lint or a bad doc link fails fast, then build and test. Cargo.toml sets the
+# lint levels.
 ci-backend:
     cargo clippy --workspace --all-targets --locked -- -D warnings
-    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
+    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked
     cargo build --workspace --locked
     cargo test --workspace --locked
 

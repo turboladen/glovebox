@@ -1,7 +1,7 @@
 # ADR-0006: Claude Desktop over MCP is the main interface
 
 - **Status:** Accepted
-- **Date:** 2026-11-12
+- **Date:** 2026-11-16
 
 ## Context
 
@@ -19,8 +19,10 @@ read an invoice and fill in a structured record, so the interface is the convers
 
 **Claude Desktop is the main interface, and it talks to glovebox over stdio.** The `glovebox-mcp`
 binary is launched by Claude Desktop, so no server has to run between conversations. Stdout
-carries only protocol frames, and every diagnostic goes to stderr. Every record the owner keeps
-can be created, read, corrected and deleted through a tool, so no fact requires another program.
+carries only protocol frames, and every diagnostic goes to stderr. Every kind of fact the owner
+keeps is filed and read through a tool, so no fact requires another program, and the records the
+owner corrects most (services, parts, incidents, jobs and needs) are corrected and deleted the
+same way.
 
 **Tools are domain verbs a person would say.** `record_service`, `plan_work`, `whats_coming` and
 `check_recalls` name the owner's intent, not a table, and Claude never has to know the schema or
@@ -30,11 +32,11 @@ number is the duplicate guard, so filing the same scan twice returns the stored 
 `whats_coming` answers the question above in one call.
 
 **The facts an invoice carries are structured, not left in notes.** A service has a performer
-(`shop` or `self`), a start date and an optional end date. Each line has a work kind and each
-part a supplier. A shop advisory is an incident noticed during a service plus a planned job. A
-recall's status is derived from the jobs and services linked to it, except `not_applicable`,
-which the owner sets. Inspection results stay in the service notes, and the mods on a car are
-read from mod lines and installed parts, with no separate configuration record.
+(`shop` or `self`), a start date and an optional end date. Each line has a work kind and each part a
+supplier. A shop advisory is an incident noticed during a service plus a planned job. A recall reads
+done when a service performed it or a job from it is done; otherwise the owner sets it open, done or
+not applicable. Inspection results stay in the service notes, and the mods on a car are read from
+mod lines and installed parts, with no separate configuration record.
 
 **All logic lives in `glovebox-shared`.** SQL, validation and business rules are service
 functions that take a connection and return `DomainResult<T>`. Each program is a thin surface

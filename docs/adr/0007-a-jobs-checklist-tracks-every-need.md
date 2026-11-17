@@ -1,7 +1,7 @@
 # ADR-0007: A job's checklist tracks every need from decision to install
 
 - **Status:** Accepted
-- **Date:** 2026-11-13
+- **Date:** 2026-11-16
 
 ## Context
 

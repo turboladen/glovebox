@@ -1,7 +1,7 @@
 # ADR-0008: The web page reads as a ledger
 
 - **Status:** Accepted
-- **Date:** 2026-11-14
+- **Date:** 2026-11-16
 
 ## Context
 

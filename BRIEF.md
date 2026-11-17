@@ -1,6 +1,6 @@
 # Glovebox: project brief
 
-Glovebox is a personal car maintenance record, and Claude Desktop is its only interface. The owner
+Glovebox is a personal car maintenance record, and Claude Desktop is its main interface. The owner
 talks to Claude, Claude reads scanned invoices and other sources, and Claude files the facts through
 the MCP tools in `glovebox-mcp`. The full design is in
 `docs/adr/0006-claude-desktop-over-mcp-is-the-main-interface.md`. Setup and the project prompt are in
