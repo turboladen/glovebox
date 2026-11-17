@@ -27,7 +27,7 @@ cargo test -p glovebox-shared test_name           # One service-level test
 cargo test -p glovebox-mcp --test rehearsal       # One MCP integration test file
 
 just ci                   # Everything CI runs: nightly fmt-check, layering, typos, clippy, docs, build, test
-just fmt                  # cargo +nightly fmt — rustfmt.toml uses nightly-only options; plain `cargo fmt` passes locally but CI's format job will fail
+just fmt                  # cargo +nightly fmt — rustfmt.toml uses nightly-only options (it also rewraps `///` text, so run it after editing docs); plain `cargo fmt` passes locally but CI's format job will fail
 just check-layering       # Layering gate only (scripts/check-layering.sh)
 just backup               # Copy the current environment's database to data/backups/ now (glovebox backup)
 just reset-env test       # Delete the named non-live environment's database files (glovebox reset --env test)
@@ -134,6 +134,8 @@ on startup.
 **Test harness** (`test_support.rs`): `test_db()` is an in-memory SQLite database with migrations
 applied. It is compiled under `#[cfg(any(test, feature = "test-support"))]`; `glovebox-mcp` uses it
 through a dev-dependency with the `test-support` feature.
+`race_pools()` and `race(&pools, |i, db| ...)` run an operation twice on each of three pools; a
+race test must fail when `services::begin_write` is swapped for a plain `BEGIN`.
 
 ### MCP surface (`glovebox-mcp/`)
 
@@ -299,7 +301,8 @@ A page is a view of the shared library, and a future page follows the same rules
   `GLOVEBOX_DB_PATH` chose the file. An option's link is shown only for an `http` or `https`
   address.
 - **Tests** drive the router in process over an in-memory database with a fixed clock
-  (`AppState::today`).
+  (`AppState::today`, `common::today()` = 2026-11-13); date fixtures by `common::today()`, not
+  `services::today()`.
 - **The home page leads with what is waiting.** Per vehicle it lists the maintenance that is
   overdue or due soon, every planned job on no appointment, the open recalls and the open
   incidents (`waiting::waiting`), then the appointments and to-dos. Those four lists hold no
@@ -358,6 +361,8 @@ role per control style, and `YYYY-MM-DD` dates.
 
 ### General
 
+- **`git rm --cached` on a tracked file deletes it from every other checkout** when that checkout
+  pulls the change. Restore with `git show <commit-before>:<path>` if the files are still wanted.
 - **Issue tracking**: Use `bd` (beads), never markdown TODOs.
 - **Design decisions**: a design or architecture decision is recorded as an ADR in `docs/adr/`
   (`NNNN-short-name.md`: status, date, context, decision, alternatives, consequences). Brainstorming
@@ -404,7 +409,9 @@ role per control style, and `YYYY-MM-DD` dates.
   copy the external-content trigger trio in the initial schema migration; aggregating over `bm25()`
   arms needs a `MATERIALIZED` CTE because query flattening breaks `bm25`.
 - **Verify data-moving migrations against a populated copy of `data/glovebox.db`**, not just
-  `test_db()`.
+  `test_db()`. To migrate a copy, run `GLOVEBOX_DB_PATH=<copy> target/release/glovebox-mcp < /dev/null`
+  (it migrates at start and exits at end of input; `glovebox backup` does not migrate). Compare
+  `sqlite_schema` and `.dump` output from `main`'s build and the branch's on a pre-migration backup.
 - **`tokio::fs::File` buffers**: always `.flush().await` before the handle drops, or a pending write
   can be silently lost under load.
 - **Entity field order**: must match physical DB column order. ALTER TABLE appends columns to the

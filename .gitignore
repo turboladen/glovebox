@@ -15,3 +15,5 @@ data/
 # Brainstorming specs and task plans are working files. A decision that should
 # outlive the work is written as an ADR in docs/adr/.
 docs/superpowers/
+# Screenshots the Playwright browser tool saves during a visual check.
+.playwright-mcp/
