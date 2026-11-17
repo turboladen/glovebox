@@ -49,7 +49,6 @@ enum Page {
     Home,
     Appointment(i32, i32),
     Job(i32, i32),
-    /// An appointment's work sheet.
     Sheet(i32, i32),
 }
 

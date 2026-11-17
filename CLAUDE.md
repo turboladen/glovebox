@@ -310,7 +310,8 @@ A page is a view of the shared library, and a future page follows the same rules
   appointment is left out. `docs/adr/0002-home-page-shows-waiting-work.md` records why.
 - **The work sheet** (`/vehicles/{vid}/appointments/{id}/print`, `work_sheet::for_appointment`)
   lists each planned job with the owner's parts (received or ordered, with manufacturer and part
-  number from one record: the linked part, else the chosen option) and the shop's parts by name.
+  number from one record: the linked part, else the chosen option when the part names no other
+  brand) and the shop's parts by name.
   Undecided and to-order needs are left off and shown in an on-screen "Before you print" box,
   whose "Ask the shop" posts the existing supplier form. `docs/adr/0009-the-work-sheet-prints-plain.md`
   records why.

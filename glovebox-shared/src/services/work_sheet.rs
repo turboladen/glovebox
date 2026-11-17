@@ -58,7 +58,7 @@ pub struct Unsettled {
     pub job_id: i32,
     pub job_title: String,
     pub name: String,
-    /// `undecided` or `to_order`.
+    /// The need's stage, which is `undecided` or `to_order`.
     pub stage: Stage,
     pub approach: Option<Approach>,
     /// What is asked of the owner, as the checklist says it.
@@ -166,17 +166,29 @@ fn line(view: &NeedView) -> SheetLine {
 }
 
 // The manufacturer and number come from one record, so a bought part's
-// number never prints beside a researched option's brand.
+// number never prints beside a researched option's brand. The option fills
+// in only for a part that names no brand or the option's own.
 fn owner_label(view: &NeedView) -> Option<String> {
-    let from_part = view
-        .part
-        .as_ref()
-        .and_then(|p| part_label(p.manufacturer.as_deref(), p.part_number.as_deref()));
-    from_part.or_else(|| {
-        view.chosen
-            .as_ref()
-            .and_then(|o| part_label(o.manufacturer.as_deref(), o.part_number.as_deref()))
-    })
+    let part = view.part.as_ref();
+    if let Some(label) =
+        part.and_then(|p| part_label(p.manufacturer.as_deref(), p.part_number.as_deref()))
+    {
+        return Some(label);
+    }
+    let option = view.chosen.as_ref()?;
+    let brand = |m: Option<&str>| {
+        m.map(str::trim)
+            .filter(|m| !m.is_empty())
+            .map(str::to_ascii_lowercase)
+    };
+    let part_brand = part.and_then(|p| brand(p.manufacturer.as_deref()));
+    if part_brand.is_some() && part_brand != brand(option.manufacturer.as_deref()) {
+        return None;
+    }
+    part_label(
+        option.manufacturer.as_deref(),
+        option.part_number.as_deref(),
+    )
 }
 
 #[cfg(test)]
@@ -354,8 +366,9 @@ mod tests {
         assert_empty(&sheet.unsettled);
     }
 
-    #[tokio::test]
-    async fn option_number_is_the_fallback() {
+    // Links a part with `manufacturer` and no number to an oil filter whose
+    // chosen option is Mann HU 7020 z, and returns the owner line's label.
+    async fn label_for_unnumbered_part(manufacturer: Option<&str>) -> Option<String> {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
         let a = appointment_on(&db, v).await;
@@ -367,20 +380,36 @@ mod tests {
             n,
             NewPart {
                 name: "Oil filter".into(),
-                manufacturer: Some("Bosch".into()),
+                manufacturer: manufacturer.map(Into::into),
                 supplied_by: Some(Supplier::Owner),
                 ..Default::default()
             },
             None,
         )
         .await;
-
         let sheet = for_appointment(&db, v, a).await.unwrap();
+        only_job(&sheet).owner_supplies[0].part_number.clone()
+    }
 
+    #[tokio::test]
+    async fn option_number_fills_a_part_with_no_brand() {
         assert_eq!(
-            only_job(&sheet).owner_supplies[0].part_number.as_deref(),
+            label_for_unnumbered_part(None).await.as_deref(),
             Some("Mann HU 7020 z")
         );
+    }
+
+    #[tokio::test]
+    async fn option_number_fills_a_part_of_the_same_brand() {
+        assert_eq!(
+            label_for_unnumbered_part(Some(" mann ")).await.as_deref(),
+            Some("Mann HU 7020 z")
+        );
+    }
+
+    #[tokio::test]
+    async fn another_brands_number_is_never_printed_beside_the_part() {
+        assert_eq!(label_for_unnumbered_part(Some("Bosch")).await, None);
     }
 
     #[tokio::test]

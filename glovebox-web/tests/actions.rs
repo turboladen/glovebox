@@ -2655,3 +2655,19 @@ async fn ask_the_shop_keeps_the_approach() {
     assert_eq!(need.approach, Some(Approach::Upgrade));
     assert_eq!(need.supplied_by, Some(Supplier::Shop));
 }
+
+#[tokio::test]
+async fn ask_the_shop_refusal_shows_beside_its_row() {
+    let w = World::new().await;
+
+    let (status, _, body) = w.ask_the_shop("bogus").await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body.matches("Not saved.").count(), 1, "{body}");
+    let row = body
+        .split_once(&format!(r#"<li id="need-{}">"#, w.need))
+        .and_then(|(_, rest)| rest.split_once("</li>"))
+        .map_or("", |(row, _)| row);
+    assert!(row.contains("Not saved."), "{body}");
+    assert!(row.contains("Approach"), "{body}");
+}

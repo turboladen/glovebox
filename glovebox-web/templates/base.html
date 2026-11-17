@@ -303,8 +303,8 @@
   .ws-warn { background: var(--panel); border: 1px solid var(--rule); padding: 0.75rem 1rem; display: grid; gap: 0.5rem; }
   .ws-warn li { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; align-items: baseline; }
   @media print {
-    .chrome, .hint, .noprint { display: none; }
-    body { background: #fff; color: #000; }
+    body:has(.ws) :is(.chrome, .hint), .noprint { display: none; }
+    body:has(.ws) { background: #fff; color: #000; }
     .ws { padding: 0; }
   }
 </style>

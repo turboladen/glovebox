@@ -20,7 +20,7 @@ manufacturer and part number, and "Please supply" lists the shop's parts by name
 shows a quantity above one.
 
 **On paper the sheet is black on white.** It departs from ADR 0008's ledger look: it has no
-panels, pills or tints, and the site header is hidden. A job does not split across pages unless it
+panels, pills or tints, and the site header is hidden. Every other page prints as it shows. A job does not split across pages unless it
 is longer than one. The browser's own print command prints it, because the page runs no script.
 
 **Needs that are not settled show only on screen, in a "Before you print" box.** That covers
