@@ -17,7 +17,7 @@ use glovebox_shared::{
         },
         todo::{NewTodo, UpdateTodo},
     },
-    services::{checklist, need},
+    services::{appointment::AppointmentStatus, checklist, need},
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -54,15 +54,6 @@ impl PlanAppointmentInput {
             },
         ))
     }
-}
-
-/// The status an appointment can be set to.
-#[derive(Clone, Copy, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AppointmentStatus {
-    Planning,
-    Done,
-    Cancelled,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -102,11 +93,7 @@ pub struct UpdateAppointmentInput {
 
 impl UpdateAppointmentInput {
     pub fn into_domain(self) -> DomainResult<(i32, i32, UpdateAppointment, Option<StatusChange>)> {
-        let change = self.status.map(|s| match s {
-            AppointmentStatus::Planning => StatusChange::Reopen,
-            AppointmentStatus::Done => StatusChange::Close,
-            AppointmentStatus::Cancelled => StatusChange::Cancel,
-        });
+        let change = self.status.map(StatusChange::from);
         Ok((
             self.vehicle_id,
             self.appointment_id,

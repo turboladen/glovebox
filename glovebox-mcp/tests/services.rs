@@ -280,7 +280,10 @@ async fn link_service_to_maintenance_add_defaults_and_replace_overwrites() {
             }),
         )
         .await;
-    assert!(err.contains("add, replace"), "got: {err}");
+    assert!(
+        err.contains("mode: unknown variant `merge`, expected `add` or `replace`"),
+        "got: {err}"
+    );
 }
 
 #[tokio::test]

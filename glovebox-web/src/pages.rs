@@ -466,8 +466,8 @@ async fn appointment_page(
             .appointment
             .planned_date
             .map(glovebox_shared::services::date_label),
-        status_class: summary.status,
-        status_text: sentence_case(summary.status),
+        status_class: summary.status.as_str(),
+        status_text: sentence_case(summary.status.as_str()),
         needs_open: Count::new(summary.needs_open, "need open", "needs open"),
         todos_open: Count::new(summary.todos_open, "to-do open", "to-dos open"),
         job_count: Count::new(summary.jobs, "job", "jobs"),

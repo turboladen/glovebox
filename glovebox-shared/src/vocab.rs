@@ -1,4 +1,4 @@
-//! Vocabularies: values a column takes from a fixed list.
+//! Vocabularies: values from a fixed list, which a column may store.
 //!
 //! `vocabulary!` defines one as an enum whose variants each carry the text
 //! that is stored, sent in tool arguments and printed in tool output.
@@ -59,8 +59,9 @@ pub fn parse_optional<V: Vocabulary>(field: &str, text: Option<&str>) -> DomainR
 
 /// Defines a [`Vocabulary`] enum from `Variant => "text"` pairs.
 ///
-/// The enum is stored as its text in a TEXT column, serializes to and from
-/// the same text, and implements `Display` and `FromStr` over it.
+/// When a TEXT column holds the enum, it stores the variant's text. The enum
+/// serializes to and from the same text, and implements `Display` and
+/// `FromStr` over it.
 // The enum derives `DeriveValueType`, not `DeriveActiveEnum`: the latter
 // builds an identifier from each stored text and does not compile for
 // `"self"`, which three vocabularies store. A stored value outside the list

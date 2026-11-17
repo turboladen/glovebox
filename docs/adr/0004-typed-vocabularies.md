@@ -25,7 +25,9 @@ Three facts constrain the choice.
 `vocab.rs` takes `Variant => "text"` pairs and gives the enum the same text everywhere: the stored
 column value (`DeriveValueType` over `FromStr` and `Display`), the serde form in tool arguments
 and tool output, and the `as_str` a page prints. The enum lives in the entity module that owns its
-column. The database stays TEXT and no stored value changes.
+column. An enum that no column stores, such as a status the code derives or a tool argument
+that picks a behavior, lives in the service that uses it. The database stays TEXT and no stored
+value changes.
 
 **Text is parsed once, at the edge.** A tool argument is read by serde, and text from a web form
 by `vocab::parse`, which names the field and lists the allowed values. Shared inputs and services
@@ -68,5 +70,6 @@ it.
 - Adding a value to a list is one line in the macro call. Removing or renaming one needs a
   migration that rewrites the stored rows first.
 - Raw SQL that writes a vocabulary column bypasses the enum and must write a listed value.
-- A recall's status (`open`, `done`, `not_applicable`) is a vocabulary with no column of its own:
-  the stored finding status uses other text, and the recall service maps between them.
+- Some vocabularies have no column. For example, a recall's settable status (`open`,
+  `done`, `not_applicable`) maps to stored finding text that differs, and the status it is shown
+  with adds `planned`, which only a planned job produces.

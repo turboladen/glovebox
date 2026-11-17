@@ -16,34 +16,16 @@ use crate::error::{DomainError, DomainResult};
 /// Overall result cap across all scopes.
 const LIMIT: usize = 50;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SearchScope {
-    All,
-    Vehicles,
-    Services,
-    Incidents,
-    Research,
-    Maintenance,
-    Todo,
-}
-
-impl SearchScope {
-    /// Parse the wire form
-    /// (`all|vehicles|services|incidents|research|maintenance|todo`).
-    pub fn parse(s: &str) -> DomainResult<Self> {
-        match s {
-            "all" => Ok(Self::All),
-            "vehicles" => Ok(Self::Vehicles),
-            "services" => Ok(Self::Services),
-            "incidents" => Ok(Self::Incidents),
-            "research" => Ok(Self::Research),
-            "maintenance" => Ok(Self::Maintenance),
-            "todo" => Ok(Self::Todo),
-            other => Err(DomainError::BadRequest(format!(
-                "unknown search scope '{other}' (expected one of: all, vehicles, services, \
-                 incidents, research, maintenance, todo)"
-            ))),
-        }
+crate::vocab::vocabulary! {
+    /// The kind of record a search covers; `all` covers every kind.
+    pub enum SearchScope {
+        All => "all",
+        Vehicles => "vehicles",
+        Services => "services",
+        Incidents => "incidents",
+        Research => "research",
+        Maintenance => "maintenance",
+        Todo => "todo",
     }
 }
 
@@ -838,45 +820,6 @@ mod tests {
                 .await
                 .unwrap_err(),
             DomainError::NotFound(_)
-        ));
-    }
-
-    #[tokio::test]
-    async fn scope_parse_round_trips_and_rejects_unknown() {
-        assert_eq!(SearchScope::parse("all").unwrap(), SearchScope::All);
-        assert_eq!(
-            SearchScope::parse("vehicles").unwrap(),
-            SearchScope::Vehicles
-        );
-        assert_eq!(
-            SearchScope::parse("services").unwrap(),
-            SearchScope::Services
-        );
-        assert_eq!(
-            SearchScope::parse("incidents").unwrap(),
-            SearchScope::Incidents
-        );
-        for retired in ["observations", "accidents", "builds", "documents"] {
-            assert!(
-                matches!(
-                    SearchScope::parse(retired).unwrap_err(),
-                    DomainError::BadRequest(_)
-                ),
-                "retired scope '{retired}' must be rejected"
-            );
-        }
-        assert_eq!(
-            SearchScope::parse("research").unwrap(),
-            SearchScope::Research
-        );
-        assert_eq!(
-            SearchScope::parse("maintenance").unwrap(),
-            SearchScope::Maintenance
-        );
-        assert_eq!(SearchScope::parse("todo").unwrap(), SearchScope::Todo);
-        assert!(matches!(
-            SearchScope::parse("nonsense").unwrap_err(),
-            DomainError::BadRequest(_)
         ));
     }
 }

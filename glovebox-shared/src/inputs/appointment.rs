@@ -32,3 +32,15 @@ pub enum StatusChange {
     /// Clear both the closed and the cancelled mark.
     Reopen,
 }
+
+impl From<crate::services::appointment::AppointmentStatus> for StatusChange {
+    /// The change that leaves an appointment in `status`.
+    fn from(status: crate::services::appointment::AppointmentStatus) -> Self {
+        use crate::services::appointment::AppointmentStatus;
+        match status {
+            AppointmentStatus::Planning => Self::Reopen,
+            AppointmentStatus::Done => Self::Close,
+            AppointmentStatus::Cancelled => Self::Cancel,
+        }
+    }
+}

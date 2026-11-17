@@ -612,9 +612,8 @@ pub struct SummarizeActivityInput {
 pub struct SearchRecordsInput {
     /// Full-text query. Plain words; no special syntax needed.
     pub query: String,
-    /// Restrict to one record kind: `all`, `vehicles`, `services`,
-    /// `incidents`, `research`, `maintenance`, or `todo`. Default `all`.
-    pub scope: Option<String>,
+    /// Restrict to one record kind. Default `all`.
+    pub scope: Option<glovebox_shared::services::search::SearchScope>,
     /// Restrict to one vehicle (from `list_vehicles`). Omit to search the garage.
     pub vehicle_id: Option<i32>,
 }
@@ -665,7 +664,7 @@ pub struct LinkServiceToMaintenanceInput {
     pub schedule_item_ids: Vec<i32>,
     /// `add` (default) keeps the record's existing links and adds these;
     /// `replace` overwrites them with exactly this list.
-    pub mode: Option<String>,
+    pub mode: Option<glovebox_shared::services::service_record::LinkMode>,
 }
 
 /// Compact vehicle row for `list_vehicles` — enough to pick a `vehicle_id`

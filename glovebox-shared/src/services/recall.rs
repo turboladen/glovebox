@@ -56,9 +56,29 @@ impl RecallStatus {
     }
 }
 
-/// The status a recall reads while a planned job addresses it and nothing
-/// has marked it done or not applicable. No caller can set it.
-pub(crate) const PLANNED: &str = "planned";
+crate::vocab::vocabulary! {
+    /// The status a recall reads.
+    // `planned` comes from a planned job while nothing has marked the recall
+    // done or not applicable, and no caller can set it. No column stores
+    // these texts either, and the finding's stored status uses others, so a
+    // filter on it takes `RecallStatus::stored()`, never a variant of this.
+    pub enum ShownRecallStatus {
+        Open => "open",
+        Planned => "planned",
+        Done => "done",
+        NotApplicable => "not_applicable",
+    }
+}
+
+impl From<RecallStatus> for ShownRecallStatus {
+    fn from(status: RecallStatus) -> Self {
+        match status {
+            RecallStatus::Open => Self::Open,
+            RecallStatus::Done => Self::Done,
+            RecallStatus::NotApplicable => Self::NotApplicable,
+        }
+    }
+}
 
 // What keeps a recall done whatever the owner set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,8 +113,7 @@ pub struct RecallWithStatus {
     pub title: String,
     pub description: Option<String>,
     pub source_url: Option<String>,
-    /// One of `open`, `planned`, `done` or `not_applicable`.
-    pub status: String,
+    pub status: ShownRecallStatus,
     /// The work item that addresses or addressed this recall: the planned
     /// one when there is one, otherwise the latest completed one. Only a
     /// planned item makes `status` read `planned`.
@@ -232,9 +251,9 @@ async fn with_status(
                 done_job_only,
             );
             let status = if settled == RecallStatus::Open && planned_work_item_id.is_some() {
-                PLANNED
+                ShownRecallStatus::Planned
             } else {
-                settled.as_str()
+                settled.into()
             };
             RecallWithStatus {
                 finding_id: f.id,
@@ -242,7 +261,7 @@ async fn with_status(
                 title: f.title,
                 description: f.description,
                 source_url: f.source_url,
-                status: status.to_owned(),
+                status,
                 work_item_id,
                 done_service,
                 settled,
@@ -429,7 +448,7 @@ pub(crate) async fn release_from_deleted_service(
     let done: std::collections::HashSet<i32> = with_status(db, findings)
         .await?
         .into_iter()
-        .filter(|r| r.status == RecallStatus::Done.as_str())
+        .filter(|r| r.status == ShownRecallStatus::Done)
         .map(|r| r.finding_id)
         .collect();
     (out.still_done_elsewhere, out.reopened) =
@@ -597,8 +616,8 @@ mod tests {
         let found = [recall_info("24V110000", "Suction Jet Pump")];
         let check = research::record_recalls(&db, v, &found).await.unwrap();
         assert_eq!(
-            (check.newly_found, check.recalls[0].status.as_str()),
-            (1, "open")
+            (check.newly_found, check.recalls[0].status),
+            (1, ShownRecallStatus::Open)
         );
         assert_eq!(
             check.recalls[0].campaign_number.as_deref(),
@@ -608,13 +627,13 @@ mod tests {
         let item = plan_work_for_recall(&db, v, check.recalls[0].finding_id).await;
         let r = &list(&db, v).await.unwrap()[0];
         assert_eq!(
-            (r.status.as_str(), r.work_item_id),
-            ("planned", Some(item.id))
+            (r.status, r.work_item_id),
+            (ShownRecallStatus::Planned, Some(item.id))
         );
 
         let svc = record_service_with_recalls(&db, v, "2025-03-25", vec![r.finding_id]).await;
         let r = &list(&db, v).await.unwrap()[0];
-        assert_eq!(r.status, "done");
+        assert_eq!(r.status, ShownRecallStatus::Done);
         assert_eq!(
             r.done_service.as_ref().unwrap().service_date,
             crate::test_support::date("2025-03-25")
@@ -642,7 +661,7 @@ mod tests {
         let second = research::record_recalls(&db, v, &found).await.unwrap();
         assert_eq!(second.newly_found, 0);
         assert_eq!(second.recalls.len(), 1);
-        assert_eq!(second.recalls[0].status, "done");
+        assert_eq!(second.recalls[0].status, ShownRecallStatus::Done);
     }
 
     #[tokio::test]
@@ -655,21 +674,21 @@ mod tests {
                 .await
                 .unwrap()
                 .status,
-            "not_applicable"
+            ShownRecallStatus::NotApplicable
         );
         assert_eq!(
             set_status(&db, v, id, RecallStatus::Done)
                 .await
                 .unwrap()
                 .status,
-            "done"
+            ShownRecallStatus::Done
         );
         assert_eq!(
             set_status(&db, v, id, RecallStatus::Open)
                 .await
                 .unwrap()
                 .status,
-            "open"
+            ShownRecallStatus::Open
         );
     }
 
@@ -686,7 +705,10 @@ mod tests {
                 "got {err:?}"
             );
         }
-        assert_eq!(list(&db, v).await.unwrap()[0].status, "done");
+        assert_eq!(
+            list(&db, v).await.unwrap()[0].status,
+            ShownRecallStatus::Done
+        );
     }
 
     #[tokio::test]
@@ -723,7 +745,10 @@ mod tests {
                 missing.to_string().replace("9999", "N")
             );
         }
-        assert_eq!(list(&db, other).await.unwrap()[0].status, "open");
+        assert_eq!(
+            list(&db, other).await.unwrap()[0].status,
+            ShownRecallStatus::Open
+        );
 
         let sched = crate::entities::maintenance_schedule_item::ActiveModel {
             vehicle_id: Set(Some(v)),
@@ -780,9 +805,9 @@ mod tests {
         }
     }
 
-    async fn shown(db: &DatabaseConnection, v: i32) -> (String, Option<i32>, bool) {
+    async fn shown(db: &DatabaseConnection, v: i32) -> (ShownRecallStatus, Option<i32>, bool) {
         let r = &list(db, v).await.unwrap()[0];
-        (r.status.clone(), r.work_item_id, r.done_service.is_some())
+        (r.status, r.work_item_id, r.done_service.is_some())
     }
 
     // Status changes racing on one file from several pools all succeed: each
@@ -815,16 +840,19 @@ mod tests {
         let item = plan_work_for_recall(&db, v, id).await;
 
         set_job_status(&db, v, item.id, JobStatus::Done).await;
-        assert_eq!(shown(&db, v).await, ("done".into(), Some(item.id), false));
+        assert_eq!(
+            shown(&db, v).await,
+            (ShownRecallStatus::Done, Some(item.id), false)
+        );
 
         set_job_status(&db, v, item.id, JobStatus::Planned).await;
         assert_eq!(
             shown(&db, v).await,
-            ("planned".into(), Some(item.id), false)
+            (ShownRecallStatus::Planned, Some(item.id), false)
         );
 
         set_job_status(&db, v, item.id, JobStatus::Dropped).await;
-        assert_eq!(shown(&db, v).await, ("open".into(), None, false));
+        assert_eq!(shown(&db, v).await, (ShownRecallStatus::Open, None, false));
     }
 
     #[tokio::test]
@@ -838,7 +866,10 @@ mod tests {
             .unwrap();
 
         set_job_status(&db, v, item.id, JobStatus::Done).await;
-        assert_eq!(list(&db, v).await.unwrap()[0].status, "not_applicable");
+        assert_eq!(
+            list(&db, v).await.unwrap()[0].status,
+            ShownRecallStatus::NotApplicable
+        );
     }
 
     #[tokio::test]
@@ -879,7 +910,10 @@ mod tests {
         .unwrap();
         assert_eq!(svc.performed_recalls.len(), 1);
         let r = &list(&db, v).await.unwrap()[0];
-        assert_eq!((r.status.as_str(), r.work_item_id), ("done", Some(item.id)));
+        assert_eq!(
+            (r.status, r.work_item_id),
+            (ShownRecallStatus::Done, Some(item.id))
+        );
         assert_eq!(r.done_service.as_ref().unwrap().id, svc.record.id);
     }
 

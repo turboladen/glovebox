@@ -687,7 +687,7 @@ pub struct HomeAppointment {
     /// True when the appointment has a planned date.
     pub booked: bool,
     /// Holds the appointment's status as `appointment::summary` derives it.
-    pub status: &'static str,
+    pub status: super::appointment::AppointmentStatus,
     /// Counts the jobs on the appointment.
     pub jobs: usize,
     /// Counts the needs that are still open.
@@ -1864,8 +1864,14 @@ mod tests {
                 (unbooked, "Tire swap", "not booked", false, 0, 0),
             ]
         );
-        let state: Vec<(&str, usize)> = g.appointments.iter().map(|a| (a.status, a.jobs)).collect();
-        assert_eq!(state, [("planning", 1), ("planning", 0)]);
+        let state: Vec<_> = g.appointments.iter().map(|a| (a.status, a.jobs)).collect();
+        assert_eq!(
+            state,
+            [
+                (super::appointment::AppointmentStatus::Planning, 1),
+                (super::appointment::AppointmentStatus::Planning, 0)
+            ]
+        );
         let jobs: Vec<(&str, usize)> = g
             .waiting
             .jobs
