@@ -1442,9 +1442,9 @@ async fn work_sheet_groups_parts_by_supplier() {
     let job = &sheet["jobs"][0];
     assert_eq!(job["title"], "Front brakes", "got: {sheet}");
     assert_eq!(job["owner_supplies"][0]["name"], "Front pads");
-    assert_eq!(job["owner_supplies"][0]["part_number"], "Akebono ACT1633");
+    assert_eq!(job["owner_supplies"][0]["label"], "Akebono ACT1633");
     assert_eq!(job["shop_supplies"][0]["name"], "Brake fluid");
-    assert_eq!(job["shop_supplies"][0]["part_number"], Value::Null);
+    assert_eq!(job["shop_supplies"][0]["label"], Value::Null);
     assert_eq!(sheet["vehicle"], "Golf GTI");
 }
 
