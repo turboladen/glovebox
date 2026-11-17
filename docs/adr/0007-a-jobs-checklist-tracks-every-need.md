@@ -23,13 +23,11 @@ unscheduled pool, where it collects needs and research before any visit is booke
 plain checkbox for the vehicle, optionally on an appointment, and can be ticked and un-ticked.
 Deleting an appointment never deletes a job, a to-do or a service.
 
-**A job lists needs, and a need lists researched options.** A need holds a name, a quantity, its
-supplier (`self`, `shop` or not decided), its approach (`replacement`, `upgrade` or not decided),
-the chosen option, the reason in the owner's words, the date it was decided and its linked part.
-An option holds the manufacturer, part number, description, seller, price and link, a fitment
-verdict (`confirmed`, `unconfirmed` or `does_not_fit`) with a note giving the evidence, and a
-rejection with its reason. Rejected options are kept, because they are the history Claude learns
-from.
+**A job lists needs, and a need lists researched options.** A need records a quantity, its
+supplier (the owner or the shop), its approach (replacement or upgrade), the chosen option, the
+owner's reason and the date it was decided, and its linked part. An option records a researched
+part with its seller, price, fitment verdict and evidence, and any rejection with its reason.
+Rejected options are kept, because they are the history Claude learns from.
 
 **A need's stage is derived and never stored.** `need::stage` reads it from the need and its
 linked part, and the first row that holds wins:
@@ -66,9 +64,8 @@ jobs and every one is done or dropped. Only a hand-closed date and a cancelled d
 Closing is refused while a job is planned or a to-do is open, and the refusal names each one.
 Cancelling takes every planned job and open to-do off the appointment, with its research intact.
 Neither kind accepts a new job, to-do or invoice. When a job returns to planned or a to-do is
-un-ticked, a hand-closed appointment opens again and a cancelled one lets the item go
-(`appointment::settle_reopened_jobs`). ADR-0005 covers the case where deleting a service reopens
-jobs.
+un-ticked, a hand-closed appointment opens again and a cancelled one lets the item go. ADR-0005
+covers the case where deleting a service reopens jobs.
 
 **Filing the invoice names what it did.** `record_service` may name an appointment, but naming it
 installs and completes nothing. The jobs it completes and the parts it installs are named
@@ -76,8 +73,8 @@ explicitly, because a shop does not always fit everything that was brought. Its 
 linked parts it did not install so that Claude can ask about each.
 
 **One shared function builds the checklist.** `checklist` produces the view of an appointment, of
-one job or of the unscheduled jobs. Its next steps group the needs as decide, order, arriving,
-to-dos and done, and its warnings are plain statements. The MCP tools and the web page both
+one job or of the unscheduled jobs. Its next steps group the needs by what each asks of the
+owner, and its warnings are plain statements. The MCP tools and the web page both
 render it. `past_decisions` searches needs across every vehicle and returns each decision with
 its reason and its rejected options.
 

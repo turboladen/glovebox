@@ -35,9 +35,9 @@ check-layering:
 # then build and test. Cargo.toml sets the pedantic level.
 ci-backend:
     cargo clippy --workspace --all-targets --locked -- -D warnings
+    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
     cargo build --workspace --locked
     cargo test --workspace --locked
-    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
 
 # This spell-checks the tree in US English (`brew install typos-cli`).
 typos:

@@ -63,8 +63,8 @@ line. Claude groups overdue items into a named service when it answers.
 
 - **Fixing the web forms.** The forms were the part that failed, and a model reading the invoice
   does the data entry better than a person retyping it.
-- **Keeping the HTTP API and the old frontend frozen.** Every schema change would have had to
-  keep unused handlers and a single-page app compiling, and the dropped tables would have stayed.
+- **Keeping the HTTP API and the old frontend beside MCP.** A second client surface would have to
+  track every schema change.
 - **Streamable HTTP for MCP.** It needs a server that stays up and a port to guard. Stdio needs
   neither, and Claude Desktop manages the process.
 - **Generic CRUD tools per table.** The model would need the schema and would have to sequence
@@ -82,5 +82,5 @@ line. Claude groups overdue items into a named service when it answers.
 - Document storage is out of scope. Invoices stay in the owner's own filing, and a service keeps
   the facts and the invoice number, never a file path.
 - A web page earns its place one screen at a time, when the owner needs to see something a
-  conversation shows poorly. The job checklist is the first.
+  conversation shows poorly.
 - Named milestone services remain possible, because nothing collapses schedule items into one list.

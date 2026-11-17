@@ -26,7 +26,7 @@ cargo test --workspace    # Unit tests live in glovebox-shared services; MCP tes
 cargo test -p glovebox-shared test_name           # One service-level test
 cargo test -p glovebox-mcp --test rehearsal       # One MCP integration test file
 
-just ci                   # Everything CI runs: nightly fmt-check, layering, typos, clippy, build, test, docs
+just ci                   # Everything CI runs: nightly fmt-check, layering, typos, clippy, docs, build, test
 just fmt                  # cargo +nightly fmt — rustfmt.toml uses nightly-only options; plain `cargo fmt` passes locally but CI's format job will fail
 just check-layering       # Layering gate only (scripts/check-layering.sh)
 just backup               # Copy the current environment's database to data/backups/ now (glovebox backup)
@@ -312,17 +312,11 @@ A page is a view of the shared library, and a future page follows the same rules
   back on no appointment, so its undo redirects to the home page, which lists it. MCP deletes get
   no undo.
 
-The look lives in one inline stylesheet in `templates/base.html`, and
-`docs/adr/0008-the-web-page-reads-as-a-ledger.md` states its rules. The page reads as a
-ledger: panels on a tinted ground, with each job's needs in columns under one sticky header line
-(Need, Stage, Brand, Part number, Description, Seller, Price, Fit). It uses IBM Plex Sans in two
-weights and four sizes, served from `/assets/` by `src/assets.rs`. Gray text is a label and dark
-text is a value. A pill is a value from a fixed list, and each kind has a tint and a mark (yellow
-with an empty box needs the owner, blue with a chevron is on its way, green with a check is
-settled, red with a cross is a problem, gray with a circle is a plain fact), so no state is told
-apart by color alone. Only form fields have a boxed outline. A solid button commits something, an
-outlined button opens a form or a row, and underlined text does minor things. The control that
-opens a form and the button that submits it carry the same words. Every date is `YYYY-MM-DD`. Part numbers and prices set a slashed zero; other text does not.
+The look lives in one inline stylesheet in `templates/base.html`, with the typeface served by
+`src/assets.rs`, and `docs/adr/0008-the-web-page-reads-as-a-ledger.md` states every visual rule:
+panels on a tinted ground, one sticky header line per job, gray labels and dark values, five pill
+kinds each with a tint and a mark (`view::PillKind`), boxed outlines on form fields only, one
+role per control style, and `YYYY-MM-DD` dates.
 
 ## Conventions
 
