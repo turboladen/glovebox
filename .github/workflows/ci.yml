@@ -71,7 +71,7 @@ jobs:
           tool: just
       - name: Layering gate (no axum or rmcp in shared)
         run: just check-layering
-      - name: Build, test, clippy
+      - name: Clippy, docs, build, test
         run: just ci-backend
 
   # US-English spell-check over the whole tree, config in .typos.toml. It runs

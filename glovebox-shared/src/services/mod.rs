@@ -51,7 +51,7 @@ pub(crate) fn now() -> chrono::DateTime<chrono::Utc> {
 
 /// The calendar date where the server runs. Every day count and every default
 /// date value uses this, so "today" matches the owner's wall calendar. Stored
-/// `created_at`/`updated_at` stamps are UTC (see [`now`]).
+/// `created_at`/`updated_at` stamps are UTC.
 #[must_use]
 pub fn today() -> chrono::NaiveDate {
     chrono::Local::now().date_naive()
