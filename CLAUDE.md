@@ -33,6 +33,7 @@ just backup               # Copy the current environment's database to data/back
 just reset-env test       # Delete the named non-live environment's database files (glovebox reset --env test)
 just seed test            # Fill the named non-live environment with made-up demo data (glovebox seed --env test)
 just web                  # Serve the live page on 127.0.0.1:4827 and open it; `just web test` serves data/glovebox-test.db on 4828
+# Visual checks: `just seed <name>` then `just web <name>`; Playwright screenshots must go under .playwright-mcp/ (git-ignored), not the scratchpad
 
 cargo clippy --workspace --all-targets --locked -- -D warnings   # Rust lints, tests included (the CI gate; pedantic is set in Cargo.toml)
 
@@ -302,7 +303,8 @@ A page is a view of the shared library, and a future page follows the same rules
   address.
 - **Tests** drive the router in process over an in-memory database with a fixed clock
   (`AppState::today`, `common::today()` = 2026-11-13); date fixtures by `common::today()`, not
-  `services::today()`.
+  `services::today()`. Askama escapes only `{{ }}` values, so assert literal template text as
+  written (`I'm`) and rendered values escaped (`&#39;bogus&#39;`).
 - **The home page leads with what is waiting.** Per vehicle it lists the maintenance that is
   overdue or due soon, every planned job on no appointment, the open recalls and the open
   incidents (`waiting::waiting`), then the appointments and to-dos. Those four lists hold no
