@@ -650,10 +650,10 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
         stage_text: stage_text(stage),
         open: failure.is_some() || ctx.open == Some(need.id),
         none_checked: !options.iter().any(|o| o.checked),
-        // A shop-supplied need with no researched options still takes the
-        // reason the shop supplies it.
+        // A need that holds a reason without a chosen option (one the shop
+        // supplies) takes it even with no researched options.
         can_decide: view.part.is_none()
-            && (!options.is_empty() || need.supplied_by == Some(Supplier::Shop)),
+            && (!options.is_empty() || need::holds_reason(need.supplied_by, None)),
         linked: LinkedPart::of(view),
         chosen,
         options,

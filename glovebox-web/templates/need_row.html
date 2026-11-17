@@ -29,9 +29,7 @@
       <input type="hidden" name="back" value="{{ n.back }}">
       <input type="hidden" name="stored_reason" value="{{ n.stored_reason }}">
       {% if let Some(e) = n.error_in("decide") %}<div class="work"><p class="error" role="alert"><b>Not saved.</b> {{ e }}</p></div>{% endif %}
-      {% if n.options.is_empty() %}
-      <input type="hidden" name="option_id" value="">
-      {% else %}
+      {% if !n.options.is_empty() %}
       <div role="radiogroup" aria-label="Options for {{ n.name }}">
       {% for o in n.options %}
       <label class="row opt{% if o.blocked %} opt--blocked opt--{{ o.fit_class }}{% endif %}">

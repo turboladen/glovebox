@@ -336,13 +336,11 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let template_id = model_template::Entity::find()
-            .filter(model_template::Column::Model.eq("Golf GTI"))
-            .one(&db)
+        let template_id = crate::services::vehicle::require(&db, v)
             .await
             .unwrap()
-            .unwrap()
-            .id;
+            .model_template_id
+            .unwrap();
         let template_plugs = item::ActiveModel {
             model_template_id: Set(Some(template_id)),
             name: Set("Spark Plugs".into()),

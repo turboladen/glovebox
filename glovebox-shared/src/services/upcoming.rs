@@ -61,10 +61,12 @@ fn urgency(status: Option<&str>) -> u8 {
 ///
 /// Returns `NotFound` when the vehicle does not exist.
 pub async fn upcoming(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult<Upcoming> {
-    let reminders = reminders::calculate_reminders(db, vehicle_id).await?;
+    // One date judges both the reminders and the planned work.
+    let today = crate::services::today();
+    let reminders = reminders::calculate_reminders_on(db, vehicle_id, today).await?;
     let budget = budget::forecast_from(db, vehicle_id, &reminders).await?;
 
-    let planned_work = planned_work(db, vehicle_id, crate::services::today()).await?;
+    let planned_work = planned_work(db, vehicle_id, today).await?;
     let planned_work_est_cost_cents = planned_work
         .iter()
         .map(|p| p.item.est_cost_cents.unwrap_or(0))
@@ -93,12 +95,11 @@ pub(crate) async fn planned_work(
     vehicle_id: i32,
     today: chrono::NaiveDate,
 ) -> DomainResult<Vec<PlannedItem>> {
-    let mut planned: Vec<PlannedItem> =
-        work_item::list_with_status_on(db, vehicle_id, false, today)
-            .await?
-            .into_iter()
-            .filter(|p| p.item.status == JobStatus::Planned)
-            .collect();
+    let mut planned: Vec<PlannedItem> = work_item::list_with_status(db, vehicle_id, false, today)
+        .await?
+        .into_iter()
+        .filter(|p| p.item.status == JobStatus::Planned)
+        .collect();
     planned.sort_by_key(|p| (urgency(p.revisit_status), p.item.id));
     Ok(planned)
 }

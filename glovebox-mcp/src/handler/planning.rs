@@ -57,11 +57,17 @@ impl GloveboxMcp {
         }
         let p = tool_input!(params, "list_planned_work");
         let include_done = p.include_done.unwrap_or(false);
-        let items =
-            match work_item_svc::list_with_status(&*self.db, p.vehicle_id, include_done).await {
-                Ok(v) => v,
-                Err(e) => return domain_error(e),
-            };
+        let items = match work_item_svc::list_with_status(
+            &*self.db,
+            p.vehicle_id,
+            include_done,
+            glovebox_shared::services::today(),
+        )
+        .await
+        {
+            Ok(v) => v,
+            Err(e) => return domain_error(e),
+        };
         tool_json_result(&PlannedWork { items })
     }
 

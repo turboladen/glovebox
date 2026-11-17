@@ -152,18 +152,9 @@ pub async fn list(
 }
 
 /// Lists a vehicle's to-do items, each with its revisit status judged against
-/// today and the estimated odometer. A vehicle with no mileage data is
+/// `today` and the estimated odometer. A vehicle with no mileage data is
 /// judged on dates alone.
 pub async fn list_with_status(
-    db: &impl ConnectionTrait,
-    vehicle_id: i32,
-    include_done: bool,
-) -> DomainResult<Vec<PlannedItem>> {
-    list_with_status_on(db, vehicle_id, include_done, crate::services::today()).await
-}
-
-/// [`list_with_status`] judging each revisit as of `today`.
-pub async fn list_with_status_on(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     include_done: bool,
@@ -898,7 +889,9 @@ mod tests {
         .await
         .unwrap();
 
-        let listed = list_with_status(&db, v, false).await.unwrap();
+        let listed = list_with_status(&db, v, false, crate::services::today())
+            .await
+            .unwrap();
         let by_title = |t: &str| listed.iter().find(|p| p.item.title == t).unwrap();
         assert_eq!(by_title("late").revisit_status, Some("overdue"));
         assert_eq!(by_title("plain").revisit_status, None);

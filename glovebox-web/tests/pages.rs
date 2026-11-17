@@ -182,6 +182,12 @@ async fn home_lists_open_appointments_and_jobs_not_scheduled() {
 // A GTI on the seeded schedule at 64,000 miles, where the 60k spark plugs are
 // overdue.
 async fn gti_at_64k(db: &DatabaseConnection) -> i32 {
+    gti(db, "2017-03-05", 64_000).await
+}
+
+// A GTI on the seeded schedule, bought on `purchased` with 40 miles and read
+// at `mileage` on the test clock's day.
+async fn gti(db: &DatabaseConnection, purchased: &str, mileage: i32) -> i32 {
     let template = model_template::list(db)
         .await
         .unwrap()
@@ -191,7 +197,7 @@ async fn gti_at_64k(db: &DatabaseConnection) -> i32 {
     let v = VehicleFixture::new()
         .name("Golf GTI")
         .model_template_id(template.id)
-        .purchase_date("2017-03-05")
+        .purchase_date(purchased)
         .purchase_mileage(40)
         .insert_id(db)
         .await;
@@ -199,7 +205,7 @@ async fn gti_at_64k(db: &DatabaseConnection) -> i32 {
         db,
         v,
         NewMileageEntry {
-            mileage: 64000,
+            mileage,
             recorded_at: Some(common::today().into()),
             source: None,
             notes: None,
@@ -216,31 +222,7 @@ async fn gti_at_64k(db: &DatabaseConnection) -> i32 {
 #[tokio::test]
 async fn home_judges_what_is_due_by_the_page_clock() {
     let db = db().await;
-    let template = model_template::list(&db)
-        .await
-        .unwrap()
-        .into_iter()
-        .find(|t| t.model.as_deref() == Some("Golf GTI"))
-        .expect("seeded GTI template");
-    let v = VehicleFixture::new()
-        .name("Golf GTI")
-        .model_template_id(template.id)
-        .purchase_date("2024-11-23")
-        .purchase_mileage(40)
-        .insert_id(&db)
-        .await;
-    mileage::create(
-        &db,
-        v,
-        NewMileageEntry {
-            mileage: 1000,
-            recorded_at: Some(common::today().into()),
-            source: None,
-            notes: None,
-        },
-    )
-    .await
-    .unwrap();
+    gti(&db, "2024-11-23", 1_000).await;
 
     let (_, body) = page(app(db, "live"), get("/")).await;
 

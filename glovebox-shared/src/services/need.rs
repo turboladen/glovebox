@@ -271,7 +271,10 @@ async fn apply_update(
 // Whether a need with this supplier and chosen option may hold a decision
 // reason: one with a chosen option always may, and one with none only while
 // the shop supplies it.
-fn holds_reason(supplied_by: Option<Supplier>, chosen_option_id: Option<i32>) -> bool {
+/// Whether a need may hold a `decision_reason`: it has a chosen option, or the
+/// shop supplies it.
+#[must_use]
+pub fn holds_reason(supplied_by: Option<Supplier>, chosen_option_id: Option<i32>) -> bool {
     chosen_option_id.is_some() || supplied_by == Some(Supplier::Shop)
 }
 

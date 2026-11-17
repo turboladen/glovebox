@@ -548,10 +548,9 @@ pub(crate) async fn tracked_ids(
         return Ok(Vec::new());
     }
     let v = crate::services::vehicle::require(db, vehicle_id).await?;
-    let inherited = inherited_owner(db, &v).await?;
     let mut owner =
         Condition::any().add(maintenance_schedule_item::Column::VehicleId.eq(vehicle_id));
-    if let Some(inherited) = inherited.clone() {
+    if let Some(inherited) = inherited_owner(db, &v).await? {
         owner = owner.add(inherited);
     }
     let found: HashMap<i32, maintenance_schedule_item::Model> =
@@ -569,37 +568,17 @@ pub(crate) async fn tracked_ids(
         )));
     }
 
-    // An inherited id maps to the item the vehicle tracks under its name.
-    let mut tracked_by_name: HashMap<String, i32> = HashMap::new();
-    if let Some(inherited) =
-        inherited.filter(|_| found.values().any(|i| i.vehicle_id != Some(vehicle_id)))
-    {
-        let mut by_name: HashMap<String, Vec<maintenance_schedule_item::Model>> = HashMap::new();
-        for item in maintenance_schedule_item::Entity::find()
-            .filter(inherited)
-            .order_by_asc(maintenance_schedule_item::Column::Id)
-            .all(db)
-            .await?
-        {
-            by_name.entry(name_key(&item.name)).or_default().push(item);
-        }
-        for (name, items) in &by_name {
-            if let Some(shown) = effective_inherited(items) {
-                tracked_by_name.insert(name.clone(), shown.id);
-            }
-        }
-        let own = maintenance_schedule_item::Entity::find()
-            .filter(maintenance_schedule_item::Column::VehicleId.eq(vehicle_id))
-            .order_by_desc(maintenance_schedule_item::Column::Id)
-            .all(db)
-            .await?;
-        // Descending ids, so the lowest id wins when a name repeats, and the
-        // vehicle's own item shadows every inherited one.
-        for item in own {
-            tracked_by_name.insert(name_key(&item.name), item.id);
-        }
-    }
-
+    // An inherited id maps to the item `resolve` shows under its name.
+    let tracked_by_name: HashMap<String, i32> =
+        if found.values().any(|i| i.vehicle_id != Some(vehicle_id)) {
+            resolve_for_listing(db, vehicle_id, true)
+                .await?
+                .into_iter()
+                .map(|r| (name_key(&r.effective_item.name), r.effective_item.id))
+                .collect()
+        } else {
+            HashMap::new()
+        };
     let mapped: Vec<i32> = ids
         .iter()
         .map(|id| {
