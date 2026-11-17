@@ -1864,12 +1864,14 @@ mod tests {
                 (unbooked, "Tire swap", "not booked", false, 0, 0),
             ]
         );
-        let state: Vec<(&str, usize)> = g
-            .appointments
-            .iter()
-            .map(|a| (a.status.as_str(), a.jobs))
-            .collect();
-        assert_eq!(state, [("planning", 1), ("planning", 0)]);
+        let state: Vec<_> = g.appointments.iter().map(|a| (a.status, a.jobs)).collect();
+        assert_eq!(
+            state,
+            [
+                (super::appointment::AppointmentStatus::Planning, 1),
+                (super::appointment::AppointmentStatus::Planning, 0)
+            ]
+        );
         let jobs: Vec<(&str, usize)> = g
             .waiting
             .jobs

@@ -664,7 +664,7 @@ pub struct LinkServiceToMaintenanceInput {
     pub schedule_item_ids: Vec<i32>,
     /// `add` (default) keeps the record's existing links and adds these;
     /// `replace` overwrites them with exactly this list.
-    pub mode: Option<glovebox_shared::services::schedule::LinkMode>,
+    pub mode: Option<glovebox_shared::services::service_record::LinkMode>,
 }
 
 /// Compact vehicle row for `list_vehicles` — enough to pick a `vehicle_id`

@@ -615,8 +615,8 @@ mod tests {
         let found = [recall_info("24V110000", "Suction Jet Pump")];
         let check = research::record_recalls(&db, v, &found).await.unwrap();
         assert_eq!(
-            (check.newly_found, check.recalls[0].status.as_str()),
-            (1, "open")
+            (check.newly_found, check.recalls[0].status),
+            (1, ShownRecallStatus::Open)
         );
         assert_eq!(
             check.recalls[0].campaign_number.as_deref(),
@@ -626,8 +626,8 @@ mod tests {
         let item = plan_work_for_recall(&db, v, check.recalls[0].finding_id).await;
         let r = &list(&db, v).await.unwrap()[0];
         assert_eq!(
-            (r.status.as_str(), r.work_item_id),
-            ("planned", Some(item.id))
+            (r.status, r.work_item_id),
+            (ShownRecallStatus::Planned, Some(item.id))
         );
 
         let svc = record_service_with_recalls(&db, v, "2025-03-25", vec![r.finding_id]).await;
@@ -804,9 +804,9 @@ mod tests {
         }
     }
 
-    async fn shown(db: &DatabaseConnection, v: i32) -> (&'static str, Option<i32>, bool) {
+    async fn shown(db: &DatabaseConnection, v: i32) -> (ShownRecallStatus, Option<i32>, bool) {
         let r = &list(db, v).await.unwrap()[0];
-        (r.status.as_str(), r.work_item_id, r.done_service.is_some())
+        (r.status, r.work_item_id, r.done_service.is_some())
     }
 
     // Status changes racing on one file from several pools all succeed: each
@@ -839,13 +839,19 @@ mod tests {
         let item = plan_work_for_recall(&db, v, id).await;
 
         set_job_status(&db, v, item.id, JobStatus::Done).await;
-        assert_eq!(shown(&db, v).await, ("done", Some(item.id), false));
+        assert_eq!(
+            shown(&db, v).await,
+            (ShownRecallStatus::Done, Some(item.id), false)
+        );
 
         set_job_status(&db, v, item.id, JobStatus::Planned).await;
-        assert_eq!(shown(&db, v).await, ("planned", Some(item.id), false));
+        assert_eq!(
+            shown(&db, v).await,
+            (ShownRecallStatus::Planned, Some(item.id), false)
+        );
 
         set_job_status(&db, v, item.id, JobStatus::Dropped).await;
-        assert_eq!(shown(&db, v).await, ("open", None, false));
+        assert_eq!(shown(&db, v).await, (ShownRecallStatus::Open, None, false));
     }
 
     #[tokio::test]
@@ -903,7 +909,10 @@ mod tests {
         .unwrap();
         assert_eq!(svc.performed_recalls.len(), 1);
         let r = &list(&db, v).await.unwrap()[0];
-        assert_eq!((r.status.as_str(), r.work_item_id), ("done", Some(item.id)));
+        assert_eq!(
+            (r.status, r.work_item_id),
+            (ShownRecallStatus::Done, Some(item.id))
+        );
         assert_eq!(r.done_service.as_ref().unwrap().id, svc.record.id);
     }
 

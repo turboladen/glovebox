@@ -3043,7 +3043,7 @@ mod tests {
         assert_eq!(work_item_before.status, JobStatus::Done);
         assert_eq!(
             recall::list(&db, v).await.unwrap()[0].status,
-            crate::services::recall::ShownRecallStatus::Done
+            recall::ShownRecallStatus::Done
         );
 
         delete(&db, v, closing.record.id, UNDO).await.unwrap();
@@ -3057,7 +3057,7 @@ mod tests {
         assert!(kept_incident.incident.resolved);
         assert_eq!(
             recall::list(&db, v).await.unwrap()[0].status,
-            crate::services::recall::ShownRecallStatus::Open
+            recall::ShownRecallStatus::Open
         );
     }
 
@@ -3099,12 +3099,15 @@ mod tests {
         .id
     }
 
-    async fn recall_status(db: &DatabaseConnection, v: i32) -> Vec<(&'static str, Option<i32>)> {
+    async fn recall_status(
+        db: &DatabaseConnection,
+        v: i32,
+    ) -> Vec<(recall::ShownRecallStatus, Option<i32>)> {
         crate::services::recall::list(db, v)
             .await
             .unwrap()
             .into_iter()
-            .map(|r| (r.status.as_str(), r.done_service.map(|s| s.id)))
+            .map(|r| (r.status, r.done_service.map(|s| s.id)))
             .collect()
     }
 
@@ -3166,7 +3169,10 @@ mod tests {
             "{message}"
         );
         assert!(get(&db, v, id).await.is_ok());
-        assert_eq!(recall_status(&db, v).await, vec![("done", Some(id))]);
+        assert_eq!(
+            recall_status(&db, v).await,
+            vec![(recall::ShownRecallStatus::Done, Some(id))]
+        );
         assert_eq!(
             work_item_svc::get(&db, v, work_item.id)
                 .await
@@ -3197,7 +3203,10 @@ mod tests {
 
         assert_eq!(out.reopened_recall_ids, vec![finding_id]);
         crate::test_support::assert_empty(&out.kept_done_recall_ids);
-        assert_eq!(recall_status(&db, v).await, vec![("open", None)]);
+        assert_eq!(
+            recall_status(&db, v).await,
+            vec![(recall::ShownRecallStatus::Open, None)]
+        );
     }
 
     #[tokio::test]
@@ -3213,7 +3222,10 @@ mod tests {
 
         assert_eq!(out.kept_done_recall_ids, vec![finding_id]);
         crate::test_support::assert_empty(&out.reopened_recall_ids);
-        assert_eq!(recall_status(&db, v).await, vec![("done", None)]);
+        assert_eq!(
+            recall_status(&db, v).await,
+            vec![(recall::ShownRecallStatus::Done, None)]
+        );
     }
 
     #[tokio::test]
@@ -3240,7 +3252,10 @@ mod tests {
 
         crate::test_support::assert_empty(&out.reopened_recall_ids);
         assert_eq!(out.still_done_elsewhere_recall_ids, vec![finding_id]);
-        assert_eq!(recall_status(&db, v).await, vec![("done", Some(second))]);
+        assert_eq!(
+            recall_status(&db, v).await,
+            vec![(recall::ShownRecallStatus::Done, Some(second))]
+        );
     }
 
     #[tokio::test]
@@ -3541,12 +3556,11 @@ mod tests {
                 .status
         }
 
-        async fn appointment_status(f: &Fixture) -> &'static str {
+        async fn appointment_status(f: &Fixture) -> appointment::AppointmentStatus {
             appointment::summary(&f.db, f.vehicle, f.appointment)
                 .await
                 .unwrap()
                 .status
-                .as_str()
         }
 
         fn invoice(f: &Fixture) -> NewServiceRecord {
@@ -3784,7 +3798,10 @@ mod tests {
             let f = fixture().await;
             let first = add_job(&f, "Rear brakes").await;
             let second = add_job(&f, "Wipers").await;
-            assert_eq!(appointment_status(&f).await, "planning");
+            assert_eq!(
+                appointment_status(&f).await,
+                appointment::AppointmentStatus::Planning
+            );
 
             create(
                 &f.db,
@@ -3796,7 +3813,10 @@ mod tests {
             )
             .await
             .unwrap();
-            assert_eq!(appointment_status(&f).await, "planning");
+            assert_eq!(
+                appointment_status(&f).await,
+                appointment::AppointmentStatus::Planning
+            );
 
             create(
                 &f.db,
@@ -3809,7 +3829,10 @@ mod tests {
             )
             .await
             .unwrap();
-            assert_eq!(appointment_status(&f).await, "done");
+            assert_eq!(
+                appointment_status(&f).await,
+                appointment::AppointmentStatus::Done
+            );
         }
 
         #[tokio::test]
@@ -3829,7 +3852,10 @@ mod tests {
             )
             .await
             .unwrap();
-            assert_eq!(appointment_status(&f).await, "done");
+            assert_eq!(
+                appointment_status(&f).await,
+                appointment::AppointmentStatus::Done
+            );
             assert_eq!(stage_of(&f, need_id).await, need::Stage::Installed);
 
             let deleted = delete(&f.db, f.vehicle, created.record.id, UNDO)
@@ -3839,7 +3865,10 @@ mod tests {
             // An appointment that read done from its jobs had no date to clear.
             crate::test_support::assert_empty(&deleted.reopened_appointment_ids);
             crate::test_support::assert_empty(&deleted.unassigned_job_ids);
-            assert_eq!(appointment_status(&f).await, "planning");
+            assert_eq!(
+                appointment_status(&f).await,
+                appointment::AppointmentStatus::Planning
+            );
             assert_eq!(job_status(&f, job_id).await, JobStatus::Planned);
             assert_eq!(stage_of(&f, need_id).await, need::Stage::Received);
         }
@@ -3869,14 +3898,17 @@ mod tests {
             let summary = appointment::summary(&f.db, f.vehicle, f.appointment)
                 .await
                 .unwrap();
-            assert_eq!(summary.status.as_str(), "planning");
+            assert_eq!(summary.status, appointment::AppointmentStatus::Planning);
             assert_eq!(summary.appointment.closed_on, None);
             let open = appointment::list(&f.db, f.vehicle, false).await.unwrap();
             assert_eq!(open.len(), 1);
             assert_eq!(job_status(&f, job_id).await, JobStatus::Planned);
             // Re-recording the corrected invoice against the appointment works.
             create(&f.db, f.vehicle, filed()).await.unwrap();
-            assert_eq!(appointment_status(&f).await, "done");
+            assert_eq!(
+                appointment_status(&f).await,
+                appointment::AppointmentStatus::Done
+            );
         }
 
         #[tokio::test]
@@ -3904,7 +3936,10 @@ mod tests {
             crate::test_support::assert_empty(&deleted.reopened_appointment_ids);
             assert_eq!(deleted.unassigned_job_ids, vec![job_id]);
 
-            assert_eq!(appointment_status(&f).await, "cancelled");
+            assert_eq!(
+                appointment_status(&f).await,
+                appointment::AppointmentStatus::Cancelled
+            );
             let job = work_item::Entity::find_by_id(job_id)
                 .one(&f.db)
                 .await
