@@ -64,7 +64,7 @@ pub async fn upcoming(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResul
     // One date judges both the reminders and the planned work.
     let today = crate::services::today();
     let reminders = reminders::calculate_reminders_on(db, vehicle_id, today).await?;
-    let budget = budget::forecast_from(db, vehicle_id, &reminders).await?;
+    let budget = budget::forecast_from(db, vehicle_id, &reminders, today).await?;
 
     let planned_work = planned_work(db, vehicle_id, today).await?;
     let planned_work_est_cost_cents = planned_work

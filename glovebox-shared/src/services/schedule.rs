@@ -621,6 +621,9 @@ pub async fn resolve(
 /// [`resolve`], keeping disabled items when `include_dismissed` is true. A
 /// dismissed item then appears as the vehicle's disabled row, whose id is
 /// what [`undismiss_for_vehicle`] takes.
+// Each layer is read in descending id order, so when a name repeats the
+// lowest id is the one kept, as `own_item_named` picks; `tracked_ids` and the
+// reminders' `resolve_schedule` must agree with it.
 pub async fn resolve_for_listing(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -641,6 +644,7 @@ pub async fn resolve_for_listing(
             if let Some(platform_id) = mt.platform_id {
                 let platform_items = maintenance_schedule_item::Entity::find()
                     .filter(maintenance_schedule_item::Column::PlatformId.eq(platform_id))
+                    .order_by_desc(maintenance_schedule_item::Column::Id)
                     .all(db)
                     .await?;
 
@@ -659,6 +663,7 @@ pub async fn resolve_for_listing(
             // Layer 2: Model template items override platform items by name
             let template_items = maintenance_schedule_item::Entity::find()
                 .filter(maintenance_schedule_item::Column::ModelTemplateId.eq(mt_id))
+                .order_by_desc(maintenance_schedule_item::Column::Id)
                 .all(db)
                 .await?;
 
@@ -678,6 +683,7 @@ pub async fn resolve_for_listing(
     // Layer 3: Vehicle-level items override everything
     let vehicle_items = maintenance_schedule_item::Entity::find()
         .filter(maintenance_schedule_item::Column::VehicleId.eq(vehicle_id))
+        .order_by_desc(maintenance_schedule_item::Column::Id)
         .all(db)
         .await?;
 
@@ -1423,7 +1429,9 @@ mod tests {
         // for the first projected occurrence.
         let moved = work_item::get(&db, vid, planned.id).await.unwrap();
         assert_eq!(moved.schedule_item_id, Some(over.id));
-        let f = budget::forecast_from(&db, vid, &rems).await.unwrap();
+        let f = budget::forecast_from(&db, vid, &rems, crate::services::today())
+            .await
+            .unwrap();
         assert!(
             !f.lines.iter().any(|l| l.label == "Spark Plugs"),
             "first occurrence is already planned: {:?}",

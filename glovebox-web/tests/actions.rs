@@ -971,13 +971,13 @@ async fn a_shop_need_with_no_options_takes_a_reason() {
     let action = format!("/vehicles/{}/needs/{fluid}/decision", w.vehicle);
     let (_, page) = w.get(&w.page_path()).await;
     assert!(page.contains(&format!(r#"action="{action}""#)), "{page}");
+    assert!(page.contains("No options researched."), "{page}");
 
     let back = w.page_path();
     let (status, _, _) = w
         .post(
             &action,
             &[
-                ("option_id", ""),
                 ("stored_reason", ""),
                 ("reason", "They bleed it with their own"),
                 ("back", &back),

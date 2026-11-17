@@ -97,7 +97,7 @@ fn planned_work_cost(backlog: &[work_item::Model]) -> (i64, Vec<UnestimatedWork>
     (cents, unestimated)
 }
 
-/// Projects the vehicle's next 12 months of maintenance spend from reminders
+/// Projects the vehicle's 12 months of maintenance spend from `today`, from reminders
 /// the caller has already computed with
 /// [`calculate_reminders`](crate::services::reminders::calculate_reminders).
 ///
@@ -112,6 +112,7 @@ pub async fn forecast_from(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     rems: &RemindersResponse,
+    today: chrono::NaiveDate,
 ) -> DomainResult<BudgetForecast> {
     // The reminders response carries id + name; the intervals and est_cost
     // live on the schedule items themselves.
@@ -139,7 +140,6 @@ pub async fn forecast_from(
     let planned_schedule_items: HashSet<i32> =
         backlog.iter().filter_map(|i| i.schedule_item_id).collect();
 
-    let today = crate::services::today();
     let avg_daily = rems.avg_daily_miles;
     let miles_to_days = |miles: i32| -> Option<i64> {
         (avg_daily > 0.0).then(|| (f64::from(miles) / avg_daily).ceil() as i64)
@@ -240,7 +240,7 @@ mod tests {
 
     async fn forecast(db: &DatabaseConnection, vehicle_id: i32) -> DomainResult<BudgetForecast> {
         let rems = reminders::calculate_reminders(db, vehicle_id).await?;
-        forecast_from(db, vehicle_id, &rems).await
+        forecast_from(db, vehicle_id, &rems, crate::services::today()).await
     }
 
     async fn seed_item(
@@ -523,7 +523,9 @@ mod tests {
         .unwrap();
 
         let rems = reminders::calculate_reminders(&db, vid).await.unwrap();
-        let f = forecast_from(&db, vid, &rems).await.unwrap();
+        let f = forecast_from(&db, vid, &rems, crate::services::today())
+            .await
+            .unwrap();
         assert!(!f.lines.is_empty(), "rate {}", rems.avg_daily_miles);
         #[expect(
             clippy::cast_possible_truncation,

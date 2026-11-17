@@ -448,6 +448,8 @@ fn odometer_on(
 }
 
 /// Resolve effective schedule items for a vehicle (Platform → Model Template → Vehicle).
+// Reads each layer in descending id order, as `schedule::resolve_for_listing`
+// does, so both keep the lowest id when a name repeats.
 async fn resolve_schedule(
     db: &impl ConnectionTrait,
     v: &vehicle::Model,
@@ -461,6 +463,7 @@ async fn resolve_schedule(
             if let Some(platform_id) = mt.platform_id {
                 let items = maintenance_schedule_item::Entity::find()
                     .filter(maintenance_schedule_item::Column::PlatformId.eq(platform_id))
+                    .order_by_desc(maintenance_schedule_item::Column::Id)
                     .all(db)
                     .await?;
                 for item in items {
@@ -471,6 +474,7 @@ async fn resolve_schedule(
             // Layer 2: Model template items
             let items = maintenance_schedule_item::Entity::find()
                 .filter(maintenance_schedule_item::Column::ModelTemplateId.eq(mt_id))
+                .order_by_desc(maintenance_schedule_item::Column::Id)
                 .all(db)
                 .await?;
             for item in items {
@@ -482,6 +486,7 @@ async fn resolve_schedule(
     // Layer 3: Vehicle-level items
     let items = maintenance_schedule_item::Entity::find()
         .filter(maintenance_schedule_item::Column::VehicleId.eq(v.id))
+        .order_by_desc(maintenance_schedule_item::Column::Id)
         .all(db)
         .await?;
     for item in items {
