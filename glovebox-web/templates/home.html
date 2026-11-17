@@ -120,7 +120,7 @@
     {% endif %}
     <ol>
       {% for t in hv.todos %}{% include "todo_row.html" %}{% endfor %}
-      {% let add = hv.todo_form %}{% let add_vid = v.vehicle.id %}{% let add_back = "/" %}{% let add_appointment = "" %}
+      {% let add = hv.todo_form %}
       {% include "todo_add.html" %}
     </ol>
   </section>

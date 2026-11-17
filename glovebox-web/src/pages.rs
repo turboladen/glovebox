@@ -96,8 +96,6 @@ struct AppointmentPage {
     chrome: Chrome,
     banner: Option<Banner>,
     top_error: Option<String>,
-    vid: i32,
-    appointment_id: i32,
     /// The path the forms on this page return to.
     back: String,
     vehicle: String,
@@ -197,7 +195,7 @@ pub async fn home_response(state: &AppState, view: Page<'_>, status: StatusCode)
         vehicles.push(HomeVehicle {
             waiting: WaitingRows::from(&home.waiting),
             appointments: home.appointments.iter().map(Into::into).collect(),
-            todo_form: TodoForm::after(failure.filter(|f| f.vid == vid)),
+            todo_form: TodoForm::after(vid, None, "/", failure.filter(|f| f.vid == vid)),
             todos,
             home,
         });
@@ -457,8 +455,6 @@ async fn appointment_page(
             state,
         ),
         top_error,
-        vid,
-        appointment_id: id,
         vehicle: car.name,
         purpose: summary.appointment.purpose.clone(),
         shop: summary.appointment.shop_name.clone(),
@@ -473,7 +469,7 @@ async fn appointment_page(
         job_count: Count::new(summary.jobs, "job", "jobs"),
         steps: grouped,
         takes_todos,
-        todo_form: TodoForm::after(failure),
+        todo_form: TodoForm::after(vid, Some(id), &back, failure),
         jobs,
         back,
     })

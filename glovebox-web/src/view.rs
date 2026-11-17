@@ -99,7 +99,6 @@ pub struct OptionCard {
     pub price: Option<String>,
     /// The option's listing, when it is an `http` or `https` address.
     pub link: Option<String>,
-    pub fit_class: &'static str,
     pub fit_kind: &'static str,
     pub fit_text: &'static str,
     pub fit_note: Option<String>,
@@ -134,7 +133,6 @@ impl OptionCard {
                 .as_deref()
                 .filter(|u| is_web_address(u))
                 .map(str::to_owned),
-            fit_class: option.fitment.as_str(),
             fit_kind: PillKind::of_fit(option.fitment).class(),
             fit_text,
             fit_note: option.fitment_note.clone(),
@@ -218,7 +216,8 @@ pub struct NeedCard {
     pub quantity: Option<String>,
     /// The page the forms return to.
     pub back: String,
-    pub stage_class: &'static str,
+    /// True while no part is chosen, which greys the row's status line.
+    pub undecided: bool,
     pub stage_kind: &'static str,
     pub stage_text: &'static str,
     /// What a row with no chosen option and no linked part shows in place of
@@ -321,16 +320,29 @@ pub struct TodoCard {
 
 /// The add-a-to-do form, with its error and what was typed.
 pub struct TodoForm {
+    pub vid: i32,
+    /// The appointment a new to-do goes on, or none.
+    pub appointment_id: Option<i32>,
+    /// The page the form returns to.
+    pub back: String,
     pub error: Option<String>,
     pub title: String,
 }
 
 impl TodoForm {
-    /// The form as `failure` left it, when the failure is a to-do add, or
-    /// empty otherwise.
-    pub fn after(failure: Option<&Failure>) -> Self {
+    /// The form for `vid`'s to-dos as `failure` left it, when the failure is a
+    /// to-do add, or empty otherwise.
+    pub fn after(
+        vid: i32,
+        appointment_id: Option<i32>,
+        back: &str,
+        failure: Option<&Failure>,
+    ) -> Self {
         let own = failure.filter(|f| f.target == Target::TodoAdd);
         Self {
+            vid,
+            appointment_id,
+            back: back.to_owned(),
             error: own.map(|f| f.message.clone()),
             title: own
                 .and_then(|f| f.value("title"))
@@ -428,7 +440,7 @@ impl From<&HomeAppointment> for HomeAppointmentRow {
 
 /// The kind of a pill, which picks its tint and mark: `todo` needs the owner,
 /// `wait` is on its way, `ok` is settled, `bad` is a problem and `plain` is a
-/// fact. Each value type maps to a kind here, so a new value needs a kind
+/// fact. Each typed value maps to a kind here, so a new variant needs a kind
 /// before it compiles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PillKind {
@@ -482,7 +494,8 @@ impl PillKind {
     }
 
     // A reminder's and a revisit's status are still text (`overdue`,
-    // `due_soon`, `ok`).
+    // `due_soon`, `ok`), so this match cannot be exhaustive until bead
+    // glovebox-whhy types them; any other text reads as a plain fact.
     fn of_due(status: &str) -> Self {
         match status {
             "overdue" => Self::Bad,
@@ -717,7 +730,7 @@ pub fn need_card(view: &NeedView, job_status: JobStatus, ctx: &CardContext<'_>) 
         quantity: several.then(|| format!("\u{d7} {}", need.quantity)),
         status_line,
         back: ctx.back.to_owned(),
-        stage_class: stage.label(),
+        undecided: stage == Stage::Undecided,
         stage_kind: PillKind::of_stage(stage).class(),
         stage_text: stage_text(stage),
         open: failure.is_some() || ctx.open == Some(need.id),

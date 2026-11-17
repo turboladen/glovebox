@@ -10,7 +10,7 @@
       {% let o = p %}{% include "part_cells.html" %}
       <span></span>
       {% else %}
-      <span class="span{% if n.stage_class == "undecided" %} empty{% endif %}">{{ n.status_line }}</span>
+      <span class="span{% if n.undecided %} empty{% endif %}">{{ n.status_line }}</span>
       {% endif %}
       <span class="toggle" aria-hidden="true"></span>
       <span class="memo">
@@ -34,7 +34,7 @@
       {% else %}
       <div role="radiogroup" aria-label="Options for {{ n.name }}">
       {% for o in n.options %}
-      <label class="row opt{% if o.blocked %} opt--blocked opt--{{ o.fit_class }}{% endif %}">
+      <label class="row opt{% if o.blocked %} opt--blocked opt--{{ o.fit_kind }}{% endif %}">
         {% if loop.first %}<span class="l" aria-hidden="true">Options</span>{% else %}<span></span>{% endif %}
         <span class="pick"><input type="radio" name="option_id" value="{{ o.id }}"{% if o.checked %} checked{% endif %}{% if o.blocked %} disabled aria-describedby="opt-{{ o.id }}-why opt-{{ o.id }}-note"{% endif %}></span>
         {% include "part_cells.html" %}
