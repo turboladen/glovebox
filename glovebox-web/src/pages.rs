@@ -21,8 +21,8 @@ use serde::Deserialize;
 use crate::{
     AppState, DeletedTodo,
     view::{
-        Banner, CardContext, Count, Failure, HomeAppointmentRow, JobCard, Steps, Target, TodoCard,
-        TodoForm, WaitingRows, job_card, sentence_case, steps,
+        Banner, CardContext, Count, Failure, HomeAppointmentRow, JobCard, PillKind, Steps, Target,
+        TodoCard, TodoForm, WaitingRows, job_card, sentence_case, steps,
     },
 };
 
@@ -96,15 +96,13 @@ struct AppointmentPage {
     chrome: Chrome,
     banner: Option<Banner>,
     top_error: Option<String>,
-    vid: i32,
-    appointment_id: i32,
     /// The path the forms on this page return to.
     back: String,
     vehicle: String,
     purpose: String,
     shop: Option<String>,
     date: Option<String>,
-    status_class: &'static str,
+    status_kind: &'static str,
     status_text: String,
     needs_open: Count,
     todos_open: Count,
@@ -197,7 +195,7 @@ pub async fn home_response(state: &AppState, view: Page<'_>, status: StatusCode)
         vehicles.push(HomeVehicle {
             waiting: WaitingRows::from(&home.waiting),
             appointments: home.appointments.iter().map(Into::into).collect(),
-            todo_form: TodoForm::after(failure.filter(|f| f.vid == vid)),
+            todo_form: TodoForm::after(vid, None, "/", failure.filter(|f| f.vid == vid)),
             todos,
             home,
         });
@@ -457,8 +455,6 @@ async fn appointment_page(
             state,
         ),
         top_error,
-        vid,
-        appointment_id: id,
         vehicle: car.name,
         purpose: summary.appointment.purpose.clone(),
         shop: summary.appointment.shop_name.clone(),
@@ -466,14 +462,14 @@ async fn appointment_page(
             .appointment
             .planned_date
             .map(glovebox_shared::services::date_label),
-        status_class: summary.status.as_str(),
+        status_kind: PillKind::of_appointment(summary.status).class(),
         status_text: sentence_case(summary.status.as_str()),
         needs_open: Count::new(summary.needs_open, "need open", "needs open"),
         todos_open: Count::new(summary.todos_open, "to-do open", "to-dos open"),
         job_count: Count::new(summary.jobs, "job", "jobs"),
         steps: grouped,
         takes_todos,
-        todo_form: TodoForm::after(failure),
+        todo_form: TodoForm::after(vid, Some(id), &back, failure),
         jobs,
         back,
     })

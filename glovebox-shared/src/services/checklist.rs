@@ -577,22 +577,13 @@ fn next_steps(jobs: &[JobView], todos: &[todo::Model]) -> NextSteps {
             JobStatus::Planned => false,
         };
         for view in &job.needs {
-            // Every need of a done job is done; one still open says so.
-            let (group, detail) = if job_done {
-                let detail = if view.stage.is_open() {
-                    "the job is done".to_owned()
-                } else {
-                    step_detail(view)
-                };
-                (&mut steps.done, detail)
-            } else {
-                let group = match view.stage {
-                    Stage::Undecided => &mut steps.decide,
-                    Stage::ToOrder => &mut steps.order,
-                    Stage::Ordered => &mut steps.arriving,
-                    Stage::ShopSupplies | Stage::Received | Stage::Installed => &mut steps.done,
-                };
-                (group, step_detail(view))
+            let detail = need_detail(view, job.job.status);
+            let group = match view.stage {
+                _ if job_done => &mut steps.done,
+                Stage::Undecided => &mut steps.decide,
+                Stage::ToOrder => &mut steps.order,
+                Stage::Ordered => &mut steps.arriving,
+                Stage::ShopSupplies | Stage::Received | Stage::Installed => &mut steps.done,
             };
             group.push(StepRow {
                 need_id: view.need.id,
@@ -624,9 +615,29 @@ fn option_label(option: &need_option::Model) -> String {
     .join(" ")
 }
 
-/// Returns what is asked of the owner for a need of a job that is not done,
-/// or what settled it, as a sentence without the need's name.
-pub fn step_detail(view: &NeedView) -> String {
+/// Whether a need is still open on a job that is done or dropped, so it asks
+/// nothing of the owner whatever its stage says.
+#[must_use]
+pub fn open_on_closed_job(view: &NeedView, job_status: JobStatus) -> bool {
+    job_status != JobStatus::Planned && view.stage.is_open()
+}
+
+/// The sentence a need's row shows, without the need's name: what is asked of
+/// the owner, or what settled it. A need still open on a done job reads "the
+/// job is done", and one on a dropped job "the job is dropped".
+pub fn need_detail(view: &NeedView, job_status: JobStatus) -> String {
+    if !open_on_closed_job(view, job_status) {
+        return step_detail(view);
+    }
+    match job_status {
+        JobStatus::Dropped => "the job is dropped".to_owned(),
+        JobStatus::Done | JobStatus::Planned => "the job is done".to_owned(),
+    }
+}
+
+// Returns what is asked of the owner for a need of a job that is not done,
+// or what settled it, as a sentence without the need's name.
+fn step_detail(view: &NeedView) -> String {
     match view.stage {
         Stage::Undecided if view.chosen.is_some() => "who supplies it is not decided".to_owned(),
         Stage::Undecided => "no part chosen".to_owned(),

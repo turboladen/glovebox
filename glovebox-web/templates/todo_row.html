@@ -5,11 +5,11 @@
   </form>
   <span class="say">{{ t.title }}</span>
   {% if !t.done %}
-  <span class="act">
+  <div class="act">
     <form method="post" action="/vehicles/{{ t.vid }}/todos/{{ t.id }}/delete">
       <input type="hidden" name="back" value="{{ t.back }}">
       <button class="btn btn--quiet" type="submit" aria-label="Delete to-do: {{ t.title }}">Delete</button>
     </form>
-  </span>
+  </div>
   {% endif %}
 </li>

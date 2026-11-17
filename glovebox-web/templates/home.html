@@ -24,7 +24,7 @@
       {% for m in hv.waiting.due %}
       <li class="row row--wait">
         <span class="key">{{ m.name }}</span>
-        <span data-l="Status"><span class="pill pill--{{ m.status.class }}">{{ m.status.text }}</span></span>
+        <span data-l="Status"><span class="pill pill--{{ m.status.kind }}">{{ m.status.text }}</span></span>
         <span data-l="Due at">{{ m.due_at }}</span>
         <span data-l="How far">{{ m.how_far }}</span>
         <span data-l="Last done">{% if let Some(d) = m.last_done %}{{ d }}{% else %}<span class="empty">No record</span>{% endif %}</span>
@@ -45,9 +45,9 @@
       {% for j in hv.waiting.jobs %}
       <li class="row row--wait">
         <span class="key"><a href="/vehicles/{{ v.vehicle.id }}/jobs/{{ j.id }}">{{ j.title }}</a></span>
-        <span data-l="Revisit">{% if let Some(t) = j.revisit %}<span class="pill pill--{{ t.class }}">{{ t.text }}</span>{% endif %}</span>
+        <span data-l="Revisit">{% if let Some(t) = j.revisit %}<span class="pill pill--{{ t.kind }}">{{ t.text }}</span>{% endif %}</span>
         <span data-l="Estimate">{% if let Some(e) = j.estimate %}{{ e }}{% endif %}</span>
-        <span class="at-job num" data-l="Needs open"><span class="n{% if j.needs_open > 0 %} n--todo{% endif %}">{{ j.needs_open }}</span></span>
+        <span class="at-job num" data-l="Needs open"><span class="vh">Needs open </span><span class="n{% if j.needs_open > 0 %} n--todo{% endif %}">{{ j.needs_open }}</span></span>
       </li>
       {% endfor %}
     </ul>
@@ -101,12 +101,12 @@
       {% for a in hv.appointments %}
       <li class="row row--home">
         <span class="key"><a href="/vehicles/{{ v.vehicle.id }}/appointments/{{ a.id }}">{{ a.purpose }}</a></span>
-        <span data-l="Status"><span class="pill pill--{{ a.status_class }}">{{ a.status_text }}</span></span>
+        <span data-l="Status"><span class="pill pill--{{ a.status_kind }}">{{ a.status_text }}</span></span>
         <span data-l="Date">{% if a.booked %}{{ a.when }}{% else %}<span class="empty cap">{{ a.when }}</span>{% endif %}</span>
         <span data-l="Shop">{% if let Some(shop) = a.shop_name %}{{ shop }}{% endif %}</span>
-        <span class="num" data-l="Jobs">{{ a.jobs }}</span>
-        <span class="num" data-l="Needs open"><span class="n{% if a.needs_open > 0 %} n--todo{% endif %}">{{ a.needs_open }}</span></span>
-        <span class="num" data-l="To-dos open"><span class="n{% if a.todos_open > 0 %} n--todo{% endif %}">{{ a.todos_open }}</span></span>
+        <span class="num" data-l="Jobs"><span class="vh">Jobs </span>{{ a.jobs }}</span>
+        <span class="num" data-l="Needs open"><span class="vh">Needs open </span><span class="n{% if a.needs_open > 0 %} n--todo{% endif %}">{{ a.needs_open }}</span></span>
+        <span class="num" data-l="To-dos open"><span class="vh">To-dos open </span><span class="n{% if a.todos_open > 0 %} n--todo{% endif %}">{{ a.todos_open }}</span></span>
       </li>
       {% endfor %}
     </ul>
@@ -120,18 +120,8 @@
     {% endif %}
     <ol>
       {% for t in hv.todos %}{% include "todo_row.html" %}{% endfor %}
-      <li class="step step--todo">
-        <span aria-hidden="true"></span>
-        <details class="drawer drawer--quiet"{% if hv.todo_form.error.is_some() %} open{% endif %}>
-          <summary>Add a to-do</summary>
-          <form class="formbox" method="post" action="/vehicles/{{ v.vehicle.id }}/todos">
-            {% if let Some(e) = hv.todo_form.error %}<p class="error" role="alert"><b>Not saved.</b> {{ e }}</p>{% endif %}
-            <input type="hidden" name="back" value="/">
-            <label class="field"><span>To-do</span><input type="text" name="title" value="{{ hv.todo_form.title }}" required autocomplete="off"{% if hv.todo_form.error.is_some() %} aria-invalid="true"{% endif %}></label>
-            <div class="form-actions"><button class="btn" type="submit">Add a to-do</button></div>
-          </form>
-        </details>
-      </li>
+      {% let add = hv.todo_form %}
+      {% include "todo_add.html" %}
     </ol>
   </section>
 </section>

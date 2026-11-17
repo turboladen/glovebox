@@ -10,9 +10,11 @@ use glovebox_shared::{
         need_option::{self, Fitment},
         part::{self, Supplier},
         todo,
+        work_item::JobStatus,
     },
     money::format_cents,
     services::{
+        appointment::AppointmentStatus,
         checklist::{self, Checklist, HomeAppointment, JobView, NeedView, StepRow},
         date_label,
         need::{self, Stage},
@@ -97,7 +99,7 @@ pub struct OptionCard {
     pub price: Option<String>,
     /// The option's listing, when it is an `http` or `https` address.
     pub link: Option<String>,
-    pub fit_class: &'static str,
+    pub fit_kind: &'static str,
     pub fit_text: &'static str,
     pub fit_note: Option<String>,
     pub rejected_reason: Option<String>,
@@ -131,7 +133,7 @@ impl OptionCard {
                 .as_deref()
                 .filter(|u| is_web_address(u))
                 .map(str::to_owned),
-            fit_class: option.fitment.as_str(),
+            fit_kind: PillKind::of_fit(option.fitment).class(),
             fit_text,
             fit_note: option.fitment_note.clone(),
             rejected_reason: rejected.then(|| option.rejected_reason.clone().unwrap_or_default()),
@@ -214,7 +216,9 @@ pub struct NeedCard {
     pub quantity: Option<String>,
     /// The page the forms return to.
     pub back: String,
-    pub stage_class: &'static str,
+    /// True while no part is chosen, which greys the row's status line.
+    pub undecided: bool,
+    pub stage_kind: &'static str,
     pub stage_text: &'static str,
     /// What a row with no chosen option and no linked part shows in place of
     /// the part: the sentence the need's row under Next steps shows, then the
@@ -316,16 +320,29 @@ pub struct TodoCard {
 
 /// The add-a-to-do form, with its error and what was typed.
 pub struct TodoForm {
+    pub vid: i32,
+    /// The appointment a new to-do goes on, or none.
+    pub appointment_id: Option<i32>,
+    /// The page the form returns to.
+    pub back: String,
     pub error: Option<String>,
     pub title: String,
 }
 
 impl TodoForm {
-    /// The form as `failure` left it, when the failure is a to-do add, or
-    /// empty otherwise.
-    pub fn after(failure: Option<&Failure>) -> Self {
+    /// The form for `vid`'s to-dos as `failure` left it, when the failure is a
+    /// to-do add, or empty otherwise.
+    pub fn after(
+        vid: i32,
+        appointment_id: Option<i32>,
+        back: &str,
+        failure: Option<&Failure>,
+    ) -> Self {
         let own = failure.filter(|f| f.target == Target::TodoAdd);
         Self {
+            vid,
+            appointment_id,
+            back: back.to_owned(),
             error: own.map(|f| f.message.clone()),
             title: own
                 .and_then(|f| f.value("title"))
@@ -366,7 +383,7 @@ pub struct JobCard {
     pub vid: i32,
     pub id: i32,
     pub title: String,
-    pub status_class: &'static str,
+    pub status_kind: &'static str,
     pub status_text: String,
     pub open: Count,
     pub needs: Vec<NeedCard>,
@@ -397,7 +414,7 @@ pub struct HomeAppointmentRow {
     /// The planned date, or the words the shared row gives when there is none.
     pub when: String,
     pub booked: bool,
-    pub status_class: &'static str,
+    pub status_kind: &'static str,
     pub status_text: String,
     pub jobs: usize,
     pub needs_open: usize,
@@ -412,7 +429,7 @@ impl From<&HomeAppointment> for HomeAppointmentRow {
             shop_name: a.shop_name.clone(),
             when: a.when.clone(),
             booked: a.booked,
-            status_class: a.status.as_str(),
+            status_kind: PillKind::of_appointment(a.status).class(),
             status_text: sentence_case(a.status.as_str()),
             jobs: a.jobs,
             needs_open: a.needs_open,
@@ -421,9 +438,77 @@ impl From<&HomeAppointment> for HomeAppointmentRow {
     }
 }
 
-/// A tag for a status: the class that picks its tint and mark, and its words.
+/// The kind of a pill, which picks its tint and mark: `todo` needs the owner,
+/// `wait` is on its way, `ok` is settled, `bad` is a problem and `plain` is a
+/// fact.
+// Each typed value maps to a kind with an exhaustive match, so a new variant
+// needs a kind before it compiles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PillKind {
+    Todo,
+    Wait,
+    Ok,
+    Bad,
+    Plain,
+}
+
+impl PillKind {
+    /// The class suffix the stylesheet keys on.
+    pub fn class(self) -> &'static str {
+        match self {
+            Self::Todo => "todo",
+            Self::Wait => "wait",
+            Self::Ok => "ok",
+            Self::Bad => "bad",
+            Self::Plain => "plain",
+        }
+    }
+
+    fn of_stage(stage: Stage) -> Self {
+        match stage {
+            Stage::Undecided | Stage::ToOrder => Self::Todo,
+            Stage::Ordered => Self::Wait,
+            Stage::ShopSupplies | Stage::Received | Stage::Installed => Self::Ok,
+        }
+    }
+
+    fn of_fit(fit: Fitment) -> Self {
+        match fit {
+            Fitment::Unconfirmed => Self::Todo,
+            Fitment::Confirmed => Self::Ok,
+            Fitment::DoesNotFit => Self::Bad,
+        }
+    }
+
+    fn of_job(status: JobStatus) -> Self {
+        match status {
+            JobStatus::Done => Self::Ok,
+            JobStatus::Planned | JobStatus::Dropped => Self::Plain,
+        }
+    }
+
+    pub fn of_appointment(status: AppointmentStatus) -> Self {
+        match status {
+            AppointmentStatus::Done => Self::Ok,
+            AppointmentStatus::Planning | AppointmentStatus::Cancelled => Self::Plain,
+        }
+    }
+
+    // A reminder's and a revisit's status are still text (`overdue`,
+    // `due_soon`, `ok`), so this match cannot be exhaustive until bead
+    // glovebox-whhy types them; any other text reads as a plain fact.
+    fn of_due(status: &str) -> Self {
+        match status {
+            "overdue" => Self::Bad,
+            "due_soon" => Self::Todo,
+            _ => Self::Plain,
+        }
+    }
+}
+
+/// A tag for a status: the kind that picks its tint and mark, and its words.
 pub struct Tag {
-    pub class: String,
+    pub kind: &'static str,
     pub text: String,
 }
 
@@ -431,7 +516,7 @@ impl Tag {
     /// Reads `overdue` as "Overdue" and `due_soon` as "Due soon".
     fn of(status: &str) -> Self {
         Self {
-            class: status.to_owned(),
+            kind: PillKind::of_due(status).class(),
             text: sentence_case(&status.replace('_', " ")),
         }
     }
@@ -584,7 +669,7 @@ fn split_notes(view: &NeedView) -> (Vec<String>, Vec<String>) {
 }
 
 /// Builds the card of one need. `failure` applies when it names this need.
-pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
+pub fn need_card(view: &NeedView, job_status: JobStatus, ctx: &CardContext<'_>) -> NeedCard {
     let need = &view.need;
     let failure = ctx.failure.filter(|f| f.target == Target::Need(need.id));
     let typed = |key: &str| failure.and_then(|f| f.value(key));
@@ -605,6 +690,7 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
     let chosen = view.chosen.as_ref().map(|o| OptionCard::new(o, true));
 
     let stage = view.stage;
+    let (undecided, stage_kind) = stage_look(view, job_status);
     let several = need.quantity > 1;
     let order = OrderValues {
         seller: typed("seller")
@@ -635,7 +721,7 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
     };
 
     let (unrecorded, notes) = split_notes(view);
-    let mut status_line = checklist::step_detail(view);
+    let mut status_line = checklist::need_detail(view, job_status);
     if !options.is_empty() {
         status_line = format!("{status_line}, {}", view.options_note());
     }
@@ -646,7 +732,8 @@ pub fn need_card(view: &NeedView, ctx: &CardContext<'_>) -> NeedCard {
         quantity: several.then(|| format!("\u{d7} {}", need.quantity)),
         status_line,
         back: ctx.back.to_owned(),
-        stage_class: stage.label(),
+        undecided,
+        stage_kind,
         stage_text: stage_text(stage),
         open: failure.is_some() || ctx.open == Some(need.id),
         none_checked: !options.iter().any(|o| o.checked),
@@ -719,15 +806,32 @@ fn choices<V: Vocabulary>(current: Option<&str>) -> Vec<Choice> {
         .collect()
 }
 
+// Whether a need's row reads as undecided, and its stage pill's kind. A need
+// still open on a done or dropped job asks nothing of the owner, so it is
+// neither undecided nor a pill that asks for something.
+fn stage_look(view: &NeedView, job_status: JobStatus) -> (bool, &'static str) {
+    if checklist::open_on_closed_job(view, job_status) {
+        return (false, PillKind::Plain.class());
+    }
+    (
+        view.stage == Stage::Undecided,
+        PillKind::of_stage(view.stage).class(),
+    )
+}
+
 /// Builds the card of a job from its view.
 pub fn job_card(job: &JobView, ctx: &CardContext<'_>) -> JobCard {
-    let needs: Vec<NeedCard> = job.needs.iter().map(|n| need_card(n, ctx)).collect();
+    let needs: Vec<NeedCard> = job
+        .needs
+        .iter()
+        .map(|n| need_card(n, job.job.status, ctx))
+        .collect();
     let open = job.open_needs();
     JobCard {
         vid: ctx.vid,
         id: job.job.id,
         title: job.job.title.clone(),
-        status_class: job.job.status.as_str(),
+        status_kind: PillKind::of_job(job.job.status).class(),
         status_text: sentence_case(job.job.status.as_str()),
         open: Count::new(open, "need open", "needs open"),
         needs,

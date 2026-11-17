@@ -950,6 +950,54 @@ async fn todo_add_tick_undo_delete() {
     assert!(body.contains("Not saved"), "{body}");
 }
 
+// An undecided need of a done job reads the same in its job row as in Next
+// steps.
+#[tokio::test]
+async fn an_open_need_of_a_done_job_says_the_job_is_done_in_its_row() {
+    let w = World::new().await;
+    test_support::set_job_status(
+        &w.db,
+        w.vehicle,
+        w.job,
+        glovebox_shared::entities::work_item::JobStatus::Done,
+    )
+    .await;
+
+    let (_, body) = w.get(&w.page_path()).await;
+
+    let row = need_summary(&body, w.need);
+    assert!(row.contains("the job is done"), "{row}");
+    assert!(!row.contains("no part chosen"), "{row}");
+    assert!(
+        row.contains(r#"class="pill pill--plain">Undecided"#),
+        "{row}"
+    );
+    assert!(!row.contains(r#"class="span empty""#), "{row}");
+}
+
+#[tokio::test]
+async fn an_open_need_of_a_dropped_job_asks_nothing() {
+    let w = World::new().await;
+    test_support::set_job_status(
+        &w.db,
+        w.vehicle,
+        w.job,
+        glovebox_shared::entities::work_item::JobStatus::Dropped,
+    )
+    .await;
+
+    let (_, body) = w
+        .get(&format!("/vehicles/{}/jobs/{}", w.vehicle, w.job))
+        .await;
+
+    let row = need_summary(&body, w.need);
+    assert!(row.contains("the job is dropped"), "{row}");
+    assert!(
+        row.contains(r#"class="pill pill--plain">Undecided"#),
+        "{row}"
+    );
+}
+
 // A shop-supplied need with no researched options still has a form for the
 // reason the shop supplies it.
 #[tokio::test]
@@ -2252,7 +2300,7 @@ async fn a_linked_part_with_no_chosen_option_fills_the_part_columns() {
         r#"<span class="pn" data-l="Part number">1K0615301AD</span>"#,
         r#"<span data-l="Description">Coat Z front rotors 340x30</span>"#,
         r#"<span data-l="Seller">FCP Euro</span>"#,
-        r#"<span class="num" data-l="Price">$191.98</span>"#,
+        r#"<span class="num price" data-l="Price">$191.98</span>"#,
     ] {
         assert!(row.contains(cell), "{cell}: {row}");
     }
@@ -2373,7 +2421,7 @@ async fn a_job_shows_one_header_line_and_each_part_in_its_own_columns() {
         "{body}"
     );
     assert!(
-        body.contains(r#"<span class="num" data-l="Price">$74.99</span>"#),
+        body.contains(r#"<span class="num price" data-l="Price">$74.99</span>"#),
         "{body}"
     );
     assert!(
@@ -2436,7 +2484,7 @@ async fn a_chosen_option_without_a_seller_or_price_keeps_its_columns() {
     assert!(row.contains(r#"<span data-l="Brand"></span>"#), "{row}");
     assert!(row.contains(r#"<span data-l="Seller"></span>"#), "{row}");
     assert!(
-        row.contains(r#"<span class="num" data-l="Price"></span>"#),
+        row.contains(r#"<span class="num price" data-l="Price"></span>"#),
         "{row}"
     );
 }
@@ -2477,7 +2525,7 @@ async fn a_done_step_row_keeps_its_stage_pill() {
 
     let done = group(&body, "done");
     assert!(
-        done.contains(r#"<span class="pill pill--received">Received</span>"#),
+        done.contains(r#"<span class="pill pill--ok">Received</span>"#),
         "{done}"
     );
     assert!(done.contains(">Return it<"), "{done}");
