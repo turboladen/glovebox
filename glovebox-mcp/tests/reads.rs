@@ -32,8 +32,8 @@ async fn search_records_scopes_and_rejects_bad_scope() {
         )
         .await;
     assert!(
-        err.contains("unknown search scope"),
-        "scope error must reach the LLM; got: {err}"
+        err.contains("scope: unknown variant `nonsense`") && err.contains("`maintenance`"),
+        "scope error must reach the LLM and list the scopes; got: {err}"
     );
 }
 

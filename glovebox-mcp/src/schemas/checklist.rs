@@ -17,7 +17,7 @@ use glovebox_shared::{
         },
         todo::{NewTodo, UpdateTodo},
     },
-    services::{checklist, need},
+    services::{appointment::AppointmentStatus, checklist, need},
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -54,15 +54,6 @@ impl PlanAppointmentInput {
             },
         ))
     }
-}
-
-/// The status an appointment can be set to.
-#[derive(Clone, Copy, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AppointmentStatus {
-    Planning,
-    Done,
-    Cancelled,
 }
 
 #[derive(Deserialize, JsonSchema)]

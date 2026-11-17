@@ -2,7 +2,7 @@
 
 use rmcp::{ErrorData as McpError, model::CallToolResult, tool, tool_router};
 
-use super::{GloveboxMcp, Parameters, domain_error, domain_result};
+use super::{GloveboxMcp, Parameters, domain_result};
 use glovebox_shared::{
     dates,
     services::service_record::{self, LinkMode},
@@ -98,10 +98,7 @@ impl GloveboxMcp {
         params: Parameters<LinkServiceToMaintenanceInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "link_service_to_maintenance");
-        let mode = match LinkMode::parse(p.mode.as_deref().unwrap_or("add")) {
-            Ok(m) => m,
-            Err(e) => return domain_error(e),
-        };
+        let mode = p.mode.unwrap_or(LinkMode::Add);
         domain_result(
             service_record::link_schedule_items(
                 &*self.db,

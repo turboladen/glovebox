@@ -353,7 +353,10 @@ mod tests {
         .unwrap();
         assert_eq!(check.newly_found, 0);
         assert_eq!(check.recalls.len(), 1);
-        assert_eq!(check.recalls[0].status, "open");
+        assert_eq!(
+            check.recalls[0].status,
+            crate::services::recall::ShownRecallStatus::Open
+        );
         let message = check.message.unwrap_or_default();
         assert!(
             message.starts_with("NHTSA lookup failed: connection refused"),
@@ -412,7 +415,10 @@ mod tests {
         assert_eq!(second.recalls.len(), 1);
         assert_eq!(second.recalls[0].finding_id, id);
         assert_eq!(second.recalls[0].title, "FUEL SYSTEM");
-        assert_eq!(second.recalls[0].status, "not_applicable");
+        assert_eq!(
+            second.recalls[0].status,
+            crate::services::recall::ShownRecallStatus::NotApplicable
+        );
 
         let third = record_recalls(&db, vid, &[full_recall("17V1", "OTHER")])
             .await

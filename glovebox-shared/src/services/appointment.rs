@@ -24,7 +24,7 @@ use crate::{
 pub struct AppointmentSummary {
     #[serde(flatten)]
     pub appointment: appointment::Model,
-    pub status: &'static str,
+    pub status: AppointmentStatus,
     /// True when the appointment has a planned date.
     pub booked: bool,
     pub jobs: usize,
@@ -88,16 +88,28 @@ impl Ending {
     }
 }
 
+crate::vocab::vocabulary! {
+    /// An appointment's status. It is derived, not stored, and
+    /// `update_appointment` sets it by closing, cancelling or reopening.
+    pub enum AppointmentStatus {
+        Planning => "planning",
+        Done => "done",
+        Cancelled => "cancelled",
+    }
+}
+
 /// The appointment's state from its dates and its jobs' statuses: `cancelled`
 /// when cancelled, `done` when closed by hand or when it has jobs and every
 /// one is done or dropped, otherwise `planning`.
 #[must_use]
-pub fn status(a: &appointment::Model, job_statuses: &[JobStatus]) -> &'static str {
+pub fn status(a: &appointment::Model, job_statuses: &[JobStatus]) -> AppointmentStatus {
     match Ending::of(a) {
-        Some(Ending::Cancelled) => "cancelled",
-        Some(Ending::Closed) => "done",
-        None if !job_statuses.is_empty() && job_statuses.iter().all(|s| s.is_finished()) => "done",
-        None => "planning",
+        Some(Ending::Cancelled) => AppointmentStatus::Cancelled,
+        Some(Ending::Closed) => AppointmentStatus::Done,
+        None if !job_statuses.is_empty() && job_statuses.iter().all(|s| s.is_finished()) => {
+            AppointmentStatus::Done
+        }
+        None => AppointmentStatus::Planning,
     }
 }
 
@@ -298,8 +310,10 @@ pub(crate) async fn open_by_vehicle(
 // A derived `done` appointment with a to-do left still has work to show; a
 // hand-closed or cancelled one has been put away on purpose.
 fn shows_as_open(s: &AppointmentSummary) -> bool {
-    s.status == "planning"
-        || (s.status == "done" && s.appointment.closed_on.is_none() && s.todos_open > 0)
+    s.status == AppointmentStatus::Planning
+        || (s.status == AppointmentStatus::Done
+            && s.appointment.closed_on.is_none()
+            && s.todos_open > 0)
 }
 
 /// One appointment of the vehicle with its counts, whatever its status.
@@ -714,25 +728,25 @@ mod tests {
     #[test]
     fn status_table() {
         let open = model(None, None);
-        assert_eq!(status(&open, &[]), "planning");
+        assert_eq!(status(&open, &[]), AppointmentStatus::Planning);
         assert_eq!(
             status(&open, &[JobStatus::Done, JobStatus::Dropped]),
-            "done"
+            AppointmentStatus::Done
         );
         assert_eq!(
             status(&open, &[JobStatus::Done, JobStatus::Planned]),
-            "planning"
+            AppointmentStatus::Planning
         );
         assert_eq!(
             status(
                 &model(Some("2026-11-01"), Some("2026-11-02")),
                 &[JobStatus::Done]
             ),
-            "cancelled"
+            AppointmentStatus::Cancelled
         );
         assert_eq!(
             status(&model(None, Some("2026-11-02")), &[JobStatus::Planned]),
-            "done"
+            AppointmentStatus::Done
         );
     }
 
@@ -913,7 +927,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(revised.appointment.appointment.purpose, "Brakes and plugs");
-        assert_eq!(revised.appointment.status, "cancelled");
+        assert_eq!(revised.appointment.status, AppointmentStatus::Cancelled);
         assert_eq!(revised.unassigned_job_ids, vec![planned]);
 
         let reopened = update_with_status(
@@ -925,7 +939,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(reopened.appointment.status, "planning");
+        assert_eq!(reopened.appointment.status, AppointmentStatus::Planning);
         crate::test_support::assert_empty(&reopened.unassigned_job_ids);
 
         let closed = update_with_status(
@@ -937,7 +951,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(closed.appointment.status, "done");
+        assert_eq!(closed.appointment.status, AppointmentStatus::Done);
         assert!(closed.appointment.appointment.closed_on.is_some());
 
         // No status change edits only.
@@ -1191,7 +1205,7 @@ mod tests {
         let s = all.iter().find(|s| s.appointment.id == a.id).unwrap();
         assert_eq!(
             (s.status, s.booked, s.jobs, s.needs_open, s.todos_open),
-            ("planning", true, 2, 2, 1)
+            (AppointmentStatus::Planning, true, 2, 2, 1)
         );
         let u = all
             .iter()
@@ -1260,7 +1274,10 @@ mod tests {
 
         let open = list(&db, v, false).await.unwrap();
         assert_eq!(open.len(), 1);
-        assert_eq!((open[0].status, open[0].todos_open), ("done", 1));
+        assert_eq!(
+            (open[0].status, open[0].todos_open),
+            (AppointmentStatus::Done, 1)
+        );
 
         todo_svc::complete(&db, v, t.id, None).await.unwrap();
         assert!(list(&db, v, false).await.unwrap().is_empty());
@@ -1301,11 +1318,11 @@ mod tests {
         assert_eq!(returned.reopened_appointment_id, None);
 
         let reopened = summary(&db, v, closed.id).await.unwrap();
-        assert_eq!(reopened.status, "planning");
+        assert_eq!(reopened.status, AppointmentStatus::Planning);
         assert_eq!(reopened.appointment.closed_on, None);
         assert_eq!(
             summary(&db, v, cancelled.id).await.unwrap().status,
-            "cancelled"
+            AppointmentStatus::Cancelled
         );
         let unscheduled = job::get(&db, v, on_cancelled).await.unwrap();
         assert_eq!(unscheduled.appointment_id, None);

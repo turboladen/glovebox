@@ -109,7 +109,12 @@ pub(crate) async fn open_recalls(
     Ok(recall::list(db, vehicle_id)
         .await?
         .into_iter()
-        .filter(|r| r.status == recall::RecallStatus::Open.as_str() || r.status == recall::PLANNED)
+        .filter(|r| {
+            matches!(
+                r.status,
+                recall::ShownRecallStatus::Open | recall::ShownRecallStatus::Planned
+            )
+        })
         .collect())
 }
 
@@ -357,7 +362,10 @@ mod tests {
         assert_eq!(u.planned_work[1].revisit_status, None);
         assert_eq!(u.planned_work_est_cost_cents, 20500);
         assert_eq!(u.recalls.len(), 1);
-        assert_eq!(u.recalls[0].status, "open");
+        assert_eq!(
+            u.recalls[0].status,
+            crate::services::recall::ShownRecallStatus::Open
+        );
         assert_eq!(u.open_incidents.len(), 1);
         assert_eq!(u.open_incidents[0].title, "Seeping valve cover");
     }

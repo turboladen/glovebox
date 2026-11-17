@@ -392,9 +392,10 @@ opens a form and the button that submits it carry the same words. Every date is 
   rebuilt with it, because an older binary cannot read a row that holds the new value. Removing
   or renaming one needs a migration that rewrites the rows, placed after
   `m20261115_000001_vocabulary_values`, whose lists stay as written.
-  Two enums are stored in no column: `services::recall::RecallStatus`, which `set_recall_status`
-  takes and the recall service maps to and from the stored finding status, and
-  `services::service_record::CompletedWork`, the answer `delete_service` takes.
+  An enum that no column stores lives in the service that uses it: `recall::RecallStatus`
+  (which `set_recall_status` takes, mapped to and from the stored finding status) and
+  `recall::ShownRecallStatus`, `appointment::AppointmentStatus` (derived, never stored),
+  `service_record::CompletedWork`, `schedule::LinkMode` and `search::SearchScope`.
   `docs/adr/0004-typed-vocabularies.md` records why.
 - **Migrations**: new migrations go after `m20261115_000001_vocabulary_values`; the
   `new-migration` skill has the templates. Use `Expr::cust()` for expressions inside builder queries; raw

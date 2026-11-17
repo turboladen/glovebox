@@ -470,25 +470,13 @@ async fn repoint_links(
     Ok(())
 }
 
-/// How a schedule-link write treats the service's existing links.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LinkMode {
-    /// Union the given items with the existing links (safe for incremental
-    /// reconciliation loops — nothing already linked is clobbered).
-    Add,
-    /// Overwrite: the given items become the record's only links.
-    Replace,
-}
-
-impl LinkMode {
-    pub fn parse(mode: &str) -> DomainResult<Self> {
-        match mode {
-            "add" => Ok(Self::Add),
-            "replace" => Ok(Self::Replace),
-            other => Err(DomainError::BadRequest(format!(
-                "Invalid mode '{other}'. Must be one of: add, replace"
-            ))),
-        }
+crate::vocab::vocabulary! {
+    /// How a service's schedule links combine with the items given.
+    // `add` unions them with the links already there, so a reconciliation
+    // loop clobbers nothing; `replace` makes them the record's only links.
+    pub enum LinkMode {
+        Add => "add",
+        Replace => "replace",
     }
 }
 

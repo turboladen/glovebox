@@ -2287,16 +2287,6 @@ mod tests {
         crate::test_support::assert_empty(&fetched.schedule_item_ids);
     }
 
-    #[test]
-    fn link_mode_parses_and_rejects() {
-        assert_eq!(LinkMode::parse("add").unwrap(), LinkMode::Add);
-        assert_eq!(LinkMode::parse("replace").unwrap(), LinkMode::Replace);
-        assert!(matches!(
-            LinkMode::parse("merge").unwrap_err(),
-            DomainError::BadRequest(_)
-        ));
-    }
-
     #[tokio::test]
     async fn create_allows_inherited_template_and_platform_schedule_items() {
         use crate::entities::{maintenance_schedule_item, model_template, platform};
@@ -3051,7 +3041,10 @@ mod tests {
         .unwrap();
         let work_item_before = work_item_svc::get(&db, v, work_item.id).await.unwrap();
         assert_eq!(work_item_before.status, JobStatus::Done);
-        assert_eq!(recall::list(&db, v).await.unwrap()[0].status, "done");
+        assert_eq!(
+            recall::list(&db, v).await.unwrap()[0].status,
+            crate::services::recall::ShownRecallStatus::Done
+        );
 
         delete(&db, v, closing.record.id, UNDO).await.unwrap();
 
@@ -3062,7 +3055,10 @@ mod tests {
         let kept_incident = incident::get(&db, v, incident_b).await.unwrap();
         assert!(!reopened_incident.incident.resolved);
         assert!(kept_incident.incident.resolved);
-        assert_eq!(recall::list(&db, v).await.unwrap()[0].status, "open");
+        assert_eq!(
+            recall::list(&db, v).await.unwrap()[0].status,
+            crate::services::recall::ShownRecallStatus::Open
+        );
     }
 
     async fn seed_recall(db: &DatabaseConnection, v: i32, campaign: &str) -> i32 {
@@ -3103,12 +3099,12 @@ mod tests {
         .id
     }
 
-    async fn recall_status(db: &DatabaseConnection, v: i32) -> Vec<(String, Option<i32>)> {
+    async fn recall_status(db: &DatabaseConnection, v: i32) -> Vec<(&'static str, Option<i32>)> {
         crate::services::recall::list(db, v)
             .await
             .unwrap()
             .into_iter()
-            .map(|r| (r.status, r.done_service.map(|s| s.id)))
+            .map(|r| (r.status.as_str(), r.done_service.map(|s| s.id)))
             .collect()
     }
 
@@ -3170,7 +3166,7 @@ mod tests {
             "{message}"
         );
         assert!(get(&db, v, id).await.is_ok());
-        assert_eq!(recall_status(&db, v).await, vec![("done".into(), Some(id))]);
+        assert_eq!(recall_status(&db, v).await, vec![("done", Some(id))]);
         assert_eq!(
             work_item_svc::get(&db, v, work_item.id)
                 .await
@@ -3201,7 +3197,7 @@ mod tests {
 
         assert_eq!(out.reopened_recall_ids, vec![finding_id]);
         crate::test_support::assert_empty(&out.kept_done_recall_ids);
-        assert_eq!(recall_status(&db, v).await, vec![("open".into(), None)]);
+        assert_eq!(recall_status(&db, v).await, vec![("open", None)]);
     }
 
     #[tokio::test]
@@ -3217,7 +3213,7 @@ mod tests {
 
         assert_eq!(out.kept_done_recall_ids, vec![finding_id]);
         crate::test_support::assert_empty(&out.reopened_recall_ids);
-        assert_eq!(recall_status(&db, v).await, vec![("done".into(), None)]);
+        assert_eq!(recall_status(&db, v).await, vec![("done", None)]);
     }
 
     #[tokio::test]
@@ -3244,10 +3240,7 @@ mod tests {
 
         crate::test_support::assert_empty(&out.reopened_recall_ids);
         assert_eq!(out.still_done_elsewhere_recall_ids, vec![finding_id]);
-        assert_eq!(
-            recall_status(&db, v).await,
-            vec![("done".into(), Some(second))]
-        );
+        assert_eq!(recall_status(&db, v).await, vec![("done", Some(second))]);
     }
 
     #[tokio::test]
@@ -3553,6 +3546,7 @@ mod tests {
                 .await
                 .unwrap()
                 .status
+                .as_str()
         }
 
         fn invoice(f: &Fixture) -> NewServiceRecord {
@@ -3875,7 +3869,7 @@ mod tests {
             let summary = appointment::summary(&f.db, f.vehicle, f.appointment)
                 .await
                 .unwrap();
-            assert_eq!(summary.status, "planning");
+            assert_eq!(summary.status.as_str(), "planning");
             assert_eq!(summary.appointment.closed_on, None);
             let open = appointment::list(&f.db, f.vehicle, false).await.unwrap();
             assert_eq!(open.len(), 1);

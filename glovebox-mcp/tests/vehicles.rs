@@ -452,6 +452,17 @@ async fn a_vocabulary_argument_lists_its_values_in_the_schema() {
     let approaches = json!(["replacement", "upgrade"]);
     let fitments = json!(["confirmed", "unconfirmed", "does_not_fit"]);
     let recall_statuses = json!(["open", "done", "not_applicable"]);
+    let link_modes = json!(["add", "replace"]);
+    let scopes = json!([
+        "all",
+        "vehicles",
+        "services",
+        "incidents",
+        "research",
+        "maintenance",
+        "todo"
+    ]);
+    let appointment_statuses = json!(["planning", "done", "cancelled"]);
     // `[]` in a path steps into the items of a list.
     for (tool, path, values) in [
         ("log_incident", "category", &categories),
@@ -478,6 +489,9 @@ async fn a_vocabulary_argument_lists_its_values_in_the_schema() {
         ("add_need_option", "fitment", &fitments),
         ("update_need_option", "fitment", &fitments),
         ("set_recall_status", "status", &recall_statuses),
+        ("link_service_to_maintenance", "mode", &link_modes),
+        ("search_records", "scope", &scopes),
+        ("update_appointment", "status", &appointment_statuses),
     ] {
         let Some(listed) = tools.iter().find(|t| t["name"] == tool) else {
             panic!("{tool} must be listed");

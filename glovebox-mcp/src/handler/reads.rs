@@ -2,7 +2,7 @@
 
 use rmcp::{ErrorData as McpError, model::CallToolResult, tool, tool_router};
 
-use super::{GloveboxMcp, Parameters, domain_error, domain_result};
+use super::{GloveboxMcp, Parameters, domain_result};
 use glovebox_shared::services::{
     activity, costs, incident,
     search::{self, SearchScope},
@@ -42,10 +42,7 @@ impl GloveboxMcp {
         params: Parameters<SearchRecordsInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "search_records");
-        let scope = match SearchScope::parse(p.scope.as_deref().unwrap_or("all")) {
-            Ok(s) => s,
-            Err(e) => return domain_error(e),
-        };
+        let scope = p.scope.unwrap_or(SearchScope::All);
         domain_result(search::search(&*self.db, &p.query, scope, p.vehicle_id).await)
     }
 
