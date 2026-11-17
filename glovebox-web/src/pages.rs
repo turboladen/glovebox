@@ -13,7 +13,7 @@ use glovebox_shared::{
         appointment,
         checklist::{self, NeedView, VehicleHome},
         need::{self, Stage},
-        part, todo as todo_svc, vehicle,
+        part, todo as todo_svc, vehicle, work_sheet,
     },
 };
 use serde::Deserialize;
@@ -21,8 +21,9 @@ use serde::Deserialize;
 use crate::{
     AppState, DeletedTodo,
     view::{
-        Banner, CardContext, Count, Failure, HomeAppointmentRow, JobCard, PillKind, Steps, Target,
-        TodoCard, TodoForm, WaitingRows, job_card, sentence_case, steps,
+        Banner, CardContext, Count, Failure, HomeAppointmentRow, JobCard, PillKind, SheetJobCard,
+        Steps, Target, TodoCard, TodoForm, UnsettledRow, WaitingRows, job_card, sentence_case,
+        sheet_heading, sheet_jobs, steps, unsettled_rows,
     },
 };
 
@@ -98,6 +99,8 @@ struct AppointmentPage {
     top_error: Option<String>,
     /// The path the forms on this page return to.
     back: String,
+    /// The path of the appointment's work sheet.
+    sheet_href: String,
     vehicle: String,
     purpose: String,
     shop: Option<String>,
@@ -379,6 +382,11 @@ pub fn appointment_path(vid: i32, id: i32) -> String {
     format!("/vehicles/{vid}/appointments/{id}")
 }
 
+/// The path of an appointment's work sheet.
+pub fn sheet_path(vid: i32, id: i32) -> String {
+    format!("/vehicles/{vid}/appointments/{id}/print")
+}
+
 /// The path of a job's page.
 pub fn job_path(vid: i32, id: i32) -> String {
     format!("/vehicles/{vid}/jobs/{id}")
@@ -471,6 +479,7 @@ async fn appointment_page(
         takes_todos,
         todo_form: TodoForm::after(vid, Some(id), &back, failure),
         jobs,
+        sheet_href: sheet_path(vid, id),
         back,
     })
 }
@@ -538,5 +547,65 @@ async fn job_page(state: &AppState, vid: i32, id: i32, view: Page<'_>) -> Domain
         vehicle: car.name,
         appointment: linked,
         j: card,
+    })
+}
+
+#[derive(Template)]
+#[template(path = "sheet.html")]
+struct SheetPage {
+    chrome: Chrome,
+    top_error: Option<String>,
+    vid: i32,
+    /// The path the forms on this page return to.
+    back: String,
+    appointment_href: String,
+    heading: String,
+    jobs: Vec<SheetJobCard>,
+    unsettled: Vec<UnsettledRow>,
+}
+
+pub async fn get_sheet(
+    State(state): State<AppState>,
+    Path((vid, id)): Path<(i32, i32)>,
+) -> Response {
+    sheet_response(&state, vid, id, Page::default(), StatusCode::OK).await
+}
+
+/// Renders an appointment's work sheet with `status`. `failure` is shown in
+/// the row it names, or at the top of the page when that row is not on it.
+pub async fn sheet_response(
+    state: &AppState,
+    vid: i32,
+    id: i32,
+    view: Page<'_>,
+    status: StatusCode,
+) -> Response {
+    match sheet_page(state, vid, id, view.failure).await {
+        Ok(page) => html(status, page.render()),
+        Err(e) => load_failed(state, &e),
+    }
+}
+
+async fn sheet_page(
+    state: &AppState,
+    vid: i32,
+    id: i32,
+    failure: Option<&Failure>,
+) -> DomainResult<SheetPage> {
+    let sheet = work_sheet::for_appointment(&state.db, vid, id).await?;
+    let unsettled = unsettled_rows(&sheet, vid, failure);
+    let top_error = top_error(failure, |target| match target {
+        Target::Need(need_id) => unsettled.iter().any(|u| u.need_id == need_id),
+        Target::TodoAdd | Target::Todo => false,
+    });
+    Ok(SheetPage {
+        chrome: Chrome::of(state),
+        top_error,
+        vid,
+        back: sheet_path(vid, id),
+        appointment_href: appointment_path(vid, id),
+        heading: sheet_heading(&sheet),
+        jobs: sheet_jobs(&sheet),
+        unsettled,
     })
 }

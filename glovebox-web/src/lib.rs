@@ -86,6 +86,10 @@ pub fn router(state: AppState) -> Router {
             "/vehicles/{vid}/appointments/{id}",
             get(pages::get_appointment),
         )
+        .route(
+            "/vehicles/{vid}/appointments/{id}/print",
+            get(pages::get_sheet),
+        )
         .route("/vehicles/{vid}/jobs/{id}", get(pages::get_job))
         .route(
             "/vehicles/{vid}/needs/{id}/supplier",
