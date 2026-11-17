@@ -3,7 +3,7 @@
 Glovebox is a personal car maintenance record, and Claude Desktop is its only interface. The owner
 talks to Claude, Claude reads scanned invoices and other sources, and Claude files the facts through
 the MCP tools in `glovebox-mcp`. The full design is in
-`docs/superpowers/specs/2026-11-12-mcp-first-reset-design.md`. Setup and the project prompt are in
+`docs/adr/0006-claude-desktop-over-mcp-is-the-main-interface.md`. Setup and the project prompt are in
 `docs/claude-desktop/`.
 
 ## The question it answers

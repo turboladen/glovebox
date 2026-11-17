@@ -37,6 +37,7 @@ ci-backend:
     cargo clippy --workspace --all-targets --locked -- -D warnings
     cargo build --workspace --locked
     cargo test --workspace --locked
+    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
 
 # This spell-checks the tree in US English (`brew install typos-cli`).
 typos:

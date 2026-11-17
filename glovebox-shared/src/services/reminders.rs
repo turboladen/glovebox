@@ -89,7 +89,7 @@ pub struct RemindersResponse {
     pub estimated_mileage: i32,
     pub mileage_is_estimate: bool,
     pub mileage_as_of: NaiveDate,
-    /// Miles driven per day, measured as [`estimate_mileage`] describes.
+    /// Miles driven per day, measured from the vehicle's recent mileage readings.
     pub avg_daily_miles: f64,
     /// `None` when the vehicle has no warranty fields set.
     pub warranty: Option<WarrantyStatus>,

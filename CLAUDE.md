@@ -13,8 +13,8 @@ babysitting; the web page runs only while the owner serves it with `just web`. T
 app answers: given what has been done to the car, its mileage and its age, what maintenance is
 coming, when, how much will it cost, and what parts are worth buying and bringing to the shop, and
 for each job, whether every part it needs has been decided, ordered and received.
-The design is in `docs/superpowers/specs/2026-11-12-mcp-first-reset-design.md` and
-`docs/superpowers/specs/2026-11-13-job-checklist-design.md`, and the Desktop
+The design is in `docs/adr/0006-claude-desktop-over-mcp-is-the-main-interface.md` and
+`docs/adr/0007-a-jobs-checklist-tracks-every-need.md`, and the Desktop
 setup and project prompt are in `docs/claude-desktop/`.
 
 ## Commands
@@ -26,7 +26,7 @@ cargo test --workspace    # Unit tests live in glovebox-shared services; MCP tes
 cargo test -p glovebox-shared test_name           # One service-level test
 cargo test -p glovebox-mcp --test rehearsal       # One MCP integration test file
 
-just ci                   # Everything CI runs: nightly fmt-check, layering, typos, build, test, clippy
+just ci                   # Everything CI runs: nightly fmt-check, layering, typos, clippy, build, test, docs
 just fmt                  # cargo +nightly fmt — rustfmt.toml uses nightly-only options; plain `cargo fmt` passes locally but CI's format job will fail
 just check-layering       # Layering gate only (scripts/check-layering.sh)
 just backup               # Copy the current environment's database to data/backups/ now (glovebox backup)
@@ -313,7 +313,7 @@ A page is a view of the shared library, and a future page follows the same rules
   no undo.
 
 The look lives in one inline stylesheet in `templates/base.html`, and
-`docs/superpowers/specs/2026-11-14-web-design-pass-design.md` states its rules. The page reads as a
+`docs/adr/0008-the-web-page-reads-as-a-ledger.md` states its rules. The page reads as a
 ledger: panels on a tinted ground, with each job's needs in columns under one sticky header line
 (Need, Stage, Brand, Part number, Description, Seller, Price, Fit). It uses IBM Plex Sans in two
 weights and four sizes, served from `/assets/` by `src/assets.rs`. Gray text is a label and dark

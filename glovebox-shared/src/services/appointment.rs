@@ -577,7 +577,8 @@ pub(crate) async fn settle_reopened_todo(
     }
 }
 
-/// What [`settle_reopened_jobs`] changed, with each list sorted by id.
+/// What settling the appointments of jobs that are planned again changed,
+/// with each list sorted by id.
 #[derive(Debug, Default, Serialize)]
 pub struct SettledJobs {
     /// The hand-closed appointments that are open again.
