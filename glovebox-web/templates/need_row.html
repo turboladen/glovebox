@@ -21,7 +21,7 @@
         {% for note in n.notes %}<span class="line note">{{ note }}</span>{% endfor %}
       </span>
     </summary>
-    {% if let Some(c) = n.chosen %}{% if let Some(href) = c.link %}<div class="work"><span class="l">Listing</span><a href="{{ href }}" target="_blank" rel="noopener noreferrer">Open the listing</a></div>{% endif %}{% endif %}
+    {% if !n.can_decide %}{% if let Some(c) = n.chosen %}{% if let Some(href) = c.link %}<div class="work"><span class="l">Listing</span><a href="{{ href }}" target="_blank" rel="noopener noreferrer">Open the listing</a></div>{% endif %}{% endif %}{% endif %}
 
     {% if let Some(e) = n.error_elsewhere() %}<div class="work"><p class="error" role="alert"><b>Not saved.</b> {{ e }}</p></div>{% endif %}
     {% if n.can_decide %}

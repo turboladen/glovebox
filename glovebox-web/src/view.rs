@@ -440,8 +440,9 @@ impl From<&HomeAppointment> for HomeAppointmentRow {
 
 /// The kind of a pill, which picks its tint and mark: `todo` needs the owner,
 /// `wait` is on its way, `ok` is settled, `bad` is a problem and `plain` is a
-/// fact. Each typed value maps to a kind here, so a new variant needs a kind
-/// before it compiles.
+/// fact.
+// Each typed value maps to a kind with an exhaustive match, so a new variant
+// needs a kind before it compiles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PillKind {
     Todo,
@@ -689,6 +690,7 @@ pub fn need_card(view: &NeedView, job_status: JobStatus, ctx: &CardContext<'_>) 
     let chosen = view.chosen.as_ref().map(|o| OptionCard::new(o, true));
 
     let stage = view.stage;
+    let (undecided, stage_kind) = stage_look(view, job_status);
     let several = need.quantity > 1;
     let order = OrderValues {
         seller: typed("seller")
@@ -730,8 +732,8 @@ pub fn need_card(view: &NeedView, job_status: JobStatus, ctx: &CardContext<'_>) 
         quantity: several.then(|| format!("\u{d7} {}", need.quantity)),
         status_line,
         back: ctx.back.to_owned(),
-        undecided: stage == Stage::Undecided,
-        stage_kind: PillKind::of_stage(stage).class(),
+        undecided,
+        stage_kind,
         stage_text: stage_text(stage),
         open: failure.is_some() || ctx.open == Some(need.id),
         none_checked: !options.iter().any(|o| o.checked),
@@ -802,6 +804,19 @@ fn choices<V: Vocabulary>(current: Option<&str>) -> Vec<Choice> {
             selected: value == current,
         })
         .collect()
+}
+
+// Whether a need's row reads as undecided, and its stage pill's kind. A need
+// still open on a done or dropped job asks nothing of the owner, so it is
+// neither undecided nor a pill that asks for something.
+fn stage_look(view: &NeedView, job_status: JobStatus) -> (bool, &'static str) {
+    if checklist::open_on_closed_job(view, job_status) {
+        return (false, PillKind::Plain.class());
+    }
+    (
+        view.stage == Stage::Undecided,
+        PillKind::of_stage(view.stage).class(),
+    )
 }
 
 /// Builds the card of a job from its view.

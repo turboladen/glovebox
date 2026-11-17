@@ -615,14 +615,23 @@ fn option_label(option: &need_option::Model) -> String {
     .join(" ")
 }
 
+/// Whether a need is still open on a job that is done or dropped, so it asks
+/// nothing of the owner whatever its stage says.
+#[must_use]
+pub fn open_on_closed_job(view: &NeedView, job_status: JobStatus) -> bool {
+    job_status != JobStatus::Planned && view.stage.is_open()
+}
+
 /// The sentence a need's row shows, without the need's name: what is asked of
-/// the owner, or what settled it. Every need of a done job is done, so one
-/// still open there reads "the job is done".
+/// the owner, or what settled it. A need still open on a done job reads "the
+/// job is done", and one on a dropped job "the job is dropped".
 pub fn need_detail(view: &NeedView, job_status: JobStatus) -> String {
-    if job_status == JobStatus::Done && view.stage.is_open() {
-        "the job is done".to_owned()
-    } else {
-        step_detail(view)
+    if !open_on_closed_job(view, job_status) {
+        return step_detail(view);
+    }
+    match job_status {
+        JobStatus::Dropped => "the job is dropped".to_owned(),
+        JobStatus::Done | JobStatus::Planned => "the job is done".to_owned(),
     }
 }
 

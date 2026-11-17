@@ -580,6 +580,13 @@ async fn font_files_are_served_as_woff2() {
         let (res, body) = send_bytes(app(db().await, "live"), again).await;
         assert_eq!(res.status(), StatusCode::NOT_MODIFIED, "{path}");
         assert!(body.is_empty(), "{path}");
+        // A tag a cache marked weak still matches.
+        let weak = request("GET", path)
+            .header("if-none-match", format!("W/{etag}"))
+            .body(Body::empty())
+            .unwrap();
+        let (res, _) = send_bytes(app(db().await, "live"), weak).await;
+        assert_eq!(res.status(), StatusCode::NOT_MODIFIED, "{path}");
     }
 }
 

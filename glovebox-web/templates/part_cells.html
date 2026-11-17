@@ -1,3 +1,3 @@
 <span data-l="Brand">{% if let Some(m) = o.manufacturer %}{{ m }}{% endif %}</span>
 {% if let Some(d) = o.description %}<span class="pn" data-l="Part number">{{ o.title }}</span><span data-l="Description">{{ d }}</span>{% else %}<span class="pn span2" data-l="Part">{{ o.title }}</span>{% endif %}
-<span data-l="Seller">{% if let Some(s) = o.seller %}{{ s }}{% endif %}</span><span class="num" data-l="Price">{% if let Some(p) = o.price %}{{ p }}{% endif %}</span>
+<span data-l="Seller">{% if let Some(s) = o.seller %}{{ s }}{% endif %}</span><span class="num price" data-l="Price">{% if let Some(p) = o.price %}{{ p }}{% endif %}</span>

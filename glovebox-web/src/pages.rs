@@ -21,8 +21,8 @@ use serde::Deserialize;
 use crate::{
     AppState, DeletedTodo,
     view::{
-        Banner, CardContext, Count, Failure, HomeAppointmentRow, JobCard, Steps, Target, TodoCard,
-        TodoForm, WaitingRows, job_card, sentence_case, steps,
+        Banner, CardContext, Count, Failure, HomeAppointmentRow, JobCard, PillKind, Steps, Target,
+        TodoCard, TodoForm, WaitingRows, job_card, sentence_case, steps,
     },
 };
 
@@ -462,7 +462,7 @@ async fn appointment_page(
             .appointment
             .planned_date
             .map(glovebox_shared::services::date_label),
-        status_kind: crate::view::PillKind::of_appointment(summary.status).class(),
+        status_kind: PillKind::of_appointment(summary.status).class(),
         status_text: sentence_case(summary.status.as_str()),
         needs_open: Count::new(summary.needs_open, "need open", "needs open"),
         todos_open: Count::new(summary.todos_open, "to-do open", "to-dos open"),
