@@ -59,7 +59,9 @@ impl RecallStatus {
 crate::vocab::vocabulary! {
     /// The status a recall reads.
     // `planned` comes from a planned job while nothing has marked the recall
-    // done or not applicable, and no caller can set it.
+    // done or not applicable, and no caller can set it. No column stores
+    // these texts either, and the finding's stored status uses others, so a
+    // filter on it takes `RecallStatus::stored()`, never a variant of this.
     pub enum ShownRecallStatus {
         Open => "open",
         Planned => "planned",
@@ -111,7 +113,6 @@ pub struct RecallWithStatus {
     pub title: String,
     pub description: Option<String>,
     pub source_url: Option<String>,
-    /// One of `open`, `planned`, `done` or `not_applicable`.
     pub status: ShownRecallStatus,
     /// The work item that addresses or addressed this recall: the planned
     /// one when there is one, otherwise the latest completed one. Only a

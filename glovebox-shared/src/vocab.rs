@@ -59,8 +59,9 @@ pub fn parse_optional<V: Vocabulary>(field: &str, text: Option<&str>) -> DomainR
 
 /// Defines a [`Vocabulary`] enum from `Variant => "text"` pairs.
 ///
-/// A TEXT column of the enum stores its text. The enum serializes to and from
-/// the same text, and implements `Display` and `FromStr` over it.
+/// When a TEXT column holds the enum, it stores the variant's text. The enum
+/// serializes to and from the same text, and implements `Display` and
+/// `FromStr` over it.
 // The enum derives `DeriveValueType`, not `DeriveActiveEnum`: the latter
 // builds an identifier from each stored text and does not compile for
 // `"self"`, which three vocabularies store. A stored value outside the list

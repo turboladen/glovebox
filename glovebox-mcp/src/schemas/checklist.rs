@@ -93,11 +93,7 @@ pub struct UpdateAppointmentInput {
 
 impl UpdateAppointmentInput {
     pub fn into_domain(self) -> DomainResult<(i32, i32, UpdateAppointment, Option<StatusChange>)> {
-        let change = self.status.map(|s| match s {
-            AppointmentStatus::Planning => StatusChange::Reopen,
-            AppointmentStatus::Done => StatusChange::Close,
-            AppointmentStatus::Cancelled => StatusChange::Cancel,
-        });
+        let change = self.status.map(StatusChange::from);
         Ok((
             self.vehicle_id,
             self.appointment_id,

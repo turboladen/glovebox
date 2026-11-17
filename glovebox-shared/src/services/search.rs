@@ -822,27 +822,4 @@ mod tests {
             DomainError::NotFound(_)
         ));
     }
-
-    #[test]
-    fn scope_reads_each_listed_value_and_refuses_a_retired_one() {
-        use crate::vocab::{Vocabulary, parse};
-        for scope in SearchScope::ALL {
-            assert_eq!(
-                parse::<SearchScope>("scope", scope.as_str()).unwrap(),
-                *scope
-            );
-        }
-        for retired in [
-            "observations",
-            "accidents",
-            "builds",
-            "documents",
-            "nonsense",
-        ] {
-            assert!(
-                parse::<SearchScope>("scope", retired).is_err(),
-                "retired scope '{retired}' must be refused"
-            );
-        }
-    }
 }

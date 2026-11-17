@@ -89,8 +89,9 @@ impl Ending {
 }
 
 crate::vocab::vocabulary! {
-    /// An appointment's status. It is derived, not stored, and
-    /// `update_appointment` sets it by closing, cancelling or reopening.
+    /// An appointment's status, as [`status`] derives it.
+    // No column stores it: the closed and cancelled dates and the jobs'
+    // statuses decide it, and a `StatusChange` moves an appointment to one.
     pub enum AppointmentStatus {
         Planning => "planning",
         Done => "done",
