@@ -607,3 +607,247 @@ async fn every_page_loads_the_bundled_typeface_and_labels_the_database() {
     );
     assert!(body.contains(r#"<span class="l">Today </span>"#), "{body}");
 }
+
+// A vehicle with one appointment holding: "Front brakes" with an owner part
+// bought (rotors × 2, ATE 13.0460) and a shop need (brake fluid); "Cabin
+// filter" whose only need is installed; and a done job "Old job". Returns
+// (vehicle, appointment, brakes job).
+async fn sheet_fixture(db: &DatabaseConnection) -> (i32, i32, i32) {
+    use glovebox_shared::{
+        entities::{
+            part::{PartStatus, Supplier},
+            work_item::JobStatus,
+        },
+        inputs::{need::UpdateNeed, part::NewPart},
+        services::part,
+        test_support::{add_job, set_job_status},
+    };
+    let v = VehicleFixture::new().name("Golf GTI").insert_id(db).await;
+    let a = appointment::create(
+        db,
+        v,
+        NewAppointment {
+            purpose: "Brakes".into(),
+            shop_name: Some("Smith Auto".into()),
+            planned_date: Some(date("2026-11-20")),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    let brakes = add_job(db, v, "Front brakes", Some(a)).await;
+    let cabin = add_job(db, v, "Cabin filter", Some(a)).await;
+    let old = add_job(db, v, "Old job", Some(a)).await;
+    let add = |job_id: i32, name: &'static str, quantity: i32| {
+        need::add(
+            db,
+            v,
+            job_id,
+            NewNeed {
+                name: name.into(),
+                quantity: Some(quantity),
+                ..Default::default()
+            },
+        )
+    };
+    let rotors = add(brakes, "Rotors", 2).await.unwrap().id;
+    let fluid = add(brakes, "Brake fluid", 1).await.unwrap().id;
+    let filter = add(cabin, "Cabin filter", 1).await.unwrap().id;
+    let bought = part::create(
+        db,
+        v,
+        NewPart {
+            name: "Rotors".into(),
+            manufacturer: Some("ATE".into()),
+            part_number: Some("13.0460".into()),
+            supplied_by: Some(Supplier::Owner),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    need::link_part(db, v, rotors, bought.id, Some(date("2026-11-12")))
+        .await
+        .unwrap();
+    need::update(
+        db,
+        v,
+        fluid,
+        UpdateNeed {
+            supplied_by: Some(Some(Supplier::Shop)),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let fitted = part::create(
+        db,
+        v,
+        NewPart {
+            name: "Cabin filter".into(),
+            status: Some(PartStatus::Installed),
+            installed_date: Some(date("2026-11-01")),
+            supplied_by: Some(Supplier::Owner),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    need::link_part(db, v, filter, fitted.id, None)
+        .await
+        .unwrap();
+    set_job_status(db, v, old, JobStatus::Done).await;
+    (v, a, brakes)
+}
+
+fn sheet_path(v: i32, a: i32) -> String {
+    format!("/vehicles/{v}/appointments/{a}/print")
+}
+
+#[tokio::test]
+async fn print_sheet_lists_jobs_and_both_part_lists() {
+    let db = db().await;
+    let (v, a, _) = sheet_fixture(&db).await;
+
+    let (status, body) = page(app(db, "test"), get(&sheet_path(v, a))).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body.contains("Golf GTI — Smith Auto — 2026-11-20"),
+        "{body}"
+    );
+    assert!(body.contains("Front brakes"), "{body}");
+    assert!(body.contains(r#"class="ws-box""#), "{body}");
+    assert!(body.contains("I'm supplying"), "{body}");
+    assert!(body.contains("Rotors × 2"), "{body}");
+    assert!(
+        body.contains(r#"<span class="pn">ATE 13.0460</span>"#),
+        "{body}"
+    );
+    assert!(body.contains("Please supply"), "{body}");
+    assert!(body.contains("Brake fluid"), "{body}");
+    assert!(!body.contains("Old job"), "{body}");
+}
+
+#[tokio::test]
+async fn print_sheet_omits_empty_groups() {
+    let db = db().await;
+    let (v, a, brakes) = sheet_fixture(&db).await;
+    work_item::delete(&db, v, brakes).await.unwrap();
+
+    let (_, body) = page(app(db, "test"), get(&sheet_path(v, a))).await;
+
+    assert!(body.contains("Cabin filter"), "{body}");
+    assert!(!body.contains("Please supply"), "{body}");
+    assert!(!body.contains("I'm supplying"), "{body}");
+}
+
+#[tokio::test]
+async fn print_sheet_warns_about_unsettled_needs() {
+    let db = db().await;
+    let (v, a, brakes) = sheet_fixture(&db).await;
+    let pads = need::add(
+        &db,
+        v,
+        brakes,
+        NewNeed {
+            name: "Brake pads".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+
+    let (_, body) = page(app(db, "test"), get(&sheet_path(v, a))).await;
+
+    assert!(body.contains("Before you print"), "{body}");
+    assert!(body.contains("Brake pads (Front brakes)"), "{body}");
+    assert!(
+        body.contains(&format!(r#"action="/vehicles/{v}/needs/{pads}/supplier""#)),
+        "{body}"
+    );
+    assert!(
+        body.contains(r#"name="supplied_by" value="shop""#),
+        "{body}"
+    );
+    assert!(
+        body.contains(&format!(r#"name="back" value="{}""#, sheet_path(v, a))),
+        "{body}"
+    );
+    assert!(
+        body.contains(&format!(
+            r#"href="/vehicles/{v}/jobs/{brakes}?open=need-{pads}#need-{pads}""#
+        )),
+        "{body}"
+    );
+    assert!(!body.contains("Everything is settled."), "{body}");
+}
+
+#[tokio::test]
+async fn print_sheet_says_everything_is_settled() {
+    let db = db().await;
+    let (v, a, _) = sheet_fixture(&db).await;
+
+    let (_, body) = page(app(db, "test"), get(&sheet_path(v, a))).await;
+
+    assert!(body.contains("Everything is settled."), "{body}");
+    assert!(!body.contains("Before you print"), "{body}");
+}
+
+#[tokio::test]
+async fn print_sheet_with_no_planned_jobs_says_so() {
+    let db = db().await;
+    let v = VehicleFixture::new().name("Golf GTI").insert_id(&db).await;
+    let a = appointment::create(
+        &db,
+        v,
+        NewAppointment {
+            purpose: "Brakes".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+
+    let (_, body) = page(app(db, "test"), get(&sheet_path(v, a))).await;
+
+    assert!(
+        body.contains("No planned jobs on this appointment."),
+        "{body}"
+    );
+    assert!(!body.contains("Everything is settled."), "{body}");
+}
+
+#[tokio::test]
+async fn print_sheet_of_another_vehicles_appointment_is_not_found() {
+    let db = db().await;
+    let (_, a, _) = sheet_fixture(&db).await;
+    let other = VehicleFixture::new().name("Other").insert_id(&db).await;
+
+    let (status, wrong) = page(app(db.clone(), "test"), get(&sheet_path(other, a))).await;
+    let (_, missing) = page(app(db, "test"), get(&sheet_path(other, 9999))).await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(wrong, missing.replace("9999", &a.to_string()));
+}
+
+#[tokio::test]
+async fn appointment_page_links_to_its_print_sheet() {
+    let db = db().await;
+    let (v, a, _) = sheet_fixture(&db).await;
+
+    let (_, body) = page(
+        app(db, "test"),
+        get(&format!("/vehicles/{v}/appointments/{a}")),
+    )
+    .await;
+
+    assert!(
+        body.contains(&format!(r#"href="{}""#, sheet_path(v, a))),
+        "{body}"
+    );
+    assert!(body.contains("Print sheet"), "{body}");
+}

@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Work sheet - Glovebox{% endblock %}
+{% block content %}
+<div class="noprint page">
+  <p><a href="{{ appointment_href }}">Back to the appointment</a></p>
+  {% if let Some(e) = top_error %}<p class="error" role="alert"><b>Not saved.</b> {{ e }}</p>{% endif %}
+  {% if jobs.is_empty() && unsettled.is_empty() %}
+  <p>No planned jobs on this appointment.</p>
+  {% else if unsettled.is_empty() %}
+  <p>Everything is settled.</p>
+  {% else %}
+  <section class="ws-warn" aria-labelledby="ws-warn-title">
+    <h2 id="ws-warn-title">Before you print</h2>
+    <p>These parts are not on the sheet yet.</p>
+    <ul>
+      {% for u in unsettled %}
+      <li id="need-{{ u.need_id }}">
+        <span>{{ u.name }} ({{ u.job_title }}): {{ u.detail }}.</span>
+        <a class="btn" href="{{ u.decide_href }}">Decide…</a>
+        <form method="post" action="/vehicles/{{ vid }}/needs/{{ u.need_id }}/supplier">
+          <input type="hidden" name="back" value="{{ back }}">
+          <input type="hidden" name="supplied_by" value="shop">
+          <button class="btn" type="submit">Ask the shop</button>
+        </form>
+        {% if let Some(e) = u.error %}<p class="error" role="alert"><b>Not saved.</b> {{ e }}</p>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+</div>
+<article class="ws page">
+  <h1>{{ heading }}</h1>
+  {% for j in jobs %}
+  <section class="ws-job">
+    <p class="ws-title"><span class="ws-box"></span>{{ j.title }}</p>
+    {% if !j.owner.is_empty() %}
+    <h2>I'm supplying</h2>
+    <ul>{% for l in j.owner %}<li>{{ l.text }}{% if let Some(pn) = l.label %}<span class="pn">{{ pn }}</span>{% endif %}</li>{% endfor %}</ul>
+    {% endif %}
+    {% if !j.shop.is_empty() %}
+    <h2>Please supply</h2>
+    <ul>{% for l in j.shop %}<li>{{ l.text }}</li>{% endfor %}</ul>
+    {% endif %}
+  </section>
+  {% endfor %}
+</article>
+{% endblock %}

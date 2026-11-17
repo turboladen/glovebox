@@ -49,6 +49,7 @@ enum Page {
     Home,
     Appointment(i32, i32),
     Job(i32, i32),
+    Sheet(i32, i32),
 }
 
 fn page_of(back: &str, vehicle: i32) -> Option<Page> {
@@ -57,19 +58,18 @@ fn page_of(back: &str, vehicle: i32) -> Option<Page> {
         return Some(Page::Home);
     }
     let parts: Vec<&str> = path.split('/').collect();
-    let [_, "vehicles", vid, kind, id] = parts.as_slice() else {
-        return None;
+    let (page, vid, id): (fn(i32, i32) -> Page, &str, &str) = match parts.as_slice() {
+        [_, "vehicles", vid, "appointments", id] => (Page::Appointment, vid, id),
+        [_, "vehicles", vid, "appointments", id, "print"] => (Page::Sheet, vid, id),
+        [_, "vehicles", vid, "jobs", id] => (Page::Job, vid, id),
+        _ => return None,
     };
     let (vid, id): (i32, i32) = (vid.parse().ok()?, id.parse().ok()?);
     // A page of another vehicle is never shown for this vehicle's write.
     if vid != vehicle {
         return None;
     }
-    match *kind {
-        "appointments" => Some(Page::Appointment(vid, id)),
-        "jobs" => Some(Page::Job(vid, id)),
-        _ => None,
-    }
+    Some(page(vid, id))
 }
 
 fn field_label(field: &str) -> &str {
@@ -205,6 +205,9 @@ impl<'a> Post<'a> {
             Some(Page::Job(vid, id)) => {
                 pages::job_response(self.state, vid, id, view, refused.status).await
             }
+            Some(Page::Sheet(vid, id)) => {
+                pages::sheet_response(self.state, vid, id, view, refused.status).await
+            }
             None => pages::failure_page(self.state, refused.status, refused.message),
         }
     }
@@ -236,8 +239,8 @@ fn optional_id(text: &str, field: &str, message: &str) -> DomainResult<Option<i3
 pub struct SupplierForm {
     #[serde(default)]
     supplied_by: String,
-    #[serde(default)]
-    approach: String,
+    // Absent on the work sheet's form, which leaves the approach alone.
+    approach: Option<String>,
     back: Option<String>,
 }
 
@@ -253,15 +256,17 @@ pub async fn post_supplier(
         Target::Need(id),
         "supplier",
     )
-    .typed(&[
-        ("supplied_by", &form.supplied_by),
-        ("approach", &form.approach),
-    ]);
+    .typed(&[("supplied_by", &form.supplied_by)]);
+    let post = match &form.approach {
+        Some(approach) => post.typed(&[("approach", approach)]),
+        None => post,
+    };
     let result = supplier(&state, vid, id, &form).await;
     post.answer(result).await
 }
 
-// An empty field clears the stored value.
+// An empty field clears the stored value, and an absent approach is left
+// alone.
 async fn supplier(
     state: &AppState,
     vid: i32,
@@ -269,13 +274,17 @@ async fn supplier(
     form: &SupplierForm,
 ) -> DomainResult<job_need::Model> {
     let supplied_by = trim_to_none(&form.supplied_by);
-    let approach = trim_to_none(&form.approach);
+    let approach = form
+        .approach
+        .as_deref()
+        .map(|a| vocab::parse_optional("approach", trim_to_none(a).as_deref()))
+        .transpose()?;
     let input = UpdateNeed {
         supplied_by: Some(vocab::parse_optional(
             "supplied_by",
             supplied_by.as_deref(),
         )?),
-        approach: Some(vocab::parse_optional("approach", approach.as_deref())?),
+        approach,
         ..Default::default()
     };
     need::update(&state.db, vid, id, input).await

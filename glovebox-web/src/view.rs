@@ -20,6 +20,7 @@ use glovebox_shared::{
         need::{self, Stage},
         reminders,
         waiting::{Waiting, booked_note},
+        work_sheet::{SheetLine, WorkSheet},
     },
     vocab::Vocabulary,
 };
@@ -914,4 +915,80 @@ pub fn steps(list: &Checklist, jobs: &[JobCard], ctx: &CardContext<'_>) -> Steps
             .map(todo_card)
             .collect(),
     }
+}
+
+/// One job on the work sheet.
+pub struct SheetJobCard {
+    pub title: String,
+    pub owner: Vec<SheetLineCard>,
+    pub shop: Vec<SheetLineCard>,
+}
+
+/// One part line on the work sheet.
+pub struct SheetLineCard {
+    /// The part's name, with " × N" when more than one is needed.
+    pub text: String,
+    /// The manufacturer and part number, printed apart from the name.
+    pub label: Option<String>,
+}
+
+/// A need the work sheet leaves off until the owner settles it.
+pub struct UnsettledRow {
+    pub need_id: i32,
+    pub name: String,
+    pub job_title: String,
+    pub detail: String,
+    /// The need on its job's page, where it is decided.
+    pub decide_href: String,
+    pub error: Option<String>,
+}
+
+/// The sheet's heading: the vehicle, then the shop and the date when the
+/// appointment has them.
+pub fn sheet_heading(sheet: &WorkSheet) -> String {
+    let mut parts = vec![sheet.vehicle.clone()];
+    parts.extend(sheet.shop.clone());
+    parts.extend(sheet.date.map(date_label));
+    parts.join(" \u{2014} ")
+}
+
+pub fn sheet_jobs(sheet: &WorkSheet) -> Vec<SheetJobCard> {
+    let card = |line: &SheetLine| SheetLineCard {
+        text: if line.quantity > 1 {
+            format!("{} \u{d7} {}", line.name, line.quantity)
+        } else {
+            line.name.clone()
+        },
+        label: line.label.clone(),
+    };
+    sheet
+        .jobs
+        .iter()
+        .map(|job| SheetJobCard {
+            title: job.title.clone(),
+            owner: job.owner_supplies.iter().map(card).collect(),
+            shop: job.shop_supplies.iter().map(card).collect(),
+        })
+        .collect()
+}
+
+pub fn unsettled_rows(sheet: &WorkSheet, vid: i32, failure: Option<&Failure>) -> Vec<UnsettledRow> {
+    sheet
+        .unsettled
+        .iter()
+        .map(|u| UnsettledRow {
+            need_id: u.need_id,
+            name: u.name.clone(),
+            job_title: u.job_title.clone(),
+            detail: u.detail.clone(),
+            decide_href: format!(
+                "{}?open=need-{id}#need-{id}",
+                crate::pages::job_path(vid, u.job_id),
+                id = u.need_id
+            ),
+            error: failure
+                .filter(|f| f.target == Target::Need(u.need_id))
+                .map(|f| f.message.clone()),
+        })
+        .collect()
 }
