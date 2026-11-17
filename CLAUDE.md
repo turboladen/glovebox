@@ -157,7 +157,7 @@ named as things a person would say:
 - `planning.rs`: `plan_work`, `list_planned_work`, `whats_coming`, `update_planned_work`,
   `delete_planned_work`
 - `checklist.rs`: `plan_appointment`, `update_appointment`, `list_appointments`,
-  `delete_appointment`, `get_checklist`, `past_decisions`, `add_need`, `update_need`, `delete_need`,
+  `delete_appointment`, `get_checklist`, `get_work_sheet`, `past_decisions`, `add_need`, `update_need`, `delete_need`,
   `add_need_option`, `update_need_option`, `delete_need_option`, `mark_need_ordered`,
   `link_part_to_need`, `mark_need_received`, `return_part`, `add_todo`, `update_todo`,
   `delete_todo`

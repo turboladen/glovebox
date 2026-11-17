@@ -162,7 +162,12 @@ need has a decision, every decision has a reason, and every part ordered has arr
    mistake. That records the return, sends the need back, and adds a to-do to take the part back.
 10. Keep plain to-dos ("ask KW to confirm the differential") with `add_todo`, optionally on the
     appointment, and tick them off with `update_todo`.
-11. When the trip happens, file the invoice with `record_service`, passing `appointment_id`,
+11. When Steve wants a list to hand the mechanic, call `get_work_sheet` for the appointment. Raise
+    each `unsettled` need first and offer to settle it, or to set `supplied_by` to `shop` with
+    `update_need`. Then show each job with a checkbox, the parts he brings with their
+    `part_number`, and the parts the shop supplies by name. The web page prints the same sheet
+    from the appointment's "Print sheet" link.
+12. When the trip happens, file the invoice with `record_service`, passing `appointment_id`,
     `work_item_ids` for the jobs it finished and `part_ids` for the parts the shop fitted (see
     "Filing an invoice"). The appointment reads `done` by itself once every job on it is done or
     dropped. Do not set `status: "done"` before filing: closing an appointment takes every job that

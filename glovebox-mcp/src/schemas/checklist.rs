@@ -604,6 +604,15 @@ pub struct DeleteTodoInput {
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct GetWorkSheetInput {
+    /// Vehicle id, from `list_vehicles`.
+    pub vehicle_id: i32,
+    /// The appointment to read the work sheet of, from `list_appointments`.
+    pub appointment_id: i32,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PastDecisionsInput {
     /// What kind of part to look up, e.g. "brake pads" or "rotor". Matches a
     /// need's name and its options' description, manufacturer and part number
