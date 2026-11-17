@@ -5,6 +5,7 @@ use common::{app, db, page, post_to, request};
 use glovebox_shared::{
     db::DatabaseConnection,
     entities::{
+        job_need::Approach,
         need_option::Fitment,
         part::{PartStatus, Supplier},
     },
@@ -2562,4 +2563,95 @@ async fn the_option_radios_are_one_named_group() {
         body.contains(r#"<span class="l" aria-hidden="true">Options</span>"#),
         "{body}"
     );
+}
+
+impl World {
+    fn sheet_path(&self) -> String {
+        format!("{}/print", self.page_path())
+    }
+
+    async fn ask_the_shop(&self, approach: &str) -> (StatusCode, Option<String>, String) {
+        self.post(
+            &self.need_path("supplier"),
+            &[
+                ("supplied_by", "shop"),
+                ("approach", approach),
+                ("back", &self.sheet_path()),
+            ],
+        )
+        .await
+    }
+}
+
+// The sheet's "Please supply" list, or the empty string when it has none.
+fn please_supply(body: &str) -> &str {
+    body.split_once("<h2>Please supply</h2>")
+        .map_or("", |(_, rest)| rest.split("</ul>").next().unwrap_or(""))
+}
+
+#[tokio::test]
+async fn ask_the_shop_from_the_sheet_settles_an_undecided_need() {
+    let w = World::new().await;
+    let (_, before) = w.get(&w.sheet_path()).await;
+    assert!(before.contains("Front pads (Brakes)"), "{before}");
+
+    let (status, location, _) = w.ask_the_shop("").await;
+
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(location.as_deref(), Some(w.sheet_path().as_str()));
+    let (_, body) = w.get(&w.sheet_path()).await;
+    assert!(body.contains("Everything is settled."), "{body}");
+    assert!(please_supply(&body).contains("Front pads"), "{body}");
+}
+
+#[tokio::test]
+async fn ask_the_shop_from_the_sheet_settles_a_need_to_order() {
+    let w = World::new().await;
+    w.choose_good().await;
+
+    w.ask_the_shop("").await;
+
+    let (_, body) = w.get(&w.sheet_path()).await;
+    assert!(body.contains("Everything is settled."), "{body}");
+    assert!(please_supply(&body).contains("Front pads"), "{body}");
+}
+
+#[tokio::test]
+async fn ask_the_shop_failure_shows_the_sheet_again() {
+    let w = World::new().await;
+    need::delete(&w.db, w.vehicle, w.need).await.unwrap();
+
+    let (status, _, body) = w.ask_the_shop("").await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(body.contains("Everything is settled."), "{body}");
+    assert!(body.contains("Not saved."), "{body}");
+    assert!(body.contains("not found"), "{body}");
+}
+
+#[tokio::test]
+async fn ask_the_shop_keeps_the_approach() {
+    let w = World::new().await;
+    need::update(
+        &w.db,
+        w.vehicle,
+        w.need,
+        UpdateNeed {
+            approach: Some(Some(Approach::Upgrade)),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let (_, sheet) = w.get(&w.sheet_path()).await;
+    assert!(
+        sheet.contains(r#"name="approach" value="upgrade""#),
+        "{sheet}"
+    );
+
+    w.ask_the_shop("upgrade").await;
+
+    let need = need::require(&w.db, w.vehicle, w.need).await.unwrap();
+    assert_eq!(need.approach, Some(Approach::Upgrade));
+    assert_eq!(need.supplied_by, Some(Supplier::Shop));
 }

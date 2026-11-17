@@ -64,7 +64,7 @@ MCP server, and its `--open` flag opens the browser.
   `reset --env <name>` and `seed --env <name>`, with `run` callable in process from tests. The
   last two refuse `live` and build the file name themselves.
 - **`glovebox-web/`** (lib crate `glovebox_web` plus the `glovebox-web` binary) — an axum and askama
-  server that renders the checklist. `src/pages.rs` holds the three page handlers (home, appointment and job), `src/actions.rs`
+  server that renders the checklist. `src/pages.rs` holds the four page handlers (home, appointment, job and work sheet), `src/actions.rs`
   the form posts, `src/view.rs` the view structs, `src/guard.rs` the request guard and the content
   security policy, and `templates/` the askama templates.
 - `scripts/check-layering.sh` (run by CI and `just ci`) keeps axum and rmcp out of `glovebox-shared`
@@ -106,7 +106,7 @@ functions.
 `work_item`, `appointment`, `need`, `todo`, `schedule`, `recall`, `research`, ...) of free functions taking `db: &impl
 ConnectionTrait` first and returning `DomainResult<T>`. Composite reads: `upcoming` (the
 `whats_coming` answer: reminders, budget, planned work, recalls, open incidents), `reminders`,
-`budget`, `costs`, `activity`, `search`, and `checklist` (the checklist for an appointment, an
+`budget`, `costs`, `activity`, `search`, `work_sheet` (an appointment's sheet for the mechanic), and `checklist` (the checklist for an appointment, an
 unscheduled job or one job, the past decisions across vehicles, and the home page's rows; the MCP
 tools and the web page both render it), and `waiting` (what is not yet on an appointment: due
 maintenance, planned jobs, open recalls and open incidents, for the home page). `whats_coming` lists each open appointment.
@@ -308,6 +308,12 @@ A page is a view of the shared library, and a future page follows the same rules
   incidents (`waiting::waiting`), then the appointments and to-dos. Those four lists hold no
   forms. An item a planned job covers links to the job, and an item whose job is on an
   appointment is left out. `docs/adr/0002-home-page-shows-waiting-work.md` records why.
+- **The work sheet** (`/vehicles/{vid}/appointments/{id}/print`, `work_sheet::for_appointment`)
+  lists each planned job with the owner's parts (received or ordered, with manufacturer and part
+  number from one record: the linked part, else the chosen option) and the shop's parts by name.
+  Undecided and to-order needs are left off and shown in an on-screen "Before you print" box,
+  whose "Ask the shop" posts the existing supplier form. `docs/adr/0009-the-work-sheet-prints-plain.md`
+  records why.
 - **Marking a need ordered has no undo**, because it creates a purchase record. A to-do tick, a
   received date and a deleted to-do show a banner with an undo form. The undo of a delete puts
   the row back through `todo::restore` and lasts until the next delete or a restart of the server.

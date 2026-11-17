@@ -49,6 +49,8 @@ enum Page {
     Home,
     Appointment(i32, i32),
     Job(i32, i32),
+    /// An appointment's work sheet.
+    Sheet(i32, i32),
 }
 
 fn page_of(back: &str, vehicle: i32) -> Option<Page> {
@@ -57,19 +59,18 @@ fn page_of(back: &str, vehicle: i32) -> Option<Page> {
         return Some(Page::Home);
     }
     let parts: Vec<&str> = path.split('/').collect();
-    let [_, "vehicles", vid, kind, id] = parts.as_slice() else {
-        return None;
+    let (page, vid, id): (fn(i32, i32) -> Page, &str, &str) = match parts.as_slice() {
+        [_, "vehicles", vid, "appointments", id] => (Page::Appointment, vid, id),
+        [_, "vehicles", vid, "appointments", id, "print"] => (Page::Sheet, vid, id),
+        [_, "vehicles", vid, "jobs", id] => (Page::Job, vid, id),
+        _ => return None,
     };
     let (vid, id): (i32, i32) = (vid.parse().ok()?, id.parse().ok()?);
     // A page of another vehicle is never shown for this vehicle's write.
     if vid != vehicle {
         return None;
     }
-    match *kind {
-        "appointments" => Some(Page::Appointment(vid, id)),
-        "jobs" => Some(Page::Job(vid, id)),
-        _ => None,
-    }
+    Some(page(vid, id))
 }
 
 fn field_label(field: &str) -> &str {
@@ -204,6 +205,9 @@ impl<'a> Post<'a> {
             }
             Some(Page::Job(vid, id)) => {
                 pages::job_response(self.state, vid, id, view, refused.status).await
+            }
+            Some(Page::Sheet(vid, id)) => {
+                pages::sheet_response(self.state, vid, id, view, refused.status).await
             }
             None => pages::failure_page(self.state, refused.status, refused.message),
         }
