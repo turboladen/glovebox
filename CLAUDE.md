@@ -341,7 +341,12 @@ role per control style, and `YYYY-MM-DD` dates.
   map tool arguments to domain inputs and rely on `domain_error` for failures. No SeaORM queries,
   `ActiveModel`s or business logic in `glovebox-mcp/src/handler/`.
 - `glovebox-shared` never imports axum or rmcp, and `glovebox-web` never names SeaORM.
-- Service functions take `db: &impl ConnectionTrait` as the first parameter, never a server type.
+- Service functions take the database as the first parameter, never a server type. A service
+  that checks and then writes opens its own transaction and takes `db: &C` with
+  `C: ConnectionTrait + TransactionTrait`; a call made inside a caller's transaction becomes a
+  savepoint. `db: &impl ConnectionTrait` is for a read, a single statement that needs no check
+  (`todo::delete`), or a step only ever run inside a caller's transaction, which is
+  `pub(crate)` when nothing outside the crate calls it.
 - **Error model**: services return `DomainResult<T>`. `Invalid` renders as `"{field}: {message}"`;
   `BadRequest` renders its message verbatim; `Db` and `Internal` are opaque to the client.
   A service's message reads correctly on both the web page and in a tool result, so it carries no

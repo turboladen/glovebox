@@ -35,6 +35,10 @@ pub fn assert_empty<T: std::fmt::Debug>(items: &[T]) {
 /// Runs `op` twice on each of `pools` at once, as two page posts and two
 /// tool calls on one file do, and returns every result. `op` gets the run's
 /// index and its pool.
+// A transaction that opens with `services::begin_write` holds the write lock
+// before it reads, so no run of it fails on the lock. One that opens with a
+// plain `BEGIN` fails a run whose snapshot another pool's commit made stale,
+// which is what a race test built on this catches.
 pub async fn race<T, F, Fut>(pools: &[DatabaseConnection], op: F) -> Vec<T>
 where
     F: Fn(usize, DatabaseConnection) -> Fut,

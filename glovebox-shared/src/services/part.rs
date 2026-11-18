@@ -176,11 +176,13 @@ pub async fn get(db: &impl ConnectionTrait, vehicle_id: i32, id: i32) -> DomainR
         .ok_or_else(|| DomainError::NotFound(format!("Part {id} not found")))
 }
 
-pub async fn create(
-    db: &impl ConnectionTrait,
+pub async fn create<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
     vehicle_id: i32,
     input: NewPart,
 ) -> DomainResult<part::Model> {
+    let txn = super::begin_write(db).await?;
+    let db = &txn;
     super::vehicle::require(db, vehicle_id).await?;
     let supplied_by = input.supplied_by.unwrap_or(Supplier::Owner);
     if let Some(status) = input.status {
@@ -214,7 +216,9 @@ pub async fn create(
         order_ref: Set(input.order_ref),
         ..Default::default()
     };
-    Ok(model.insert(db).await?)
+    let out = model.insert(db).await?;
+    txn.commit().await?;
+    Ok(out)
 }
 
 /// Clears the service, date and odometer a part was installed with.
@@ -461,8 +465,15 @@ pub(crate) async fn release_from_service(
 }
 
 /// Delete a part.
-pub async fn delete(db: &impl ConnectionTrait, vehicle_id: i32, id: i32) -> DomainResult<()> {
+pub async fn delete<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    id: i32,
+) -> DomainResult<()> {
+    let txn = super::begin_write(db).await?;
+    let db = &txn;
     get(db, vehicle_id, id).await?.delete(db).await?;
+    txn.commit().await?;
     Ok(())
 }
 
@@ -1001,7 +1012,7 @@ mod tests {
         assert_eq!(cleared.status, PartStatus::Returned);
     }
 
-    async fn seed_installed(db: &impl ConnectionTrait, vid: i32, sid: i32) -> part::Model {
+    async fn seed_installed(db: &DatabaseConnection, vid: i32, sid: i32) -> part::Model {
         create(
             db,
             vid,
@@ -1232,5 +1243,35 @@ mod tests {
             .unwrap();
             assert_eq!(owned.status, PartStatus::Purchased);
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn racing_records_and_deletes_all_succeed() {
+        let (_dir, pools) = crate::test_support::race_pools().await;
+        let first = &pools[0];
+        let v = seed_vehicle(first).await;
+        let mut ids = Vec::new();
+        for i in 0..pools.len() * 2 {
+            ids.push(
+                create(first, v, minimal_part(&format!("Part {i}"), None))
+                    .await
+                    .unwrap()
+                    .id,
+            );
+        }
+        let results = crate::test_support::race(&pools, |i, db| {
+            let id = ids[i];
+            async move {
+                if i % 2 == 0 {
+                    create(&db, v, minimal_part("New part", None))
+                        .await
+                        .map(|_| ())
+                } else {
+                    delete(&db, v, id).await
+                }
+            }
+        })
+        .await;
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
     }
 }

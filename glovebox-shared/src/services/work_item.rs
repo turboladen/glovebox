@@ -456,9 +456,16 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     Ok(out)
 }
 
-pub async fn delete(db: &impl ConnectionTrait, vehicle_id: i32, id: i32) -> DomainResult<()> {
+pub async fn delete<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    id: i32,
+) -> DomainResult<()> {
+    let txn = super::begin_write(db).await?;
+    let db = &txn;
     let existing = get(db, vehicle_id, id).await?;
     existing.delete(db).await?;
+    txn.commit().await?;
     Ok(())
 }
 
@@ -1186,5 +1193,27 @@ mod tests {
         .unwrap();
         assert_eq!(reopened.work_item.status, JobStatus::Planned);
         assert_eq!(reopened.work_item.completed_service_id, None);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn racing_deletes_all_succeed() {
+        let (_dir, pools) = crate::test_support::race_pools().await;
+        let first = &pools[0];
+        let v = seed_vehicle(first).await;
+        let mut ids = Vec::new();
+        for i in 0..pools.len() * 2 {
+            ids.push(
+                create(first, v, item(&format!("Job {i}")))
+                    .await
+                    .unwrap()
+                    .id,
+            );
+        }
+        let results = crate::test_support::race(&pools, |i, db| {
+            let id = ids[i];
+            async move { delete(&db, v, id).await }
+        })
+        .await;
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
     }
 }

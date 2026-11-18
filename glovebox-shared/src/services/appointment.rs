@@ -119,12 +119,14 @@ pub fn status(a: &appointment::Model, job_statuses: &[JobStatus]) -> Appointment
 /// # Errors
 /// `NotFound` for a vehicle or shop that does not exist; `Invalid` for a
 /// blank purpose.
-pub async fn create(
-    db: &impl ConnectionTrait,
+pub async fn create<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
     vehicle_id: i32,
     input: NewAppointment,
 ) -> DomainResult<appointment::Model> {
     super::validate_not_blank("purpose", &input.purpose)?;
+    let txn = super::begin_write(db).await?;
+    let db = &txn;
     super::vehicle::require(db, vehicle_id).await?;
     validate_shop(db, input.shop_id).await?;
     let model = appointment::ActiveModel {
@@ -136,7 +138,9 @@ pub async fn create(
         notes: Set(input.notes),
         ..Default::default()
     };
-    Ok(model.insert(db).await?)
+    let out = model.insert(db).await?;
+    txn.commit().await?;
+    Ok(out)
 }
 
 /// Changes an appointment's purpose, shop, date or notes.
@@ -144,7 +148,7 @@ pub async fn create(
 /// # Errors
 /// `NotFound` for an appointment that is not the vehicle's or a missing shop;
 /// `Invalid` as for [`create`].
-pub async fn update(
+pub(crate) async fn update(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     id: i32,
@@ -180,7 +184,9 @@ pub async fn update(
 /// unapplied.
 ///
 /// # Errors
-/// As for [`update`], and as for [`close`] or [`reopen`] for the status change.
+/// `NotFound` for an appointment that is not the vehicle's or a missing shop;
+/// `Invalid` as for [`create`]; and as for [`close`] or [`reopen`] for the
+/// status change.
 pub async fn update_with_status<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -666,17 +672,21 @@ async fn reopen_closed_among(
 ///
 /// # Errors
 /// `NotFound` for an appointment that is not the vehicle's.
-pub async fn reopen(
-    db: &impl ConnectionTrait,
+pub async fn reopen<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
     vehicle_id: i32,
     id: i32,
 ) -> DomainResult<appointment::Model> {
+    let txn = super::begin_write(db).await?;
+    let db = &txn;
     let existing = require(db, vehicle_id, id).await?;
     let mut active: appointment::ActiveModel = existing.into();
     active.cancelled_on = Set(None);
     active.closed_on = Set(None);
     active.updated_at = Set(super::now());
-    Ok(active.update(db).await?)
+    let out = active.update(db).await?;
+    txn.commit().await?;
+    Ok(out)
 }
 
 /// Deletes an appointment. Its jobs, to-dos and services stay and lose the
@@ -684,8 +694,15 @@ pub async fn reopen(
 ///
 /// # Errors
 /// `NotFound` for an appointment that is not the vehicle's.
-pub async fn delete(db: &impl ConnectionTrait, vehicle_id: i32, id: i32) -> DomainResult<()> {
+pub async fn delete<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    id: i32,
+) -> DomainResult<()> {
+    let txn = super::begin_write(db).await?;
+    let db = &txn;
     require(db, vehicle_id, id).await?.delete(db).await?;
+    txn.commit().await?;
     Ok(())
 }
 
@@ -1502,5 +1519,33 @@ mod tests {
         // The close read the job the open write committed, so it refuses.
         let err = closing.await.unwrap().unwrap_err();
         assert!(err.to_string().contains(&format!("job {job} ")), "{err}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn racing_creates_reopens_and_deletes_all_succeed() {
+        let (_dir, pools) = crate::test_support::race_pools().await;
+        let first = &pools[0];
+        let v = VehicleFixture::new().insert_id(first).await;
+        let mut ids = Vec::new();
+        for i in 0..pools.len() * 2 {
+            ids.push(
+                create(first, v, appt(&format!("Visit {i}")))
+                    .await
+                    .unwrap()
+                    .id,
+            );
+        }
+        let results = crate::test_support::race(&pools, |i, db| {
+            let id = ids[i];
+            async move {
+                match i % 3 {
+                    0 => create(&db, v, appt("New visit")).await.map(|_| ()),
+                    1 => reopen(&db, v, id).await.map(|_| ()),
+                    _ => delete(&db, v, id).await,
+                }
+            }
+        })
+        .await;
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
     }
 }
