@@ -35,11 +35,15 @@ impl MigrationTrait for Migration {
             )
             .await?;
         manager
-            .create_index(index(
-                "idx_part_contents_part",
-                "part_contents",
-                &["part_id"],
-            ))
+            .create_index(
+                index(
+                    "idx_part_contents_part_position",
+                    "part_contents",
+                    &["part_id", "position"],
+                )
+                .unique()
+                .to_owned(),
+            )
             .await
     }
 

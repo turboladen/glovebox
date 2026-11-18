@@ -338,31 +338,33 @@ async fn brakes(db: &(impl ConnectionTrait + TransactionTrait), at: &Visit) -> D
     .await?;
     // The kit's number is the seller's, so the work sheet lists what is in
     // the box with the numbers printed on each item.
-    if let Some(kit) = need::require(db, v, front_rotors).await?.part_id {
-        services::part::update(
-            db,
-            v,
-            kit,
-            UpdatePart {
-                contents: Some(vec![
-                    NewPartContent {
-                        name: "Front rotor".into(),
-                        manufacturer: Some("Zimmermann".into()),
-                        part_number: Some("100.3367.20".into()),
-                        quantity: Some(2),
-                    },
-                    NewPartContent {
-                        name: "Rotor retaining screw".into(),
-                        manufacturer: Some("Volkswagen".into()),
-                        part_number: Some("N 911 568 01".into()),
-                        quantity: Some(2),
-                    },
-                ]),
-                ..Default::default()
-            },
-        )
-        .await?;
-    }
+    let kit = need::require(db, v, front_rotors)
+        .await?
+        .part_id
+        .ok_or_else(|| DomainError::Internal("the front rotors have no part".into()))?;
+    services::part::update(
+        db,
+        v,
+        kit,
+        UpdatePart {
+            contents: Some(vec![
+                NewPartContent {
+                    name: "Front rotor".into(),
+                    manufacturer: Some("Zimmermann".into()),
+                    part_number: Some("100.3367.20".into()),
+                    quantity: Some(2),
+                },
+                NewPartContent {
+                    name: "Rotor retaining screw".into(),
+                    manufacturer: Some("Volkswagen".into()),
+                    part_number: Some("N 911 568 01".into()),
+                    quantity: Some(2),
+                },
+            ]),
+            ..Default::default()
+        },
+    )
+    .await?;
 
     need::add(
         db,

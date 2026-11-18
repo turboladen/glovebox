@@ -276,7 +276,9 @@ pub struct AddNeedOptionInput {
     pub vehicle_id: i32,
     /// Need id, from `get_checklist` or `add_need`.
     pub need_id: i32,
-    /// What the option is, e.g. "310 mm slotted rotor".
+    /// What the option is, e.g. "310 mm slotted rotor". Ordering it names the
+    /// bought part after this, and the work sheet prints that name beside the
+    /// need's quantity, so leave out counts such as "set of 4".
     pub description: String,
     /// Brand. Always fill it when known: the owner reads an option by
     /// manufacturer and part number.

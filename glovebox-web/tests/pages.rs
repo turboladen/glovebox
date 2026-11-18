@@ -797,7 +797,8 @@ async fn print_sheet_boxes_each_owner_part_and_lists_a_kits_contents() {
         "{body}"
     );
     assert!(body.contains("Anti-squeal paste"), "{body}");
-    // Two job boxes, one for the rotors and one for each item in their kit.
+    // The sheet has a box for each of the two jobs, one for the rotors and one
+    // for each of the two items in their kit, which makes five.
     assert_eq!(body.matches(r#"class="ws-box""#).count(), 5, "{body}");
 }
 

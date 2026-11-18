@@ -218,7 +218,6 @@ pub async fn record<C: ConnectionTrait + TransactionTrait>(
     vehicle_id: i32,
     input: NewPart,
 ) -> DomainResult<PartView> {
-    validate_contents(&input.contents)?;
     let txn = super::begin_write(db).await?;
     let (part, contents) = insert_part(&txn, vehicle_id, input).await?;
     txn.commit().await?;
@@ -232,7 +231,6 @@ pub async fn correct<C: ConnectionTrait + TransactionTrait>(
     id: i32,
     input: UpdatePart,
 ) -> DomainResult<PartView> {
-    validate_update_contents(&input)?;
     let txn = super::begin_write(db).await?;
     let (part, written) = apply_update(&txn, vehicle_id, id, input).await?;
     let contents = match written {
@@ -264,10 +262,6 @@ fn validate_contents(contents: &[NewPartContent]) -> DomainResult<()> {
         }
     }
     Ok(())
-}
-
-fn validate_update_contents(input: &UpdatePart) -> DomainResult<()> {
-    input.contents.as_deref().map_or(Ok(()), validate_contents)
 }
 
 // Kits hold a handful of items, so the rows go in one at a time, which lets
@@ -326,11 +320,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     vehicle_id: i32,
     input: NewPart,
 ) -> DomainResult<part::Model> {
-    validate_contents(&input.contents)?;
-    let txn = super::begin_write(db).await?;
-    let (part, _) = insert_part(&txn, vehicle_id, input).await?;
-    txn.commit().await?;
-    Ok(part)
+    Ok(record(db, vehicle_id, input).await?.part)
 }
 
 async fn insert_part(
@@ -338,6 +328,7 @@ async fn insert_part(
     vehicle_id: i32,
     input: NewPart,
 ) -> DomainResult<(part::Model, Vec<part_content::Model>)> {
+    validate_contents(&input.contents)?;
     super::vehicle::require(db, vehicle_id).await?;
     let supplied_by = input.supplied_by.unwrap_or(Supplier::Owner);
     if let Some(status) = input.status {
@@ -415,11 +406,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     id: i32,
     input: UpdatePart,
 ) -> DomainResult<part::Model> {
-    validate_update_contents(&input)?;
-    let txn = super::begin_write(db).await?;
-    let (part, _) = apply_update(&txn, vehicle_id, id, input).await?;
-    txn.commit().await?;
-    Ok(part)
+    Ok(correct(db, vehicle_id, id, input).await?.part)
 }
 
 // Writes the correction and returns the part with the contents it wrote, or
@@ -430,6 +417,9 @@ async fn apply_update(
     id: i32,
     input: UpdatePart,
 ) -> DomainResult<(part::Model, Option<Vec<part_content::Model>>)> {
+    if let Some(contents) = &input.contents {
+        validate_contents(contents)?;
+    }
     let existing = get(db, vehicle_id, id).await?;
 
     if let Some(Some(service_id)) = input.installed_service_id {
