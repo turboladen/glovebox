@@ -77,6 +77,8 @@ pub enum Relation {
         to = "super::service_record::Column::Id"
     )]
     ServiceRecord,
+    #[sea_orm(has_many = "super::part_content::Entity")]
+    Contents,
 }
 
 impl Related<super::vehicle::Entity> for Entity {
@@ -88,6 +90,12 @@ impl Related<super::vehicle::Entity> for Entity {
 impl Related<super::service_record::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::ServiceRecord.def()
+    }
+}
+
+impl Related<super::part_content::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Contents.def()
     }
 }
 

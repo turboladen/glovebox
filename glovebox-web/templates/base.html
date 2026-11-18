@@ -300,6 +300,11 @@
   .ws-job h2 { font-size: var(--s-data); margin-left: 1.5rem; }
   .ws-job ul { margin-left: 2.5rem; list-style: disc; }
   .ws-job .pn { margin-left: 1rem; }
+  /* The owner ticks each part, and each item in a kit, while gathering them. */
+  .ws-job ul.ws-get, .ws-get ul { list-style: none; }
+  .ws-job ul.ws-get { margin-left: 1.5rem; }
+  .ws-get li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.15rem 0.6rem; align-items: baseline; }
+  .ws-job .ws-get ul { grid-column: 2; margin-left: 0; display: grid; gap: 0.15rem; }
   .ws-warn { background: var(--panel); border: 1px solid var(--rule); padding: 0.75rem 1rem; display: grid; gap: 0.5rem; }
   .ws-warn li { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; align-items: baseline; }
   @media print {

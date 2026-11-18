@@ -9,6 +9,7 @@ use serde::Serialize;
 use crate::{
     entities::{
         part::{self, Supplier},
+        part_content,
         work_item::JobStatus,
     },
     error::{DomainError, DomainResult},
@@ -47,11 +48,36 @@ pub struct SheetJob {
 #[derive(Debug, Serialize)]
 pub struct SheetLine {
     pub need_id: i32,
+    /// The bought part on an owner line. A shop line never carries one.
+    pub part_id: Option<i32>,
+    /// The bought part's name on an owner line, and the need's on a shop line.
     pub name: String,
     pub quantity: i32,
     /// The manufacturer and part number together, such as `Mann HU 7020 z`,
     /// as [`part_svc::label`] writes them. A shop line never carries one.
     pub label: Option<String>,
+    /// The items inside an owner's kit, in print order. A shop line never
+    /// carries any.
+    pub contents: Vec<SheetContent>,
+}
+
+/// One item inside a kit the owner brings.
+#[derive(Debug, Serialize)]
+pub struct SheetContent {
+    pub name: String,
+    pub quantity: i32,
+    /// The item's manufacturer and number, as [`part_svc::label`] writes them.
+    pub label: Option<String>,
+}
+
+impl From<part_content::Model> for SheetContent {
+    fn from(item: part_content::Model) -> Self {
+        SheetContent {
+            label: part_svc::label(item.manufacturer.as_deref(), item.part_number.as_deref()),
+            name: item.name,
+            quantity: item.quantity,
+        }
+    }
 }
 
 /// A need that is not settled enough to print.
@@ -98,15 +124,19 @@ pub async fn for_appointment(
         for need in &view.needs {
             match placement(need) {
                 Placement::Off => {}
-                // The label comes from the part's own record, so the sheet
-                // never prints a researched option's number beside a part
-                // that may not be that option.
+                // The name and label come from the part's own record, so the
+                // sheet never prints a researched option's number beside a
+                // part that may not be that option.
                 Placement::Owner(part) => job.owner_supplies.push(SheetLine {
+                    need_id: need.need.id,
+                    part_id: Some(part.id),
+                    name: part.name.clone(),
+                    quantity: need.need.quantity,
                     label: part_svc::label(
                         part.manufacturer.as_deref(),
                         part.part_number.as_deref(),
                     ),
-                    ..line(need)
+                    contents: Vec::new(),
                 }),
                 Placement::Shop => job.shop_supplies.push(line(need)),
                 Placement::Unsettled => unsettled.push(Unsettled {
@@ -121,6 +151,7 @@ pub async fn for_appointment(
         }
         jobs.push(job);
     }
+    attach_contents(db, &mut jobs).await?;
     Ok(WorkSheet {
         appointment_id,
         vehicle: car.name,
@@ -152,12 +183,29 @@ fn placement(view: &NeedView) -> Placement<'_> {
     }
 }
 
+// Fills each owner line's kit contents with one query.
+async fn attach_contents(db: &impl ConnectionTrait, jobs: &mut [SheetJob]) -> DomainResult<()> {
+    let part_ids = jobs
+        .iter()
+        .flat_map(|job| &job.owner_supplies)
+        .filter_map(|line| line.part_id);
+    let mut contents = part_svc::contents_by_part(db, part_ids).await?;
+    for line in jobs.iter_mut().flat_map(|job| &mut job.owner_supplies) {
+        if let Some(items) = line.part_id.and_then(|id| contents.remove(&id)) {
+            line.contents = items.into_iter().map(SheetContent::from).collect();
+        }
+    }
+    Ok(())
+}
+
 fn line(view: &NeedView) -> SheetLine {
     SheetLine {
         need_id: view.need.id,
+        part_id: None,
         name: view.need.name.clone(),
         quantity: view.need.quantity,
         label: None,
+        contents: Vec::new(),
     }
 }
 
@@ -174,7 +222,7 @@ mod tests {
         inputs::{
             appointment::NewAppointment,
             need::{NewNeed, NewOption, OrderDetails, UpdateNeed},
-            part::NewPart,
+            part::{NewPart, NewPartContent},
         },
         services::{appointment, checklist, need, need::Stage, part as part_svc},
         test_support::{VehicleFixture, add_job, assert_empty, date, set_job_status, test_db},
@@ -303,6 +351,113 @@ mod tests {
         assert_empty(&job.shop_supplies);
     }
 
+    fn kit_item(name: &str, number: Option<&str>, quantity: Option<i32>) -> NewPartContent {
+        NewPartContent {
+            name: name.into(),
+            manufacturer: number.map(|_| "Mann".into()),
+            part_number: number.map(Into::into),
+            quantity,
+        }
+    }
+
+    #[tokio::test]
+    async fn owner_line_prints_the_bought_parts_name() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let a = appointment_on(&db, v).await;
+        let job = add_job(&db, v, "Plugs", Some(a)).await;
+        let n = new_need(&db, v, job, "Spark plugs", 4).await;
+        link_part(
+            &db,
+            v,
+            n,
+            NewPart {
+                name: "Beru spark plugs".into(),
+                supplied_by: Some(Supplier::Owner),
+                ..Default::default()
+            },
+            Some("2026-11-10"),
+        )
+        .await;
+
+        let sheet = for_appointment(&db, v, a).await.unwrap();
+
+        let line = &only_job(&sheet).owner_supplies[0];
+        assert_eq!(line.name, "Beru spark plugs");
+        assert_eq!(line.quantity, 4);
+    }
+
+    #[tokio::test]
+    async fn a_kit_lists_its_contents_in_order_with_their_numbers() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let a = appointment_on(&db, v).await;
+        let job = add_job(&db, v, "Oil change", Some(a)).await;
+        let n = new_need(&db, v, job, "Oil change kit", 1).await;
+        link_part(
+            &db,
+            v,
+            n,
+            NewPart {
+                name: "Oil change kit".into(),
+                part_number: Some("KIT-1".into()),
+                supplied_by: Some(Supplier::Owner),
+                contents: vec![
+                    kit_item("Oil filter", Some("HU 7020 z"), None),
+                    kit_item("Engine oil, 1 L", None, Some(6)),
+                    kit_item("Drain plug", Some("N 908 132 02"), None),
+                ],
+                ..Default::default()
+            },
+            Some("2026-11-10"),
+        )
+        .await;
+
+        let sheet = for_appointment(&db, v, a).await.unwrap();
+
+        let line = &only_job(&sheet).owner_supplies[0];
+        assert_eq!(line.label.as_deref(), Some("KIT-1"));
+        let printed: Vec<(&str, i32, Option<&str>)> = line
+            .contents
+            .iter()
+            .map(|c| (c.name.as_str(), c.quantity, c.label.as_deref()))
+            .collect();
+        assert_eq!(
+            printed,
+            vec![
+                ("Oil filter", 1, Some("Mann HU 7020 z")),
+                ("Engine oil, 1 L", 6, None),
+                ("Drain plug", 1, Some("Mann N 908 132 02")),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_shop_line_lists_no_contents() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let a = appointment_on(&db, v).await;
+        let job = add_job(&db, v, "Haldex service", Some(a)).await;
+        let n = new_need(&db, v, job, "Haldex kit", 1).await;
+        link_part(
+            &db,
+            v,
+            n,
+            NewPart {
+                name: "Haldex kit".into(),
+                supplied_by: Some(Supplier::Shop),
+                contents: vec![kit_item("Haldex filter", Some("1"), None)],
+                ..Default::default()
+            },
+            None,
+        )
+        .await;
+
+        let sheet = for_appointment(&db, v, a).await.unwrap();
+
+        assert_empty(&only_job(&sheet).shop_supplies[0].contents);
+    }
+
     #[tokio::test]
     async fn ordered_part_prints_as_the_owners() {
         let db = test_db().await;
@@ -325,7 +480,7 @@ mod tests {
         let sheet = for_appointment(&db, v, a).await.unwrap();
 
         let job = only_job(&sheet);
-        assert_eq!(job.owner_supplies[0].name, "Rotors");
+        assert_eq!(job.owner_supplies[0].name, "Rotors option");
         assert_eq!(
             job.owner_supplies[0].label.as_deref(),
             Some("Zimmermann 100.3380")
@@ -379,7 +534,7 @@ mod tests {
         let sheet = for_appointment(&db, v, a).await.unwrap();
 
         let line = &only_job(&sheet).owner_supplies[0];
-        assert_eq!(line.name, "Oil filter");
+        assert_eq!(line.name, "Oil filter option");
         assert_eq!(line.label, None);
     }
 

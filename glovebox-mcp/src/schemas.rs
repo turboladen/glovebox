@@ -18,7 +18,7 @@ use glovebox_shared::{
     inputs::{
         incident::NewIncident,
         mileage::NewMileageEntry,
-        part::NewPart,
+        part::{NewPart, NewPartContent},
         service_record::{NewLineItem, NewServiceRecord},
         vehicle::VehicleSale,
         work_item::NewWorkItem,
@@ -426,7 +426,8 @@ impl InlinePartInput {
 pub struct RecordPartInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
-    /// Part name, e.g. "Sachs SRE clutch kit".
+    /// Part name, e.g. "Sachs SRE clutch kit". Leave the count out of it,
+    /// such as "x4": the work sheet prints the need's quantity beside the name.
     pub name: String,
     /// Manufacturer/brand, e.g. "Sachs".
     pub manufacturer: Option<String>,
@@ -462,6 +463,36 @@ pub struct RecordPartInput {
     pub warranty_expires_miles: Option<i32>,
     /// The seller's order or confirmation number.
     pub order_ref: Option<String>,
+    /// For a kit: each item inside it, with the number printed on that item's
+    /// own packaging, in the order the work sheet should list them. Omit for a
+    /// part that is not a kit.
+    pub contents: Option<Vec<PartContentInput>>,
+}
+
+/// One item inside a kit, such as the filter in an oil change kit.
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PartContentInput {
+    /// What the item is, e.g. "Oil filter".
+    pub name: String,
+    /// Manufacturer/brand, e.g. "Mann".
+    pub manufacturer: Option<String>,
+    /// The number printed on the item's own box or label, e.g. "HU 7020 z".
+    pub part_number: Option<String>,
+    /// How many of it one kit holds, whatever the need's quantity. Defaults
+    /// to 1.
+    pub quantity: Option<i32>,
+}
+
+impl From<PartContentInput> for NewPartContent {
+    fn from(item: PartContentInput) -> Self {
+        NewPartContent {
+            name: item.name,
+            manufacturer: item.manufacturer,
+            part_number: item.part_number,
+            quantity: item.quantity,
+        }
+    }
 }
 
 impl RecordPartInput {
@@ -493,6 +524,12 @@ impl RecordPartInput {
                 supplied_by: self.supplied_by,
                 order_ref: self.order_ref,
                 need_id: None,
+                contents: self
+                    .contents
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
             },
         ))
     }

@@ -36,6 +36,7 @@ pub mod mileage_log;
 pub mod model_template;
 pub mod need_option;
 pub mod part;
+pub mod part_content;
 pub mod platform;
 pub mod research_finding;
 pub mod research_report;

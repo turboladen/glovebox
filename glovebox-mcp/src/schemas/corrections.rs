@@ -25,7 +25,7 @@ use glovebox_shared::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer};
 
-use super::LineItemInput;
+use super::{LineItemInput, PartContentInput};
 
 /// Deserializes a present key into `Some(value)`, so that `null` becomes
 /// `Some(None)` and only an absent key stays `None` (via `serde(default)`).
@@ -459,7 +459,8 @@ pub struct CorrectPartInput {
     pub vehicle_id: i32,
     /// Part id, from `list_parts`.
     pub part_id: i32,
-    /// New part name.
+    /// New part name, without a count such as "x4": the work sheet prints
+    /// the need's quantity beside it.
     pub name: Option<String>,
     /// `purchased`, `installed` or `replaced`. A return is made on the need,
     /// not here; a returned part can only be set back to `purchased`.
@@ -577,6 +578,14 @@ pub struct CorrectPartInput {
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<String>")]
     pub received_on: Option<Option<String>>,
+    /// For a kit: every item inside it, with the number printed on that
+    /// item's own packaging. The list replaces the stored contents whole, so
+    /// send every item, not only the new ones.
+    ///
+    /// Send `null` or `[]` to clear them; omit the key to leave them unchanged.
+    #[serde(default, deserialize_with = "nullable")]
+    #[schemars(with = "Option<Vec<PartContentInput>>")]
+    pub contents: Option<Option<Vec<PartContentInput>>>,
 }
 
 impl CorrectPartInput {
@@ -608,6 +617,9 @@ impl CorrectPartInput {
                 warranty_expires_miles: self.warranty_expires_miles,
                 order_ref: self.order_ref,
                 received_on: dates::parse_date_change("received_on", self.received_on)?,
+                contents: self
+                    .contents
+                    .map(|items| items.into_iter().flatten().map(Into::into).collect()),
                 ..Default::default()
             },
         ))

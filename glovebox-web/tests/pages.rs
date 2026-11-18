@@ -750,6 +750,58 @@ async fn print_sheet_lists_jobs_and_both_part_lists() {
 }
 
 #[tokio::test]
+async fn print_sheet_boxes_each_owner_part_and_lists_a_kits_contents() {
+    use glovebox_shared::{
+        inputs::part::{NewPartContent, PartFilter, UpdatePart},
+        services::part,
+    };
+    let db = db().await;
+    let (v, a, _) = sheet_fixture(&db).await;
+    let rotors = part::list(&db, v, PartFilter::default())
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|p| p.part.name == "Rotors")
+        .unwrap()
+        .part
+        .id;
+    part::update(
+        &db,
+        v,
+        rotors,
+        UpdatePart {
+            contents: Some(vec![
+                NewPartContent {
+                    name: "Rotor bolts".into(),
+                    manufacturer: Some("Febi".into()),
+                    part_number: Some("N 911 568 01".into()),
+                    quantity: Some(4),
+                },
+                NewPartContent {
+                    name: "Anti-squeal paste".into(),
+                    ..Default::default()
+                },
+            ]),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let (status, body) = page(app(db, "test"), get(&sheet_path(v, a))).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("Rotor bolts × 4"), "{body}");
+    assert!(
+        body.contains(r#"<span class="pn">Febi N 911 568 01</span>"#),
+        "{body}"
+    );
+    assert!(body.contains("Anti-squeal paste"), "{body}");
+    // Two job boxes, one for the rotors and one for each item in their kit.
+    assert_eq!(body.matches(r#"class="ws-box""#).count(), 5, "{body}");
+}
+
+#[tokio::test]
 async fn print_sheet_omits_empty_groups() {
     let db = db().await;
     let (v, a, brakes) = sheet_fixture(&db).await;
