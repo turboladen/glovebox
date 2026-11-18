@@ -105,6 +105,15 @@ pub struct ServiceRecordWithLinks {
     /// by `create` and `update`; empty (and omitted from JSON) otherwise.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unfitted_needs: Vec<UnfittedNeed>,
+    /// Ids of the hand-closed appointments that are open again because a
+    /// correction took one of their jobs off this service as work that did
+    /// not happen. Filled only by `update`; omitted from JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reopened_appointment_ids: Vec<i32>,
+    /// Ids of the jobs such a correction took off a cancelled appointment.
+    /// Filled only by `update`; omitted from JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unassigned_job_ids: Vec<i32>,
 }
 
 /// A need on a completed job whose linked part is neither installed nor
@@ -286,6 +295,8 @@ impl ServiceRecordWithLinks {
             message: None,
             possible_duplicates: Vec::new(),
             unfitted_needs: Vec::new(),
+            reopened_appointment_ids: Vec::new(),
+            unassigned_job_ids: Vec::new(),
         }
     }
 }
@@ -860,6 +871,31 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     let txn = super::begin_write(db).await?;
     let db = &txn;
     let existing = require(db, vehicle_id, id).await?;
+    // What the correction takes off the service is known before anything is
+    // written, so a refusal names the work it would change and writes nothing.
+    let recorded = if input.work_item_ids.is_some()
+        || input.part_ids.is_some()
+        || input.recall_finding_ids.is_some()
+    {
+        RecordedWork::read(db, existing.id).await?
+    } else {
+        RecordedWork::default()
+    };
+    // The ids the lists name are checked first, so a wrong one is NotFound
+    // before the owner is asked anything.
+    let mut listed_jobs = Vec::new();
+    for &job_id in input.work_item_ids.iter().flatten() {
+        listed_jobs.push(work_item::get(db, vehicle_id, job_id).await?);
+    }
+    for &part_id in input.part_ids.iter().flatten() {
+        part_svc::get(db, vehicle_id, part_id).await?;
+    }
+    if let Some(finding_ids) = &input.recall_finding_ids {
+        recall::require_recalls(db, vehicle_id, &super::dedup_ids(finding_ids)).await?;
+    }
+    let completed_before = recorded.job_ids();
+    let removal = recorded.left_out_by(db, &input, &listed_jobs).await?;
+    let choice = removal.choice(existing.id, ChoiceFor::Correction, input.completed_work)?;
 
     validate_who_and_when(
         input.service_date.unwrap_or(existing.service_date),
@@ -950,40 +986,59 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     // Keep the auto-created mileage log in step with the record.
     sync_auto_mileage_log(&txn, vehicle_id, &record).await?;
 
+    // Jobs come first, with the work that hangs off each one; the lists the
+    // call sends then apply as sent.
+    let settled = work_item::release_completed(&txn, &removal.job_ids(), choice).await?;
+    let added = match &input.work_item_ids {
+        Some(job_ids) => {
+            let added: Vec<i32> = job_ids
+                .iter()
+                .copied()
+                .filter(|id| !completed_before.contains(id))
+                .collect();
+            work_item::complete_with_service(&txn, vehicle_id, &added, record.id).await?
+        }
+        None => Vec::new(),
+    };
+    link_incidents(&txn, vehicle_id, record.id, Vec::new(), Vec::new(), &added).await?;
+    let from_added: Vec<i32> = added.iter().filter_map(|w| w.research_finding_id).collect();
+    let added_recalls = recall::recall_ids_among(&txn, &from_added).await?;
+    release_incidents(&txn, record.id, &removal.incidents, choice).await?;
+
     if let Some(item_ids) = input.schedule_item_ids {
         schedule::link_service(&txn, vehicle_id, record.id, &item_ids, LinkMode::Replace).await?;
     }
 
-    // Handle part linking on update
+    let parts_listed = input.part_ids.is_some();
+    part_svc::release_from_service(&txn, removal.parts, choice).await?;
     if let Some(new_part_ids) = input.part_ids {
-        // Unlink previously linked parts
-        let removed: Vec<part::Model> = part::Entity::find()
-            .filter(part::Column::InstalledServiceId.eq(record.id))
-            .all(&txn)
-            .await?
-            .into_iter()
-            .filter(|old_part| !new_part_ids.contains(&old_part.id))
-            .collect();
-        // Taking a part off the invoice treats its install as not having
-        // happened; only `delete` asks the owner which it was.
-        part_svc::release_from_service(&txn, removed, CompletedWork::DidNotHappen).await?;
-        // Link new parts
         for &part_id in &new_part_ids {
             part_svc::install(&txn, vehicle_id, part_id, &record, Set(record.mileage)).await?;
         }
-    } else if record.service_date != date_before || record.mileage != mileage_before {
+    }
+    if !parts_listed && (record.service_date != date_before || record.mileage != mileage_before) {
         // The parts this service installed carry its date and mileage as
         // their install date and odometer.
         part_svc::follow_service(&txn, &record).await?;
     }
 
+    // A sent list replaces every recall link; without one, only the recalls
+    // of the jobs taken off lose theirs.
+    let removed_recalls: Vec<i32> = removal.recalls.iter().map(|r| r.finding_id).collect();
+    let mut relink = added_recalls;
+    let unlink = service_recall_link::Entity::delete_many()
+        .filter(service_recall_link::Column::ServiceRecordId.eq(record.id));
     if let Some(recall_ids) = input.recall_finding_ids {
-        service_recall_link::Entity::delete_many()
-            .filter(service_recall_link::Column::ServiceRecordId.eq(record.id))
+        relink.extend(recall_ids);
+        unlink.exec(&txn).await?;
+    } else if !removed_recalls.is_empty() {
+        unlink
+            .filter(service_recall_link::Column::ResearchFindingId.is_in(removed_recalls.clone()))
             .exec(&txn)
             .await?;
-        recall::link_service(&txn, vehicle_id, &recall_ids, record.id).await?;
     }
+    recall::link_service(&txn, vehicle_id, &relink, record.id).await?;
+    recall::release_from_service(&txn, removed_recalls, choice).await?;
 
     // Handle line items: replace-all semantics when provided
     if let Some(new_line_items) = input.line_items {
@@ -996,10 +1051,150 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
 
     let mut updated = load_service_links(&txn, record).await?;
     updated.unfitted_needs = unfitted_needs(&txn, &updated.completed_work_items).await?;
+    updated.reopened_appointment_ids = settled.reopened_appointment_ids;
+    updated.unassigned_job_ids = settled.unassigned_job_ids;
 
     txn.commit().await?;
 
     Ok(updated)
+}
+
+/// The work a service records as done: the jobs it completed that still read
+/// done, the parts it installed, the incidents it resolved and the recalls it
+/// performed. Deleting the service releases all of it, and a correction
+/// releases what its replacement lists leave out.
+#[derive(Default)]
+struct RecordedWork {
+    jobs: Vec<job::Model>,
+    parts: Vec<part::Model>,
+    incidents: Vec<incident::Model>,
+    recalls: Vec<RecallRef>,
+}
+
+impl RecordedWork {
+    async fn read(db: &impl ConnectionTrait, service_id: i32) -> DomainResult<Self> {
+        // A job moved off done loses its link with the service through its
+        // foreign key, so only a job that still reads done is listed.
+        let jobs = job::Entity::find()
+            .filter(job::Column::CompletedServiceId.eq(service_id))
+            .filter(job::Column::Status.eq(JobStatus::Done))
+            .order_by_asc(job::Column::Id)
+            .all(db)
+            .await?;
+        let parts = part::Entity::find()
+            .filter(part::Column::InstalledServiceId.eq(service_id))
+            .order_by_asc(part::Column::Id)
+            .all(db)
+            .await?;
+        let recalls = recall::load_performed(db, &[service_id])
+            .await?
+            .remove(&service_id)
+            .unwrap_or_default();
+        Ok(Self {
+            jobs,
+            parts,
+            incidents: resolved_by(db, service_id).await?,
+            recalls,
+        })
+    }
+
+    /// The part of this work that `input` takes off the service: the jobs,
+    /// parts and recalls its replacement lists leave out, and with each job
+    /// taken off the work that hangs off it (the incident and the recall it
+    /// came from, and the parts fitted to its needs) unless a list the call
+    /// sends names that work or a job in `listed_jobs`, which the service
+    /// keeps or gains, came from the same incident or recall.
+    async fn left_out_by(
+        mut self,
+        db: &impl ConnectionTrait,
+        input: &UpdateServiceRecord,
+        listed_jobs: &[job::Model],
+    ) -> DomainResult<Self> {
+        if let Some(list) = &input.work_item_ids {
+            self.jobs.retain(|j| !list.contains(&j.id));
+        } else {
+            self.jobs.clear();
+        }
+        let job_ids = self.job_ids();
+        let released = |id: Option<i32>, of: fn(&job::Model) -> Option<i32>| {
+            id.filter(|id| !listed_jobs.iter().any(|j| of(j) == Some(*id)))
+        };
+        let incident_ids: Vec<i32> = self
+            .jobs
+            .iter()
+            .filter_map(|j| released(j.incident_id, |l| l.incident_id))
+            .collect();
+        let finding_ids: Vec<i32> = self
+            .jobs
+            .iter()
+            .filter_map(|j| released(j.research_finding_id, |l| l.research_finding_id))
+            .collect();
+        self.incidents.retain(|i| incident_ids.contains(&i.id));
+        match &input.recall_finding_ids {
+            Some(list) => self.recalls.retain(|r| !list.contains(&r.finding_id)),
+            None => self.recalls.retain(|r| finding_ids.contains(&r.finding_id)),
+        }
+        match &input.part_ids {
+            Some(list) => self.parts.retain(|p| !list.contains(&p.id)),
+            None if job_ids.is_empty() => self.parts.clear(),
+            None => {
+                let on_jobs: Vec<i32> = job_need::Entity::find()
+                    .filter(job_need::Column::WorkItemId.is_in(job_ids))
+                    .all(db)
+                    .await?
+                    .into_iter()
+                    .filter_map(|n| n.part_id)
+                    .collect();
+                self.parts.retain(|p| on_jobs.contains(&p.id));
+            }
+        }
+        Ok(self)
+    }
+
+    fn job_ids(&self) -> Vec<i32> {
+        self.jobs.iter().map(|j| j.id).collect()
+    }
+
+    /// The owner's answer for this work. Work that needs none (no jobs, no
+    /// fitted parts, no incidents, no recalls) takes `did_not_happen` when no
+    /// answer is given; other work is refused, naming each item, until it
+    /// has one.
+    fn choice(
+        &self,
+        service_id: i32,
+        action: ChoiceFor,
+        completed: Option<CompletedWork>,
+    ) -> DomainResult<CompletedWork> {
+        // A returned part keeps its status either way, so it needs no answer.
+        let fitted: Vec<&part::Model> = self
+            .parts
+            .iter()
+            .filter(|p| p.status != PartStatus::Returned)
+            .collect();
+        let needs_answer = !(self.jobs.is_empty()
+            && fitted.is_empty()
+            && self.incidents.is_empty()
+            && self.recalls.is_empty());
+        match completed {
+            Some(choice) => Ok(choice),
+            None if !needs_answer => Ok(CompletedWork::DidNotHappen),
+            None => Err(completed_work_needs_a_choice(
+                service_id,
+                action,
+                &self
+                    .jobs
+                    .iter()
+                    .map(|j| WorkItemRef {
+                        id: j.id,
+                        title: j.title.clone(),
+                    })
+                    .collect::<Vec<_>>(),
+                &fitted,
+                &self.incidents,
+                &self.recalls,
+            )),
+        }
+    }
 }
 
 /// Refuses an invoice number that another service on the vehicle already
@@ -1112,67 +1307,22 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     let txn = super::begin_write(db).await?;
     let existing = require(&txn, vehicle_id, id).await?;
 
-    let performed = recall::load_performed(&txn, &[existing.id])
-        .await?
-        .remove(&existing.id)
-        .unwrap_or_default();
-    // Only work that still reads done needs an answer. A job moved off done
-    // loses its link with the service through its foreign key, and a part
-    // returned since keeps its status either way.
-    let completed_jobs: Vec<WorkItemRef> = job::Entity::find()
-        .filter(job::Column::CompletedServiceId.eq(existing.id))
-        .filter(job::Column::Status.eq(JobStatus::Done))
-        .order_by_asc(job::Column::Id)
-        .all(&txn)
-        .await?
-        .into_iter()
-        .map(|j| WorkItemRef {
-            id: j.id,
-            title: j.title,
-        })
-        .collect();
-    let linked_parts = part::Entity::find()
-        .filter(part::Column::InstalledServiceId.eq(existing.id))
-        .order_by_asc(part::Column::Id)
-        .all(&txn)
-        .await?;
-    let fitted_parts: Vec<&part::Model> = linked_parts
-        .iter()
-        .filter(|p| p.status != PartStatus::Returned)
-        .collect();
-    let resolved_incidents = resolved_by(&txn, existing.id).await?;
-    let recorded_work = !(performed.is_empty()
-        && completed_jobs.is_empty()
-        && fitted_parts.is_empty()
-        && resolved_incidents.is_empty());
-    // The choice is checked before anything is written. A service that
-    // recorded no work has nothing for either answer to act on.
-    let choice = match completed {
-        Some(choice) => choice,
-        None if !recorded_work => CompletedWork::DidNotHappen,
-        None => {
-            return Err(completed_work_needs_a_choice(
-                existing.id,
-                &completed_jobs,
-                &fitted_parts,
-                &resolved_incidents,
-                &performed,
-            ));
-        }
-    };
-    let job_ids: Vec<i32> = completed_jobs.iter().map(|j| j.id).collect();
-    let settled = work_item::release_completed(&txn, &job_ids, choice).await?;
+    // The choice is checked before anything is written.
+    let work = RecordedWork::read(&txn, existing.id).await?;
+    let choice = work.choice(existing.id, ChoiceFor::Delete, completed)?;
+    let settled = work_item::release_completed(&txn, &work.job_ids(), choice).await?;
+    let finding_ids = work.recalls.iter().map(|r| r.finding_id).collect();
     if choice == CompletedWork::DidNotHappen {
-        let incident_ids: Vec<i32> = resolved_incidents.iter().map(|i| i.id).collect();
+        let incident_ids: Vec<i32> = work.incidents.iter().map(|i| i.id).collect();
         reopen_resolved_incidents(&txn, existing.id, incident_ids).await?;
     }
     let mut outcome = DeletedService {
-        kept_part_ids: linked_parts.iter().map(|p| p.id).collect(),
+        kept_part_ids: work.parts.iter().map(|p| p.id).collect(),
         reopened_appointment_ids: settled.reopened_appointment_ids,
         unassigned_job_ids: settled.unassigned_job_ids,
         ..Default::default()
     };
-    part_svc::release_from_service(&txn, linked_parts, choice).await?;
+    part_svc::release_from_service(&txn, work.parts, choice).await?;
 
     // Remove the auto-created mileage log(s) — an orphaned log would keep
     // feeding reminders' mileage estimate while staying hidden from the feed.
@@ -1206,8 +1356,7 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     // Delete the service record
     existing.delete(&txn).await?;
 
-    let finding_ids = performed.iter().map(|r| r.finding_id).collect();
-    let released = recall::release_from_deleted_service(&txn, finding_ids, choice).await?;
+    let released = recall::release_from_service(&txn, finding_ids, choice).await?;
     outcome.reopened_recall_ids = released.reopened;
     outcome.kept_done_recall_ids = released.kept_done;
     outcome.still_done_elsewhere_recall_ids = released.still_done_elsewhere;
@@ -1217,10 +1366,19 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     Ok(outcome)
 }
 
-// The refusal to delete a service that recorded work as done before the
-// caller says what happened to it, naming each item.
+/// Which change to a service needs the owner's answer about its work.
+#[derive(Clone, Copy)]
+enum ChoiceFor {
+    Delete,
+    Correction,
+}
+
+// The refusal to delete a service that recorded work as done, or to take
+// that work off it, before the caller says what happened to it, naming each
+// item.
 fn completed_work_needs_a_choice(
     service_id: i32,
+    action: ChoiceFor,
     jobs: &[WorkItemRef],
     parts: &[&part::Model],
     incidents: &[incident::Model],
@@ -1244,9 +1402,13 @@ fn completed_work_needs_a_choice(
             None => format!("recall {} \"{}\"", r.finding_id, r.title),
         }))
         .collect();
+    let (needs, nothing) = match action {
+        ChoiceFor::Delete => ("Deleting it", "Nothing was deleted."),
+        ChoiceFor::Correction => ("Taking it off the service", "Nothing was changed."),
+    };
     DomainError::BadRequest(format!(
-        "Service {service_id} recorded this work as done: {}. Deleting it needs to know whether \
-         that work did not happen or was done another way. Nothing was deleted.",
+        "Service {service_id} recorded this work as done: {}. {needs} needs to know whether that \
+         work did not happen or was done another way. {nothing}",
         items.join(", ")
     ))
 }
@@ -1275,8 +1437,33 @@ async fn resolved_by(
         .await?)
 }
 
-// Marks unresolved each of `resolved_here`, the incidents a service that is
-// about to be deleted resolved, unless another service also resolved it.
+// Takes `incidents` off the incidents service `service_id` resolved, because
+// a correction took off the jobs they came from. After `did_not_happen` each
+// is unresolved again unless another service also resolved it.
+async fn release_incidents(
+    txn: &impl ConnectionTrait,
+    service_id: i32,
+    incidents: &[incident::Model],
+    choice: CompletedWork,
+) -> DomainResult<()> {
+    if incidents.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<i32> = incidents.iter().map(|i| i.id).collect();
+    incident_service_link::Entity::delete_many()
+        .filter(incident_service_link::Column::ServiceRecordId.eq(service_id))
+        .filter(incident_service_link::Column::Role.eq(LinkRole::Resolved))
+        .filter(incident_service_link::Column::IncidentId.is_in(ids.clone()))
+        .exec(txn)
+        .await?;
+    if choice == CompletedWork::DidNotHappen {
+        reopen_resolved_incidents(txn, service_id, ids).await?;
+    }
+    Ok(())
+}
+
+// Marks unresolved each of `resolved_here`, incidents service `service_id`
+// resolved and no longer does, unless another service also resolved it.
 async fn reopen_resolved_incidents(
     txn: &impl ConnectionTrait,
     service_id: i32,
@@ -1490,6 +1677,7 @@ mod tests {
             created.record.id,
             UpdateServiceRecord {
                 part_ids: Some(vec![part_b]),
+                completed_work: Some(CompletedWork::DidNotHappen),
                 line_items: Some(vec![NewLineItem {
                     paid_by: None,
                     description: "new".into(),
@@ -3710,6 +3898,7 @@ mod tests {
                 created.record.id,
                 UpdateServiceRecord {
                     part_ids: Some(vec![fitted_part]),
+                    completed_work: Some(CompletedWork::DidNotHappen),
                     ..Default::default()
                 },
             )
@@ -3778,6 +3967,7 @@ mod tests {
                 created.record.id,
                 UpdateServiceRecord {
                     part_ids: Some(vec![]),
+                    completed_work: Some(CompletedWork::DidNotHappen),
                     ..Default::default()
                 },
             )
@@ -4015,6 +4205,7 @@ mod tests {
                 created.record.id,
                 UpdateServiceRecord {
                     part_ids: Some(Vec::new()),
+                    completed_work: Some(CompletedWork::DidNotHappen),
                     ..Default::default()
                 },
             )
@@ -4164,6 +4355,7 @@ mod tests {
                 service_id,
                 UpdateServiceRecord {
                     part_ids: Some(Vec::new()),
+                    completed_work: Some(CompletedWork::DidNotHappen),
                     ..Default::default()
                 },
             )
@@ -4462,6 +4654,425 @@ mod tests {
                 )
             );
             assert_eq!(row_count::<service_record::Entity>(&f.db).await, 0);
+        }
+    }
+
+    // `update` taking recorded work off a service: the jobs, parts and
+    // recalls its replacement lists leave out.
+    mod corrections {
+        use super::*;
+        use crate::{
+            inputs::{appointment::NewAppointment, work_item::NewWorkItem},
+            services::{appointment, work_item as job},
+        };
+
+        async fn planned(db: &DatabaseConnection, v: i32, title: &str, appt: Option<i32>) -> i32 {
+            job::create(
+                db,
+                v,
+                NewWorkItem {
+                    title: title.into(),
+                    appointment_id: appt,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .id
+        }
+
+        async fn completing(db: &DatabaseConnection, v: i32, jobs: Vec<i32>) -> i32 {
+            create(
+                db,
+                v,
+                NewServiceRecord {
+                    service_date: date("2026-11-01"),
+                    work_item_ids: Some(jobs),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .record
+            .id
+        }
+
+        fn jobs(ids: Vec<i32>, completed: Option<CompletedWork>) -> UpdateServiceRecord {
+            UpdateServiceRecord {
+                work_item_ids: Some(ids),
+                completed_work: completed,
+                ..Default::default()
+            }
+        }
+
+        #[tokio::test]
+        async fn dropping_a_completed_job_needs_an_answer_and_changes_nothing_without_one() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let j = planned(&db, v, "Flush brake fluid", None).await;
+            let svc = completing(&db, v, vec![j]).await;
+
+            let err = update(
+                &db,
+                v,
+                svc,
+                UpdateServiceRecord {
+                    notes: Some(Some("edited".into())),
+                    ..jobs(vec![], None)
+                },
+            )
+            .await
+            .unwrap_err();
+            let DomainError::BadRequest(message) = err else {
+                panic!("{err:?}");
+            };
+            assert!(
+                message.contains(&format!("job {j} \"Flush brake fluid\"")),
+                "{message}"
+            );
+            assert!(message.contains("Taking it off the service"), "{message}");
+            assert_eq!(job::get(&db, v, j).await.unwrap().status, JobStatus::Done);
+            assert_eq!(get(&db, v, svc).await.unwrap().record.notes, None);
+        }
+
+        #[tokio::test]
+        async fn did_not_happen_puts_the_job_back_and_reopens_its_closed_appointment() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let appt = appointment::create(
+                &db,
+                v,
+                NewAppointment {
+                    purpose: "Brakes".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .id;
+            let j = planned(&db, v, "Pads", Some(appt)).await;
+            let svc = completing(&db, v, vec![j]).await;
+            appointment::close(&db, v, appt).await.unwrap();
+
+            let out = update(&db, v, svc, jobs(vec![], Some(CompletedWork::DidNotHappen)))
+                .await
+                .unwrap();
+            let back = job::get(&db, v, j).await.unwrap();
+            assert_eq!(back.status, JobStatus::Planned);
+            assert_eq!(back.completed_service_id, None);
+            assert_eq!(out.reopened_appointment_ids, vec![appt]);
+            crate::test_support::assert_empty(&out.completed_work_items);
+        }
+
+        #[tokio::test]
+        async fn done_another_way_keeps_the_job_done_without_the_service() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let j = planned(&db, v, "Pads", None).await;
+            let svc = completing(&db, v, vec![j]).await;
+
+            update(
+                &db,
+                v,
+                svc,
+                jobs(vec![], Some(CompletedWork::DoneAnotherWay)),
+            )
+            .await
+            .unwrap();
+            let kept = job::get(&db, v, j).await.unwrap();
+            assert_eq!(kept.status, JobStatus::Done);
+            assert_eq!(kept.completed_service_id, None);
+        }
+
+        #[tokio::test]
+        async fn a_job_added_to_the_list_is_completed_and_a_kept_one_is_left_alone() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let first = planned(&db, v, "Pads", None).await;
+            let second = planned(&db, v, "Rotors", None).await;
+            let svc = completing(&db, v, vec![first]).await;
+
+            let out = update(&db, v, svc, jobs(vec![first, second], None))
+                .await
+                .unwrap();
+            let ids: Vec<i32> = out.completed_work_items.iter().map(|w| w.id).collect();
+            assert_eq!(ids, vec![first, second]);
+            assert_eq!(
+                job::get(&db, v, second).await.unwrap().completed_service_id,
+                Some(svc)
+            );
+
+            // A job another service completed is not planned, so it is refused.
+            let elsewhere = planned(&db, v, "Wipers", None).await;
+            completing(&db, v, vec![elsewhere]).await;
+            let err = update(&db, v, svc, jobs(vec![first, second, elsewhere], None))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
+        }
+
+        #[tokio::test]
+        async fn a_job_of_another_vehicle_reads_as_missing() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let other = VehicleFixture::new().name("Other").insert_id(&db).await;
+            let theirs = planned(&db, other, "Pads", None).await;
+            let svc = completing(&db, v, vec![]).await;
+
+            let wrong = update(&db, v, svc, jobs(vec![theirs], None))
+                .await
+                .unwrap_err();
+            let missing = update(&db, v, svc, jobs(vec![99_999], None))
+                .await
+                .unwrap_err();
+            assert_eq!(
+                wrong.to_string().replace(&theirs.to_string(), "N"),
+                missing.to_string().replace("99999", "N")
+            );
+        }
+
+        #[tokio::test]
+        async fn a_part_and_a_recall_done_another_way_keep_their_state() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let finding = seed_recall(&db, v, "24V555").await;
+            let p = part_svc::create(
+                &db,
+                v,
+                crate::inputs::part::NewPart {
+                    name: "Pads".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .id;
+            let svc = create(
+                &db,
+                v,
+                NewServiceRecord {
+                    service_date: date("2026-11-01"),
+                    part_ids: Some(vec![p]),
+                    recall_finding_ids: Some(vec![finding]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .record
+            .id;
+
+            let drop_both = || UpdateServiceRecord {
+                part_ids: Some(vec![]),
+                recall_finding_ids: Some(vec![]),
+                ..Default::default()
+            };
+            let err = update(&db, v, svc, drop_both()).await.unwrap_err();
+            assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
+
+            update(
+                &db,
+                v,
+                svc,
+                UpdateServiceRecord {
+                    completed_work: Some(CompletedWork::DoneAnotherWay),
+                    ..drop_both()
+                },
+            )
+            .await
+            .unwrap();
+            let part = part_svc::get(&db, v, p).await.unwrap();
+            assert_eq!(part.status, PartStatus::Installed);
+            assert_eq!(part.installed_service_id, None);
+            assert_eq!(
+                recall_status(&db, v).await,
+                vec![(recall::ShownRecallStatus::Done, None)]
+            );
+        }
+
+        async fn job_from(db: &DatabaseConnection, v: i32, incident: i32, finding: i32) -> i32 {
+            job::create(
+                db,
+                v,
+                NewWorkItem {
+                    title: "Replace N80 valve".into(),
+                    incident_id: Some(incident),
+                    research_finding_id: Some(finding),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .id
+        }
+
+        async fn resolved(db: &DatabaseConnection, v: i32, id: i32) -> bool {
+            incident::get(db, v, id).await.unwrap().incident.resolved
+        }
+
+        #[tokio::test]
+        async fn a_job_added_resolves_its_incident_and_performs_its_recall() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observation(&db, v, None).await;
+            let finding = seed_recall(&db, v, "24V777").await;
+            let j = job_from(&db, v, incident, finding).await;
+            let svc = completing(&db, v, vec![]).await;
+
+            let out = update(&db, v, svc, jobs(vec![j], None)).await.unwrap();
+            assert!(resolved(&db, v, incident).await);
+            let performed: Vec<i32> = out.performed_recalls.iter().map(|r| r.finding_id).collect();
+            assert_eq!(performed, vec![finding]);
+        }
+
+        #[tokio::test]
+        async fn a_job_taken_off_as_not_done_takes_its_incident_recall_and_parts_with_it() {
+            use crate::entities::job_need;
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observation(&db, v, None).await;
+            let finding = seed_recall(&db, v, "24V777").await;
+            let j = job_from(&db, v, incident, finding).await;
+            let p = part_svc::create(
+                &db,
+                v,
+                crate::inputs::part::NewPart {
+                    name: "N80 valve".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .id;
+            job_need::ActiveModel {
+                work_item_id: Set(j),
+                name: Set("Valve".into()),
+                quantity: Set(1),
+                part_id: Set(Some(p)),
+                ..Default::default()
+            }
+            .insert(&db)
+            .await
+            .unwrap();
+            let svc = create(
+                &db,
+                v,
+                NewServiceRecord {
+                    service_date: date("2026-11-01"),
+                    work_item_ids: Some(vec![j]),
+                    part_ids: Some(vec![p]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .record
+            .id;
+            assert!(resolved(&db, v, incident).await);
+
+            let err = update(&db, v, svc, jobs(vec![], None)).await.unwrap_err();
+            let DomainError::BadRequest(message) = err else {
+                panic!("{err:?}");
+            };
+            for named in [
+                format!("job {j}"),
+                format!("part {p}"),
+                format!("incident {incident}"),
+                format!("recall {finding}"),
+            ] {
+                assert!(message.contains(&named), "{named} in {message}");
+            }
+
+            let out = update(&db, v, svc, jobs(vec![], Some(CompletedWork::DidNotHappen)))
+                .await
+                .unwrap();
+            assert!(!resolved(&db, v, incident).await);
+            crate::test_support::assert_empty(&out.performed_recalls);
+            crate::test_support::assert_empty(&out.part_ids);
+            assert_eq!(
+                part_svc::get(&db, v, p).await.unwrap().status,
+                PartStatus::Purchased
+            );
+        }
+
+        #[tokio::test]
+        async fn a_sent_schedule_list_wins_over_an_added_jobs_schedule_item() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let item = crate::services::schedule::create_for_vehicle(
+                &db,
+                v,
+                crate::inputs::schedule::NewScheduleItem {
+                    name: "Brake fluid".into(),
+                    interval_months: Some(24),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .id;
+            let j = job::create(
+                &db,
+                v,
+                NewWorkItem {
+                    title: "Flush brake fluid".into(),
+                    schedule_item_id: Some(item),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .id;
+            let svc = completing(&db, v, vec![]).await;
+
+            let out = update(
+                &db,
+                v,
+                svc,
+                UpdateServiceRecord {
+                    schedule_item_ids: Some(vec![]),
+                    ..jobs(vec![j], None)
+                },
+            )
+            .await
+            .unwrap();
+            crate::test_support::assert_empty(&out.schedule_item_ids);
+        }
+
+        #[tokio::test]
+        async fn an_incident_a_kept_job_shares_stays_resolved() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observation(&db, v, None).await;
+            let finding = seed_recall(&db, v, "24V777").await;
+            let a = job_from(&db, v, incident, finding).await;
+            let b = job_from(&db, v, incident, finding).await;
+            let svc = completing(&db, v, vec![a, b]).await;
+
+            let out = update(
+                &db,
+                v,
+                svc,
+                jobs(vec![b], Some(CompletedWork::DidNotHappen)),
+            )
+            .await
+            .unwrap();
+            assert!(resolved(&db, v, incident).await);
+            let performed: Vec<i32> = out.performed_recalls.iter().map(|r| r.finding_id).collect();
+            assert_eq!(performed, vec![finding]);
+        }
+
+        #[tokio::test]
+        async fn a_wrong_id_is_not_found_before_any_answer_is_asked_for() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let j = planned(&db, v, "Pads", None).await;
+            let svc = completing(&db, v, vec![j]).await;
+
+            let err = update(&db, v, svc, jobs(vec![99_999], None))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, DomainError::NotFound(_)), "{err:?}");
         }
     }
 }

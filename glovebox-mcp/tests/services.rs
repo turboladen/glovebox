@@ -831,6 +831,63 @@ async fn correct_service_sets_changes_and_clears_the_invoice_ref() {
 }
 
 #[tokio::test]
+async fn correct_service_moves_the_jobs_a_service_completed() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let plan = |title: &'static str| {
+        let t = &t;
+        async move {
+            t.call("plan_work", json!({ "vehicle_id": v.id, "title": title }))
+                .await["id"]
+                .clone()
+        }
+    };
+    let wrong = plan("Rear wiper").await;
+    let right = plan("Front wiper").await;
+    let service = t
+        .call(
+            "record_service",
+            json!({ "vehicle_id": v.id, "service_date": "2026-11-01", "work_item_ids": [wrong] }),
+        )
+        .await;
+
+    let err = t
+        .call_err(
+            "correct_service",
+            json!({ "vehicle_id": v.id, "service_id": service["id"], "work_item_ids": [right] }),
+        )
+        .await;
+    assert!(
+        err.contains("Rear wiper") && err.contains("Nothing was changed"),
+        "got: {err}"
+    );
+
+    let fixed = t
+        .call(
+            "correct_service",
+            json!({
+                "vehicle_id": v.id, "service_id": service["id"], "work_item_ids": [right],
+                "completed_work": "did_not_happen"
+            }),
+        )
+        .await;
+    assert_eq!(
+        fixed["completed_work_items"][0]["id"], right,
+        "got: {fixed}"
+    );
+    let planned = t
+        .call("list_planned_work", json!({ "vehicle_id": v.id }))
+        .await;
+    let titles: Vec<&serde_json::Value> = planned["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|j| &j["title"])
+        .collect();
+    assert_eq!(titles, [&json!("Rear wiper")], "got: {planned}");
+}
+
+#[tokio::test]
 async fn correct_service_replaces_the_recalls_it_performed() {
     let t = connect().await;
     let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
@@ -846,7 +903,7 @@ async fn correct_service_replaces_the_recalls_it_performed() {
     let fixed = t
         .call(
             "correct_service",
-            json!({ "vehicle_id": v.id, "service_id": service["id"], "recall_finding_ids": [right] }),
+            json!({ "vehicle_id": v.id, "service_id": service["id"], "recall_finding_ids": [right], "completed_work": "did_not_happen" }),
         )
         .await;
     let performed: Vec<&serde_json::Value> = fixed["performed_recalls"]

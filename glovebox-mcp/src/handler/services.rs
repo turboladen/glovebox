@@ -135,17 +135,27 @@ impl GloveboxMcp {
         description = "Fix a service record that was filed wrong: the date, cost, shop, who did \
                        it, who paid, mileage, notes, the invoice number (`invoice_ref`; another \
                        service on the car with the same number is an error naming it), the \
-                       invoice lines, the parts it installed, the schedule items it satisfies, or \
-                       the recalls it performed, or the appointment it settles \
-                       (`appointment_id`). Send only the fields to change; null clears a field, \
-                       and a field left out is untouched. `line_items`, `schedule_item_ids`, \
-                       `part_ids` and `recall_finding_ids` REPLACE the existing lists with \
-                       exactly what is sent. A part taken off `part_ids` reads `purchased` again, \
-                       and one the shop supplied is unlinked from its need. Use this when the \
+                       invoice lines, the parts it installed, the schedule items it satisfies, \
+                       the recalls it performed, the planned jobs it completed (`work_item_ids`), \
+                       or the appointment it settles (`appointment_id`). Send only the fields to \
+                       change; null clears a field, and a field left out is untouched. \
+                       `line_items`, `schedule_item_ids`, `part_ids`, `recall_finding_ids` and \
+                       `work_item_ids` REPLACE the existing lists with exactly what is sent. A \
+                       job taken off takes its incident, its recall and the parts fitted to its \
+                       needs with it, and a job added resolves its incident and performs its \
+                       recall, as `record_service` does. When the call takes recorded work off \
+                       the service (a job, a fitted part, a recall or an incident), it refuses \
+                       and names each item until you pass `completed_work`. Ask the owner and \
+                       never choose on your own: `did_not_happen` when the work was not done \
+                       (jobs go back to planned, parts read `purchased` and a shop-supplied one \
+                       leaves its need, recalls read open, incidents are unresolved), or \
+                       `done_another_way` when it was done but not on this invoice. The reply \
+                       names any appointment that reopened (`reopened_appointment_ids`) and any \
+                       job that left a cancelled one (`unassigned_job_ids`). Use this when the \
                        invoice was already recorded and something on it is wrong; do not record \
                        the work a second time with `record_service`, which creates a duplicate. \
-                       To close an incident or a to-do, use `record_service` for new work, or \
-                       `update_incident` / `update_planned_work` for existing records."
+                       To close an incident, use `record_service` for new work or \
+                       `update_incident`."
     )]
     async fn correct_service(
         &self,

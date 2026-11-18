@@ -43,11 +43,20 @@ installed goes back to purchased and leaves its need.
 **The delete claims the service row first**, so the work named in a refusal is the work the delete
 would undo.
 
+**A correction that takes recorded work off a service asks the same question.** `correct_service`
+replaces its `work_item_ids`, `part_ids` and `recall_finding_ids` lists. When the new lists leave
+out a completed job, a fitted part or a performed recall, the call needs `completed_work`, is
+refused naming each item without it, and passes the answer to the same release functions as the
+delete. A job taken off takes the work that hangs off it: the incident and the recall it came
+from, and the parts this service fitted to its needs, unless a list the call sends names that
+work. A job added gets what `record_service` gives one: its incident resolved and its recall
+performed. A correction that removes none of that work needs no answer.
+
 ## Alternatives considered
 
 - **A choice for each kind of work** (jobs, parts, incidents, recalls). This is more precise, but
-  the owner's answer is one fact about one invoice. `correct_service` cannot yet express a mixed
-  answer, because dropping an item from it always treats that item's work as not done.
+  the owner's answer is one fact about one invoice. A mixed answer is two corrections, each
+  removing the items that share one answer.
 - **Always undo, and warn in the reply.** The owner would learn what changed only after it had
   changed. A wrong guess also costs the most here, because the undo reopens appointments and
   unlinks parts.
@@ -64,5 +73,7 @@ would undo.
 - After `done_another_way`, a job is done with no completing service, the same state as a job set
   to done by hand. A recall it came from therefore reads done.
 - Jobs, parts and recalls each have one release function that takes the answer
-  (`work_item::release_completed`, `part::release_from_service`,
-  `recall::release_from_deleted_service`), so `correct_service` can take the same choice later.
+  (`work_item::release_completed`, `part::release_from_service`, `recall::release_from_service`),
+  which `delete_service` and `correct_service` both call.
+- A correction leaves the schedule links alone, so a job taken off a service keeps the reminder
+  baseline its schedule item got, until `schedule_item_ids` is corrected too.

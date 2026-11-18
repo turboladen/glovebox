@@ -152,7 +152,7 @@ fn not_found(finding_id: i32) -> DomainError {
 /// Loads the findings behind `finding_ids` that are recalls on this vehicle.
 /// A finding that does not exist, belongs to another vehicle or is not a
 /// recall produces the same `NotFound`.
-async fn require_recalls(
+pub(crate) async fn require_recalls(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     finding_ids: &[i32],
@@ -411,11 +411,11 @@ pub(crate) struct ReleasedRecalls {
     pub still_done_elsewhere: Vec<i32>,
 }
 
-/// Applies the owner's choice to the recalls a deleted service performed, on
-/// the caller's transaction. Call it once that service's recall links are
-/// gone: a reopened recall that still reads `done` is one another service
-/// also performed.
-pub(crate) async fn release_from_deleted_service(
+/// Applies the owner's choice to recalls a service no longer performs,
+/// because it was deleted or corrected, on the caller's transaction. Call it
+/// once those recall links are gone: a reopened recall that still reads
+/// `done` is one another service also performed.
+pub(crate) async fn release_from_service(
     db: &impl ConnectionTrait,
     finding_ids: Vec<i32>,
     choice: super::service_record::CompletedWork,
