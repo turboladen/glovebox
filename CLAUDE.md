@@ -149,7 +149,8 @@ add a `println!` to this crate or to code it calls.
 named as things a person would say:
 
 - `vehicles.rs`: `list_vehicles`, `get_vehicle`, `add_vehicle`, `update_vehicle`, `delete_vehicle`,
-  `log_mileage`, `list_mileage`, `delete_mileage`, `list_model_templates`
+  `archive_vehicle`, `unarchive_vehicle`, `log_mileage`, `list_mileage`, `delete_mileage`,
+  `list_model_templates`
 - `services.rs`: `record_service`, `link_service_to_maintenance`, `list_services`,
   `correct_service`, `delete_service`
 - `parts.rs`: `record_part`, `list_parts`, `correct_part`, `delete_part`

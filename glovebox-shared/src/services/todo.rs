@@ -56,8 +56,8 @@ pub async fn add<C: ConnectionTrait + TransactionTrait>(
     input: NewTodo,
 ) -> DomainResult<todo::Model> {
     super::validate_not_blank("title", &input.title)?;
-    super::vehicle::require(db, vehicle_id).await?;
     let txn = super::begin_write(db).await?;
+    super::vehicle::require_in_garage(&txn, vehicle_id).await?;
     if let Some(appointment_id) = input.appointment_id {
         super::appointment::require_assignable(&txn, vehicle_id, appointment_id).await?;
     }

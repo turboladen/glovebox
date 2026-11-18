@@ -714,11 +714,7 @@ pub async fn home(
 ) -> DomainResult<Vec<VehicleHome>> {
     // Every vehicle's rows come from the same batched queries, through the
     // functions the per-vehicle lists use, so the page and the tools agree.
-    let vehicles: Vec<vehicle::Model> = super::vehicle::list(db)
-        .await?
-        .into_iter()
-        .filter(|v| v.archived_at.is_none())
-        .collect();
+    let vehicles = super::vehicle::list(db, false).await?;
     let ids: Vec<i32> = vehicles.iter().map(|v| v.id).collect();
     let mut appointments = appointment::open_by_vehicle(db, &ids).await?;
     let mut todos: HashMap<i32, Vec<todo::Model>> = HashMap::new();
@@ -1790,7 +1786,9 @@ mod tests {
         let golf = VehicleFixture::new().name("Golf").insert_id(&db).await;
         let alltrack = VehicleFixture::new().name("Alltrack").insert_id(&db).await;
         let old = VehicleFixture::new().name("Old").insert_id(&db).await;
-        crate::services::vehicle::archive(&db, old).await.unwrap();
+        crate::services::vehicle::archive(&db, old, crate::inputs::vehicle::VehicleSale::default())
+            .await
+            .unwrap();
 
         let booked = appointment::create(
             &db,

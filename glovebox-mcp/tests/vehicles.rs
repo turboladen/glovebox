@@ -538,3 +538,73 @@ fn listed_values(schema: &serde_json::Value) -> Option<serde_json::Value> {
             .find_map(listed_values)
     })
 }
+
+#[tokio::test]
+async fn a_sold_car_leaves_the_garage_list_and_keeps_its_records() {
+    let t = connect().await;
+    let sold = t.call("add_vehicle", json!({ "name": "Old GTI" })).await["id"].clone();
+    t.call("add_vehicle", json!({ "name": "Alltrack" })).await;
+    t.call(
+        "log_mileage",
+        json!({ "vehicle_id": sold, "mileage": 97_500 }),
+    )
+    .await;
+
+    let archived = t
+        .call(
+            "archive_vehicle",
+            json!({
+                "vehicle_id": sold, "sold_date": "2026-11-10",
+                "sold_price_cents": 1_850_000, "sold_mileage": 98_000
+            }),
+        )
+        .await;
+    assert_eq!(archived["sold_date"], "2026-11-10", "got: {archived}");
+    assert_eq!(archived["sold_price_cents"], 1_850_000);
+
+    let names = |list: &serde_json::Value| -> Vec<String> {
+        list.as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["name"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let garage = t.call("list_vehicles", json!({})).await;
+    assert_eq!(names(&garage), ["Alltrack"]);
+    let everything = t
+        .call("list_vehicles", json!({ "include_archived": true }))
+        .await;
+    assert_eq!(names(&everything), ["Old GTI", "Alltrack"]);
+    assert_eq!(everything[0]["archived"], true);
+
+    let readings = t.call("list_mileage", json!({ "vehicle_id": sold })).await;
+    assert_eq!(
+        readings.as_array().map(Vec::len),
+        Some(1),
+        "got: {readings}"
+    );
+
+    t.call("unarchive_vehicle", json!({ "vehicle_id": sold }))
+        .await;
+    let garage = t.call("list_vehicles", json!({})).await;
+    assert_eq!(names(&garage), ["Old GTI", "Alltrack"]);
+
+    let err = t
+        .call_err(
+            "archive_vehicle",
+            json!({ "vehicle_id": sold, "sold_price_cents": -5 }),
+        )
+        .await;
+    assert!(err.contains("sold_price_cents"), "got: {err}");
+
+    // Open work keeps the car in the garage, and an archived car takes none.
+    t.call(
+        "plan_work",
+        json!({ "vehicle_id": sold, "title": "Wipers" }),
+    )
+    .await;
+    let err = t
+        .call_err("archive_vehicle", json!({ "vehicle_id": sold }))
+        .await;
+    assert!(err.contains("1 planned job"), "got: {err}");
+}

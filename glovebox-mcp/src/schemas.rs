@@ -20,6 +20,7 @@ use glovebox_shared::{
         mileage::NewMileageEntry,
         part::NewPart,
         service_record::{NewLineItem, NewServiceRecord},
+        vehicle::VehicleSale,
         work_item::NewWorkItem,
     },
     services::{recall::RecallStatus, research::NewFiledFinding},
@@ -42,6 +43,40 @@ pub use checklist::*;
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EmptyParams {}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListVehiclesInput {
+    /// `true` also lists the archived (sold) cars. Omit to list only the garage.
+    #[serde(default)]
+    pub include_archived: bool,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ArchiveVehicleInput {
+    /// Vehicle id, from `list_vehicles`.
+    pub vehicle_id: i32,
+    /// The day the car was sold, `YYYY-MM-DD`. Omit to keep the stored one.
+    pub sold_date: Option<String>,
+    /// The sale price in cents. Omit to keep the stored one.
+    pub sold_price_cents: Option<i32>,
+    /// The odometer reading at the sale. Omit to keep the stored one.
+    pub sold_mileage: Option<i32>,
+}
+
+impl ArchiveVehicleInput {
+    pub fn into_domain(self) -> DomainResult<(i32, VehicleSale)> {
+        Ok((
+            self.vehicle_id,
+            VehicleSale {
+                sold_date: dates::parse_optional_date("sold_date", self.sold_date)?,
+                sold_price_cents: self.sold_price_cents,
+                sold_mileage: self.sold_mileage,
+            },
+        ))
+    }
+}
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -614,7 +649,7 @@ pub struct SearchRecordsInput {
     pub query: String,
     /// Restrict to one record kind. Default `all`.
     pub scope: Option<glovebox_shared::services::search::SearchScope>,
-    /// Restrict to one vehicle (from `list_vehicles`). Omit to search the garage.
+    /// Restrict to one vehicle (from `list_vehicles`). Omit to search every vehicle, archived (sold) ones included.
     pub vehicle_id: Option<i32>,
 }
 

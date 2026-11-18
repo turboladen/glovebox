@@ -239,6 +239,9 @@ second service to patch the first.
 - A mistyped odometer reading is found with `list_mileage` and removed with `delete_mileage`. A
   reading that came from a service is fixed with `correct_service` instead.
 - `delete_vehicle` removes a car added by mistake. It refuses once the car has any history.
+- When the owner sells a car, use `archive_vehicle` with the sale date, price and mileage they
+  give. Its records stay and can still be read by its id, but `list_vehicles` leaves it out unless
+  `include_archived` is true, so do not plan work for it. `unarchive_vehicle` undoes a mistake.
 - `set_recall_status` marks a recall `done` when the work left no paperwork, `not_applicable` when
   it does not apply to this car, or `open` to undo either.
 - When planned work was done and there is an invoice, file it with `record_service` and name the
