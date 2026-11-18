@@ -768,6 +768,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     if let Some(appointment_id) = input.appointment_id {
         appointment::require_assignable(db, vehicle_id, appointment_id).await?;
     }
+    super::shop::require_if_named(db, input.shop_id).await?;
 
     // Resolved before the record is written so a bad schedule id is reported
     // ahead of any error the insert itself could raise.
@@ -925,6 +926,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     {
         appointment::require_assignable(db, vehicle_id, appointment_id).await?;
     }
+    super::shop::require_if_named(db, input.shop_id.flatten()).await?;
 
     let (date_before, mileage_before) = (existing.service_date, existing.mileage);
     let mut active: service_record::ActiveModel = existing.into();
@@ -2027,6 +2029,38 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn a_shop_id_that_names_no_shop_is_not_found() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let err = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                shop_id: Some(9999),
+                ..minimal_record(None)
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.to_string(), "Shop 9999 not found");
+        crate::test_support::assert_empty(&list_between(&db, vid, None, None).await.unwrap());
+
+        let made = create(&db, vid, minimal_record(None)).await.unwrap();
+        let err = update(
+            &db,
+            vid,
+            made.record.id,
+            UpdateServiceRecord {
+                shop_id: Some(Some(9999)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.to_string(), "Shop 9999 not found");
+    }
+
     fn minimal_record(schedule_item_ids: Option<Vec<i32>>) -> NewServiceRecord {
         NewServiceRecord {
             service_date: date("2024-03-01"),
@@ -3124,7 +3158,7 @@ mod tests {
             wrong.to_string().replace(&foreign_service.to_string(), "N"),
             missing.to_string().replace("9999", "N")
         );
-        assert!(incident::list(&db, v1).await.unwrap().is_empty());
+        crate::test_support::assert_empty(&incident::list_filtered(&db, v1, None).await.unwrap());
 
         // Foreign incident ids on record_service leave no footprint at all.
         let sched = seed_schedule_item(&db, v1, "Oil change").await;

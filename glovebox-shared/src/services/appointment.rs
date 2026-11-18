@@ -52,15 +52,6 @@ pub struct RevisedAppointment {
     pub unassigned_todo_ids: Vec<i32>,
 }
 
-// The shop directory is global, so an id is checked for existence only. A
-// missing shop would otherwise surface as an opaque foreign-key failure.
-async fn validate_shop(db: &impl ConnectionTrait, shop_id: Option<i32>) -> DomainResult<()> {
-    if let Some(id) = shop_id {
-        super::shop::get(db, id).await?;
-    }
-    Ok(())
-}
-
 /// How an appointment was put away by hand, read from its dates. A cancelled
 /// one counts as cancelled even when it also carries a closed date.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,7 +119,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     let txn = super::begin_write(db).await?;
     let db = &txn;
     super::vehicle::require_in_garage(db, vehicle_id).await?;
-    validate_shop(db, input.shop_id).await?;
+    super::shop::require_if_named(db, input.shop_id).await?;
     let model = appointment::ActiveModel {
         vehicle_id: Set(vehicle_id),
         purpose: Set(input.purpose),
@@ -158,7 +149,7 @@ pub(crate) async fn update(
     if let Some(purpose) = &input.purpose {
         super::validate_not_blank("purpose", purpose)?;
     }
-    validate_shop(db, input.shop_id.flatten()).await?;
+    super::shop::require_if_named(db, input.shop_id.flatten()).await?;
     let mut active: appointment::ActiveModel = existing.into();
     if let Some(v) = input.purpose {
         active.purpose = Set(v);

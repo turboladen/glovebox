@@ -796,21 +796,18 @@ mod tests {
     }
 
     async fn seed_template(db: &impl ConnectionTrait) -> i32 {
-        crate::services::model_template::create(
-            db,
-            crate::inputs::model_template::NewModelTemplate {
-                year: Some(2018),
-                make: Some("Volkswagen".into()),
-                model: Some("Golf".into()),
-                trim_level: Some("SE".into()),
-                body_style: Some("Wagon".into()),
-                engine: Some("2.0L TSI".into()),
-                transmission: Some("6MT".into()),
-                drivetrain: Some("FWD".into()),
-                platform_id: None,
-                platform_ref: None,
-            },
-        )
+        crate::entities::model_template::ActiveModel {
+            year: Set(Some(2018)),
+            make: Set(Some("Volkswagen".into())),
+            model: Set(Some("Golf".into())),
+            trim_level: Set(Some("SE".into())),
+            body_style: Set(Some("Wagon".into())),
+            engine: Set(Some("2.0L TSI".into())),
+            transmission: Set(Some("6MT".into())),
+            drivetrain: Set(Some("FWD".into())),
+            ..Default::default()
+        }
+        .insert(db)
         .await
         .unwrap()
         .id

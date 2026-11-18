@@ -173,13 +173,6 @@ pub(crate) async fn link_service(
     Ok(())
 }
 
-pub async fn list(
-    db: &impl ConnectionTrait,
-    vehicle_id: i32,
-) -> DomainResult<Vec<IncidentWithDetails>> {
-    list_filtered(db, vehicle_id, None).await
-}
-
 /// Lists a vehicle's incidents newest first, keeping only resolved ones for
 /// `Some(true)`, only unresolved ones for `Some(false)`, and all for `None`.
 pub async fn list_filtered(
@@ -494,21 +487,6 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     Ok(())
 }
 
-pub async fn list_followups(
-    db: &impl ConnectionTrait,
-    vehicle_id: i32,
-    incident_id: i32,
-) -> DomainResult<Vec<incident_followup::Model>> {
-    // Verify the incident belongs to this vehicle before exposing followups.
-    require_incident(db, vehicle_id, incident_id).await?;
-
-    Ok(incident_followup::Entity::find()
-        .filter(incident_followup::Column::IncidentId.eq(incident_id))
-        .order_by_asc(incident_followup::Column::OccurredAt)
-        .all(db)
-        .await?)
-}
-
 pub async fn create_followup<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -635,7 +613,7 @@ mod tests {
             .await
             .unwrap();
         }
-        let listed = list(&db, vid).await.unwrap();
+        let listed = list_filtered(&db, vid, None).await.unwrap();
         assert_eq!(listed.len(), 2);
         assert_eq!(listed[0].incident.title, "newer");
         assert_eq!(listed[1].incident.title, "older");
@@ -676,7 +654,7 @@ mod tests {
             assert_eq!(made.incident.category, *category);
         }
         assert_eq!(
-            list(&db, vid).await.unwrap().len(),
+            list_filtered(&db, vid, None).await.unwrap().len(),
             IncidentCategory::ALL.len()
         );
     }
@@ -802,7 +780,7 @@ mod tests {
             .unwrap_err(),
             DomainError::NotFound(_)
         ));
-        assert!(list(&db, owner).await.unwrap().is_empty());
+        crate::test_support::assert_empty(&list_filtered(&db, owner, None).await.unwrap());
     }
 
     #[tokio::test]
@@ -1018,7 +996,7 @@ mod tests {
             .unwrap_err(),
             DomainError::NotFound(_)
         ));
-        assert!(list(&db, owner).await.unwrap().is_empty());
+        crate::test_support::assert_empty(&list_filtered(&db, owner, None).await.unwrap());
 
         // Update referencing a foreign incident must 404 and mutate nothing.
         let mine = create(&db, owner, new_incident("mine", IncidentCategory::Noise))
@@ -1101,7 +1079,7 @@ mod tests {
     // --- followups ------------------------------------------------------------
 
     #[tokio::test]
-    async fn followup_create_and_list_relate_to_incident() {
+    async fn a_followup_is_read_with_its_incident() {
         let db = test_db().await;
         let vid = seed_vehicle(&db).await;
         let inc = create(&db, vid, new_incident("crash", IncidentCategory::Accident))
@@ -1124,13 +1102,9 @@ mod tests {
         .unwrap();
         assert_eq!(f.incident_id, inc.incident.id);
 
-        let listed = list_followups(&db, vid, inc.incident.id).await.unwrap();
-        assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].summary, "Filed claim");
-
-        // The incident get() now surfaces the followup too.
         let fetched = get(&db, vid, inc.incident.id).await.unwrap();
         assert_eq!(fetched.followups.len(), 1);
+        assert_eq!(fetched.followups[0].summary, "Filed claim");
     }
 
     #[tokio::test]
@@ -1152,43 +1126,6 @@ mod tests {
             )
             .await
             .unwrap_err(),
-            DomainError::NotFound(_)
-        ));
-    }
-
-    #[tokio::test]
-    async fn list_followups_wrong_vehicle_is_not_found() {
-        let db = test_db().await;
-        let owner = seed_vehicle(&db).await;
-        let other = seed_vehicle(&db).await;
-        let inc = create(
-            &db,
-            owner,
-            new_incident("crash", IncidentCategory::Accident),
-        )
-        .await
-        .unwrap();
-        create_followup(
-            &db,
-            owner,
-            inc.incident.id,
-            NewFollowup {
-                occurred_at: date("2024-05-02"),
-                contact_method: None,
-                contact_with: None,
-                summary: "private".into(),
-                notes: None,
-            },
-        )
-        .await
-        .unwrap();
-
-        // Reading through the wrong vehicle must 404, not leak the other
-        // vehicle's followups.
-        assert!(matches!(
-            list_followups(&db, other, inc.incident.id)
-                .await
-                .unwrap_err(),
             DomainError::NotFound(_)
         ));
     }
@@ -1224,7 +1161,7 @@ mod tests {
             DomainError::NotFound(_)
         ));
         crate::test_support::assert_empty(
-            &list_followups(&db, owner, inc.incident.id).await.unwrap(),
+            &get(&db, owner, inc.incident.id).await.unwrap().followups,
         );
     }
 
@@ -1262,7 +1199,7 @@ mod tests {
         .await
         .unwrap();
 
-        let listed = list(&db, vid).await.unwrap();
+        let listed = list_filtered(&db, vid, None).await.unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].followups.len(), 1);
         assert_eq!(listed[0].resolved_by[0].id, svc);
