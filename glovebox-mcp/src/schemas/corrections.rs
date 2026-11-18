@@ -325,7 +325,7 @@ pub struct CorrectServiceInput {
     pub paid_by: Option<Payer>,
     /// REPLACES the schedule items this service satisfies with exactly this list (ids from `list_schedule`). Omit to leave the links alone.
     pub schedule_item_ids: Option<Vec<i32>>,
-    /// REPLACES the existing parts installed by this service with exactly this list (ids from `list_parts`). Omit to leave them alone.
+    /// REPLACES the existing parts installed by this service with exactly this list (ids from `list_parts`). A fitted part taken off the list needs `completed_work`. Omit to leave them alone.
     pub part_ids: Option<Vec<i32>>,
     /// REPLACES every line item with exactly this list. Omit to leave the lines alone.
     pub line_items: Option<Vec<LineItemInput>>,
@@ -390,8 +390,13 @@ pub struct CorrectServiceInput {
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<String>")]
     pub invoice_ref: Option<Option<String>>,
-    /// REPLACES the recalls this service performed with exactly this list (`finding_id`s from `whats_coming` or `check_recalls`). A recall taken off the list reads as open again unless it was marked done by hand. Send `[]` to remove them all; omit to leave them alone.
+    /// REPLACES the recalls this service performed with exactly this list (`finding_id`s from `whats_coming` or `check_recalls`). A recall taken off the list needs `completed_work`. Send `[]` to remove them all; omit to leave them alone.
     pub recall_finding_ids: Option<Vec<i32>>,
+    /// REPLACES the planned jobs this service completed with exactly this list (ids from `list_planned_work`). A job added must be planned and becomes done, resolving its incident and performing its recall; a job taken off needs `completed_work` and takes its incident, recall and the parts fitted to its needs with it. Schedule links stay as they are, so send `schedule_item_ids` too when the reminders should change. Send `[]` to remove them all; omit to leave them alone.
+    pub work_item_ids: Option<Vec<i32>>,
+    /// What happened to the work this call takes off the service (jobs left out of `work_item_ids`, fitted parts left out of `part_ids`, recalls left out of `recall_finding_ids`): `did_not_happen` undoes it, so jobs go back to planned, parts read purchased and recalls read open; `done_another_way` keeps it done and only unlinks it from this invoice. Needed only when the call takes such work off; ask the owner.
+    #[serde(default)]
+    pub completed_work: Option<glovebox_shared::services::service_record::CompletedWork>,
     /// The appointment this invoice settles (from `list_appointments`). It must be open.
     ///
     /// Send `null` to clear it; omit the key to leave it unchanged.
@@ -422,6 +427,8 @@ impl CorrectServiceInput {
                 payer_note: self.payer_note,
                 invoice_ref: self.invoice_ref,
                 recall_finding_ids: self.recall_finding_ids,
+                work_item_ids: self.work_item_ids,
+                completed_work: self.completed_work,
                 appointment_id: self.appointment_id,
                 line_items: self
                     .line_items

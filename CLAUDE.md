@@ -188,7 +188,7 @@ link (schedule items, work items, recalls, incidents) in one transaction. One ba
 and commits nothing. Re-recording an existing `invoice_ref` for the vehicle returns the stored
 record with `already_recorded: true` and a `message` and writes nothing (both keys appear only
 on that path). Completing planned work happens by naming
-`work_item_ids` in `record_service`.
+`work_item_ids` in `record_service`, or in `correct_service` for a service already recorded.
 Every service read carries `lines_total_cents`, and a `note` when the total differs from it (the
 kinds are `maintenance`, `mod`, `repair`, `inspection`, `recall` and `fee`; payers are `self`,
 `insurance`, `third_party` and `manufacturer`). A line may carry its own `paid_by`
@@ -214,17 +214,20 @@ closing is refused while a job is still planned, and cancelling unassigns them. 
 appointment therefore never holds a planned job: when a job on one returns to `planned` (its
 service is deleted, or its status is set back), a hand-closed appointment opens again and a
 cancelled one lets the job go to the unscheduled pool (`appointment::settle_reopened_jobs`).
-The `delete_service` and `update_planned_work` replies name the appointment that reopened and the
-jobs that left a cancelled one. Re-recording the service does not close the appointment again.
-Deleting a service, or correcting its `part_ids`, also unlinks from its need every shop-supplied
-part the service stops installing that goes back to purchased; a part a later service replaced
+The `delete_service`, `correct_service` and `update_planned_work` replies name the appointment that
+reopened and the jobs that left a cancelled one. Re-recording the service does not close the appointment again.
+Deleting a service, or correcting its `part_ids` as work that did not happen, also unlinks from its
+need every shop-supplied part the service stops installing that goes back to purchased; a part a later service replaced
 keeps its status and its need. `correct_part` setting an installed or replaced part to
 `purchased` clears its install and replace details and fills an empty `received_on` from the
 install date, so its need reads received; it refuses a shop-supplied part, install or
 replacement details sent in the same call, and a cleared `received_on`. `delete_service` refuses a service that recorded work as done
 (jobs, installed parts, resolved incidents, recalls) until `completed_work` says whether that
 work did not happen, which undoes it, or was done another way, which keeps it and drops only the
-invoice. `docs/adr/0005-deleting-a-service-asks-what-happened.md` records why. A need is
+invoice. `correct_service` asks the same when its `work_item_ids`, `part_ids` or
+`recall_finding_ids` leave out a completed job, a fitted part or a performed recall, and a job
+added to `work_item_ids` must be planned. `docs/adr/0005-deleting-a-service-asks-what-happened.md`
+records why. A need is
 open when `need::counts_as_open` says so (an open stage on a planned job); every open-needs count
 uses it. Rejecting or ruling out a chosen option keeps the need's reason and date on the option as
 `chosen_reason` and `chosen_on` until the option is chosen again, and `past_decisions` lists both

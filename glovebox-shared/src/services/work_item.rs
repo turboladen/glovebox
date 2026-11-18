@@ -261,8 +261,8 @@ pub(crate) async fn load_completed_by(
     Ok(out)
 }
 
-/// Releases the jobs a service that is about to be deleted completed, on the
-/// caller's transaction. After `did_not_happen` they return to `planned`,
+/// Releases jobs a service no longer completes, because it is about to be
+/// deleted or a correction took them off it, on the caller's transaction. After `did_not_happen` they return to `planned`,
 /// which reopens a hand-closed appointment or takes a job off a cancelled one.
 /// After `done_another_way` they stay done with no completing service.
 pub(crate) async fn release_completed(

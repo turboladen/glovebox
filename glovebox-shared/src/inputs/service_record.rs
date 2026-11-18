@@ -91,6 +91,13 @@ pub struct UpdateServiceRecord {
     pub invoice_ref: Option<Option<String>>,
     /// When present, replaces the recalls this service performed.
     pub recall_finding_ids: Option<Vec<i32>>,
+    /// When present, replaces the jobs this service completed. A job added
+    /// must be planned.
+    pub work_item_ids: Option<Vec<i32>>,
+    /// What happened to the work this update takes off the service: the
+    /// jobs, fitted parts and recalls its lists leave out. Required when it
+    /// takes any off, and ignored otherwise.
+    pub completed_work: Option<crate::services::service_record::CompletedWork>,
     /// Set, change or clear the appointment this invoice settles. The same
     /// rules as `NewServiceRecord::appointment_id` apply to a new value.
     pub appointment_id: Option<Option<i32>>,
