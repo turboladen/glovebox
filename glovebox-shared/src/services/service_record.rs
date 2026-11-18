@@ -544,6 +544,13 @@ pub async fn list_between(
         part_svc::views(db, parts).await?
     };
 
+    let mut parts_by_service: std::collections::HashMap<i32, Vec<part_svc::PartView>> =
+        std::collections::HashMap::new();
+    for p in all_parts {
+        if let Some(service_id) = p.part.installed_service_id {
+            parts_by_service.entry(service_id).or_default().push(p);
+        }
+    }
     let mut incident_links = load_incident_links(db, &record_ids).await?;
     let mut performed = recall::load_performed(db, &record_ids).await?;
     let mut jobs = work_item::load_by_service(db, &record_ids).await?;
@@ -566,11 +573,7 @@ pub async fn list_between(
                 .filter(|l| l.service_record_id == record.id)
                 .map(|l| l.schedule_item_id)
                 .collect();
-            let parts = all_parts
-                .iter()
-                .filter(|p| p.part.installed_service_id == Some(record.id))
-                .cloned()
-                .collect();
+            let parts = parts_by_service.remove(&record.id).unwrap_or_default();
             let line_items = all_line_items
                 .iter()
                 .filter(|li| li.service_record_id == record.id)

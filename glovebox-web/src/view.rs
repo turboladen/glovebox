@@ -18,10 +18,9 @@ use glovebox_shared::{
         checklist::{self, Checklist, HomeAppointment, JobView, NeedView, StepRow},
         date_label,
         need::{self, Stage},
-        part as part_svc,
         reminders::{self, DueStatus},
         waiting::{Waiting, booked_note},
-        work_sheet::{SheetLine, WorkSheet},
+        work_sheet::{SheetContent, SheetLine, WorkSheet},
     },
     vocab::Vocabulary,
 };
@@ -946,10 +945,7 @@ fn kit_items(view: &NeedView) -> Vec<KitItemCard> {
     view.part
         .iter()
         .flat_map(|p| &p.contents)
-        .map(|item| KitItemCard {
-            text: count_text(&item.name, item.quantity),
-            label: part_svc::label(item.manufacturer.as_deref(), item.part_number.as_deref()),
-        })
+        .map(|item| KitItemCard::from(&SheetContent::from(item)))
         .collect()
 }
 
@@ -959,6 +955,15 @@ pub struct KitItemCard {
     /// The item's name, with " × N" when the kit holds more than one.
     pub text: String,
     pub label: Option<String>,
+}
+
+impl From<&SheetContent> for KitItemCard {
+    fn from(item: &SheetContent) -> Self {
+        KitItemCard {
+            text: count_text(&item.name, item.quantity),
+            label: item.label.clone(),
+        }
+    }
 }
 
 fn count_text(name: &str, quantity: i32) -> String {
@@ -993,14 +998,7 @@ pub fn sheet_jobs(sheet: &WorkSheet) -> Vec<SheetJobCard> {
     let card = |line: &SheetLine| SheetLineCard {
         text: count_text(&line.name, line.quantity),
         label: line.label.clone(),
-        contents: line
-            .contents
-            .iter()
-            .map(|item| KitItemCard {
-                text: count_text(&item.name, item.quantity),
-                label: item.label.clone(),
-            })
-            .collect(),
+        contents: line.contents.iter().map(KitItemCard::from).collect(),
     };
     sheet
         .jobs

@@ -157,7 +157,7 @@ fn sets_install(input: &UpdatePart) -> bool {
 }
 
 /// A part with the items inside it, when it was bought as a kit.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Debug, Serialize)]
 pub struct PartView {
     #[serde(flatten)]
     pub part: part::Model,
@@ -199,11 +199,10 @@ pub(crate) async fn views(
 
 /// One part with its kit contents.
 pub(crate) async fn view(db: &impl ConnectionTrait, part: part::Model) -> DomainResult<PartView> {
-    let contents = contents_by_part(db, [part.id])
+    views(db, vec![part])
         .await?
-        .remove(&part.id)
-        .unwrap_or_default();
-    Ok(PartView { part, contents })
+        .pop()
+        .ok_or_else(|| DomainError::Internal("a part's view came back empty".into()))
 }
 
 /// The kit contents of each named part, in print order. A part with no
@@ -455,7 +454,10 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     id: i32,
     input: UpdatePart,
 ) -> DomainResult<part::Model> {
-    Ok(correct(db, vehicle_id, id, input).await?.part)
+    let txn = super::begin_write(db).await?;
+    let part = apply_update(&txn, vehicle_id, id, input).await?;
+    txn.commit().await?;
+    Ok(part)
 }
 
 async fn apply_update(

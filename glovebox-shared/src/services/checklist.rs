@@ -141,6 +141,12 @@ pub struct NeedView {
 }
 
 impl NeedView {
+    /// The linked part's own record, without its kit contents.
+    #[must_use]
+    pub fn linked_part(&self) -> Option<&part::Model> {
+        self.part.as_ref().map(|p| &p.part)
+    }
+
     /// A sentence counting the need's options and how many are rejected,
     /// such as `3 options researched, 1 rejected`.
     #[must_use]
@@ -450,14 +456,15 @@ async fn job_views(
         .filter(part::Column::Id.is_in(needs.iter().filter_map(|n| n.part_id)))
         .all(db)
         .await?;
-    let parts: HashMap<i32, super::part::PartView> = super::part::views(db, parts)
+    let mut parts: HashMap<i32, super::part::PartView> = super::part::views(db, parts)
         .await?
         .into_iter()
         .map(|p| (p.part.id, p))
         .collect();
     let mut by_job: HashMap<i32, Vec<NeedView>> = HashMap::new();
     for need in needs {
-        let linked = need.part_id.and_then(|id| parts.get(&id).cloned());
+        // A part links to at most one need, so each is moved out once.
+        let linked = need.part_id.and_then(|id| parts.remove(&id));
         let job_id = need.work_item_id;
         let own_options = options.remove(&need.id).unwrap_or_default();
         by_job
@@ -654,11 +661,8 @@ fn step_detail(view: &NeedView) -> String {
             format!("order{what}")
         }
         Stage::Ordered => {
-            let seller = view.part.as_ref().and_then(|p| p.part.seller.as_ref());
-            let date = view
-                .part
-                .as_ref()
-                .and_then(|p| p.part.purchase_date.as_ref());
+            let seller = view.linked_part().and_then(|p| p.seller.as_ref());
+            let date = view.linked_part().and_then(|p| p.purchase_date.as_ref());
             format!(
                 "ordered{}{}",
                 seller.map_or_else(String::new, |s| format!(" from {s}")),
@@ -666,7 +670,7 @@ fn step_detail(view: &NeedView) -> String {
             )
         }
         Stage::ShopSupplies => "the shop supplies it".to_owned(),
-        Stage::Received => match view.part.as_ref().and_then(|p| p.part.received_on.as_ref()) {
+        Stage::Received => match view.linked_part().and_then(|p| p.received_on.as_ref()) {
             Some(date) => format!("received on {date}"),
             None => "received".to_owned(),
         },

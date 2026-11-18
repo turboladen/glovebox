@@ -61,6 +61,8 @@ pub struct SheetLine {
 /// One item inside a kit the owner brings.
 #[derive(Debug, Serialize)]
 pub struct SheetContent {
+    /// The item's id, which `correct_part` takes to remove it.
+    pub id: i32,
     pub name: String,
     pub quantity: i32,
     /// The item's manufacturer and number, as [`part_svc::label`] writes them.
@@ -70,6 +72,7 @@ pub struct SheetContent {
 impl From<&part_content::Model> for SheetContent {
     fn from(item: &part_content::Model) -> Self {
         SheetContent {
+            id: item.id,
             label: part_svc::label(item.manufacturer.as_deref(), item.part_number.as_deref()),
             name: item.name.clone(),
             quantity: item.quantity,

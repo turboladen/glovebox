@@ -21,8 +21,8 @@ the ones the kit holds, and `remove_contents` names the ids of items to remove, 
 does not name stays as it is. An id that is not one of the part's items fails the call, which then
 writes nothing. Every reply that returns a part carries its contents with each item's id: the
 part tools, the service reads, the checklist, and the need replies (`mark_need_ordered`,
-`link_part_to_need`, `mark_need_received`, `return_part`, `past_decisions`). The work sheet prints
-the items without ids.
+`link_part_to_need`, `mark_need_received`, `return_part`, `past_decisions`) and `get_work_sheet`.
+The printed sheet leaves the ids off.
 
 **The job and appointment pages list a kit's items** in the need's row, under "In the kit", whether
 the row shows the linked part or a chosen option.

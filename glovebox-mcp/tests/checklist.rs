@@ -1540,8 +1540,8 @@ async fn work_sheet_lists_a_kits_contents() {
     assert_eq!(
         sheet["jobs"][0]["owner_supplies"][0]["contents"],
         json!([
-            { "name": "Pads", "quantity": 4, "label": "Akebono ACT1633A" },
-            { "name": "Shims", "quantity": 1, "label": null }
+            { "id": 1, "name": "Pads", "quantity": 4, "label": "Akebono ACT1633A" },
+            { "id": 2, "name": "Shims", "quantity": 1, "label": null }
         ]),
         "got: {sheet}"
     );

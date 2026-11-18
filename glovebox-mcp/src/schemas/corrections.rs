@@ -582,8 +582,8 @@ pub struct CorrectPartInput {
     /// packaging. They go after the items the kit already holds, and the
     /// items already there stay as they are.
     pub add_contents: Option<Vec<PartContentInput>>,
-    /// For a kit: the `id`s of items to remove, as `contents` in any part
-    /// reply but the work sheet shows them. Items not named stay. To fix an
+    /// For a kit: the `id`s of items to remove, as `contents` in any reply
+    /// that shows the kit lists them. Items not named stay. To fix an
     /// item, remove it and add it again; it then prints last.
     pub remove_contents: Option<Vec<i32>>,
 }
@@ -619,8 +619,8 @@ impl CorrectPartInput {
                 received_on: dates::parse_date_change("received_on", self.received_on)?,
                 add_contents: self
                     .add_contents
+                    .unwrap_or_default()
                     .into_iter()
-                    .flatten()
                     .map(Into::into)
                     .collect(),
                 remove_contents: self.remove_contents.unwrap_or_default(),
