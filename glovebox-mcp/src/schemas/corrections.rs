@@ -456,6 +456,13 @@ pub struct CorrectPartInput {
     pub name: Option<String>,
     /// `purchased`, `installed` or `replaced`. A return is made on the need,
     /// not here; a returned part can only be set back to `purchased`.
+    /// Setting an installed or replaced part to `purchased` clears its
+    /// install and replacement details. A part with no received date gets its
+    /// install date, or today when it has none; a `received_on` date sent in
+    /// the same call is used instead. It is refused for a part the shop
+    /// supplied (correct the service's `part_ids` or delete the part
+    /// instead), when the same call sends install or replacement details, and
+    /// when it sends `received_on: null`.
     pub status: Option<PartStatus>,
     /// Who supplied the part.
     pub supplied_by: Option<Supplier>,

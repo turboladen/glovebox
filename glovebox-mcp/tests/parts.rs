@@ -107,6 +107,50 @@ async fn list_correct_and_delete_a_part() {
 }
 
 #[tokio::test]
+async fn correcting_an_installed_part_to_purchased_clears_its_install_details() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let service = t
+        .call(
+            "record_service",
+            json!({ "vehicle_id": v.id, "service_date": "2026-11-01", "mileage": 40_000 }),
+        )
+        .await;
+    let part = t
+        .call(
+            "record_part",
+            json!({
+                "vehicle_id": v.id,
+                "name": "Brake pads",
+                "status": "installed",
+                "installed_service_id": service["id"],
+                "installed_date": "2026-11-01",
+                "installed_odometer": 40_000
+            }),
+        )
+        .await;
+    assert_eq!(part["installed_service_id"], service["id"], "{part}");
+
+    let corrected = t
+        .call(
+            "correct_part",
+            json!({ "vehicle_id": v.id, "part_id": part["id"], "status": "purchased" }),
+        )
+        .await;
+    assert_eq!(corrected["status"], "purchased");
+    for field in [
+        "installed_service_id",
+        "installed_date",
+        "installed_odometer",
+    ] {
+        assert!(
+            corrected[field].is_null(),
+            "{field} is cleared: {corrected}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn parts_tools_reject_unknown_arguments() {
     let t = connect().await;
     common::assert_unknown_field_rejected(
