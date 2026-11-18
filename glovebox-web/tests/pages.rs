@@ -383,6 +383,25 @@ async fn home_says_so_when_nothing_is_waiting() {
 }
 
 #[tokio::test]
+async fn home_leaves_out_an_archived_car() {
+    let db = db().await;
+    VehicleFixture::new().name("Golf GTI").insert_id(&db).await;
+    let sold = VehicleFixture::new().name("Old Jetta").insert_id(&db).await;
+    glovebox_shared::services::vehicle::archive(
+        &db,
+        sold,
+        glovebox_shared::inputs::vehicle::VehicleSale::default(),
+    )
+    .await
+    .unwrap();
+
+    let (_, body) = page(app(db, "live"), get("/")).await;
+
+    assert!(body.contains("Golf GTI"), "{body}");
+    assert!(!body.contains("Old Jetta"), "{body}");
+}
+
+#[tokio::test]
 async fn home_says_how_many_due_items_are_already_on_an_appointment() {
     let db = db().await;
     let v = gti_at_64k(&db).await;

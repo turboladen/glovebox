@@ -50,3 +50,12 @@ pub struct UpdateVehicle {
     pub warranty_expires_on: Option<Option<chrono::NaiveDate>>,
     pub warranty_expires_miles: Option<Option<i32>>,
 }
+
+/// What a sold car's sale records. Each field left out keeps the value the
+/// vehicle already holds.
+#[derive(Default)]
+pub struct VehicleSale {
+    pub sold_date: Option<chrono::NaiveDate>,
+    pub sold_price_cents: Option<i32>,
+    pub sold_mileage: Option<i32>,
+}

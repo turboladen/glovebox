@@ -159,12 +159,15 @@ impl ServerHandler for GloveboxMcp {
                 .with_mime_type("application/json")
         }
 
-        let vehicles = vehicle::list(&*self.db).await.map_err(resource_error)?;
+        let vehicles = vehicle::list(&*self.db, true)
+            .await
+            .map_err(resource_error)?;
 
         let mut resources: Vec<Resource> = vec![json_resource(
             VEHICLES_URI.to_string(),
             "vehicles".to_string(),
-            "Every vehicle in the garage (id, name, year, make, model).".to_string(),
+            "Every vehicle, archived ones included (id, name, year, make, model, archived)."
+                .to_string(),
         )];
         for v in &vehicles {
             resources.push(json_resource(
@@ -203,7 +206,9 @@ impl ServerHandler for GloveboxMcp {
 
         let json = match parsed {
             ResourceRef::Vehicles => {
-                let vehicles = vehicle::list(&*self.db).await.map_err(resource_error)?;
+                let vehicles = vehicle::list(&*self.db, true)
+                    .await
+                    .map_err(resource_error)?;
                 let briefs: Vec<VehicleBrief> = vehicles.iter().map(VehicleBrief::from).collect();
                 resource_json(&briefs)?
             }

@@ -10,8 +10,8 @@ use glovebox_shared::{
 use serde::Serialize;
 
 use crate::schemas::{
-    AddVehicleInput, DeleteMileageInput, EmptyParams, LogMileageInput, UpdateVehicleInput,
-    VehicleBrief, VehicleParams,
+    AddVehicleInput, ArchiveVehicleInput, DeleteMileageInput, EmptyParams, ListVehiclesInput,
+    LogMileageInput, UpdateVehicleInput, VehicleBrief, VehicleParams,
 };
 
 /// The created vehicle plus what the VIN lookup did, when one was asked for.
@@ -28,17 +28,19 @@ struct AddedVehicle {
 impl GloveboxMcp {
     #[tool(
         name = "list_vehicles",
-        description = "List the garage — every vehicle's id, name, year, make, and model. Call \
+        description = "List the garage: each car's id, name, year, make, and model. Archived \
+                       (sold) cars are left out unless `include_archived` is true; when the owner \
+                       names a car this list lacks, call it again with `include_archived`. Call \
                        this first: almost every other tool takes a vehicle_id from here. Use \
                        `get_vehicle` for the full record."
     )]
     async fn list_vehicles(
         &self,
-        params: Parameters<EmptyParams>,
+        params: Parameters<ListVehiclesInput>,
     ) -> Result<CallToolResult, McpError> {
-        tool_input!(params, "list_vehicles");
+        let p = tool_input!(params, "list_vehicles");
         domain_result(
-            vehicle::list(&*self.db)
+            vehicle::list(&*self.db, p.include_archived)
                 .await
                 .map(|vs| vs.iter().map(VehicleBrief::from).collect::<Vec<_>>()),
         )
@@ -125,6 +127,38 @@ impl GloveboxMcp {
             p.vehicle_id,
             vehicle::delete_unused(&*self.db, p.vehicle_id).await,
         )
+    }
+
+    #[tool(
+        name = "archive_vehicle",
+        description = "Take a sold car out of the garage and record the sale: `sold_date`, \
+                       `sold_price_cents` and `sold_mileage`, each optional. Its records all \
+                       stay, and every tool that takes its vehicle_id still reads it; \
+                       `list_vehicles` and the web page leave it out. Use this instead of \
+                       `delete_vehicle` for a car with history. It refuses while the car has an \
+                       open appointment, a planned job or an open to-do, naming how many, since \
+                       no garage list would show them afterwards. `unarchive_vehicle` undoes it."
+    )]
+    async fn archive_vehicle(
+        &self,
+        params: Parameters<ArchiveVehicleInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = tool_input!(params, "archive_vehicle");
+        let (vehicle_id, sale) = domain_input!(p.into_domain());
+        domain_result(vehicle::archive(&*self.db, vehicle_id, sale).await)
+    }
+
+    #[tool(
+        name = "unarchive_vehicle",
+        description = "Put an archived car back in the garage, for one archived by mistake or \
+                       bought back. Its sale details stay; clear them with `update_vehicle`."
+    )]
+    async fn unarchive_vehicle(
+        &self,
+        params: Parameters<VehicleParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = tool_input!(params, "unarchive_vehicle");
+        domain_result(vehicle::unarchive(&*self.db, p.vehicle_id).await)
     }
 
     #[tool(

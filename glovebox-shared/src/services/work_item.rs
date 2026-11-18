@@ -319,7 +319,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     if let Some(id) = input.appointment_id {
         crate::services::appointment::require_assignable(db, vehicle_id, id).await?;
     }
-    crate::services::vehicle::require(db, vehicle_id).await?;
+    crate::services::vehicle::require_in_garage(db, vehicle_id).await?;
     let schedule_item_id = require_links_owned(
         db,
         vehicle_id,

@@ -6,7 +6,7 @@ use crate::{
         service_record, todo, vehicle, work_item,
     },
     error::{DomainError, DomainResult},
-    inputs::vehicle::{NewVehicle, UpdateVehicle},
+    inputs::vehicle::{NewVehicle, UpdateVehicle, VehicleSale},
     services::vin_decode::{self, VinDecodeResult},
 };
 
@@ -20,8 +20,37 @@ pub async fn require(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult
         .ok_or_else(|| DomainError::NotFound(format!("Vehicle {vehicle_id} not found")))
 }
 
-pub async fn list(db: &impl ConnectionTrait) -> DomainResult<Vec<vehicle::Model>> {
-    Ok(vehicle::Entity::find().all(db).await?)
+/// The vehicles in id order, leaving out the archived ones unless
+/// Verifies a vehicle exists and is in the garage, for a write that adds
+/// open work (a planned job, an appointment or a to-do).
+///
+/// # Errors
+/// `NotFound` for a missing vehicle; `BadRequest` for an archived one, since
+/// no garage list would show the work.
+pub async fn require_in_garage(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+) -> DomainResult<vehicle::Model> {
+    let v = require(db, vehicle_id).await?;
+    if v.archived_at.is_some() {
+        return Err(DomainError::BadRequest(format!(
+            "Vehicle {vehicle_id} is archived, so it takes no new planned work, appointments or \
+             to-dos. Unarchive it first if it is back in the garage."
+        )));
+    }
+    Ok(v)
+}
+
+/// `include_archived` is set.
+pub async fn list(
+    db: &impl ConnectionTrait,
+    include_archived: bool,
+) -> DomainResult<Vec<vehicle::Model>> {
+    let mut query = vehicle::Entity::find();
+    if !include_archived {
+        query = query.filter(vehicle::Column::ArchivedAt.is_null());
+    }
+    Ok(query.order_by_asc(vehicle::Column::Id).all(db).await?)
 }
 
 pub async fn get(db: &impl ConnectionTrait, id: i32) -> DomainResult<vehicle::Model> {
@@ -181,6 +210,10 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     id: i32,
     input: UpdateVehicle,
 ) -> DomainResult<vehicle::Model> {
+    validate_sale(
+        input.sold_price_cents.flatten(),
+        input.sold_mileage.flatten(),
+    )?;
     let txn = super::begin_write(db).await?;
     let db = &txn;
     let existing = require(db, id).await?;
@@ -270,22 +303,98 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     Ok(out)
 }
 
+// A sale price or odometer reading below zero is a typing mistake.
+fn validate_sale(price_cents: Option<i32>, mileage: Option<i32>) -> DomainResult<()> {
+    for (field, value) in [("sold_price_cents", price_cents), ("sold_mileage", mileage)] {
+        if value.is_some_and(|v| v < 0) {
+            return Err(DomainError::invalid(field, "must not be negative"));
+        }
+    }
+    Ok(())
+}
+
+// A garage list leaves an archived car out, so work still open on one would
+// show nowhere; it is settled before the car leaves.
+async fn refuse_open_work(db: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
+    let appointments = super::appointment::open_by_vehicle(db, &[id])
+        .await?
+        .remove(&id)
+        .map_or(0, |a| a.len());
+    let jobs = work_item::Entity::find()
+        .filter(work_item::Column::VehicleId.eq(id))
+        .filter(work_item::Column::Status.eq(work_item::JobStatus::Planned))
+        .count(db)
+        .await?;
+    let todos = todo::Entity::find()
+        .filter(todo::Column::VehicleId.eq(id))
+        .filter(todo::Column::DoneOn.is_null())
+        .count(db)
+        .await?;
+    let open: Vec<String> = [
+        (
+            u64::try_from(appointments).unwrap_or(u64::MAX),
+            "open appointment",
+            "open appointments",
+        ),
+        (jobs, "planned job", "planned jobs"),
+        (todos, "open to-do", "open to-dos"),
+    ]
+    .into_iter()
+    .filter(|(n, _, _)| *n > 0)
+    .map(|(n, one, many)| format!("{n} {}", if n == 1 { one } else { many }))
+    .collect();
+    if open.is_empty() {
+        return Ok(());
+    }
+    Err(DomainError::BadRequest(format!(
+        "Vehicle {id} still has {}. Cancel or close each appointment, finish or drop each job, \
+         and tick or delete each to-do before archiving it.",
+        open.join(", ")
+    )))
+}
+
+/// Takes a vehicle out of the garage, as for a sold car, and records `sale`.
+/// An archived vehicle keeps all its records and can still be read by id;
+/// garage lists leave it out. Archiving one already archived keeps its first
+/// stamp and records the sale.
+///
+/// # Errors
+/// `NotFound` for a missing vehicle; `Invalid` for a negative sale price or
+/// mileage; `BadRequest` while the vehicle has an open appointment, a planned
+/// job or an open to-do, which no garage list would show once it is archived.
 pub async fn archive<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     id: i32,
+    sale: VehicleSale,
 ) -> DomainResult<vehicle::Model> {
+    validate_sale(sale.sold_price_cents, sale.sold_mileage)?;
     let txn = super::begin_write(db).await?;
     let db = &txn;
     let existing = require(db, id).await?;
-    let mut active: vehicle::ActiveModel = existing.into();
+    refuse_open_work(db, id).await?;
     let now = super::now();
-    active.archived_at = Set(Some(now));
+    let archived_at = existing.archived_at.unwrap_or(now);
+    let mut active: vehicle::ActiveModel = existing.into();
+    active.archived_at = Set(Some(archived_at));
+    if let Some(v) = sale.sold_date {
+        active.sold_date = Set(Some(v));
+    }
+    if let Some(v) = sale.sold_price_cents {
+        active.sold_price_cents = Set(Some(v));
+    }
+    if let Some(v) = sale.sold_mileage {
+        active.sold_mileage = Set(Some(v));
+    }
     active.updated_at = Set(now);
     let out = active.update(db).await?;
     txn.commit().await?;
     Ok(out)
 }
 
+/// Puts an archived vehicle back in the garage. Its sale details stay.
+///
+/// # Errors
+/// `NotFound` for a missing vehicle.
 pub async fn unarchive<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     id: i32,
@@ -450,11 +559,169 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn archive_then_unarchive_toggles() {
+    async fn archiving_records_the_sale_and_leaves_the_garage_list() {
+        let db = test_db().await;
+        let sold = seed(&db, "Old GTI").await;
+        seed(&db, "Alltrack").await;
+        let day = crate::test_support::date("2026-11-10");
+        let archived = archive(
+            &db,
+            sold.id,
+            VehicleSale {
+                sold_date: Some(day),
+                sold_price_cents: Some(1_850_000),
+                sold_mileage: Some(98_000),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (
+                archived.sold_date,
+                archived.sold_price_cents,
+                archived.sold_mileage
+            ),
+            (Some(day), Some(1_850_000), Some(98_000))
+        );
+        let first_stamp = archived.archived_at;
+
+        let names = |vs: Vec<vehicle::Model>| vs.into_iter().map(|v| v.name).collect::<Vec<_>>();
+        assert_eq!(names(list(&db, false).await.unwrap()), ["Alltrack"]);
+        assert_eq!(
+            names(list(&db, true).await.unwrap()),
+            ["Old GTI", "Alltrack"]
+        );
+        assert_eq!(
+            get(&db, sold.id).await.unwrap().name,
+            "Old GTI",
+            "still readable"
+        );
+
+        // Archiving again records the sale and keeps the first stamp.
+        let again = archive(&db, sold.id, VehicleSale::default()).await.unwrap();
+        assert_eq!(again.archived_at, first_stamp);
+        assert_eq!(again.sold_price_cents, Some(1_850_000));
+
+        let back = unarchive(&db, sold.id).await.unwrap();
+        assert_eq!(back.sold_date, Some(day), "the sale details stay");
+        assert_eq!(list(&db, false).await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn archiving_refuses_a_negative_price() {
         let db = test_db().await;
         let v = seed(&db, "Car").await;
-        assert!(archive(&db, v.id).await.unwrap().archived_at.is_some());
-        assert!(unarchive(&db, v.id).await.unwrap().archived_at.is_none());
+        let err = archive(
+            &db,
+            v.id,
+            VehicleSale {
+                sold_price_cents: Some(-1),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Invalid { .. }), "{err:?}");
+        assert!(get(&db, v.id).await.unwrap().archived_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn archiving_waits_for_open_work_to_be_settled() {
+        use crate::{inputs::work_item::NewWorkItem, services::work_item as job};
+        let db = test_db().await;
+        let v = seed(&db, "Old GTI").await.id;
+        let j = job::create(
+            &db,
+            v,
+            NewWorkItem {
+                title: "Wipers".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+
+        let err = archive(&db, v, VehicleSale::default()).await.unwrap_err();
+        let DomainError::BadRequest(message) = err else {
+            panic!("{err:?}");
+        };
+        assert!(message.contains("1 planned job"), "{message}");
+        assert!(get(&db, v).await.unwrap().archived_at.is_none());
+
+        job::delete(&db, v, j).await.unwrap();
+        assert!(archive(&db, v, VehicleSale::default()).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn an_archived_car_takes_no_new_open_work() {
+        use crate::{
+            inputs::{appointment::NewAppointment, todo::NewTodo, work_item::NewWorkItem},
+            services::{appointment, todo, work_item as job},
+        };
+        let db = test_db().await;
+        let v = seed(&db, "Old GTI").await.id;
+        archive(&db, v, VehicleSale::default()).await.unwrap();
+
+        let refused = |r: DomainResult<()>| {
+            assert!(
+                matches!(&r, Err(DomainError::BadRequest(m)) if m.contains("is archived")),
+                "{r:?}"
+            );
+        };
+        refused(
+            job::create(
+                &db,
+                v,
+                NewWorkItem {
+                    title: "Wipers".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map(|_| ()),
+        );
+        refused(
+            appointment::create(
+                &db,
+                v,
+                NewAppointment {
+                    purpose: "Brakes".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map(|_| ()),
+        );
+        refused(
+            todo::add(
+                &db,
+                v,
+                NewTodo {
+                    title: "Wash".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map(|_| ()),
+        );
+    }
+
+    #[tokio::test]
+    async fn a_corrected_sale_price_is_not_negative_either() {
+        let db = test_db().await;
+        let v = seed(&db, "Car").await;
+        let err = update(
+            &db,
+            v.id,
+            UpdateVehicle {
+                sold_price_cents: Some(Some(-1)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Invalid { .. }), "{err:?}");
     }
 
     fn decoded() -> VinDecodeResult {
@@ -797,7 +1064,7 @@ mod tests {
                 )
                 .await
                 .map(|_| ()),
-                1 => archive(&db, v).await.map(|_| ()),
+                1 => archive(&db, v, VehicleSale::default()).await.map(|_| ()),
                 _ => unarchive(&db, v).await.map(|_| ()),
             }
         })

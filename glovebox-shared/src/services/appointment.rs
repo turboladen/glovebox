@@ -127,7 +127,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     super::validate_not_blank("purpose", &input.purpose)?;
     let txn = super::begin_write(db).await?;
     let db = &txn;
-    super::vehicle::require(db, vehicle_id).await?;
+    super::vehicle::require_in_garage(db, vehicle_id).await?;
     validate_shop(db, input.shop_id).await?;
     let model = appointment::ActiveModel {
         vehicle_id: Set(vehicle_id),
