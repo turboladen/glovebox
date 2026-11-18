@@ -218,7 +218,10 @@ The `delete_service` and `update_planned_work` replies name the appointment that
 jobs that left a cancelled one. Re-recording the service does not close the appointment again.
 Deleting a service, or correcting its `part_ids`, also unlinks from its need every shop-supplied
 part the service stops installing that goes back to purchased; a part a later service replaced
-keeps its status and its need. `delete_service` refuses a service that recorded work as done
+keeps its status and its need. `correct_part` setting an installed or replaced part to
+`purchased` clears its install and replace details and fills an empty `received_on` from the
+install date, so its need reads received; it refuses a shop-supplied part, install or
+replacement details sent in the same call, and a cleared `received_on`. `delete_service` refuses a service that recorded work as done
 (jobs, installed parts, resolved incidents, recalls) until `completed_work` says whether that
 work did not happen, which undoes it, or was done another way, which keeps it and drops only the
 invoice. `docs/adr/0005-deleting-a-service-asks-what-happened.md` records why. A need is

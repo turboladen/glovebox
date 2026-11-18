@@ -694,6 +694,67 @@ async fn an_inline_part_fills_the_need_it_names() {
 }
 
 #[tokio::test]
+async fn a_fitted_part_goes_back_to_purchased_only_when_the_owner_holds_it() {
+    let t = connect().await;
+    let v = add_vehicle(&t, "GTI").await;
+    // The job stays planned (the service does not name it), so each need's
+    // stage is read on an open job.
+    let job = plan_job(&t, v, "Plugs and pads", None).await;
+    let mut needs = Vec::new();
+    for (name, supplier) in [("Plugs", "shop"), ("Pads", "self")] {
+        needs.push(id(&t
+            .call(
+                "add_need",
+                json!({
+                    "vehicle_id": v, "work_item_id": job, "name": name, "supplied_by": supplier
+                }),
+            )
+            .await));
+    }
+    t.call(
+        "record_service",
+        json!({
+            "vehicle_id": v, "service_date": "2026-11-10",
+            "parts": [
+                { "name": "Plug set", "supplied_by": "shop", "need_id": needs[0] },
+                { "name": "Pad set", "supplied_by": "self", "need_id": needs[1] }
+            ]
+        }),
+    )
+    .await;
+    let view = t
+        .call(
+            "get_checklist",
+            json!({ "vehicle_id": v, "work_item_id": job }),
+        )
+        .await;
+    let part = |i: usize| view["needs"][i]["part"]["id"].clone();
+    let (plugs, pads) = (part(0), part(1));
+
+    let err = t
+        .call_err(
+            "correct_part",
+            json!({ "vehicle_id": v, "part_id": plugs, "status": "purchased" }),
+        )
+        .await;
+    assert!(err.contains("supplied by the shop"), "got: {err}");
+
+    t.call(
+        "correct_part",
+        json!({ "vehicle_id": v, "part_id": pads, "status": "purchased" }),
+    )
+    .await;
+    let view = t
+        .call(
+            "get_checklist",
+            json!({ "vehicle_id": v, "work_item_id": job }),
+        )
+        .await;
+    assert_eq!(view["needs"][0]["stage"], "installed", "got: {view}");
+    assert_eq!(view["needs"][1]["stage"], "received", "got: {view}");
+}
+
+#[tokio::test]
 async fn appointment_status_changes_report_the_jobs_they_release() {
     let t = connect().await;
     let v = add_vehicle(&t, "GTI").await;
