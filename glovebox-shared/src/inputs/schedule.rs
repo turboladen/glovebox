@@ -35,11 +35,3 @@ pub struct UpdateScheduleItem {
     pub labor_categories: Option<Option<String>>,
     pub est_cost_cents: Option<Option<i32>>,
 }
-
-/// Filter for listing raw schedule items by owner.
-#[derive(Default)]
-pub struct ScheduleFilter {
-    pub platform_id: Option<i32>,
-    pub model_template_id: Option<i32>,
-    pub vehicle_id: Option<i32>,
-}

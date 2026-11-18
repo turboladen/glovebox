@@ -9,7 +9,7 @@ use crate::{
         work_item,
     },
     error::{DomainError, DomainResult},
-    inputs::schedule::{NewScheduleItem, ScheduleFilter, UpdateScheduleItem},
+    inputs::schedule::{NewScheduleItem, UpdateScheduleItem},
 };
 
 /// Miles before an item's due point at which it reads as due soon, when the
@@ -44,29 +44,7 @@ pub struct OverriddenItem {
     pub inherited_from: String,
 }
 
-pub async fn list(
-    db: &impl ConnectionTrait,
-    filter: ScheduleFilter,
-) -> DomainResult<Vec<maintenance_schedule_item::Model>> {
-    let mut select = maintenance_schedule_item::Entity::find();
-
-    if let Some(pid) = filter.platform_id {
-        select = select.filter(maintenance_schedule_item::Column::PlatformId.eq(pid));
-    }
-    if let Some(mtid) = filter.model_template_id {
-        select = select.filter(maintenance_schedule_item::Column::ModelTemplateId.eq(mtid));
-    }
-    if let Some(vid) = filter.vehicle_id {
-        select = select.filter(maintenance_schedule_item::Column::VehicleId.eq(vid));
-    }
-
-    Ok(select.all(db).await?)
-}
-
-pub async fn get(
-    db: &impl ConnectionTrait,
-    id: i32,
-) -> DomainResult<maintenance_schedule_item::Model> {
+async fn get(db: &impl ConnectionTrait, id: i32) -> DomainResult<maintenance_schedule_item::Model> {
     maintenance_schedule_item::Entity::find_by_id(id)
         .one(db)
         .await?
@@ -596,18 +574,6 @@ pub(crate) async fn tracked_ids(
     Ok(super::dedup_ids(&mapped))
 }
 
-pub async fn delete(db: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
-    let result = maintenance_schedule_item::Entity::delete_by_id(id)
-        .exec(db)
-        .await?;
-    if result.rows_affected == 0 {
-        return Err(DomainError::NotFound(format!(
-            "Schedule item {id} not found"
-        )));
-    }
-    Ok(())
-}
-
 /// Resolve the effective maintenance schedule for a vehicle.
 /// Implements the 3-level inheritance: Platform → Model Template → Vehicle.
 /// Dismissed and otherwise disabled items are left out.
@@ -846,6 +812,18 @@ mod tests {
         test_support::{VehicleFixture, days_ago, test_db},
     };
 
+    // Reads the schedule items the vehicle itself owns, overrides included.
+    async fn own_items(
+        db: &impl ConnectionTrait,
+        vid: i32,
+    ) -> Vec<maintenance_schedule_item::Model> {
+        maintenance_schedule_item::Entity::find()
+            .filter(maintenance_schedule_item::Column::VehicleId.eq(vid))
+            .all(db)
+            .await
+            .unwrap()
+    }
+
     async fn seed_vehicle(db: &impl ConnectionTrait, model_template_id: Option<i32>) -> i32 {
         let mut fixture = VehicleFixture::new();
         if let Some(id) = model_template_id {
@@ -1063,15 +1041,6 @@ mod tests {
         assert_eq!(resolved[0].inherited_from, None);
     }
 
-    #[tokio::test]
-    async fn delete_missing_is_not_found() {
-        let db = test_db().await;
-        assert!(matches!(
-            delete(&db, 999).await.unwrap_err(),
-            DomainError::NotFound(_)
-        ));
-    }
-
     fn item_named(name: &str) -> NewScheduleItem {
         NewScheduleItem {
             platform_id: None,
@@ -1209,15 +1178,7 @@ mod tests {
             .unwrap();
         assert_eq!(first.id, second.id, "no duplicate shadow rows");
 
-        let vehicle_rows = list(
-            &db,
-            ScheduleFilter {
-                vehicle_id: Some(vid),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
+        let vehicle_rows = own_items(&db, vid).await;
         assert_eq!(vehicle_rows.len(), 1);
     }
 
@@ -1455,15 +1416,7 @@ mod tests {
             .unwrap();
             assert_eq!(again.id, over.id);
         }
-        let own_rows = list(
-            &db,
-            ScheduleFilter {
-                vehicle_id: Some(vid),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
+        let own_rows = own_items(&db, vid).await;
         assert_eq!(own_rows.len(), 1, "one override, never two");
     }
 
@@ -1575,19 +1528,8 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(err, DomainError::BadRequest(_)), "got: {err}");
-        assert!(
-            list(
-                &db,
-                ScheduleFilter {
-                    vehicle_id: Some(vid),
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap()
-            .is_empty(),
-            "a refused change leaves no override behind"
-        );
+        // A refused change leaves no override behind.
+        crate::test_support::assert_empty(&own_items(&db, vid).await);
     }
 
     #[tokio::test]
@@ -1763,16 +1705,7 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(err, DomainError::Invalid { .. }), "got: {err}");
-        let own = list(
-            &db,
-            ScheduleFilter {
-                vehicle_id: Some(vid),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        assert!(own.is_empty(), "got: {} own items", own.len());
+        crate::test_support::assert_empty(&own_items(&db, vid).await);
     }
 
     #[tokio::test]

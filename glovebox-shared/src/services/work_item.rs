@@ -644,7 +644,10 @@ mod tests {
             )
         };
 
-        crate::services::schedule::delete(&db, sched).await.unwrap();
+        maintenance_schedule_item::Entity::delete_by_id(sched)
+            .exec(&db)
+            .await
+            .unwrap();
         assert_eq!(sources().await, (None, Some(finding), Some(inc)));
 
         research_finding::Entity::delete_by_id(finding)
