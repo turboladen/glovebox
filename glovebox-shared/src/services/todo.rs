@@ -160,18 +160,22 @@ impl UpdatedTodo {
 ///
 /// # Errors
 /// `NotFound` for a to-do that is not the vehicle's.
-pub async fn complete(
-    db: &impl ConnectionTrait,
+pub async fn complete<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
     vehicle_id: i32,
     id: i32,
     on: Option<chrono::NaiveDate>,
 ) -> DomainResult<todo::Model> {
+    let txn = super::begin_write(db).await?;
+    let db = &txn;
     let existing = require(db, vehicle_id, id).await?;
     let done_on = on.unwrap_or_else(crate::services::today);
     let mut active: todo::ActiveModel = existing.into();
     active.done_on = Set(Some(done_on));
     active.updated_at = Set(super::now());
-    Ok(active.update(db).await?)
+    let out = active.update(db).await?;
+    txn.commit().await?;
+    Ok(out)
 }
 
 /// Marks a to-do not done. A to-do on a hand-closed appointment opens that
@@ -969,5 +973,20 @@ mod tests {
             );
         }
         crate::test_support::assert_empty(&list(&db, v2, None, true).await.unwrap());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn racing_ticks_of_one_todo_all_succeed() {
+        let (_dir, pools) = race_pools().await;
+        let first = &pools[0];
+        let v = VehicleFixture::new().insert_id(first).await;
+        let t = add(first, v, new_todo("Wash", None)).await.unwrap();
+        let results =
+            crate::test_support::race(
+                &pools,
+                |_, db| async move { complete(&db, v, t.id, None).await },
+            )
+            .await;
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
     }
 }

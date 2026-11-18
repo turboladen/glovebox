@@ -68,10 +68,12 @@ async fn fill_new_from_template(
 /// Creates a vehicle. When `model_template_id` is set, every one of year, make,
 /// model, trim, body style, engine, transmission and drivetrain that the input
 /// leaves empty takes the template's value; a supplied value always wins.
-pub async fn create(
-    db: &impl ConnectionTrait,
+pub async fn create<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
     mut input: NewVehicle,
 ) -> DomainResult<vehicle::Model> {
+    let txn = super::begin_write(db).await?;
+    let db = &txn;
     fill_new_from_template(db, &mut input).await?;
     let model = vehicle::ActiveModel {
         name: Set(input.name),
@@ -96,7 +98,9 @@ pub async fn create(
         warranty_expires_miles: Set(input.warranty_expires_miles),
         ..Default::default()
     };
-    Ok(model.insert(db).await?)
+    let out = model.insert(db).await?;
+    txn.commit().await?;
+    Ok(out)
 }
 
 /// Creates a vehicle, filling the fields the caller left empty and storing the
@@ -112,9 +116,10 @@ pub async fn create_with_vin_decode<C: ConnectionTrait + TransactionTrait>(
     mut input: NewVehicle,
     decoded: Option<&VinDecodeResult>,
 ) -> DomainResult<vehicle::Model> {
+    let txn = super::begin_write(db).await?;
     // The template goes first: a chosen template names one trim and engine,
     // where the decode often returns every option the model line offers.
-    fill_new_from_template(db, &mut input).await?;
+    fill_new_from_template(&txn, &mut input).await?;
     if let Some(d) = decoded {
         input.year = input.year.or(d.year);
         input.make = input.make.or_else(|| d.make.clone());
@@ -125,7 +130,6 @@ pub async fn create_with_vin_decode<C: ConnectionTrait + TransactionTrait>(
         input.transmission = input.transmission.or_else(|| d.transmission.clone());
         input.drivetrain = input.drivetrain.or_else(|| d.drivetrain.clone());
     }
-    let txn = super::begin_write(db).await?;
     let created = create(&txn, input).await?;
     if let Some(d) = decoded {
         vin_decode::store_attributes(&txn, created.id, d).await?;
@@ -172,11 +176,13 @@ fn fill_empty_from_template(
     );
 }
 
-pub async fn update(
-    db: &impl ConnectionTrait,
+pub async fn update<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
     id: i32,
     input: UpdateVehicle,
 ) -> DomainResult<vehicle::Model> {
+    let txn = super::begin_write(db).await?;
+    let db = &txn;
     let existing = require(db, id).await?;
     let template = require_template(db, input.model_template_id.flatten()).await?;
     let mut input = input;
@@ -259,24 +265,40 @@ pub async fn update(
     }
     active.updated_at = Set(super::now());
 
-    Ok(active.update(db).await?)
+    let out = active.update(db).await?;
+    txn.commit().await?;
+    Ok(out)
 }
 
-pub async fn archive(db: &impl ConnectionTrait, id: i32) -> DomainResult<vehicle::Model> {
+pub async fn archive<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    id: i32,
+) -> DomainResult<vehicle::Model> {
+    let txn = super::begin_write(db).await?;
+    let db = &txn;
     let existing = require(db, id).await?;
     let mut active: vehicle::ActiveModel = existing.into();
     let now = super::now();
     active.archived_at = Set(Some(now));
     active.updated_at = Set(now);
-    Ok(active.update(db).await?)
+    let out = active.update(db).await?;
+    txn.commit().await?;
+    Ok(out)
 }
 
-pub async fn unarchive(db: &impl ConnectionTrait, id: i32) -> DomainResult<vehicle::Model> {
+pub async fn unarchive<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    id: i32,
+) -> DomainResult<vehicle::Model> {
+    let txn = super::begin_write(db).await?;
+    let db = &txn;
     let existing = require(db, id).await?;
     let mut active: vehicle::ActiveModel = existing.into();
     active.archived_at = Set(None);
     active.updated_at = Set(super::now());
-    Ok(active.update(db).await?)
+    let out = active.update(db).await?;
+    txn.commit().await?;
+    Ok(out)
 }
 
 /// Deletes a vehicle that has no history yet, undoing a mistaken
@@ -371,7 +393,7 @@ mod tests {
     use super::*;
     use crate::{entities::part::PartStatus, test_support::test_db};
 
-    async fn seed(db: &impl ConnectionTrait, name: &str) -> vehicle::Model {
+    async fn seed(db: &DatabaseConnection, name: &str) -> vehicle::Model {
         create(
             db,
             NewVehicle {
@@ -745,5 +767,41 @@ mod tests {
             "got: {err}"
         );
         assert_eq!(crate::test_support::row_count::<todo::Entity>(&db).await, 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn racing_edits_and_archives_of_one_vehicle_all_succeed() {
+        let (_dir, pools) = crate::test_support::race_pools().await;
+        let v = seed(&pools[0], "Daily").await.id;
+        let template = seed_template(&pools[0]).await;
+        let results = crate::test_support::race(&pools, |i, db| async move {
+            match i % 4 {
+                // A template makes the create read before it writes.
+                3 => create(
+                    &db,
+                    NewVehicle {
+                        name: format!("Car {i}"),
+                        model_template_id: Some(template),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .map(|_| ()),
+                0 => update(
+                    &db,
+                    v,
+                    UpdateVehicle {
+                        name: Some(format!("Daily {i}")),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .map(|_| ()),
+                1 => archive(&db, v).await.map(|_| ()),
+                _ => unarchive(&db, v).await.map(|_| ()),
+            }
+        })
+        .await;
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
     }
 }

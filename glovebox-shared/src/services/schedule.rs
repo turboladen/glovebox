@@ -132,7 +132,7 @@ pub async fn create(
     Ok(model.insert(db).await?)
 }
 
-pub async fn update(
+pub(crate) async fn update(
     db: &impl ConnectionTrait,
     id: i32,
     input: UpdateScheduleItem,
@@ -814,11 +814,13 @@ pub async fn dismiss_for_vehicle<C: ConnectionTrait + TransactionTrait>(
 /// later changes to the template.
 ///
 /// Rows not owned by this vehicle are indistinguishable from nonexistent.
-pub async fn undismiss_for_vehicle(
-    db: &impl ConnectionTrait,
+pub async fn undismiss_for_vehicle<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
     vehicle_id: i32,
     schedule_item_id: i32,
 ) -> DomainResult<maintenance_schedule_item::Model> {
+    let txn = super::begin_write(db).await?;
+    let db = &txn;
     crate::services::vehicle::require(db, vehicle_id).await?;
     let item = maintenance_schedule_item::Entity::find_by_id(schedule_item_id)
         .filter(maintenance_schedule_item::Column::VehicleId.eq(vehicle_id))
@@ -831,7 +833,9 @@ pub async fn undismiss_for_vehicle(
     let mut active: maintenance_schedule_item::ActiveModel = item.into();
     active.enabled = Set(true);
     active.updated_at = Set(super::now());
-    Ok(active.update(db).await?)
+    let out = active.update(db).await?;
+    txn.commit().await?;
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -1982,5 +1986,22 @@ mod tests {
         create_for_vehicle(&db, second, item_named("CABIN AIR FILTER"))
             .await
             .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn racing_restores_of_one_item_all_succeed() {
+        let (_dir, pools) = crate::test_support::race_pools().await;
+        let first = &pools[0];
+        let v = seed_vehicle(first, None).await;
+        let item = create_for_vehicle(first, v, item_named("Wipers"))
+            .await
+            .unwrap()
+            .id;
+        dismiss_for_vehicle(first, v, item, None).await.unwrap();
+        let results = crate::test_support::race(&pools, |_, db| async move {
+            undismiss_for_vehicle(&db, v, item).await
+        })
+        .await;
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
     }
 }

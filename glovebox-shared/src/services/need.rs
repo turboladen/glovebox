@@ -168,8 +168,8 @@ async fn require_option(
 /// # Errors
 /// `NotFound` for a work item that is not the vehicle's; `Invalid` for a
 /// blank name or a quantity below 1.
-pub async fn add(
-    db: &impl ConnectionTrait,
+pub async fn add<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
     vehicle_id: i32,
     work_item_id: i32,
     input: NewNeed,
@@ -177,6 +177,8 @@ pub async fn add(
     super::validate_not_blank("name", &input.name)?;
     let quantity = input.quantity.unwrap_or(1);
     validate_quantity(quantity)?;
+    let txn = super::begin_write(db).await?;
+    let db = &txn;
     super::work_item::get(db, vehicle_id, work_item_id).await?;
     let model = job_need::ActiveModel {
         work_item_id: Set(work_item_id),
@@ -186,7 +188,9 @@ pub async fn add(
         approach: Set(input.approach),
         ..Default::default()
     };
-    Ok(model.insert(db).await?)
+    let out = model.insert(db).await?;
+    txn.commit().await?;
+    Ok(out)
 }
 
 /// Changes a need's name, quantity, supplier, approach or decision reason. A
@@ -289,8 +293,15 @@ fn reason_refused() -> DomainError {
 ///
 /// # Errors
 /// `NotFound` for a need that is not the vehicle's.
-pub async fn delete(db: &impl ConnectionTrait, vehicle_id: i32, need_id: i32) -> DomainResult<()> {
+pub async fn delete<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    need_id: i32,
+) -> DomainResult<()> {
+    let txn = super::begin_write(db).await?;
+    let db = &txn;
     require(db, vehicle_id, need_id).await?.delete(db).await?;
+    txn.commit().await?;
     Ok(())
 }
 
@@ -299,14 +310,16 @@ pub async fn delete(db: &impl ConnectionTrait, vehicle_id: i32, need_id: i32) ->
 /// # Errors
 /// `NotFound` for a need that is not the vehicle's; `Invalid` for a blank
 /// description or a negative price.
-pub async fn add_option(
-    db: &impl ConnectionTrait,
+pub async fn add_option<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
     vehicle_id: i32,
     need_id: i32,
     input: NewOption,
 ) -> DomainResult<need_option::Model> {
     super::validate_not_blank("description", &input.description)?;
     validate_price(input.price_cents)?;
+    let txn = super::begin_write(db).await?;
+    let db = &txn;
     require(db, vehicle_id, need_id).await?;
     let model = need_option::ActiveModel {
         need_id: Set(need_id),
@@ -320,7 +333,9 @@ pub async fn add_option(
         fitment_note: Set(input.fitment_note.as_deref().and_then(super::trim_to_none)),
         ..Default::default()
     };
-    Ok(model.insert(db).await?)
+    let out = model.insert(db).await?;
+    txn.commit().await?;
+    Ok(out)
 }
 
 // Clears the need's choice, the date it was made and the reason given for it
@@ -507,21 +522,22 @@ pub async fn update_with_choice<C: ConnectionTrait + TransactionTrait>(
 /// option stamps `decided_on` with today's date, choosing the option already
 /// chosen keeps the date and replaces only the reason, and clearing removes
 /// the date. Choosing an option clears the `chosen_reason` and `chosen_on` it
-/// kept from an earlier choice. The writes are atomic only inside a
-/// transaction the caller holds, as [`update_with_choice`] does.
+/// kept from an earlier choice, all in one transaction.
 ///
 /// # Errors
 /// `NotFound` for a need that is not the vehicle's; `BadRequest` for an
 /// option of another need, one marked `does_not_fit` or a rejected one;
 /// `Invalid` on `decision_reason` for a reason sent without an option, unless
 /// the shop supplies the need.
-pub async fn decide(
-    db: &impl ConnectionTrait,
+pub async fn decide<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
     vehicle_id: i32,
     need_id: i32,
     option_id: Option<i32>,
     reason: Option<String>,
 ) -> DomainResult<job_need::Model> {
+    let txn = super::begin_write(db).await?;
+    let db = &txn;
     let need = require(db, vehicle_id, need_id).await?;
     // The choice this call makes decides, never the stored one.
     if reason.is_some() && !holds_reason(need.supplied_by, option_id) {
@@ -563,7 +579,9 @@ pub async fn decide(
     if let Some(option_id) = option_id.filter(|_| has_history) {
         clear_choice_history(db, option_id).await?;
     }
-    Ok(active.update(db).await?)
+    let out = active.update(db).await?;
+    txn.commit().await?;
+    Ok(out)
 }
 
 // Clears the reason and date an option kept from an earlier choice, which
@@ -3414,5 +3432,49 @@ mod tests {
             .unwrap();
         assert_eq!(linked.stage, Stage::Installed);
         assert_eq!(linked.part.received_on, None);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn racing_adds_options_and_deletes_all_succeed() {
+        let (_dir, pools) = race_pools().await;
+        let first = &pools[0];
+        let (v, job) = seed_job(first).await;
+        let mut ids = Vec::new();
+        for i in 0..pools.len() * 2 {
+            ids.push(
+                add(first, v, job, need(&format!("Need {i}")))
+                    .await
+                    .unwrap()
+                    .id,
+            );
+        }
+        let results = crate::test_support::race(&pools, |i, db| {
+            let id = ids[i];
+            async move {
+                match i % 3 {
+                    0 => add(&db, v, job, need("New need")).await.map(|_| ()),
+                    1 => add_option(&db, v, id, option("Pads")).await.map(|_| ()),
+                    _ => delete(&db, v, id).await,
+                }
+            }
+        })
+        .await;
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn racing_choices_on_one_need_all_succeed() {
+        let (_dir, pools) = race_pools().await;
+        let first = &pools[0];
+        let (v, job) = seed_job(first).await;
+        let n = add(first, v, job, need("Pads")).await.unwrap().id;
+        let a = add_option(first, v, n, option("Brand A")).await.unwrap().id;
+        let b = add_option(first, v, n, option("Brand B")).await.unwrap().id;
+        let results = crate::test_support::race(&pools, |i, db| async move {
+            let chosen = if i % 2 == 0 { a } else { b };
+            decide(&db, v, n, Some(chosen), None).await
+        })
+        .await;
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
     }
 }

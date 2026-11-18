@@ -509,12 +509,14 @@ pub async fn list_followups(
         .await?)
 }
 
-pub async fn create_followup(
-    db: &impl ConnectionTrait,
+pub async fn create_followup<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
     vehicle_id: i32,
     incident_id: i32,
     input: NewFollowup,
 ) -> DomainResult<incident_followup::Model> {
+    let txn = super::begin_write(db).await?;
+    let db = &txn;
     // Verify the incident belongs to this vehicle before attaching a followup.
     require_incident(db, vehicle_id, incident_id).await?;
 
@@ -527,7 +529,9 @@ pub async fn create_followup(
         notes: Set(input.notes),
         ..Default::default()
     };
-    Ok(model.insert(db).await?)
+    let out = model.insert(db).await?;
+    txn.commit().await?;
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -1369,5 +1373,29 @@ mod tests {
         // Same message a truly nonexistent id yields: no ownership oracle.
         assert_eq!(msg, format!("Incident {} not found", inc.incident.id));
         assert!(get(&db, vid, inc.incident.id).await.is_ok());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn racing_followups_all_succeed() {
+        let (_dir, pools) = crate::test_support::race_pools().await;
+        let first = &pools[0];
+        let v = seed_vehicle(first).await;
+        let incident = create(first, v, new_incident("Rattle", IncidentCategory::Noise))
+            .await
+            .unwrap()
+            .incident
+            .id;
+        let results = crate::test_support::race(&pools, |i, db| async move {
+            let followup = NewFollowup {
+                occurred_at: crate::test_support::date("2026-11-01"),
+                contact_method: None,
+                contact_with: None,
+                summary: format!("Call {i}"),
+                notes: None,
+            };
+            create_followup(&db, v, incident, followup).await
+        })
+        .await;
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
     }
 }
