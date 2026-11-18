@@ -348,14 +348,8 @@ mod tests {
             vid,
             NewWorkItem {
                 title: "Wipers".into(),
-                notes: None,
-                schedule_item_id: None,
-                research_finding_id: None,
-                incident_id: None,
                 est_cost_cents: Some(7_500),
-                revisit_by_date: None,
-                revisit_by_miles: None,
-                appointment_id: None,
+                ..Default::default()
             },
         )
         .await
@@ -365,14 +359,8 @@ mod tests {
             vid,
             NewWorkItem {
                 title: "Never happening".into(),
-                notes: None,
-                schedule_item_id: None,
-                research_finding_id: None,
-                incident_id: None,
                 est_cost_cents: Some(99_900),
-                revisit_by_date: None,
-                revisit_by_miles: None,
-                appointment_id: None,
+                ..Default::default()
             },
         )
         .await
@@ -455,14 +443,9 @@ mod tests {
                 vid,
                 NewWorkItem {
                     title: title.into(),
-                    notes: None,
                     schedule_item_id: Some(sched),
-                    research_finding_id: None,
-                    incident_id: None,
                     est_cost_cents: Some(est),
-                    revisit_by_date: None,
-                    revisit_by_miles: None,
-                    appointment_id: None,
+                    ..Default::default()
                 },
             )
             .await
@@ -541,14 +524,8 @@ mod tests {
     fn plan(title: &str, est_cost_cents: Option<i32>) -> NewWorkItem {
         NewWorkItem {
             title: title.into(),
-            notes: None,
-            schedule_item_id: None,
-            research_finding_id: None,
-            incident_id: None,
             est_cost_cents,
-            revisit_by_date: None,
-            revisit_by_miles: None,
-            appointment_id: None,
+            ..Default::default()
         }
     }
 

@@ -25,8 +25,8 @@ impl JobStatus {
 /// A planned piece of work. It can come from a schedule item, a research
 /// finding (such as a recall), an incident, or be ad hoc. The service layer
 /// checks each source id against the vehicle. A source id,
-/// `completed_service_id` and `appointment_id` each clear when the row they
-/// name is deleted.
+/// `completed_service_id`, `appointment_id` and `quote_service_id` each clear
+/// when the row they name is deleted.
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "work_items")]
 pub struct Model {
@@ -46,6 +46,12 @@ pub struct Model {
     pub revisit_by_miles: Option<i32>,
     pub completed_service_id: Option<i32>,
     pub appointment_id: Option<i32>,
+    /// Who gave the quote this job came from, such as a shop.
+    pub quoted_by: Option<String>,
+    /// The day the quote was given.
+    pub quoted_on: Option<chrono::NaiveDate>,
+    /// The service whose visit produced the quote.
+    pub quote_service_id: Option<i32>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

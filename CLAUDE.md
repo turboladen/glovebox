@@ -129,8 +129,9 @@ not a real `YYYY-MM-DD`, because such a row could not be read,
 `m20261114_000003_work_item_link_foreign_keys`, which gives a job's `schedule_item_id`,
 `research_finding_id` and `incident_id` an `ON DELETE SET NULL` foreign key the same way, after
 clearing any id that names a missing row, and `m20261115_000001_vocabulary_values`, which changes
-nothing and refuses to finish while a vocabulary column holds a value outside its list. They run
-on startup.
+nothing and refuses to finish while a vocabulary column holds a value outside its list, and
+`m20261117_000001_work_item_quotes`, which gives a job `quoted_by`, `quoted_on` and
+`quote_service_id` (an `ON DELETE SET NULL` key added with the column). They run on startup.
 
 **Test harness** (`test_support.rs`): `test_db()` is an in-memory SQLite database with migrations
 applied. It is compiled under `#[cfg(any(test, feature = "test-support"))]`; `glovebox-mcp` uses it
@@ -216,7 +217,10 @@ appointment therefore never holds a planned job: when a job on one returns to `p
 service is deleted, or its status is set back), a hand-closed appointment opens again and a
 cancelled one lets the job go to the unscheduled pool (`appointment::settle_reopened_jobs`).
 The `delete_service`, `correct_service` and `update_planned_work` replies name the appointment that
-reopened and the jobs that left a cancelled one. Re-recording the service does not close the appointment again.
+reopened and the jobs that left a cancelled one. A quote for work not done is a planned job with
+`quote_service_id` naming the invoice it came with, which lists it in `quoted_work_items`;
+`delete_service` keeps such a quote and names it in `quotes_unlinked`
+(`docs/adr/0012-a-quote-is-planned-work.md`). Re-recording the service does not close the appointment again.
 Deleting a service, or correcting its `part_ids` as work that did not happen, also unlinks from its
 need every shop-supplied part the service stops installing that goes back to purchased; a part a later service replaced
 keeps its status and its need. `correct_part` setting an installed or replaced part to
@@ -419,7 +423,7 @@ role per control style, and `YYYY-MM-DD` dates.
   status, `service_record::CompletedWork`, `schedule::LinkMode` and `search::SearchScope`. A
   filter on a column never takes one of these.
   `docs/adr/0004-typed-vocabularies.md` records why.
-- **Migrations**: new migrations go after `m20261115_000001_vocabulary_values`; the
+- **Migrations**: new migrations go after `m20261117_000001_work_item_quotes`; the
   `new-migration` skill has the templates. Use `Expr::cust()` for expressions inside builder queries; raw
   `execute_unprepared` only where no builder form exists (FTS5 DDL, cross-table copies).
 - **Migrations are not transactional on SQLite** (sea-orm-migration only wraps Postgres), so write

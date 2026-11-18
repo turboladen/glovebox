@@ -28,7 +28,11 @@ impl GloveboxMcp {
                        for work to watch rather than do now. Pass `appointment_id` to put the job \
                        on an appointment (from `plan_appointment`); a job with no appointment is \
                        still planned and can collect needs with `add_need` before there is a shop \
-                       or a date. Review the list with list_planned_work."
+                       or a date. A quote for work not done yet is planned work: put the quoted \
+                       amount in `est_cost_cents`. Pass `quote_service_id` when it came with an \
+                       invoice for other work, which then gives its shop and date; pass \
+                       `quoted_by` and `quoted_on` for a quote with no invoice. Review the list \
+                       with list_planned_work."
     )]
     async fn plan_work(
         &self,

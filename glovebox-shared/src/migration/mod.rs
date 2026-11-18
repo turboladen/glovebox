@@ -8,6 +8,7 @@ mod m20261114_000001_typed_dates;
 mod m20261114_000002_utc_timestamps;
 mod m20261114_000003_work_item_link_foreign_keys;
 mod m20261115_000001_vocabulary_values;
+mod m20261117_000001_work_item_quotes;
 mod schema;
 
 pub struct Migrator;
@@ -24,6 +25,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261114_000002_utc_timestamps::Migration),
             Box::new(m20261114_000003_work_item_link_foreign_keys::Migration),
             Box::new(m20261115_000001_vocabulary_values::Migration),
+            Box::new(m20261117_000001_work_item_quotes::Migration),
         ]
     }
 }

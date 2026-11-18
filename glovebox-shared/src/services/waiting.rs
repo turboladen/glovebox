@@ -271,14 +271,7 @@ mod tests {
     fn work(title: &str) -> NewWorkItem {
         NewWorkItem {
             title: title.into(),
-            notes: None,
-            schedule_item_id: None,
-            research_finding_id: None,
-            incident_id: None,
-            est_cost_cents: None,
-            revisit_by_date: None,
-            revisit_by_miles: None,
-            appointment_id: None,
+            ..Default::default()
         }
     }
 

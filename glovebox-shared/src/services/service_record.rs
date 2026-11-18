@@ -76,6 +76,10 @@ pub struct ServiceRecordWithLinks {
     pub performed_recalls: Vec<RecallRef>,
     /// To-do items this service completed.
     pub completed_work_items: Vec<WorkItemRef>,
+    /// Planned jobs whose quote came with this service, such as an estimate
+    /// on the invoice for work not done. Omitted from JSON when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub quoted_work_items: Vec<WorkItemRef>,
     /// True when `create` found a record with the same `invoice_ref` on this
     /// vehicle and returned it unchanged instead of writing anything.
     /// Serialized only when true.
@@ -291,6 +295,7 @@ impl ServiceRecordWithLinks {
             resolved_incidents,
             performed_recalls,
             completed_work_items: Vec::new(),
+            quoted_work_items: Vec::new(),
             already_recorded: false,
             message: None,
             possible_duplicates: Vec::new(),
@@ -382,10 +387,7 @@ async fn load_service_links(
         .remove(&record.id)
         .unwrap_or_default();
 
-    let completed_work_items = work_item::load_completed_by(db, &[record.id])
-        .await?
-        .remove(&record.id)
-        .unwrap_or_default();
+    let mut jobs = work_item::load_by_service(db, &[record.id]).await?;
 
     let mut links = ServiceRecordWithLinks::assemble(
         record,
@@ -396,7 +398,8 @@ async fn load_service_links(
         resolved,
         performed_recalls,
     );
-    links.completed_work_items = completed_work_items;
+    links.completed_work_items = jobs.completed.remove(&links.record.id).unwrap_or_default();
+    links.quoted_work_items = jobs.quoted.remove(&links.record.id).unwrap_or_default();
     Ok(links)
 }
 
@@ -541,7 +544,7 @@ pub async fn list_between(
 
     let mut incident_links = load_incident_links(db, &record_ids).await?;
     let mut performed = recall::load_performed(db, &record_ids).await?;
-    let mut completed = work_item::load_completed_by(db, &record_ids).await?;
+    let mut jobs = work_item::load_by_service(db, &record_ids).await?;
 
     let all_line_items = if record_ids.is_empty() {
         vec![]
@@ -580,7 +583,8 @@ pub async fn list_between(
                 .remove(&record.id)
                 .unwrap_or_default();
             let performed_recalls = performed.remove(&record.id).unwrap_or_default();
-            let completed_work_items = completed.remove(&record.id).unwrap_or_default();
+            let completed_work_items = jobs.completed.remove(&record.id).unwrap_or_default();
+            let quoted_work_items = jobs.quoted.remove(&record.id).unwrap_or_default();
             let mut links = ServiceRecordWithLinks::assemble(
                 record,
                 schedule_item_ids,
@@ -591,6 +595,7 @@ pub async fn list_between(
                 performed_recalls,
             );
             links.completed_work_items = completed_work_items;
+            links.quoted_work_items = quoted_work_items;
             links
         })
         .collect();
@@ -1285,6 +1290,9 @@ pub struct DeletedService {
     /// Ids of the jobs the service completed that came off a cancelled
     /// appointment.
     pub unassigned_job_ids: Vec<i32>,
+    /// Ids of the planned jobs whose quote came with the service. They stay
+    /// and keep who quoted them and when, but no longer name the service.
+    pub unlinked_quote_ids: Vec<i32>,
 }
 
 /// Deletes a service record and its owned rows.
@@ -1316,7 +1324,29 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         let incident_ids: Vec<i32> = work.incidents.iter().map(|i| i.id).collect();
         reopen_resolved_incidents(&txn, existing.id, incident_ids).await?;
     }
+    // The key clears these on delete too; the explicit write stamps them and
+    // does not depend on the foreign_keys pragma.
+    let unlinked_quote_ids: Vec<i32> = job::Entity::find()
+        .filter(job::Column::QuoteServiceId.eq(existing.id))
+        .order_by_asc(job::Column::Id)
+        .all(&txn)
+        .await?
+        .into_iter()
+        .map(|j| j.id)
+        .collect();
+    if !unlinked_quote_ids.is_empty() {
+        job::Entity::update_many()
+            .set(job::ActiveModel {
+                quote_service_id: Set(None),
+                updated_at: Set(super::now()),
+                ..Default::default()
+            })
+            .filter(job::Column::Id.is_in(unlinked_quote_ids.clone()))
+            .exec(&txn)
+            .await?;
+    }
     let mut outcome = DeletedService {
+        unlinked_quote_ids,
         kept_part_ids: work.parts.iter().map(|p| p.id).collect(),
         reopened_appointment_ids: settled.reopened_appointment_ids,
         unassigned_job_ids: settled.unassigned_job_ids,
@@ -3021,14 +3051,8 @@ mod tests {
             v,
             crate::inputs::work_item::NewWorkItem {
                 title: "Replace purge valve".into(),
-                notes: None,
-                schedule_item_id: None,
-                research_finding_id: None,
                 incident_id: Some(incident_id),
-                est_cost_cents: None,
-                revisit_by_date: None,
-                revisit_by_miles: None,
-                appointment_id: None,
+                ..Default::default()
             },
         )
         .await
@@ -3201,14 +3225,7 @@ mod tests {
             v,
             NewWorkItem {
                 title: "Do the thing".into(),
-                notes: None,
-                schedule_item_id: None,
-                research_finding_id: None,
-                incident_id: None,
-                est_cost_cents: None,
-                revisit_by_date: None,
-                revisit_by_miles: None,
-                appointment_id: None,
+                ..Default::default()
             },
         )
         .await
@@ -3312,14 +3329,7 @@ mod tests {
             v,
             NewWorkItem {
                 title: "Do the thing".into(),
-                notes: None,
-                schedule_item_id: None,
-                research_finding_id: None,
-                incident_id: None,
-                est_cost_cents: None,
-                revisit_by_date: None,
-                revisit_by_miles: None,
-                appointment_id: None,
+                ..Default::default()
             },
         )
         .await

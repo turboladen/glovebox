@@ -890,6 +890,24 @@ pub struct UpdatePlannedWorkInput {
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<i32>")]
     pub appointment_id: Option<Option<i32>>,
+    /// Who gave the quote this job came from.
+    ///
+    /// Send `null` to clear it; omit the key to leave it unchanged.
+    #[serde(default, deserialize_with = "nullable")]
+    #[schemars(with = "Option<String>")]
+    pub quoted_by: Option<Option<String>>,
+    /// The day of that quote, `YYYY-MM-DD`.
+    ///
+    /// Send `null` to clear it; omit the key to leave it unchanged.
+    #[serde(default, deserialize_with = "nullable")]
+    #[schemars(with = "Option<String>")]
+    pub quoted_on: Option<Option<String>>,
+    /// The service whose visit produced the quote (from `list_services`).
+    ///
+    /// Send `null` to clear it; omit the key to leave it unchanged.
+    #[serde(default, deserialize_with = "nullable")]
+    #[schemars(with = "Option<i32>")]
+    pub quote_service_id: Option<Option<i32>>,
 }
 
 impl UpdatePlannedWorkInput {
@@ -908,6 +926,9 @@ impl UpdatePlannedWorkInput {
                 revisit_by_date: dates::parse_date_change("revisit_by_date", self.revisit_by_date)?,
                 revisit_by_miles: self.revisit_by_miles,
                 appointment_id: self.appointment_id,
+                quoted_by: self.quoted_by,
+                quoted_on: dates::parse_date_change("quoted_on", self.quoted_on)?,
+                quote_service_id: self.quote_service_id,
             },
         ))
     }

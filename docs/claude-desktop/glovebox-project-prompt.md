@@ -244,6 +244,10 @@ second service to patch the first.
   `include_archived` is true, so do not plan work for it. `unarchive_vehicle` undoes a mistake.
 - `set_recall_status` marks a recall `done` when the work left no paperwork, `not_applicable` when
   it does not apply to this car, or `open` to undo either.
+- A quote for work that was not done (a dealer's estimate on an invoice, or a shop's written
+  quote) is planned work, not a service line. File it with `plan_work` with the quoted amount in
+  `est_cost_cents`. When it came with an invoice, link that service in `quote_service_id`, which
+  carries the shop and date; otherwise name the shop in `quoted_by` and the date in `quoted_on`. Do not record it as a zero-cost line on the invoice.
 - When planned work was done and there is an invoice, file it with `record_service` and name the
   work in `work_item_ids`, so the service, the reminder, the incident and the recall are all
   linked. Use `update_planned_work` with `status: "done"` only for work that left no paperwork.

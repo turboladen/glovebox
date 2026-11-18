@@ -532,6 +532,15 @@ pub struct PlanWorkInput {
     /// open. Leave it out for a job with no shop visit yet; it can be moved
     /// later with `update_planned_work`.
     pub appointment_id: Option<i32>,
+    /// For a quote with no invoice: who gave it, such as the shop's name. A
+    /// quote linked by `quote_service_id` takes its shop from that service.
+    pub quoted_by: Option<String>,
+    /// The day of the quote, `YYYY-MM-DD`.
+    pub quoted_on: Option<String>,
+    /// The service whose visit produced the quote (from `list_services`), when
+    /// the quote came with an invoice for other work. The service then names
+    /// the job in its `quoted_work_items`.
+    pub quote_service_id: Option<i32>,
 }
 
 impl PlanWorkInput {
@@ -551,6 +560,9 @@ impl PlanWorkInput {
                 )?,
                 revisit_by_miles: self.revisit_by_miles,
                 appointment_id: self.appointment_id,
+                quoted_by: self.quoted_by,
+                quoted_on: dates::parse_optional_date("quoted_on", self.quoted_on)?,
+                quote_service_id: self.quote_service_id,
             },
         ))
     }

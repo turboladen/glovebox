@@ -103,8 +103,8 @@ async fn require_finding_owned(
 }
 
 /// Guard every present source link on a work item: schedule item (vehicle
-/// scope chain), research finding (via its report), and incident, each
-/// vehicle-scoped. Returns the schedule item id to store, which is the
+/// scope chain), research finding (via its report), incident and quoting
+/// service, each vehicle-scoped. Returns the schedule item id to store, which is the
 /// vehicle's own copy when the id names an inherited item the vehicle has
 /// copied.
 async fn require_links_owned(
@@ -113,6 +113,7 @@ async fn require_links_owned(
     schedule_item_id: Option<i32>,
     research_finding_id: Option<i32>,
     incident_id: Option<i32>,
+    quote_service_id: Option<i32>,
 ) -> DomainResult<Option<i32>> {
     let tracked = match schedule_item_id {
         Some(id) => crate::services::schedule::tracked_ids(db, vehicle_id, &[id])
@@ -126,6 +127,9 @@ async fn require_links_owned(
     }
     if let Some(id) = incident_id {
         crate::services::incident::require_incident(db, vehicle_id, id).await?;
+    }
+    if let Some(id) = quote_service_id {
+        super::service_record::require(db, vehicle_id, id).await?;
     }
     Ok(tracked)
 }
@@ -234,28 +238,45 @@ pub struct WorkItemRef {
     pub title: String,
 }
 
-/// The to-do items each of the given services completed, keyed by service id
-/// and ordered by item id, in one query.
-pub(crate) async fn load_completed_by(
+/// The jobs each of a set of services completed, and the jobs whose quote
+/// each one produced, keyed by service id and ordered by job id.
+#[derive(Default)]
+pub(crate) struct ServiceJobs {
+    pub completed: std::collections::HashMap<i32, Vec<WorkItemRef>>,
+    pub quoted: std::collections::HashMap<i32, Vec<WorkItemRef>>,
+}
+
+/// The [`ServiceJobs`] of the given services, in one query.
+pub(crate) async fn load_by_service(
     db: &impl ConnectionTrait,
     service_ids: &[i32],
-) -> DomainResult<std::collections::HashMap<i32, Vec<WorkItemRef>>> {
-    let mut out: std::collections::HashMap<i32, Vec<WorkItemRef>> =
-        std::collections::HashMap::new();
+) -> DomainResult<ServiceJobs> {
+    let mut out = ServiceJobs::default();
     if service_ids.is_empty() {
         return Ok(out);
     }
     let items = work_item::Entity::find()
-        .filter(work_item::Column::CompletedServiceId.is_in(service_ids.to_vec()))
+        .filter(
+            Condition::any()
+                .add(work_item::Column::CompletedServiceId.is_in(service_ids.to_vec()))
+                .add(work_item::Column::QuoteServiceId.is_in(service_ids.to_vec())),
+        )
         .order_by_asc(work_item::Column::Id)
         .all(db)
         .await?;
     for item in items {
+        let item_ref = WorkItemRef {
+            id: item.id,
+            title: item.title,
+        };
+        if let Some(service_id) = item.quote_service_id {
+            out.quoted
+                .entry(service_id)
+                .or_default()
+                .push(item_ref.clone());
+        }
         if let Some(service_id) = item.completed_service_id {
-            out.entry(service_id).or_default().push(WorkItemRef {
-                id: item.id,
-                title: item.title,
-            });
+            out.completed.entry(service_id).or_default().push(item_ref);
         }
     }
     Ok(out)
@@ -326,6 +347,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
         input.schedule_item_id,
         input.research_finding_id,
         input.incident_id,
+        input.quote_service_id,
     )
     .await?;
     let model = work_item::ActiveModel {
@@ -339,6 +361,9 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
         revisit_by_date: Set(input.revisit_by_date),
         revisit_by_miles: Set(input.revisit_by_miles),
         appointment_id: Set(input.appointment_id),
+        quoted_by: Set(input.quoted_by.as_deref().and_then(super::trim_to_none)),
+        quoted_on: Set(input.quoted_on),
+        quote_service_id: Set(input.quote_service_id),
         status: Set(JobStatus::Planned),
         ..Default::default()
     };
@@ -388,6 +413,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         input.schedule_item_id.flatten(),
         input.research_finding_id.flatten(),
         input.incident_id.flatten(),
+        input.quote_service_id.flatten(),
     )
     .await?;
     // Keeping the appointment a job is already on is not a new assignment, so
@@ -423,6 +449,15 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     }
     if let Some(v) = input.revisit_by_miles {
         active.revisit_by_miles = Set(v);
+    }
+    if let Some(v) = input.quoted_by {
+        active.quoted_by = Set(v.as_deref().and_then(super::trim_to_none));
+    }
+    if let Some(v) = input.quoted_on {
+        active.quoted_on = Set(v);
+    }
+    if let Some(v) = input.quote_service_id {
+        active.quote_service_id = Set(v);
     }
     if let Some(v) = input.appointment_id {
         active.appointment_id = Set(v);
@@ -573,14 +608,7 @@ mod tests {
     fn item(title: &str) -> NewWorkItem {
         NewWorkItem {
             title: title.into(),
-            notes: None,
-            schedule_item_id: None,
-            research_finding_id: None,
-            incident_id: None,
-            est_cost_cents: None,
-            revisit_by_date: None,
-            revisit_by_miles: None,
-            appointment_id: None,
+            ..Default::default()
         }
     }
 
@@ -652,6 +680,9 @@ mod tests {
             revisit_by_miles: miles,
             completed_service_id: None,
             appointment_id: None,
+            quoted_by: None,
+            quoted_on: None,
+            quote_service_id: None,
         }
     }
 
@@ -1215,5 +1246,108 @@ mod tests {
         })
         .await;
         assert!(results.iter().all(Result::is_ok), "{results:?}");
+    }
+
+    #[tokio::test]
+    async fn a_quote_records_who_gave_it_and_the_service_it_came_with() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let svc = service_svc::create(&db, v, service_on("2020-06-01", vec![]))
+            .await
+            .unwrap()
+            .record
+            .id;
+        let quote = create(
+            &db,
+            v,
+            NewWorkItem {
+                quoted_by: Some("  City VW ".into()),
+                quoted_on: Some(date("2020-06-01")),
+                quote_service_id: Some(svc),
+                est_cost_cents: Some(42_000),
+                ..item("Repair the mirror")
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(quote.quoted_by.as_deref(), Some("City VW"));
+        assert_eq!(quote.quoted_on, Some(date("2020-06-01")));
+        assert_eq!(quote.quote_service_id, Some(svc));
+
+        let read = service_svc::get(&db, v, svc).await.unwrap();
+        let quoted: Vec<i32> = read.quoted_work_items.iter().map(|w| w.id).collect();
+        assert_eq!(
+            quoted,
+            vec![quote.id],
+            "the service names the quote it produced"
+        );
+        crate::test_support::assert_empty(&read.completed_work_items);
+
+        // Deleting the service keeps the quote, forgets the service and says so.
+        let deleted = service_svc::delete(&db, v, svc, None).await.unwrap();
+        assert_eq!(deleted.unlinked_quote_ids, vec![quote.id]);
+        let kept = get(&db, v, quote.id).await.unwrap();
+        assert_eq!(kept.quote_service_id, None);
+        assert_eq!(kept.quoted_by.as_deref(), Some("City VW"));
+
+        let cleared = update(
+            &db,
+            v,
+            quote.id,
+            UpdateWorkItem {
+                quoted_by: Some(Some(" ".into())),
+                quoted_on: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .work_item;
+        assert_eq!((cleared.quoted_by, cleared.quoted_on), (None, None));
+    }
+
+    #[tokio::test]
+    async fn a_quote_service_of_another_vehicle_reads_as_missing() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let other = VehicleFixture::new().name("Other").insert_id(&db).await;
+        let theirs = service_svc::create(&db, other, service_on("2020-06-01", vec![]))
+            .await
+            .unwrap()
+            .record
+            .id;
+        let quoting = |service: i32| NewWorkItem {
+            quote_service_id: Some(service),
+            ..item("Mirror")
+        };
+        let wrong = create(&db, v, quoting(theirs)).await.unwrap_err();
+        let missing = create(&db, v, quoting(99_999)).await.unwrap_err();
+        assert_eq!(
+            wrong.to_string().replace(&theirs.to_string(), "N"),
+            missing.to_string().replace("99999", "N")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_quote_service_of_another_vehicle_reads_as_missing_on_update() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let other = VehicleFixture::new().name("Other").insert_id(&db).await;
+        let theirs = service_svc::create(&db, other, service_on("2020-06-01", vec![]))
+            .await
+            .unwrap()
+            .record
+            .id;
+        let job = create(&db, v, item("Mirror")).await.unwrap().id;
+        let linking = |service: i32| UpdateWorkItem {
+            quote_service_id: Some(Some(service)),
+            ..Default::default()
+        };
+        let wrong = update(&db, v, job, linking(theirs)).await.unwrap_err();
+        let missing = update(&db, v, job, linking(99_999)).await.unwrap_err();
+        assert_eq!(
+            wrong.to_string().replace(&theirs.to_string(), "N"),
+            missing.to_string().replace("99999", "N")
+        );
     }
 }
