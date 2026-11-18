@@ -18,9 +18,10 @@ use glovebox_shared::{
         checklist::{self, Checklist, HomeAppointment, JobView, NeedView, StepRow},
         date_label,
         need::{self, Stage},
+        part as part_svc,
         reminders::{self, DueStatus},
         waiting::{Waiting, booked_note},
-        work_sheet::{SheetContent, SheetLine, WorkSheet},
+        work_sheet::{SheetLine, WorkSheet},
     },
     vocab::Vocabulary,
 };
@@ -161,10 +162,9 @@ impl LinkedPart {
     // Returns the need's part when no option is chosen, because a chosen
     // option fills the row's part columns itself.
     fn of(view: &NeedView) -> Option<Self> {
-        view.part
-            .as_ref()
+        view.linked_part()
             .filter(|_| view.chosen.is_none())
-            .map(|v| Self::new(&v.part))
+            .map(Self::new)
     }
 
     fn new(part: &part::Model) -> Self {
@@ -945,7 +945,13 @@ fn kit_items(view: &NeedView) -> Vec<KitItemCard> {
     view.part
         .iter()
         .flat_map(|p| &p.contents)
-        .map(|item| KitItemCard::from(&SheetContent::from(item)))
+        .map(|item| {
+            KitItemCard::new(
+                &item.name,
+                item.quantity,
+                part_svc::label(item.manufacturer.as_deref(), item.part_number.as_deref()),
+            )
+        })
         .collect()
 }
 
@@ -957,11 +963,11 @@ pub struct KitItemCard {
     pub label: Option<String>,
 }
 
-impl From<&SheetContent> for KitItemCard {
-    fn from(item: &SheetContent) -> Self {
+impl KitItemCard {
+    fn new(name: &str, quantity: i32, label: Option<String>) -> Self {
         KitItemCard {
-            text: count_text(&item.name, item.quantity),
-            label: item.label.clone(),
+            text: count_text(name, quantity),
+            label,
         }
     }
 }
@@ -998,7 +1004,11 @@ pub fn sheet_jobs(sheet: &WorkSheet) -> Vec<SheetJobCard> {
     let card = |line: &SheetLine| SheetLineCard {
         text: count_text(&line.name, line.quantity),
         label: line.label.clone(),
-        contents: line.contents.iter().map(KitItemCard::from).collect(),
+        contents: line
+            .contents
+            .iter()
+            .map(|item| KitItemCard::new(&item.name, item.quantity, item.label.clone()))
+            .collect(),
     };
     sheet
         .jobs

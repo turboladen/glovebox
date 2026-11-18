@@ -1517,7 +1517,7 @@ async fn work_sheet_lists_a_kits_contents() {
     let (v, appt) = work_sheet_fixture(&t).await;
     let parts = t.call("list_parts", json!({ "vehicle_id": v })).await;
     let pads = parts[0]["id"].clone();
-    t.call(
+    let kit = t.call(
         "correct_part",
         json!({
             "vehicle_id": v,
@@ -1540,8 +1540,8 @@ async fn work_sheet_lists_a_kits_contents() {
     assert_eq!(
         sheet["jobs"][0]["owner_supplies"][0]["contents"],
         json!([
-            { "id": 1, "name": "Pads", "quantity": 4, "label": "Akebono ACT1633A" },
-            { "id": 2, "name": "Shims", "quantity": 1, "label": null }
+            { "id": kit["contents"][0]["id"], "name": "Pads", "quantity": 4, "label": "Akebono ACT1633A" },
+            { "id": kit["contents"][1]["id"], "name": "Shims", "quantity": 1, "label": null }
         ]),
         "got: {sheet}"
     );

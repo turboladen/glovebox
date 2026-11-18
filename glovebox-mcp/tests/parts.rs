@@ -246,7 +246,7 @@ async fn a_kits_contents_are_recorded_listed_added_to_and_removed_by_id() {
             json!({ "vehicle_id": v.id, "part_id": kit["id"], "add_contents": [{ "name": " " }] }),
         )
         .await;
-    assert_eq!(refused, "contents: item 1 needs a name");
+    assert_eq!(refused, "add_contents: item 1 needs a name");
     let gone = t
         .call_err(
             "correct_part",

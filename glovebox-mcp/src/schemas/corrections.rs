@@ -580,11 +580,13 @@ pub struct CorrectPartInput {
     pub received_on: Option<Option<String>>,
     /// For a kit: items to add, each with the number printed on its own
     /// packaging. They go after the items the kit already holds, and the
-    /// items already there stay as they are.
+    /// items already there stay as they are. An item copied from a reply
+    /// leaves out its `id`. `null` adds nothing.
     pub add_contents: Option<Vec<PartContentInput>>,
     /// For a kit: the `id`s of items to remove, as `contents` in any reply
     /// that shows the kit lists them. Items not named stay. To fix an
-    /// item, remove it and add it again; it then prints last.
+    /// item, remove it and add it again; it then prints last. `null` removes
+    /// nothing; to empty a kit, name every item.
     pub remove_contents: Option<Vec<i32>>,
 }
 

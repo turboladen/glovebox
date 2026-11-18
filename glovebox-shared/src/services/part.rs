@@ -199,10 +199,11 @@ pub(crate) async fn views(
 
 /// One part with its kit contents.
 pub(crate) async fn view(db: &impl ConnectionTrait, part: part::Model) -> DomainResult<PartView> {
-    views(db, vec![part])
+    let contents = contents_by_part(db, [part.id])
         .await?
-        .pop()
-        .ok_or_else(|| DomainError::Internal("a part's view came back empty".into()))
+        .remove(&part.id)
+        .unwrap_or_default();
+    Ok(PartView { part, contents })
 }
 
 /// The kit contents of each named part, in print order. A part with no
@@ -256,17 +257,17 @@ pub async fn correct<C: ConnectionTrait + TransactionTrait>(
 
 // The messages count items from 1, as the owner would, and name no argument
 // syntax, because they reach the web page as well as a tool result.
-fn validate_contents(contents: &[NewPartContent]) -> DomainResult<()> {
+fn validate_contents(field: &str, contents: &[NewPartContent]) -> DomainResult<()> {
     for (n, item) in (1..).zip(contents) {
         if item.name.trim().is_empty() {
             return Err(DomainError::invalid(
-                "contents",
+                field,
                 format!("item {n} needs a name"),
             ));
         }
         if item.quantity.is_some_and(|q| q < 1) {
             return Err(DomainError::invalid(
-                "contents",
+                field,
                 format!("item {n}'s quantity must be at least 1"),
             ));
         }
@@ -373,7 +374,7 @@ async fn insert_part(
     vehicle_id: i32,
     input: NewPart,
 ) -> DomainResult<(part::Model, Vec<part_content::Model>)> {
-    validate_contents(&input.contents)?;
+    validate_contents("contents", &input.contents)?;
     super::vehicle::require(db, vehicle_id).await?;
     let supplied_by = input.supplied_by.unwrap_or(Supplier::Owner);
     if let Some(status) = input.status {
@@ -466,7 +467,7 @@ async fn apply_update(
     id: i32,
     input: UpdatePart,
 ) -> DomainResult<part::Model> {
-    validate_contents(&input.add_contents)?;
+    validate_contents("add_contents", &input.add_contents)?;
     let existing = get(db, vehicle_id, id).await?;
 
     if let Some(Some(service_id)) = input.installed_service_id {
@@ -1161,7 +1162,7 @@ mod tests {
             .await
             .unwrap_err();
             assert!(
-                matches!(&err, DomainError::Invalid { field, .. } if field == "contents"),
+                matches!(&err, DomainError::Invalid { field, .. } if field == "add_contents"),
                 "{err:?}"
             );
             let err = record(
