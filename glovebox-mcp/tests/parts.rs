@@ -240,6 +240,26 @@ async fn a_kits_contents_are_recorded_listed_added_to_and_removed_by_id() {
         .await;
     assert_eq!(names(&edited), ["Engine oil, 1 L", "Drain plug"]);
 
+    // An item copied from a reply, id and all, is added as a new item.
+    let copied = edited["contents"][1].clone();
+    let readded = t
+        .call(
+            "correct_part",
+            json!({ "vehicle_id": v.id, "part_id": kit["id"], "add_contents": [copied] }),
+        )
+        .await;
+    assert_eq!(
+        names(&readded),
+        ["Engine oil, 1 L", "Drain plug", "Drain plug"]
+    );
+    assert_ne!(readded["contents"][2]["id"], edited["contents"][1]["id"]);
+    let edited = t
+        .call(
+            "correct_part",
+            json!({ "vehicle_id": v.id, "part_id": kit["id"], "remove_contents": [readded["contents"][2]["id"]] }),
+        )
+        .await;
+
     let refused = t
         .call_err(
             "correct_part",
