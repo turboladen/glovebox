@@ -271,6 +271,10 @@ carries a `baseline` (`last_service`, `purchase` or `none`), the forecast names 
 and planned work it left unpriced, `bundle_suggestions` is one entry listing every overdue or
 due-soon item when there are two or more, and a stored recall title is the NHTSA component in title
 case.
+Platforms and model templates are written only by migrations; `model_template::list` and
+`list_with_platform` are the only template services
+(`docs/adr/0013-templates-come-from-migrations.md`). Shops have their table, `shop_id` and
+`shop::require_if_named`, but no write path yet.
 
 **Resources**: `glovebox://vehicles`, `glovebox://vehicles/{id}` and `…/{id}/activity`.
 `list_resources` enumerates concrete URIs from the database and `read_resource` parses them.
@@ -355,6 +359,8 @@ role per control style, and `YYYY-MM-DD` dates.
   savepoint. `db: &impl ConnectionTrait` is for a read, a single statement that needs no check
   (`todo::delete`), or a step only ever run inside a caller's transaction, which is
   `pub(crate)` when nothing outside the crate calls it.
+  `glovebox-mcp/tests` call shared services directly as fixtures (`schedule_svc::create`), so
+  search that directory before narrowing a `pub` service function to `pub(crate)`.
 - **Error model**: services return `DomainResult<T>`. `Invalid` renders as `"{field}: {message}"`;
   `BadRequest` renders its message verbatim; `Db` and `Internal` are opaque to the client.
   A service's message reads correctly on both the web page and in a tool result, so it carries no
@@ -507,6 +513,8 @@ bd close <id>         # Complete work
 - Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
 - Run `bd prime` for detailed command reference and session close protocol
 - Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
+- Make every `bd` write, then run `bd export -o .beads/issues.jsonl`, before the `chore(beads):`
+  commit; `bd dolt push` exports again and the commit misses the last change otherwise.
 
 ## Session Completion
 
