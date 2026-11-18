@@ -1395,14 +1395,9 @@ mod tests {
             vid,
             crate::inputs::work_item::NewWorkItem {
                 title: "Plugs".into(),
-                notes: None,
                 schedule_item_id: Some(inherited.id),
-                research_finding_id: None,
-                incident_id: None,
                 est_cost_cents: Some(9_000),
-                revisit_by_date: None,
-                revisit_by_miles: None,
-                appointment_id: None,
+                ..Default::default()
             },
         )
         .await

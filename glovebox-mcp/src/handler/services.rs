@@ -194,8 +194,9 @@ impl GloveboxMcp {
                        reminders, and its parts are kept and listed in `kept_part_ids`: when \
                        re-filing the invoice, attach the ones that read purchased with \
                        `record_service`'s `part_ids` (never one that reads replaced); otherwise \
-                       remove them with `delete_part`. To change a record rather than remove it, \
-                       use `correct_service`."
+                       remove them with `delete_part`. Planned jobs whose quote came with the \
+                       service keep their quote but no longer name it (`quotes_unlinked`). To \
+                       change a record rather than remove it, use `correct_service`."
     )]
     async fn delete_service(
         &self,
@@ -215,6 +216,7 @@ impl GloveboxMcp {
                         "recalls_kept_done": out.kept_done_recall_ids,
                         "appointments_reopened": out.reopened_appointment_ids,
                         "jobs_unassigned": out.unassigned_job_ids,
+                        "quotes_unlinked": out.unlinked_quote_ids,
                     })
                 }),
         )

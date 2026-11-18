@@ -386,3 +386,48 @@ async fn planning_tools_reject_unknown_arguments() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn a_quote_is_planned_work_with_its_source() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let service = t
+        .call(
+            "record_service",
+            json!({ "vehicle_id": v.id, "service_date": "2020-06-01", "shop_name": "City VW" }),
+        )
+        .await;
+    let quote = t
+        .call(
+            "plan_work",
+            json!({
+                "vehicle_id": v.id, "title": "Repair the driver's mirror", "est_cost_cents": 42_000,
+                "quoted_by": "City VW", "quoted_on": "2020-06-01", "quote_service_id": service["id"]
+            }),
+        )
+        .await;
+    assert_eq!(quote["quoted_by"], "City VW", "got: {quote}");
+    assert_eq!(quote["quoted_on"], "2020-06-01");
+    assert_eq!(quote["quote_service_id"], service["id"]);
+
+    let listed = t
+        .call("list_planned_work", json!({ "vehicle_id": v.id }))
+        .await;
+    assert_eq!(listed["items"][0]["quoted_by"], "City VW", "got: {listed}");
+
+    let cleared = t
+        .call(
+            "update_planned_work",
+            json!({ "vehicle_id": v.id, "work_item_id": quote["id"], "quote_service_id": null }),
+        )
+        .await;
+    assert!(cleared["quote_service_id"].is_null(), "got: {cleared}");
+
+    let err = t
+        .call_err(
+            "plan_work",
+            json!({ "vehicle_id": v.id, "title": "Mirror", "quoted_on": "June 2020" }),
+        )
+        .await;
+    assert!(err.contains("quoted_on"), "got: {err}");
+}

@@ -92,9 +92,11 @@ impl GloveboxMcp {
     #[tool(
         name = "get_service",
         description = "One service record in full: line items, parts, schedule links, the recalls \
-                       it performed, the to-do items it completed, and the incidents it noticed \
-                       or fixed. Each noticed incident names the service that later fixed it (if \
-                       any), and each fixed incident names the service where it was first noticed."
+                       it performed, the to-do items it completed, the planned jobs whose quote \
+                       came with it (`quoted_work_items`, work not done on this visit), and the \
+                       incidents it noticed or fixed. Each noticed incident names the service \
+                       that later fixed it (if any), and each fixed incident names the service \
+                       where it was first noticed."
     )]
     async fn get_service(
         &self,

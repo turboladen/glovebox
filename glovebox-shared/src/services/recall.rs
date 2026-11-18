@@ -542,14 +542,8 @@ mod tests {
             vehicle_id,
             NewWorkItem {
                 title: "Fix recall".into(),
-                notes: None,
-                schedule_item_id: None,
                 research_finding_id: Some(finding_id),
-                incident_id: None,
-                est_cost_cents: None,
-                revisit_by_date: None,
-                revisit_by_miles: None,
-                appointment_id: None,
+                ..Default::default()
             },
         )
         .await
