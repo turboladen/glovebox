@@ -1502,11 +1502,49 @@ async fn work_sheet_groups_parts_by_supplier() {
 
     let job = &sheet["jobs"][0];
     assert_eq!(job["title"], "Front brakes", "got: {sheet}");
-    assert_eq!(job["owner_supplies"][0]["name"], "Front pads");
+    // An owner line names the part that was bought, not the need.
+    assert_eq!(job["owner_supplies"][0]["name"], "Ceramic pads");
     assert_eq!(job["owner_supplies"][0]["label"], "Akebono ACT1633");
+    assert_eq!(job["owner_supplies"][0]["contents"], json!([]));
     assert_eq!(job["shop_supplies"][0]["name"], "Brake fluid");
     assert_eq!(job["shop_supplies"][0]["label"], Value::Null);
     assert_eq!(sheet["vehicle"], "Golf GTI");
+}
+
+#[tokio::test]
+async fn work_sheet_lists_a_kits_contents() {
+    let t = connect().await;
+    let (v, appt) = work_sheet_fixture(&t).await;
+    let parts = t.call("list_parts", json!({ "vehicle_id": v })).await;
+    let pads = parts[0]["id"].clone();
+    t.call(
+        "correct_part",
+        json!({
+            "vehicle_id": v,
+            "part_id": pads,
+            "contents": [
+                { "name": "Pads", "manufacturer": "Akebono", "part_number": "ACT1633A", "quantity": 4 },
+                { "name": "Shims" }
+            ]
+        }),
+    )
+    .await;
+
+    let sheet = t
+        .call(
+            "get_work_sheet",
+            json!({ "vehicle_id": v, "appointment_id": appt }),
+        )
+        .await;
+
+    assert_eq!(
+        sheet["jobs"][0]["owner_supplies"][0]["contents"],
+        json!([
+            { "name": "Pads", "quantity": 4, "label": "Akebono ACT1633A" },
+            { "name": "Shims", "quantity": 1, "label": null }
+        ]),
+        "got: {sheet}"
+    );
 }
 
 #[tokio::test]

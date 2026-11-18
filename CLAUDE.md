@@ -131,7 +131,9 @@ not a real `YYYY-MM-DD`, because such a row could not be read,
 clearing any id that names a missing row, and `m20261115_000001_vocabulary_values`, which changes
 nothing and refuses to finish while a vocabulary column holds a value outside its list, and
 `m20261117_000001_work_item_quotes`, which gives a job `quoted_by`, `quoted_on` and
-`quote_service_id` (an `ON DELETE SET NULL` key added with the column). They run on startup.
+`quote_service_id` (an `ON DELETE SET NULL` key added with the column), and
+`m20261118_000001_part_contents`, which adds a kit's items (`part_contents`, cascading with the
+part). They run on startup.
 
 **Test harness** (`test_support.rs`): `test_db()` is an in-memory SQLite database with migrations
 applied. It is compiled under `#[cfg(any(test, feature = "test-support"))]`; `glovebox-mcp` uses it
@@ -258,6 +260,9 @@ to-do off a cancelled one (`appointment::settle_reopened_todo`). Naming an appoi
 result's `unfitted_needs` lists the linked parts the invoice did not install. `need_id` is accepted
 on the inline parts of `record_service` only, and `get_checklist` takes at most one of
 `appointment_id` and `work_item_id`.
+A part bought as a kit lists its items in `contents` (`record_part`, and `correct_part`, whose
+list replaces the stored one whole; `part::record` and `part::correct` return the part with them).
+`docs/adr/0014-a-kit-lists-its-contents.md` records why.
 
 **Schedule names** compare through `schedule::name_key` (ASCII case and surrounding spaces do not
 matter), so a vehicle's "Cabin air filter" shadows the inherited "Cabin Air Filter". A new item that shadows an inherited one takes that
@@ -326,8 +331,9 @@ A page is a view of the shared library, and a future page follows the same rules
   forms. An item a planned job covers links to the job, and an item whose job is on an
   appointment is left out. `docs/adr/0002-home-page-shows-waiting-work.md` records why.
 - **The work sheet** (`/vehicles/{vid}/appointments/{id}/print`, `work_sheet::for_appointment`)
-  lists each planned job with the owner's parts (received or ordered, with the manufacturer and
-  part number the linked part records, never a researched option's) and the shop's parts by name.
+  lists each planned job with the owner's parts (received or ordered, with the name, manufacturer
+  and part number the linked part records, never a researched option's, and a kit's contents
+  beneath it, each with a tick box) and the shop's parts by the need's name.
   Undecided and to-order needs are left off and shown in an on-screen "Before you print" box,
   whose "Ask the shop" posts the existing supplier form without an approach, which leaves the
   stored approach alone. `docs/adr/0009-the-work-sheet-prints-plain.md`
@@ -429,7 +435,7 @@ role per control style, and `YYYY-MM-DD` dates.
   status, `service_record::CompletedWork`, `schedule::LinkMode` and `search::SearchScope`. A
   filter on a column never takes one of these.
   `docs/adr/0004-typed-vocabularies.md` records why.
-- **Migrations**: new migrations go after `m20261117_000001_work_item_quotes`; the
+- **Migrations**: new migrations go after `m20261118_000001_part_contents`; the
   `new-migration` skill has the templates. Use `Expr::cust()` for expressions inside builder queries; raw
   `execute_unprepared` only where no builder form exists (FTS5 DDL, cross-table copies).
 - **Migrations are not transactional on SQLite** (sea-orm-migration only wraps Postgres), so write

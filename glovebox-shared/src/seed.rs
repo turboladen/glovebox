@@ -10,6 +10,7 @@ use crate::{
     inputs::{
         appointment::NewAppointment,
         need::{NewNeed, NewOption, OrderDetails, ReturnInput, UpdateOption},
+        part::{NewPartContent, UpdatePart},
         service_record::NewServiceRecord,
         todo::NewTodo,
         vehicle::NewVehicle,
@@ -327,12 +328,41 @@ async fn brakes(db: &(impl ConnectionTrait + TransactionTrait), at: &Visit) -> D
         v,
         front_rotors,
         option(
-            "Coated front rotor, 312 mm",
-            "Zimmermann",
-            "100.3367.20",
+            "Front rotor kit, 312 mm, with hardware",
+            "FCP Euro",
+            "KIT-10458",
             16_200,
         ),
         "FCP-10458",
+    )
+    .await?;
+    // The kit's number is the seller's, so the work sheet lists what is in
+    // the box with the numbers printed on each item.
+    let kit = need::require(db, v, front_rotors)
+        .await?
+        .part_id
+        .ok_or_else(|| DomainError::Internal("the front rotors have no part".into()))?;
+    services::part::update(
+        db,
+        v,
+        kit,
+        UpdatePart {
+            contents: Some(vec![
+                NewPartContent {
+                    name: "Front rotor".into(),
+                    manufacturer: Some("Zimmermann".into()),
+                    part_number: Some("100.3367.20".into()),
+                    quantity: Some(2),
+                },
+                NewPartContent {
+                    name: "Rotor retaining screw".into(),
+                    manufacturer: Some("Volkswagen".into()),
+                    part_number: Some("N 911 568 01".into()),
+                    quantity: Some(2),
+                },
+            ]),
+            ..Default::default()
+        },
     )
     .await?;
 
@@ -583,6 +613,34 @@ mod tests {
             .find(|n| n.need.name == "Rear rotors")
             .unwrap();
         assert_eq!(pair.need.quantity, 2);
+    }
+
+    #[tokio::test]
+    async fn demo_seed_shows_a_kits_contents_on_the_work_sheet() {
+        let db = test_db().await;
+        demo(&db).await.unwrap();
+        let appointment = crate::entities::appointment::Entity::find()
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let sheet = crate::services::work_sheet::for_appointment(
+            &db,
+            appointment.vehicle_id,
+            appointment.id,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            sheet
+                .jobs
+                .iter()
+                .flat_map(|j| &j.owner_supplies)
+                .any(|line| line.contents.len() == 2),
+            "{sheet:?}"
+        );
     }
 
     #[tokio::test]

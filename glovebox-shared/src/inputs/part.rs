@@ -30,6 +30,18 @@ pub struct NewPart {
     /// need in the same transaction. The need must be on the same vehicle and
     /// have no part linked. Plain part creation ignores this field.
     pub need_id: Option<i32>,
+    /// The items inside a part bought as a kit, in the order they print.
+    pub contents: Vec<NewPartContent>,
+}
+
+/// One item inside a kit, with the number printed on its own packaging.
+#[derive(Clone, Debug, Default)]
+pub struct NewPartContent {
+    pub name: String,
+    pub manufacturer: Option<String>,
+    pub part_number: Option<String>,
+    /// Defaults to 1.
+    pub quantity: Option<i32>,
 }
 
 #[derive(Default)]
@@ -59,6 +71,8 @@ pub struct UpdatePart {
     pub order_ref: Option<Option<String>>,
     /// The date the part arrived.
     pub received_on: Option<Option<chrono::NaiveDate>>,
+    /// A list replaces the kit's contents, and an empty list clears them.
+    pub contents: Option<Vec<NewPartContent>>,
 }
 
 /// Filter for listing parts within a vehicle.

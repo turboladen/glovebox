@@ -932,6 +932,23 @@ pub struct SheetLineCard {
     pub text: String,
     /// The manufacturer and part number, printed apart from the name.
     pub label: Option<String>,
+    /// The items inside a kit the owner brings.
+    pub contents: Vec<SheetItemCard>,
+}
+
+/// One item inside a kit on the work sheet.
+pub struct SheetItemCard {
+    /// The item's name, with " × N" when the kit holds more than one.
+    pub text: String,
+    pub label: Option<String>,
+}
+
+fn sheet_text(name: &str, quantity: i32) -> String {
+    if quantity > 1 {
+        format!("{name} \u{d7} {quantity}")
+    } else {
+        name.to_owned()
+    }
 }
 
 /// A need the work sheet leaves off until the owner settles it.
@@ -956,12 +973,16 @@ pub fn sheet_heading(sheet: &WorkSheet) -> String {
 
 pub fn sheet_jobs(sheet: &WorkSheet) -> Vec<SheetJobCard> {
     let card = |line: &SheetLine| SheetLineCard {
-        text: if line.quantity > 1 {
-            format!("{} \u{d7} {}", line.name, line.quantity)
-        } else {
-            line.name.clone()
-        },
+        text: sheet_text(&line.name, line.quantity),
         label: line.label.clone(),
+        contents: line
+            .contents
+            .iter()
+            .map(|item| SheetItemCard {
+                text: sheet_text(&item.name, item.quantity),
+                label: item.label.clone(),
+            })
+            .collect(),
     };
     sheet
         .jobs

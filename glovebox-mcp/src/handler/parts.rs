@@ -19,7 +19,10 @@ impl GloveboxMcp {
                        the seller's order number as `order_ref`. To attach it to a need without \
                        entering it twice, call `link_part_to_need`; for a need's own purchase, \
                        `mark_need_ordered` creates the part. Status is `purchased`, `installed` \
-                       or `replaced`; a return is made with `return_part`."
+                       or `replaced`; a return is made with `return_part`. For a kit, list each \
+                       item inside it in `contents` with the number on its own packaging, because \
+                       the work sheet prints those for the owner to check against what they \
+                       gather."
     )]
     async fn record_part(
         &self,
@@ -27,15 +30,16 @@ impl GloveboxMcp {
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "record_part");
         let (vehicle_id, input) = domain_input!(p.into_domain());
-        domain_result(part::create(&*self.db, vehicle_id, input).await)
+        domain_result(part::record(&*self.db, vehicle_id, input).await)
     }
 
     #[tool(
         name = "list_parts",
         description = "The vehicle's parts, newest first: what was bought, what is installed (and \
                        by which service), and what has been replaced. Filter with `status` \
-                       (`purchased`, `installed`, `replaced`, `returned`). Use this to find the \
-                       `part_id` for `correct_part` or `delete_part`."
+                       (`purchased`, `installed`, `replaced`, `returned`). Each part carries the \
+                       `contents` of a kit. Use this to find the `part_id` for `correct_part` or \
+                       `delete_part`."
     )]
     async fn list_parts(
         &self,
@@ -54,8 +58,9 @@ impl GloveboxMcp {
                        Status `returned` cannot be set here (a return is made with \
                        `return_part`); setting a returned part back to `purchased` is how a \
                        mistaken return is undone, and it clears the return details. `order_ref` \
-                       and `received_on` correct the order number and arrival date. To remove a \
-                       part that should never have been recorded, use `delete_part`."
+                       and `received_on` correct the order number and arrival date. `contents` \
+                       sets a kit's items, replacing the whole list. To remove a part that should \
+                       never have been recorded, use `delete_part`."
     )]
     async fn correct_part(
         &self,
@@ -63,7 +68,7 @@ impl GloveboxMcp {
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "correct_part");
         let (vehicle_id, part_id, input) = domain_input!(p.into_domain());
-        domain_result(part::update(&*self.db, vehicle_id, part_id, input).await)
+        domain_result(part::correct(&*self.db, vehicle_id, part_id, input).await)
     }
 
     #[tool(
