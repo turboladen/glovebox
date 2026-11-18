@@ -167,10 +167,19 @@ async fn parts_tools_reject_unknown_arguments() {
         "sku",
     )
     .await;
+    // `correct_part` adds and removes items by id; a whole list is not an
+    // argument it takes.
+    common::assert_unknown_field_rejected(
+        &t,
+        "correct_part",
+        json!({ "vehicle_id": 1, "part_id": 1, "contents": [{ "name": "Filter" }] }),
+        "contents",
+    )
+    .await;
 }
 
 #[tokio::test]
-async fn a_kits_contents_are_recorded_listed_replaced_and_cleared() {
+async fn a_kits_contents_are_recorded_listed_added_to_and_removed_by_id() {
     let t = connect().await;
     let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
     let kit = t
@@ -209,34 +218,48 @@ async fn a_kits_contents_are_recorded_listed_replaced_and_cleared() {
         .await;
     assert_eq!(names(&untouched), ["Oil filter", "Engine oil, 1 L"]);
 
-    let replaced = t
+    let ids = |part: &serde_json::Value| -> Vec<i64> {
+        part["contents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["id"].as_i64().unwrap())
+            .collect()
+    };
+    let filter = ids(&untouched)[0];
+    let edited = t
         .call(
             "correct_part",
-            json!({ "vehicle_id": v.id, "part_id": kit["id"], "contents": [{ "name": "Drain plug" }] }),
+            json!({
+                "vehicle_id": v.id,
+                "part_id": kit["id"],
+                "add_contents": [{ "name": "Drain plug" }],
+                "remove_contents": [filter]
+            }),
         )
         .await;
-    assert_eq!(names(&replaced), ["Drain plug"]);
+    assert_eq!(names(&edited), ["Engine oil, 1 L", "Drain plug"]);
 
     let refused = t
         .call_err(
             "correct_part",
-            json!({ "vehicle_id": v.id, "part_id": kit["id"], "contents": [{ "name": " " }] }),
+            json!({ "vehicle_id": v.id, "part_id": kit["id"], "add_contents": [{ "name": " " }] }),
         )
         .await;
     assert_eq!(refused, "contents: item 1 needs a name");
-
-    for clear in [json!([]), json!(null)] {
-        t.call(
+    let gone = t
+        .call_err(
             "correct_part",
-            json!({ "vehicle_id": v.id, "part_id": kit["id"], "contents": [{ "name": "Seal" }] }),
+            json!({ "vehicle_id": v.id, "part_id": kit["id"], "remove_contents": [filter] }),
         )
         .await;
-        let cleared = t
-            .call(
-                "correct_part",
-                json!({ "vehicle_id": v.id, "part_id": kit["id"], "contents": clear }),
-            )
-            .await;
-        assert_eq!(cleared["contents"], json!([]), "{clear}");
-    }
+    assert_eq!(gone, format!("Kit item {filter} not found"));
+
+    let emptied = t
+        .call(
+            "correct_part",
+            json!({ "vehicle_id": v.id, "part_id": kit["id"], "remove_contents": ids(&edited) }),
+        )
+        .await;
+    assert_eq!(emptied["contents"], json!([]));
 }

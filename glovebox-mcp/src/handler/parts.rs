@@ -58,9 +58,11 @@ impl GloveboxMcp {
                        Status `returned` cannot be set here (a return is made with \
                        `return_part`); setting a returned part back to `purchased` is how a \
                        mistaken return is undone, and it clears the return details. `order_ref` \
-                       and `received_on` correct the order number and arrival date. `contents` \
-                       sets a kit's items, replacing the whole list. To remove a part that should \
-                       never have been recorded, use `delete_part`."
+                       and `received_on` correct the order number and arrival date. For a kit, \
+                       `add_contents` adds items after the ones it holds and `remove_contents` \
+                       removes items by the `id` every part reply shows in `contents`; items not \
+                       named stay. To remove a part that should never have been recorded, use \
+                       `delete_part`."
     )]
     async fn correct_part(
         &self,

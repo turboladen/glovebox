@@ -18,6 +18,7 @@
         <span><span class="l">Approach</span>{% if n.approach_kind.is_some() %}{{ n.approach_text() }}{% else %}<span class="empty">{{ n.approach_text() }}</span>{% endif %}</span>
         {% if let Some(r) = n.decision_reason %}<span><span class="l">Reason</span>{{ r }}</span>{% endif %}
         {% if let Some(p) = n.purchase %}<span class="line">{{ p }}{% if n.no_decision %} <span class="pill">No decision recorded</span>{% endif %}</span>{% else if n.no_decision %}<span class="line"><span class="pill">No decision recorded</span></span>{% endif %}
+        {% if !n.kit.is_empty() %}<span class="line kit"><span class="l">In the kit</span>{% for k in n.kit %}<span class="kit-item">{{ k.text }}{% if let Some(pn) = k.label %}<span class="pn">{{ pn }}</span>{% endif %}</span>{% endfor %}</span>{% endif %}
         {% for note in n.notes %}<span class="line note">{{ note }}</span>{% endfor %}
       </span>
     </summary>

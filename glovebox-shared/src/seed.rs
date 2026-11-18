@@ -347,7 +347,7 @@ async fn brakes(db: &(impl ConnectionTrait + TransactionTrait), at: &Visit) -> D
         v,
         kit,
         UpdatePart {
-            contents: Some(vec![
+            add_contents: vec![
                 NewPartContent {
                     name: "Front rotor".into(),
                     manufacturer: Some("Zimmermann".into()),
@@ -360,7 +360,7 @@ async fn brakes(db: &(impl ConnectionTrait + TransactionTrait), at: &Visit) -> D
                     part_number: Some("N 911 568 01".into()),
                     quantity: Some(2),
                 },
-            ]),
+            ],
             ..Default::default()
         },
     )

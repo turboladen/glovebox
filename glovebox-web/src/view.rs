@@ -18,6 +18,7 @@ use glovebox_shared::{
         checklist::{self, Checklist, HomeAppointment, JobView, NeedView, StepRow},
         date_label,
         need::{self, Stage},
+        part as part_svc,
         reminders::{self, DueStatus},
         waiting::{Waiting, booked_note},
         work_sheet::{SheetLine, WorkSheet},
@@ -164,7 +165,7 @@ impl LinkedPart {
         view.part
             .as_ref()
             .filter(|_| view.chosen.is_none())
-            .map(Self::new)
+            .map(|v| Self::new(&v.part))
     }
 
     fn new(part: &part::Model) -> Self {
@@ -246,6 +247,9 @@ pub struct NeedCard {
     /// tell an edited reason from the prefilled one.
     pub stored_reason: String,
     pub purchase: Option<String>,
+    /// The items inside the linked part when it is a kit, shown whether or
+    /// not an option is chosen.
+    pub kit: Vec<KitItemCard>,
     /// The need's notes, without the one `no_decision` stands for.
     pub notes: Vec<String>,
     /// True when a part is linked and no decision is recorded. The row shows
@@ -679,10 +683,9 @@ pub fn need_card(view: &NeedView, job_status: JobStatus, ctx: &CardContext<'_>) 
     let supplier = need.supplied_by.map(Supplier::as_str);
     let approach = need.approach.map(Approach::as_str);
 
-    let chosen_id = need.chosen_option_id;
     let selected: Option<i32> = match typed("option_id") {
         Some(text) => text.parse().ok(),
-        None => chosen_id,
+        None => need.chosen_option_id,
     };
     let mut all: Vec<&need_option::Model> = view.chosen.iter().chain(&view.other_options).collect();
     all.sort_by_key(|o| o.id);
@@ -761,6 +764,7 @@ pub fn need_card(view: &NeedView, job_status: JobStatus, ctx: &CardContext<'_>) 
             .or_else(|| need.decision_reason.clone())
             .unwrap_or_default(),
         purchase: view.purchase_summary.clone(),
+        kit: kit_items(view),
         notes,
         no_decision: !unrecorded.is_empty(),
         order,
@@ -933,17 +937,31 @@ pub struct SheetLineCard {
     /// The manufacturer and part number, printed apart from the name.
     pub label: Option<String>,
     /// The items inside a kit the owner brings.
-    pub contents: Vec<SheetItemCard>,
+    pub contents: Vec<KitItemCard>,
 }
 
-/// One item inside a kit on the work sheet.
-pub struct SheetItemCard {
+// The linked kit's items, in print order; none when the need has no part or
+// the part is not a kit.
+fn kit_items(view: &NeedView) -> Vec<KitItemCard> {
+    view.part
+        .iter()
+        .flat_map(|p| &p.contents)
+        .map(|item| KitItemCard {
+            text: count_text(&item.name, item.quantity),
+            label: part_svc::label(item.manufacturer.as_deref(), item.part_number.as_deref()),
+        })
+        .collect()
+}
+
+/// One item inside a kit, on the work sheet or a need's row.
+#[derive(Clone)]
+pub struct KitItemCard {
     /// The item's name, with " × N" when the kit holds more than one.
     pub text: String,
     pub label: Option<String>,
 }
 
-fn sheet_text(name: &str, quantity: i32) -> String {
+fn count_text(name: &str, quantity: i32) -> String {
     if quantity > 1 {
         format!("{name} \u{d7} {quantity}")
     } else {
@@ -973,13 +991,13 @@ pub fn sheet_heading(sheet: &WorkSheet) -> String {
 
 pub fn sheet_jobs(sheet: &WorkSheet) -> Vec<SheetJobCard> {
     let card = |line: &SheetLine| SheetLineCard {
-        text: sheet_text(&line.name, line.quantity),
+        text: count_text(&line.name, line.quantity),
         label: line.label.clone(),
         contents: line
             .contents
             .iter()
-            .map(|item| SheetItemCard {
-                text: sheet_text(&item.name, item.quantity),
+            .map(|item| KitItemCard {
+                text: count_text(&item.name, item.quantity),
                 label: item.label.clone(),
             })
             .collect(),

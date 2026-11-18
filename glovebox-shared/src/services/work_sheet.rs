@@ -7,16 +7,13 @@ use sea_orm::*;
 use serde::Serialize;
 
 use crate::{
-    entities::{
-        part::{self, Supplier},
-        part_content,
-        work_item::JobStatus,
-    },
+    entities::{part::Supplier, part_content, work_item::JobStatus},
     error::{DomainError, DomainResult},
     services::{
         checklist::{self, NeedView},
         need::Stage,
-        part as part_svc, vehicle,
+        part::{self as part_svc, PartView},
+        vehicle,
     },
 };
 
@@ -70,11 +67,11 @@ pub struct SheetContent {
     pub label: Option<String>,
 }
 
-impl From<part_content::Model> for SheetContent {
-    fn from(item: part_content::Model) -> Self {
+impl From<&part_content::Model> for SheetContent {
+    fn from(item: &part_content::Model) -> Self {
         SheetContent {
             label: part_svc::label(item.manufacturer.as_deref(), item.part_number.as_deref()),
-            name: item.name,
+            name: item.name.clone(),
             quantity: item.quantity,
         }
     }
@@ -127,17 +124,19 @@ pub async fn for_appointment(
                 // The name and label come from the part's own record, so the
                 // sheet never prints a researched option's number beside a
                 // part that may not be that option.
-                Placement::Owner(part) => job.owner_supplies.push(SheetLine {
-                    need_id: need.need.id,
-                    part_id: Some(part.id),
-                    name: part.name.clone(),
-                    quantity: need.need.quantity,
-                    label: part_svc::label(
-                        part.manufacturer.as_deref(),
-                        part.part_number.as_deref(),
-                    ),
-                    contents: Vec::new(),
-                }),
+                Placement::Owner(PartView { part, contents }) => {
+                    job.owner_supplies.push(SheetLine {
+                        need_id: need.need.id,
+                        part_id: Some(part.id),
+                        name: part.name.clone(),
+                        quantity: need.need.quantity,
+                        label: part_svc::label(
+                            part.manufacturer.as_deref(),
+                            part.part_number.as_deref(),
+                        ),
+                        contents: contents.iter().map(SheetContent::from).collect(),
+                    });
+                }
                 Placement::Shop => job.shop_supplies.push(line(need)),
                 Placement::Unsettled => unsettled.push(Unsettled {
                     need_id: need.need.id,
@@ -151,7 +150,6 @@ pub async fn for_appointment(
         }
         jobs.push(job);
     }
-    attach_contents(db, &mut jobs).await?;
     Ok(WorkSheet {
         appointment_id,
         vehicle: car.name,
@@ -164,7 +162,7 @@ pub async fn for_appointment(
 
 enum Placement<'a> {
     Off,
-    Owner(&'a part::Model),
+    Owner(&'a PartView),
     Shop,
     Unsettled,
 }
@@ -174,28 +172,13 @@ enum Placement<'a> {
 fn placement(view: &NeedView) -> Placement<'_> {
     match (view.stage, &view.part) {
         (Stage::Installed, _) => Placement::Off,
-        (_, Some(part)) => match part.supplied_by {
+        (_, Some(part)) => match part.part.supplied_by {
             Supplier::Owner => Placement::Owner(part),
             Supplier::Shop => Placement::Shop,
         },
         (Stage::ShopSupplies, None) => Placement::Shop,
         _ => Placement::Unsettled,
     }
-}
-
-// Fills each owner line's kit contents with one query.
-async fn attach_contents(db: &impl ConnectionTrait, jobs: &mut [SheetJob]) -> DomainResult<()> {
-    let part_ids = jobs
-        .iter()
-        .flat_map(|job| &job.owner_supplies)
-        .filter_map(|line| line.part_id);
-    let mut contents = part_svc::contents_by_part(db, part_ids).await?;
-    for line in jobs.iter_mut().flat_map(|job| &mut job.owner_supplies) {
-        if let Some(items) = line.part_id.and_then(|id| contents.remove(&id)) {
-            line.contents = items.into_iter().map(SheetContent::from).collect();
-        }
-    }
-    Ok(())
 }
 
 fn line(view: &NeedView) -> SheetLine {

@@ -1522,7 +1522,7 @@ async fn work_sheet_lists_a_kits_contents() {
         json!({
             "vehicle_id": v,
             "part_id": pads,
-            "contents": [
+            "add_contents": [
                 { "name": "Pads", "manufacturer": "Akebono", "part_number": "ACT1633A", "quantity": 4 },
                 { "name": "Shims" }
             ]
@@ -1587,4 +1587,71 @@ async fn work_sheet_of_another_vehicles_appointment_is_a_tool_error() {
         .await;
 
     assert_eq!(wrong, missing.replace("9999", &appt.to_string()));
+}
+
+// A kit's items ride along wherever its need returns the part, so a caller
+// reading any of these replies sees the ids it would name to remove one.
+#[tokio::test]
+async fn every_need_reply_shows_the_linked_kits_contents() {
+    let t = connect().await;
+    let (v, appt) = work_sheet_fixture(&t).await;
+    let parts = t.call("list_parts", json!({ "vehicle_id": v })).await;
+    t.call(
+        "correct_part",
+        json!({
+            "vehicle_id": v,
+            "part_id": parts[0]["id"],
+            "add_contents": [{ "name": "Pads", "part_number": "ACT1633A", "quantity": 4 }]
+        }),
+    )
+    .await;
+    let item = |part: &Value| part["contents"][0]["part_number"].clone();
+
+    let list = t
+        .call(
+            "get_checklist",
+            json!({ "vehicle_id": v, "appointment_id": appt }),
+        )
+        .await;
+    let need = &list["jobs"][0]["needs"][0];
+    assert_eq!(need["part"]["part_number"], "ACT1633", "got: {list}");
+    assert_eq!(item(&need["part"]), "ACT1633A");
+    assert!(need["part"]["contents"][0]["id"].is_i64());
+    let need_id = need["need"]["id"].clone();
+
+    let relinked = t
+        .call(
+            "link_part_to_need",
+            json!({ "vehicle_id": v, "need_id": need_id, "part_id": parts[0]["id"] }),
+        )
+        .await;
+    // Linking the part the need already holds changes nothing.
+    assert_eq!(item(&relinked["part"]), "ACT1633A", "got: {relinked}");
+
+    let received = t
+        .call(
+            "mark_need_received",
+            json!({ "vehicle_id": v, "need_id": need_id }),
+        )
+        .await;
+    assert_eq!(item(&received["part"]), "ACT1633A", "got: {received}");
+
+    let returned = t
+        .call(
+            "return_part",
+            json!({ "vehicle_id": v, "need_id": need_id, "reason": "Wrong axle" }),
+        )
+        .await;
+    assert_eq!(
+        item(&returned["returned_part"]),
+        "ACT1633A",
+        "got: {returned}"
+    );
+
+    let past = t.call("past_decisions", json!({ "query": "pads" })).await;
+    assert_eq!(
+        item(&past[0]["returned_parts"][0]),
+        "ACT1633A",
+        "got: {past}"
+    );
 }

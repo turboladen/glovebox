@@ -260,8 +260,11 @@ to-do off a cancelled one (`appointment::settle_reopened_todo`). Naming an appoi
 result's `unfitted_needs` lists the linked parts the invoice did not install. `need_id` is accepted
 on the inline parts of `record_service` only, and `get_checklist` takes at most one of
 `appointment_id` and `work_item_id`.
-A part bought as a kit lists its items in `contents` (`record_part`, and `correct_part`, whose
-list replaces the stored one whole; `part::record` and `part::correct` return the part with them).
+A part bought as a kit lists its items in `contents`. `record_part` takes them, and `correct_part`
+edits them by item (`add_contents` appends, `remove_contents` names ids; an id not of the part is
+`NotFound` and writes nothing). Every reply that returns a part returns a `part::PartView`, the
+part with its contents (`part::views` loads them for many parts in one query), and the job and
+appointment pages list a kit's items in the need's row.
 `docs/adr/0014-a-kit-lists-its-contents.md` records why.
 
 **Schedule names** compare through `schedule::name_key` (ASCII case and surrounding spaces do not

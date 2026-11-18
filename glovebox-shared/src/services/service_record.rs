@@ -63,8 +63,8 @@ pub struct ServiceRecordWithLinks {
     pub record: service_record::Model,
     pub schedule_item_ids: Vec<i32>,
     pub part_ids: Vec<i32>,
-    /// The full rows behind `part_ids`.
-    pub parts: Vec<part::Model>,
+    /// The full rows behind `part_ids`, each with its kit contents.
+    pub parts: Vec<part_svc::PartView>,
     pub line_items: Vec<LineItemView>,
     /// Incidents first noticed during this service. Each one's
     /// `other_service` is the service that fixed it, if any.
@@ -256,7 +256,7 @@ impl ServiceRecordWithLinks {
     fn assemble(
         record: service_record::Model,
         schedule_item_ids: Vec<i32>,
-        parts: Vec<part::Model>,
+        parts: Vec<part_svc::PartView>,
         line_items: Vec<service_record_line_item::Model>,
         noticed_incidents: Vec<IncidentRef>,
         resolved_incidents: Vec<IncidentRef>,
@@ -288,7 +288,7 @@ impl ServiceRecordWithLinks {
             note,
             record,
             schedule_item_ids,
-            part_ids: parts.iter().map(|p| p.id).collect(),
+            part_ids: parts.iter().map(|p| p.part.id).collect(),
             parts,
             line_items,
             noticed_incidents,
@@ -366,6 +366,7 @@ async fn load_service_links(
         .order_by_asc(part::Column::Id)
         .all(db)
         .await?;
+    let parts = part_svc::views(db, parts).await?;
 
     let line_items = service_record_line_item::Entity::find()
         .filter(service_record_line_item::Column::ServiceRecordId.eq(record.id))
@@ -535,11 +536,12 @@ pub async fn list_between(
     let all_parts = if record_ids.is_empty() {
         vec![]
     } else {
-        part::Entity::find()
+        let parts = part::Entity::find()
             .filter(part::Column::InstalledServiceId.is_in(record_ids.clone()))
             .order_by_asc(part::Column::Id)
             .all(db)
-            .await?
+            .await?;
+        part_svc::views(db, parts).await?
     };
 
     let mut incident_links = load_incident_links(db, &record_ids).await?;
@@ -566,7 +568,7 @@ pub async fn list_between(
                 .collect();
             let parts = all_parts
                 .iter()
-                .filter(|p| p.installed_service_id == Some(record.id))
+                .filter(|p| p.part.installed_service_id == Some(record.id))
                 .cloned()
                 .collect();
             let line_items = all_line_items
@@ -2742,12 +2744,12 @@ mod tests {
         .unwrap();
         assert_eq!(got.parts.len(), 2);
         assert_eq!(got.part_ids.len(), 2);
-        assert_eq!(got.parts[0].supplied_by, Supplier::Owner);
-        assert_eq!(got.parts[0].installed_service_id, Some(got.record.id));
-        assert_eq!(got.parts[0].installed_odometer, Some(52_747));
-        assert_eq!(got.parts[0].installed_date, Some(date("2025-03-24")));
-        assert_eq!(got.parts[0].status, PartStatus::Installed);
-        assert_eq!(got.parts[1].supplied_by, Supplier::Shop);
+        assert_eq!(got.parts[0].part.supplied_by, Supplier::Owner);
+        assert_eq!(got.parts[0].part.installed_service_id, Some(got.record.id));
+        assert_eq!(got.parts[0].part.installed_odometer, Some(52_747));
+        assert_eq!(got.parts[0].part.installed_date, Some(date("2025-03-24")));
+        assert_eq!(got.parts[0].part.status, PartStatus::Installed);
+        assert_eq!(got.parts[1].part.supplied_by, Supplier::Shop);
     }
 
     #[tokio::test]
@@ -3509,7 +3511,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let part_id = svc.parts[0].id;
+        let part_id = svc.parts[0].part.id;
 
         delete(&db, v, svc.record.id, UNDO).await.unwrap();
 
@@ -3547,8 +3549,11 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(corrected.parts[0].installed_date, Some(date("2024-03-10")));
-        assert_eq!(corrected.parts[0].installed_odometer, Some(50_500));
+        assert_eq!(
+            corrected.parts[0].part.installed_date,
+            Some(date("2024-03-10"))
+        );
+        assert_eq!(corrected.parts[0].part.installed_odometer, Some(50_500));
 
         // Clearing the service's mileage leaves the part its own reading.
         let cleared = update(
@@ -3562,8 +3567,11 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(cleared.parts[0].installed_odometer, Some(50_500));
-        assert_eq!(cleared.parts[0].installed_date, Some(date("2024-03-10")));
+        assert_eq!(cleared.parts[0].part.installed_odometer, Some(50_500));
+        assert_eq!(
+            cleared.parts[0].part.installed_date,
+            Some(date("2024-03-10"))
+        );
     }
 
     #[tokio::test]

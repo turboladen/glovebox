@@ -12,7 +12,7 @@ use glovebox_shared::{
     inputs::{
         appointment::NewAppointment,
         need::{NewNeed, NewOption, OrderDetails, UpdateNeed},
-        part::{NewPart, PartFilter, UpdatePart},
+        part::{NewPart, NewPartContent, PartFilter, UpdatePart},
         todo::NewTodo,
         work_item::NewWorkItem,
     },
@@ -2305,6 +2305,64 @@ async fn a_linked_part_with_no_chosen_option_fills_the_part_columns() {
     ] {
         assert!(row.contains(cell), "{cell}: {row}");
     }
+}
+
+// A kit's items show under the row whether the linked part fills the part
+// columns itself or a chosen option does.
+#[tokio::test]
+async fn a_need_row_lists_its_kits_items_on_the_job_and_appointment_pages() {
+    let w = World::new().await;
+    need::decide(&w.db, w.vehicle, w.need, Some(w.good), None)
+        .await
+        .unwrap();
+    let kit = need::mark_ordered(&w.db, w.vehicle, w.need, OrderDetails::default())
+        .await
+        .unwrap()
+        .part
+        .part
+        .id;
+    part::update(
+        &w.db,
+        w.vehicle,
+        kit,
+        UpdatePart {
+            add_contents: vec![
+                NewPartContent {
+                    name: "Pads".into(),
+                    manufacturer: Some("Akebono".into()),
+                    part_number: Some("ACT1633A".into()),
+                    quantity: Some(4),
+                },
+                NewPartContent {
+                    name: "Shims".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    for path in [w.job_path(), w.page_path()] {
+        let (_, body) = w.get(&path).await;
+        let row = need_summary(&body, w.need);
+        assert!(
+            row.contains(
+                r#"<span class="line kit"><span class="l">In the kit</span><span class="kit-item">Pads × 4<span class="pn">Akebono ACT1633A</span></span><span class="kit-item">Shims</span></span>"#
+            ),
+            "{path}: {row}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_need_row_with_no_kit_lists_no_items() {
+    let w = World::new().await;
+
+    let (_, body) = w.get(&w.job_path()).await;
+
+    assert!(!need_summary(&body, w.need).contains("In the kit"));
 }
 
 #[tokio::test]

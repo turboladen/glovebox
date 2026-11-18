@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use sea_orm::{sea_query::Expr, *};
 use serde::Serialize;
@@ -157,7 +157,7 @@ fn sets_install(input: &UpdatePart) -> bool {
 }
 
 /// A part with the items inside it, when it was bought as a kit.
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct PartView {
     #[serde(flatten)]
     pub part: part::Model,
@@ -179,6 +179,14 @@ pub async fn list(
     }
 
     let parts = query.order_by_desc(part::Column::CreatedAt).all(db).await?;
+    views(db, parts).await
+}
+
+/// Each part with its kit contents, in the order given, from one query.
+pub(crate) async fn views(
+    db: &impl ConnectionTrait,
+    parts: Vec<part::Model>,
+) -> DomainResult<Vec<PartView>> {
     let mut contents = contents_by_part(db, parts.iter().map(|p| p.id)).await?;
     Ok(parts
         .into_iter()
@@ -187,6 +195,15 @@ pub async fn list(
             part,
         })
         .collect())
+}
+
+/// One part with its kit contents.
+pub(crate) async fn view(db: &impl ConnectionTrait, part: part::Model) -> DomainResult<PartView> {
+    let contents = contents_by_part(db, [part.id])
+        .await?
+        .remove(&part.id)
+        .unwrap_or_default();
+    Ok(PartView { part, contents })
 }
 
 /// The kit contents of each named part, in print order. A part with no
@@ -232,16 +249,10 @@ pub async fn correct<C: ConnectionTrait + TransactionTrait>(
     input: UpdatePart,
 ) -> DomainResult<PartView> {
     let txn = super::begin_write(db).await?;
-    let (part, written) = apply_update(&txn, vehicle_id, id, input).await?;
-    let contents = match written {
-        Some(rows) => rows,
-        None => contents_by_part(&txn, [id])
-            .await?
-            .remove(&id)
-            .unwrap_or_default(),
-    };
+    let part = apply_update(&txn, vehicle_id, id, input).await?;
+    let out = view(&txn, part).await?;
     txn.commit().await?;
-    Ok(PartView { part, contents })
+    Ok(out)
 }
 
 // The messages count items from 1, as the owner would, and name no argument
@@ -265,14 +276,15 @@ fn validate_contents(contents: &[NewPartContent]) -> DomainResult<()> {
 }
 
 // Kits hold a handful of items, so the rows go in one at a time, which lets
-// each insert stamp itself.
+// each insert stamp itself. The items take positions from `first` on.
 async fn insert_contents(
     db: &impl ConnectionTrait,
     part_id: i32,
+    first: i32,
     contents: Vec<NewPartContent>,
 ) -> DomainResult<Vec<part_content::Model>> {
     let mut rows = Vec::with_capacity(contents.len());
-    for (position, item) in (0..).zip(contents) {
+    for (position, item) in (first..).zip(contents) {
         let row = part_content::ActiveModel {
             part_id: Set(part_id),
             position: Set(position),
@@ -289,16 +301,50 @@ async fn insert_contents(
     Ok(rows)
 }
 
-async fn replace_contents(
+// Removes the named items of the part, then appends the new ones after the
+// last remaining item, so the kept items keep their order and the unique
+// (part_id, position) index never sees two rows in one place.
+async fn edit_contents(
     db: &impl ConnectionTrait,
     part_id: i32,
-    contents: Vec<NewPartContent>,
-) -> DomainResult<Vec<part_content::Model>> {
-    part_content::Entity::delete_many()
-        .filter(part_content::Column::PartId.eq(part_id))
-        .exec(db)
-        .await?;
-    insert_contents(db, part_id, contents).await
+    remove: &[i32],
+    add: Vec<NewPartContent>,
+) -> DomainResult<()> {
+    if !remove.is_empty() {
+        let found: HashSet<i32> = part_content::Entity::find()
+            .select_only()
+            .column(part_content::Column::Id)
+            .filter(part_content::Column::PartId.eq(part_id))
+            .filter(part_content::Column::Id.is_in(remove.iter().copied()))
+            .into_tuple::<i32>()
+            .all(db)
+            .await?
+            .into_iter()
+            .collect();
+        // Another part's item reads as a missing one, so an id reveals nothing
+        // about parts the caller did not name.
+        if let Some(missing) = remove.iter().find(|id| !found.contains(id)) {
+            return Err(DomainError::NotFound(format!(
+                "Kit item {missing} not found"
+            )));
+        }
+        part_content::Entity::delete_many()
+            .filter(part_content::Column::Id.is_in(found))
+            .exec(db)
+            .await?;
+    }
+    if !add.is_empty() {
+        let last: Option<i32> = part_content::Entity::find()
+            .select_only()
+            .column_as(part_content::Column::Position.max(), "last")
+            .filter(part_content::Column::PartId.eq(part_id))
+            .into_tuple::<Option<i32>>()
+            .one(db)
+            .await?
+            .flatten();
+        insert_contents(db, part_id, last.map_or(0, |p| p + 1), add).await?;
+    }
+    Ok(())
 }
 
 pub async fn get(db: &impl ConnectionTrait, vehicle_id: i32, id: i32) -> DomainResult<part::Model> {
@@ -363,7 +409,7 @@ async fn insert_part(
         ..Default::default()
     };
     let out = model.insert(db).await?;
-    let contents = insert_contents(db, out.id, input.contents).await?;
+    let contents = insert_contents(db, out.id, 0, input.contents).await?;
     Ok((out, contents))
 }
 
@@ -391,8 +437,11 @@ fn clear_fitting(active: &mut part::ActiveModel, received: chrono::NaiveDate) {
 /// `BadRequest` for the status `returned`, which only `return_part` sets, for
 /// any status but `purchased` on a returned part, for install details on a
 /// returned part that the same update does not make `purchased`, and for each
-/// refusal of the change to `purchased` described below; `Invalid` for a kit
-/// item with a blank name or a quantity below 1.
+/// refusal of the change to `purchased` described below; `NotFound` for a kit
+/// item to remove that is not the part's; `Invalid` for an added kit item with
+/// a blank name or a quantity below 1.
+///
+/// Removed kit items go first, and added ones follow the items that remain.
 ///
 /// Changing an installed or replaced part to `purchased` clears its install
 /// and replace details and, when the part has no received date, sets it to
@@ -409,17 +458,13 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     Ok(correct(db, vehicle_id, id, input).await?.part)
 }
 
-// Writes the correction and returns the part with the contents it wrote, or
-// `None` when the input left them alone.
 async fn apply_update(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     id: i32,
     input: UpdatePart,
-) -> DomainResult<(part::Model, Option<Vec<part_content::Model>>)> {
-    if let Some(contents) = &input.contents {
-        validate_contents(contents)?;
-    }
+) -> DomainResult<part::Model> {
+    validate_contents(&input.add_contents)?;
     let existing = get(db, vehicle_id, id).await?;
 
     if let Some(Some(service_id)) = input.installed_service_id {
@@ -515,11 +560,8 @@ async fn apply_update(
 
     active.updated_at = Set(super::now());
     let updated = active.update(db).await?;
-    let contents = match input.contents {
-        Some(contents) => Some(replace_contents(db, id, contents).await?),
-        None => None,
-    };
-    Ok((updated, contents))
+    edit_contents(db, id, &input.remove_contents, input.add_contents).await?;
+    Ok(updated)
 }
 
 /// Marks a vehicle's part as installed by `record` on the record's date.
@@ -950,8 +992,29 @@ mod tests {
         assert_eq!(names(&listed[0]), vec!["Oil filter", "Drain plug"]);
     }
 
+    // Adds and removes kit items on `kit` and returns the result.
+    async fn edit(
+        db: &DatabaseConnection,
+        v: i32,
+        kit: i32,
+        add: Vec<NewPartContent>,
+        remove: Vec<i32>,
+    ) -> DomainResult<PartView> {
+        correct(
+            db,
+            v,
+            kit,
+            UpdatePart {
+                add_contents: add,
+                remove_contents: remove,
+                ..Default::default()
+            },
+        )
+        .await
+    }
+
     #[tokio::test]
-    async fn correcting_contents_replaces_them_and_an_empty_list_clears_them() {
+    async fn adding_items_puts_them_after_the_ones_the_kit_holds() {
         let db = test_db().await;
         let v = seed_vehicle(&db).await;
         let kit = record_kit(
@@ -974,33 +1037,102 @@ mod tests {
         .unwrap();
         assert_eq!(names(&renamed), vec!["Oil filter", "Drain plug"]);
 
-        let replaced = correct(
-            &db,
-            v,
-            kit,
-            UpdatePart {
-                contents: Some(vec![item("Crush washer", None)]),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(names(&replaced), vec!["Crush washer"]);
-        assert_eq!(replaced.contents[0].position, 0);
+        let added = edit(&db, v, kit, vec![item("Crush washer", None)], vec![])
+            .await
+            .unwrap();
+        assert_eq!(
+            names(&added),
+            vec!["Oil filter", "Drain plug", "Crush washer"]
+        );
+    }
 
-        let cleared = correct(
+    #[tokio::test]
+    async fn removing_items_deletes_only_the_named_ones() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let kit = record_kit(
+            &db,
+            v,
+            vec![
+                item("Oil filter", None),
+                item("Drain plug", None),
+                item("Seal", None),
+            ],
+        )
+        .await;
+        let ids: Vec<i32> = list(&db, v, PartFilter::default()).await.unwrap()[0]
+            .contents
+            .iter()
+            .map(|c| c.id)
+            .collect();
+
+        // Removing the middle item and adding one in the same call keeps the
+        // other two in place and puts the new one last.
+        let edited = edit(
             &db,
             v,
             kit,
-            UpdatePart {
-                contents: Some(Vec::new()),
-                ..Default::default()
-            },
+            vec![item("Drain plug", Some("N 908 132 02"))],
+            vec![ids[1], ids[1]],
         )
         .await
         .unwrap();
-        assert_empty(&cleared.contents);
+        assert_eq!(names(&edited), vec!["Oil filter", "Seal", "Drain plug"]);
+        assert_eq!(
+            edited.contents[2].part_number.as_deref(),
+            Some("N 908 132 02")
+        );
+
+        let all: Vec<i32> = edited.contents.iter().map(|c| c.id).collect();
+        let emptied = edit(&db, v, kit, vec![], all).await.unwrap();
+        assert_empty(&emptied.contents);
         assert_eq!(row_count::<part_content::Entity>(&db).await, 0);
+    }
+
+    #[tokio::test]
+    async fn removing_another_parts_item_is_byte_identical_to_a_missing_one() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let kit = record_kit(&db, v, vec![item("Oil filter", None)]).await;
+        let other = record_kit(&db, v, vec![item("Rotor bolt", None)]).await;
+        let theirs = list(&db, v, PartFilter::default())
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|p| p.part.id == other)
+            .unwrap()
+            .contents[0]
+            .id;
+        let missing = theirs + 1000;
+
+        let wrong = edit(&db, v, kit, vec![item("Seal", None)], vec![theirs])
+            .await
+            .unwrap_err();
+        let absent = edit(&db, v, kit, vec![item("Seal", None)], vec![missing])
+            .await
+            .unwrap_err();
+
+        let say = |e: DomainError, id: i32| e.to_string().replace(&id.to_string(), "N");
+        assert!(matches!(wrong, DomainError::NotFound(_)), "{wrong:?}");
+        assert_eq!(say(wrong, theirs), say(absent, missing));
+        // Nothing was written: the kit kept its item and gained none, and the
+        // other kit kept its own.
+        assert_eq!(row_count::<part_content::Entity>(&db).await, 2);
+    }
+
+    #[tokio::test]
+    async fn a_bad_added_item_keeps_the_items_named_for_removal() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let kit = record_kit(&db, v, vec![item("Oil filter", None)]).await;
+        let id = list(&db, v, PartFilter::default()).await.unwrap()[0].contents[0].id;
+
+        let err = edit(&db, v, kit, vec![item(" ", None)], vec![id])
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, DomainError::Invalid { .. }), "{err:?}");
+        assert_eq!(row_count::<part_content::Entity>(&db).await, 1);
     }
 
     #[tokio::test]
@@ -1020,7 +1152,7 @@ mod tests {
                 kit,
                 UpdatePart {
                     name: Some("Renamed".into()),
-                    contents: Some(vec![bad.clone()]),
+                    add_contents: vec![bad.clone()],
                     ..Default::default()
                 },
             )
