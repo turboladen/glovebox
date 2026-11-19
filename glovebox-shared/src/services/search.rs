@@ -291,7 +291,9 @@ mod tests {
         entities::{
             incident::IncidentCategory, service_record_line_item::WorkKind, work_item::JobStatus,
         },
-        test_support::{VehicleFixture, date, test_db},
+        inputs::part::{NewPart, NewPartContent, PartFilter, UpdatePart},
+        services::part,
+        test_support::{VehicleFixture, assert_empty, date, test_db},
     };
 
     async fn seed_vehicle(db: &impl ConnectionTrait, name: &str) -> i32 {
@@ -809,11 +811,10 @@ mod tests {
             assert!(result.is_ok(), "query {query:?} must not error: {result:?}");
         }
         // Bare operators quoted as terms: matches nothing rather than parsing as syntax.
-        assert!(
-            search(&db, "NOT AND (", SearchScope::All, None)
+        assert_empty(
+            &search(&db, "NOT AND (", SearchScope::All, None)
                 .await
-                .unwrap()
-                .is_empty()
+                .unwrap(),
         );
         // "OR" is quoted into a literal term (implicit AND), so this cannot be
         // parsed as an OR-expression: no row contains the token "or" -> empty.
@@ -854,19 +855,19 @@ mod tests {
         name: &str,
         item_number: &str,
     ) -> i32 {
-        crate::services::part::record(
+        part::record(
             db,
             vehicle_id,
-            crate::inputs::part::NewPart {
+            NewPart {
                 name: name.into(),
                 part_number: Some("06K115562LM".into()),
                 contents: vec![
-                    crate::inputs::part::NewPartContent {
+                    NewPartContent {
                         name: "Oil filter".into(),
                         part_number: Some(item_number.into()),
                         ..Default::default()
                     },
-                    crate::inputs::part::NewPartContent {
+                    NewPartContent {
                         name: "Drain plug".into(),
                         part_number: Some(format!("{item_number} plug")),
                         ..Default::default()
@@ -907,7 +908,7 @@ mod tests {
         let across = search(&db, "kit 7020", SearchScope::Parts, None)
             .await
             .unwrap();
-        assert!(across.is_empty(), "{across:?}");
+        assert_empty(&across);
     }
 
     #[tokio::test]
@@ -934,21 +935,18 @@ mod tests {
         let db = test_db().await;
         let v = seed_vehicle(&db, "Daily").await;
         let kit = seed_kit(&db, v, "Oil change kit", "HU 7020 z").await;
-        let items: Vec<i32> =
-            crate::services::part::list(&db, v, crate::inputs::part::PartFilter::default())
-                .await
-                .unwrap()[0]
-                .contents
-                .iter()
-                .map(|c| c.id)
-                .collect();
+        let items: Vec<i32> = part::list(&db, v, PartFilter::default()).await.unwrap()[0]
+            .contents
+            .iter()
+            .map(|c| c.id)
+            .collect();
 
-        crate::services::part::correct(
+        part::correct(
             &db,
             v,
             kit,
-            crate::inputs::part::UpdatePart {
-                add_contents: vec![crate::inputs::part::NewPartContent {
+            UpdatePart {
+                add_contents: vec![NewPartContent {
                     name: "Crush washer".into(),
                     part_number: Some("N0138157".into()),
                     ..Default::default()
@@ -960,29 +958,18 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(
-            search(&db, "7020", SearchScope::Parts, None)
-                .await
-                .unwrap()
-                .is_empty()
-        );
+        assert_empty(&search(&db, "7020", SearchScope::Parts, None).await.unwrap());
         let added = search(&db, "N0138157", SearchScope::Parts, None)
             .await
             .unwrap();
         assert_eq!(added.len(), 1, "{added:?}");
 
-        crate::services::part::delete(&db, v, kit).await.unwrap();
-        assert!(
-            search(&db, "kit", SearchScope::Parts, None)
+        part::delete(&db, v, kit).await.unwrap();
+        assert_empty(&search(&db, "kit", SearchScope::Parts, None).await.unwrap());
+        assert_empty(
+            &search(&db, "N0138157", SearchScope::Parts, None)
                 .await
-                .unwrap()
-                .is_empty()
-        );
-        assert!(
-            search(&db, "N0138157", SearchScope::Parts, None)
-                .await
-                .unwrap()
-                .is_empty()
+                .unwrap(),
         );
     }
 }
