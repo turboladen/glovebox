@@ -460,7 +460,8 @@ async fn a_vocabulary_argument_lists_its_values_in_the_schema() {
         "incidents",
         "research",
         "maintenance",
-        "todo"
+        "todo",
+        "parts"
     ]);
     let appointment_statuses = json!(["planning", "done", "cancelled"]);
     // `[]` in a path steps into the items of a list.

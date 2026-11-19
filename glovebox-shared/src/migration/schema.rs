@@ -1,5 +1,5 @@
-//! Column, foreign-key and index builders, the soundness checks and the
-//! stored-definition edit shared by the migrations.
+//! Column, foreign-key, index and full-text index builders, the soundness
+//! checks and the stored-definition edit shared by the migrations.
 
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 use sea_orm_migration::prelude::*;
@@ -184,6 +184,78 @@ pub(super) async fn scalar<T: sea_orm::TryGetable>(
     row.try_get_by_index::<T>(0)
 }
 
+/// One external-content FTS5 index over `content`'s `cols`. Every column
+/// must exist on the content table, because FTS5 reads values back by rowid.
+pub(super) struct FtsSpec {
+    pub content: &'static str,
+    pub fts: &'static str,
+    pub cols: &'static [&'static str],
+}
+
+/// Creates each index with the AFTER INSERT/DELETE/UPDATE triggers that keep
+/// it in step with its content table. Every statement is `IF NOT EXISTS`.
+pub(super) async fn create_fts(
+    manager: &SchemaManager<'_>,
+    specs: &[FtsSpec],
+) -> Result<(), DbErr> {
+    let db = manager.get_connection();
+    for spec in specs {
+        let FtsSpec { content, fts, .. } = spec;
+        let cols = spec.cols.join(", ");
+        let new_vals = spec
+            .cols
+            .iter()
+            .map(|c| format!("new.{c}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let old_vals = spec
+            .cols
+            .iter()
+            .map(|c| format!("old.{c}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        db.execute_unprepared(&format!(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS {fts} USING fts5({cols}, content='{content}', \
+             content_rowid='id')"
+        ))
+        .await?;
+        db.execute_unprepared(&format!(
+            "CREATE TRIGGER IF NOT EXISTS {content}_fts_ai AFTER INSERT ON {content} BEGIN INSERT \
+             INTO {fts}(rowid, {cols}) VALUES (new.id, {new_vals}); END"
+        ))
+        .await?;
+        // External-content FTS5 deletes take the OLD column values alongside the
+        // special 'delete' command.
+        db.execute_unprepared(&format!(
+            "CREATE TRIGGER IF NOT EXISTS {content}_fts_ad AFTER DELETE ON {content} BEGIN INSERT \
+             INTO {fts}({fts}, rowid, {cols}) VALUES ('delete', old.id, {old_vals}); END"
+        ))
+        .await?;
+        db.execute_unprepared(&format!(
+            "CREATE TRIGGER IF NOT EXISTS {content}_fts_au AFTER UPDATE ON {content} BEGIN INSERT \
+             INTO {fts}({fts}, rowid, {cols}) VALUES ('delete', old.id, {old_vals}); INSERT INTO \
+             {fts}(rowid, {cols}) VALUES (new.id, {new_vals}); END"
+        ))
+        .await?;
+    }
+    Ok(())
+}
+
+/// Drops each index's triggers, then the index.
+pub(super) async fn drop_fts(manager: &SchemaManager<'_>, specs: &[FtsSpec]) -> Result<(), DbErr> {
+    let db = manager.get_connection();
+    for FtsSpec { content, fts, .. } in specs {
+        for suffix in ["ai", "ad", "au"] {
+            db.execute_unprepared(&format!("DROP TRIGGER IF EXISTS {content}_fts_{suffix}"))
+                .await?;
+        }
+        db.execute_unprepared(&format!("DROP TABLE IF EXISTS {fts}"))
+            .await?;
+    }
+    Ok(())
+}
+
 /// What the migration test modules share.
 #[cfg(test)]
 pub(super) mod testing {
@@ -210,6 +282,18 @@ pub(super) mod testing {
     /// the query fails or returns no row.
     pub async fn count(db: &DatabaseConnection, sql: &str) -> i64 {
         first_row(db, sql).await.try_get_by_index(0).unwrap()
+    }
+
+    /// Runs FTS5's `integrity-check` on each named index. Panics if one
+    /// fails.
+    pub async fn fts_integrity(db: &DatabaseConnection, indexes: &[&str]) {
+        for fts in indexes {
+            db.execute_unprepared(&format!(
+                "INSERT INTO {fts}({fts}) VALUES ('integrity-check')"
+            ))
+            .await
+            .unwrap();
+        }
     }
 
     async fn first_row(db: &DatabaseConnection, sql: &str) -> sea_orm::QueryResult {

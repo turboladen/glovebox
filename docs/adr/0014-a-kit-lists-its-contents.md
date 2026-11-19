@@ -58,3 +58,6 @@ and no contents, because the owner does not gather them.
   work sheet leaves them off with the rest of the shop's line.
 - The ids in replies are what a caller sends to remove an item, so a part's replies carry them
   everywhere it appears.
+- `search_records` finds a part by its own name and numbers, and a kit by an item's name or number;
+  either way the hit is the part. A query's terms must all match one row, so a kit's name and an
+  item's number together find nothing.

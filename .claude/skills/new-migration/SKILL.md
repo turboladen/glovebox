@@ -191,7 +191,9 @@ instead.
 5. **Column types**: `.text()` for strings (SQLite TEXT), `.integer()` for numbers.
 6. **No builder form**: CHECK constraints, partial-index predicates the builder cannot express, and
    FTS5 tables with their triggers go through `manager.get_connection().execute_unprepared()`.
-   Copy the external-content trigger trio from the initial schema migration for FTS5.
+   For FTS5, list `FtsSpec`s and call `schema::create_fts` (and `drop_fts` in `down()`), as
+   `m20261118_000002_parts_search.rs` does, then fill each index from stored rows with
+   `INSERT INTO fts_x(fts_x) VALUES ('rebuild')`.
 7. **Seeding data** uses `execute_unprepared` with `NOT EXISTS`-gated inserts, as the seed migration
    does.
 8. **Lints**: add `#![allow(clippy::too_many_lines)]` when a migration defines many tables.

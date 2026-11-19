@@ -133,7 +133,8 @@ nothing and refuses to finish while a vocabulary column holds a value outside it
 `m20261117_000001_work_item_quotes`, which gives a job `quoted_by`, `quoted_on` and
 `quote_service_id` (an `ON DELETE SET NULL` key added with the column), and
 `m20261118_000001_part_contents`, which adds a kit's items (`part_contents`, cascading with the
-part). They run on startup.
+part), and `m20261118_000002_parts_search`, which adds the FTS5 indexes `fts_parts` and
+`fts_part_contents` and fills them from the stored rows. They run on startup.
 
 **Test harness** (`test_support.rs`): `test_db()` is an in-memory SQLite database with migrations
 applied. It is compiled under `#[cfg(any(test, feature = "test-support"))]`; `glovebox-mcp` uses it
@@ -381,7 +382,7 @@ role per control style, and `YYYY-MM-DD` dates.
   that follow see the committed state. A transaction from plain `begin` holds a snapshot from its
   first read, and when the other program commits before its first write, SQLite fails it with a
   busy-snapshot error at once. A no-op `UPDATE` as the first statement does not fix that on the
-  eight tables with an FTS5 trigger, which fail with "database is locked" without waiting out the
+  ten tables with an FTS5 trigger, which fail with "database is locked" without waiting out the
   busy timeout. A race test opens several pools on one file (`test_support::race_pools`) and
   fails when the transaction opens with plain `begin`.
 - **Stamps are set by code, never by the database.** No stamp column has a default. An entity
@@ -440,7 +441,7 @@ role per control style, and `YYYY-MM-DD` dates.
   status, `service_record::CompletedWork`, `schedule::LinkMode` and `search::SearchScope`. A
   filter on a column never takes one of these.
   `docs/adr/0004-typed-vocabularies.md` records why.
-- **Migrations**: new migrations go after `m20261118_000001_part_contents`; the
+- **Migrations**: new migrations go after `m20261118_000002_parts_search`; the
   `new-migration` skill has the templates. Use `Expr::cust()` for expressions inside builder queries; raw
   `execute_unprepared` only where no builder form exists (FTS5 DDL, cross-table copies).
 - **Migrations are not transactional on SQLite** (sea-orm-migration only wraps Postgres), so write
@@ -449,7 +450,8 @@ role per control style, and `YYYY-MM-DD` dates.
 - **SQLite cannot `DROP COLUMN` named in an FK clause**; use the table-rebuild pattern. To add a
   foreign key to an existing column, edit the stored table definition as
   `docs/adr/0003-foreign-keys-by-editing-the-table-definition.md` describes. For FTS5,
-  copy the external-content trigger trio in the initial schema migration; aggregating over `bm25()`
+  build the index and its triggers with `schema::create_fts` (and `drop_fts` in `down`), then fill
+  it from stored rows with `INSERT INTO fts_x(fts_x) VALUES ('rebuild')`; aggregating over `bm25()`
   arms needs a `MATERIALIZED` CTE because query flattening breaks `bm25`.
 - **Verify data-moving migrations against a populated copy of `data/glovebox.db`**, not just
   `test_db()`. To migrate a copy, run `GLOVEBOX_DB_PATH=<copy> target/release/glovebox-mcp < /dev/null`

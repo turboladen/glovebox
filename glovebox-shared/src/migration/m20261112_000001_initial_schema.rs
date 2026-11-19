@@ -20,13 +20,6 @@ use super::schema::*;
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
-/// One external-content FTS5 index over `content`'s `cols`.
-struct FtsSpec {
-    content: &'static str,
-    fts: &'static str,
-    cols: &'static [&'static str],
-}
-
 const FTS_SPECS: &[FtsSpec] = &[
     FtsSpec {
         content: "vehicles",
@@ -108,20 +101,11 @@ impl MigrationTrait for Migration {
         create_service_tables(manager).await?;
         create_incident_tables(manager).await?;
         create_planning_tables(manager).await?;
-        create_fts(manager).await
+        create_fts(manager, FTS_SPECS).await
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        let db = manager.get_connection();
-        for spec in FTS_SPECS {
-            let FtsSpec { content, fts, .. } = spec;
-            for suffix in ["ai", "ad", "au"] {
-                db.execute_unprepared(&format!("DROP TRIGGER IF EXISTS {content}_fts_{suffix}"))
-                    .await?;
-            }
-            db.execute_unprepared(&format!("DROP TABLE IF EXISTS {fts}"))
-                .await?;
-        }
+        drop_fts(manager, FTS_SPECS).await?;
         for table in TABLES.iter().rev() {
             manager
                 .drop_table(
@@ -823,49 +807,4 @@ async fn create_planning_tables(manager: &SchemaManager<'_>) -> Result<(), DbErr
                 .to_owned(),
         )
         .await
-}
-
-async fn create_fts(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
-    let db = manager.get_connection();
-    for spec in FTS_SPECS {
-        let FtsSpec { content, fts, .. } = spec;
-        let cols = spec.cols.join(", ");
-        let new_vals = spec
-            .cols
-            .iter()
-            .map(|c| format!("new.{c}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let old_vals = spec
-            .cols
-            .iter()
-            .map(|c| format!("old.{c}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        db.execute_unprepared(&format!(
-            "CREATE VIRTUAL TABLE IF NOT EXISTS {fts} USING fts5({cols}, content='{content}', \
-             content_rowid='id')"
-        ))
-        .await?;
-        db.execute_unprepared(&format!(
-            "CREATE TRIGGER IF NOT EXISTS {content}_fts_ai AFTER INSERT ON {content} BEGIN INSERT \
-             INTO {fts}(rowid, {cols}) VALUES (new.id, {new_vals}); END"
-        ))
-        .await?;
-        // External-content FTS5 deletes take the OLD column values alongside the
-        // special 'delete' command.
-        db.execute_unprepared(&format!(
-            "CREATE TRIGGER IF NOT EXISTS {content}_fts_ad AFTER DELETE ON {content} BEGIN INSERT \
-             INTO {fts}({fts}, rowid, {cols}) VALUES ('delete', old.id, {old_vals}); END"
-        ))
-        .await?;
-        db.execute_unprepared(&format!(
-            "CREATE TRIGGER IF NOT EXISTS {content}_fts_au AFTER UPDATE ON {content} BEGIN INSERT \
-             INTO {fts}({fts}, rowid, {cols}) VALUES ('delete', old.id, {old_vals}); INSERT INTO \
-             {fts}(rowid, {cols}) VALUES (new.id, {new_vals}); END"
-        ))
-        .await?;
-    }
-    Ok(())
 }

@@ -1,13 +1,13 @@
-//! Full-text search across vehicle, event, and planning text — one
-//! domain operation over the FTS5 indexes created by the initial schema
-//! migration.
+//! Full-text search across vehicle, event, planning and part text — one
+//! domain operation over the FTS5 indexes.
 //!
 //! Each FTS5 table is external-content (index only), so every subquery joins
 //! back to its content table to produce domain-shaped hits: `vehicle_id` is
 //! derived through parents where needed (line item → service record,
 //! followup → incident, finding → report, schedule item → owning
-//! platform/template/vehicle), and line-item hits fold into their parent
-//! service record so callers think in domain records, not rows.
+//! platform/template/vehicle, kit item → part), and line-item and kit-item
+//! hits fold into their parent record so callers think in domain records, not
+//! rows.
 
 use sea_orm::*;
 
@@ -26,6 +26,7 @@ crate::vocab::vocabulary! {
         Research => "research",
         Maintenance => "maintenance",
         Todo => "todo",
+        Parts => "parts",
     }
 }
 
@@ -33,7 +34,7 @@ crate::vocab::vocabulary! {
 pub struct SearchHit {
     /// Domain record kind: `vehicle`, `service`, `incident`,
     /// `incident_followup`, `research_finding`,
-    /// `schedule_item`, or `work_item`.
+    /// `schedule_item`, `work_item`, or `part`.
     pub kind: String,
     pub id: i32,
     pub vehicle_id: Option<i32>,
@@ -215,6 +216,30 @@ pub async fn search(
         ));
     }
 
+    if want(SearchScope::Parts) {
+        subs.push(subquery(
+            "part",
+            "fts_parts",
+            "JOIN parts p ON p.id = fts_parts.rowid",
+            "p.id",
+            "p.vehicle_id",
+            "p.name",
+            filt,
+        ));
+        // A kit item's hit folds into its kit, as a line item's does into its
+        // service.
+        subs.push(subquery(
+            "part",
+            "fts_part_contents",
+            "JOIN part_contents pc ON pc.id = fts_part_contents.rowid JOIN parts p ON p.id = \
+             pc.part_id",
+            "p.id",
+            "p.vehicle_id",
+            "p.name",
+            filt,
+        ));
+    }
+
     // Dedupe by (kind, id, vehicle_id) in SQL, before the LIMIT: a service
     // matching in its own text and in several line items is one record, and
     // duplicate raw rows must not starve other records out of the capped
@@ -266,7 +291,9 @@ mod tests {
         entities::{
             incident::IncidentCategory, service_record_line_item::WorkKind, work_item::JobStatus,
         },
-        test_support::{VehicleFixture, date, test_db},
+        inputs::part::{NewPart, NewPartContent, PartFilter, UpdatePart},
+        services::part,
+        test_support::{VehicleFixture, assert_empty, date, test_db},
     };
 
     async fn seed_vehicle(db: &impl ConnectionTrait, name: &str) -> i32 {
@@ -784,11 +811,10 @@ mod tests {
             assert!(result.is_ok(), "query {query:?} must not error: {result:?}");
         }
         // Bare operators quoted as terms: matches nothing rather than parsing as syntax.
-        assert!(
-            search(&db, "NOT AND (", SearchScope::All, None)
+        assert_empty(
+            &search(&db, "NOT AND (", SearchScope::All, None)
                 .await
-                .unwrap()
-                .is_empty()
+                .unwrap(),
         );
         // "OR" is quoted into a literal term (implicit AND), so this cannot be
         // parsed as an OR-expression: no row contains the token "or" -> empty.
@@ -821,5 +847,129 @@ mod tests {
                 .unwrap_err(),
             DomainError::NotFound(_)
         ));
+    }
+
+    async fn seed_kit(
+        db: &DatabaseConnection,
+        vehicle_id: i32,
+        name: &str,
+        item_number: &str,
+    ) -> i32 {
+        part::record(
+            db,
+            vehicle_id,
+            NewPart {
+                name: name.into(),
+                part_number: Some("06K115562LM".into()),
+                contents: vec![
+                    NewPartContent {
+                        name: "Oil filter".into(),
+                        part_number: Some(item_number.into()),
+                        ..Default::default()
+                    },
+                    NewPartContent {
+                        name: "Drain plug".into(),
+                        part_number: Some(format!("{item_number} plug")),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .part
+        .id
+    }
+
+    #[tokio::test]
+    async fn a_part_is_found_by_its_number_and_a_kit_by_its_items() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db, "Daily").await;
+        let kit = seed_kit(&db, v, "Oil change kit", "HU 7020 z").await;
+
+        let by_number = search(&db, "06K115562LM", SearchScope::All, None)
+            .await
+            .unwrap();
+        assert_eq!(by_number.len(), 1, "{by_number:?}");
+        assert_eq!((by_number[0].kind.as_str(), by_number[0].id), ("part", kit));
+
+        // Both items match, and the kit is still one hit.
+        let by_item = search(&db, "HU 7020", SearchScope::Parts, None)
+            .await
+            .unwrap();
+        assert_eq!(by_item.len(), 1, "{by_item:?}");
+        assert_eq!(by_item[0].id, kit);
+        assert_eq!(by_item[0].title, "Oil change kit");
+        assert_eq!(by_item[0].vehicle_id, Some(v));
+
+        // Terms must all match within one row, so the kit's name and an
+        // item's number together find nothing, as with a service's line items.
+        let across = search(&db, "kit 7020", SearchScope::Parts, None)
+            .await
+            .unwrap();
+        assert_empty(&across);
+    }
+
+    #[tokio::test]
+    async fn the_parts_scope_and_a_vehicle_filter_narrow_the_hits() {
+        let db = test_db().await;
+        let mine = seed_vehicle(&db, "Daily").await;
+        let other = seed_vehicle(&db, "Other").await;
+        seed_kit(&db, mine, "Oil change kit", "HU 7020 z").await;
+        seed_kit(&db, other, "Oil change kit", "HU 7020 z").await;
+        seed_work_item(&db, mine, "Oil change kit for spring").await;
+
+        let parts = search(&db, "kit", SearchScope::Parts, None).await.unwrap();
+        assert_eq!(parts.len(), 2, "{parts:?}");
+        assert!(parts.iter().all(|h| h.kind == "part"));
+        let filtered = search(&db, "7020", SearchScope::Parts, Some(mine))
+            .await
+            .unwrap();
+        assert_eq!(filtered.len(), 1, "{filtered:?}");
+        assert_eq!(filtered[0].vehicle_id, Some(mine));
+    }
+
+    #[tokio::test]
+    async fn editing_a_kit_changes_what_finds_it() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db, "Daily").await;
+        let kit = seed_kit(&db, v, "Oil change kit", "HU 7020 z").await;
+        let items: Vec<i32> = part::list(&db, v, PartFilter::default()).await.unwrap()[0]
+            .contents
+            .iter()
+            .map(|c| c.id)
+            .collect();
+
+        part::correct(
+            &db,
+            v,
+            kit,
+            UpdatePart {
+                add_contents: vec![NewPartContent {
+                    name: "Crush washer".into(),
+                    part_number: Some("N0138157".into()),
+                    ..Default::default()
+                }],
+                remove_contents: items,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_empty(&search(&db, "7020", SearchScope::Parts, None).await.unwrap());
+        let added = search(&db, "N0138157", SearchScope::Parts, None)
+            .await
+            .unwrap();
+        assert_eq!(added.len(), 1, "{added:?}");
+
+        part::delete(&db, v, kit).await.unwrap();
+        assert_empty(&search(&db, "kit", SearchScope::Parts, None).await.unwrap());
+        assert_empty(
+            &search(&db, "N0138157", SearchScope::Parts, None)
+                .await
+                .unwrap(),
+        );
     }
 }
