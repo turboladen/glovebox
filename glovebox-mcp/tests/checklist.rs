@@ -771,7 +771,7 @@ async fn appointment_status_changes_report_the_jobs_they_release() {
         )
         .await;
     assert_eq!(edited["appointment"]["purpose"], "60k service");
-    assert_eq!(edited["appointment"]["booked"], true);
+    assert_eq!(edited["appointment"]["planned_date"], "2026-12-01");
     assert_eq!(edited["appointment"]["jobs"], 1);
     assert_eq!(edited["unassigned_job_ids"], json!([]));
 
@@ -782,7 +782,8 @@ async fn appointment_status_changes_report_the_jobs_they_release() {
             json!({ "vehicle_id": v, "appointment_id": appt, "planned_date": null }),
         )
         .await;
-    assert_eq!(cleared["appointment"]["booked"], false);
+    assert_eq!(cleared["appointment"]["planned_date"], Value::Null);
+    assert_eq!(cleared["appointment"]["phase"], "planning");
 
     let cancelled = t
         .call(
@@ -983,6 +984,55 @@ async fn closing_waits_for_open_work_and_un_ticking_reopens_the_appointment() {
         )
         .await;
     assert_eq!(cancelled["unassigned_todo_ids"], json!([todo]));
+}
+
+#[tokio::test]
+async fn an_appointment_reads_its_phase_from_its_date() {
+    let t = connect().await;
+    let v = add_vehicle(&t, "GTI").await;
+    for (purpose, planned_date) in [
+        ("Past", json!("2000-01-01")),
+        ("Future", json!("2099-01-01")),
+        ("Undated", Value::Null),
+    ] {
+        t.call(
+            "plan_appointment",
+            json!({ "vehicle_id": v, "purpose": purpose, "planned_date": planned_date }),
+        )
+        .await;
+    }
+
+    let listed = t
+        .call("list_appointments", json!({ "vehicle_id": v }))
+        .await;
+    let phases: Vec<(&str, &str, &str)> = listed
+        .as_array()
+        .expect("a list")
+        .iter()
+        .map(|a| {
+            (
+                a["purpose"].as_str().unwrap(),
+                a["status"].as_str().unwrap(),
+                a["phase"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        phases,
+        [
+            ("Past", "planning", "in_shop"),
+            ("Future", "planning", "booked"),
+            ("Undated", "planning", "planning"),
+        ]
+    );
+    let past = listed[0]["id"].as_i64().unwrap();
+    let sheet = t
+        .call(
+            "get_checklist",
+            json!({ "vehicle_id": v, "appointment_id": past }),
+        )
+        .await;
+    assert_eq!(sheet["appointment"]["phase"], "in_shop", "got: {sheet}");
 }
 
 #[tokio::test]

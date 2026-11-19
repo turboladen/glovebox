@@ -14,7 +14,7 @@ use glovebox_shared::{
     },
     money::format_cents,
     services::{
-        appointment::AppointmentStatus,
+        appointment::AppointmentPhase,
         checklist::{self, Checklist, HomeAppointment, JobView, NeedView, StepRow},
         date_label,
         need::{self, Stage},
@@ -417,9 +417,8 @@ pub struct HomeAppointmentRow {
     pub shop_name: Option<String>,
     /// The planned date, or the words the shared row gives when there is none.
     pub when: String,
-    pub booked: bool,
-    pub status_kind: &'static str,
-    pub status_text: String,
+    pub dated: bool,
+    pub status: Tag,
     pub jobs: usize,
     pub needs_open: usize,
     pub todos_open: usize,
@@ -432,9 +431,8 @@ impl From<&HomeAppointment> for HomeAppointmentRow {
             purpose: a.purpose.clone(),
             shop_name: a.shop_name.clone(),
             when: a.when.clone(),
-            booked: a.booked,
-            status_kind: PillKind::of_appointment(a.status).class(),
-            status_text: sentence_case(a.status.as_str()),
+            dated: a.dated,
+            status: Tag::of_phase(a.phase),
             jobs: a.jobs,
             needs_open: a.needs_open,
             todos_open: a.todos_open,
@@ -491,10 +489,11 @@ impl PillKind {
         }
     }
 
-    pub fn of_appointment(status: AppointmentStatus) -> Self {
-        match status {
-            AppointmentStatus::Done => Self::Ok,
-            AppointmentStatus::Planning | AppointmentStatus::Cancelled => Self::Plain,
+    fn of_phase(phase: AppointmentPhase) -> Self {
+        match phase {
+            AppointmentPhase::Done => Self::Ok,
+            AppointmentPhase::Booked | AppointmentPhase::InShop => Self::Wait,
+            AppointmentPhase::Planning | AppointmentPhase::Cancelled => Self::Plain,
         }
     }
 
@@ -522,6 +521,21 @@ impl Tag {
                 DueStatus::Overdue => "Overdue",
                 DueStatus::DueSoon => "Due soon",
                 DueStatus::NotDue => "Ok",
+            }
+            .to_owned(),
+        }
+    }
+
+    /// Builds the tag an appointment's phase shows, such as "In the shop".
+    pub fn of_phase(phase: AppointmentPhase) -> Self {
+        Self {
+            kind: PillKind::of_phase(phase).class(),
+            text: match phase {
+                AppointmentPhase::Planning => "Planning",
+                AppointmentPhase::Booked => "Booked",
+                AppointmentPhase::InShop => "In the shop",
+                AppointmentPhase::Done => "Done",
+                AppointmentPhase::Cancelled => "Cancelled",
             }
             .to_owned(),
         }

@@ -3808,7 +3808,7 @@ mod tests {
         }
 
         async fn appointment_status(f: &Fixture) -> appointment::AppointmentStatus {
-            appointment::summary(&f.db, f.vehicle, f.appointment)
+            appointment::summary(&f.db, f.vehicle, f.appointment, crate::services::today())
                 .await
                 .unwrap()
                 .status
@@ -4148,12 +4148,15 @@ mod tests {
             assert_eq!(deleted.reopened_appointment_ids, vec![f.appointment]);
             crate::test_support::assert_empty(&deleted.unassigned_job_ids);
 
-            let summary = appointment::summary(&f.db, f.vehicle, f.appointment)
-                .await
-                .unwrap();
+            let summary =
+                appointment::summary(&f.db, f.vehicle, f.appointment, crate::services::today())
+                    .await
+                    .unwrap();
             assert_eq!(summary.status, appointment::AppointmentStatus::Planning);
             assert_eq!(summary.appointment.closed_on, None);
-            let open = appointment::list(&f.db, f.vehicle, false).await.unwrap();
+            let open = appointment::list(&f.db, f.vehicle, false, crate::services::today())
+                .await
+                .unwrap();
             assert_eq!(open.len(), 1);
             assert_eq!(job_status(&f, job_id).await, JobStatus::Planned);
             // Re-recording the corrected invoice against the appointment works.

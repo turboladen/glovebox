@@ -21,9 +21,9 @@ use serde::Deserialize;
 use crate::{
     AppState, DeletedTodo,
     view::{
-        Banner, CardContext, Count, Failure, HomeAppointmentRow, JobCard, PillKind, SheetJobCard,
-        Steps, Target, TodoCard, TodoForm, UnsettledRow, WaitingRows, job_card, sentence_case,
-        sheet_heading, sheet_jobs, steps, unsettled_rows,
+        Banner, CardContext, Count, Failure, HomeAppointmentRow, JobCard, SheetJobCard, Steps, Tag,
+        Target, TodoCard, TodoForm, UnsettledRow, WaitingRows, job_card, sheet_heading, sheet_jobs,
+        steps, unsettled_rows,
     },
 };
 
@@ -105,8 +105,7 @@ struct AppointmentPage {
     purpose: String,
     shop: Option<String>,
     date: Option<String>,
-    status_kind: &'static str,
-    status_text: String,
+    status: Tag,
     needs_open: Count,
     todos_open: Count,
     job_count: Count,
@@ -426,14 +425,15 @@ async fn appointment_page(
         open,
         failure,
     } = view;
-    let list = checklist::for_appointment(&state.db, vid, id).await?;
+    let today = (state.today)();
+    let list = checklist::for_appointment(&state.db, vid, id, today).await?;
     let car = vehicle::require(&state.db, vid).await?;
     let summary = list
         .appointment
         .as_ref()
         .ok_or_else(|| DomainError::NotFound(format!("Appointment {id} not found")))?;
     let back = appointment_path(vid, id);
-    let today = today_label(state);
+    let today = glovebox_shared::services::date_label(today);
     let ctx = CardContext {
         vid,
         back: &back,
@@ -470,8 +470,7 @@ async fn appointment_page(
             .appointment
             .planned_date
             .map(glovebox_shared::services::date_label),
-        status_kind: PillKind::of_appointment(summary.status).class(),
-        status_text: sentence_case(summary.status.as_str()),
+        status: Tag::of_phase(summary.phase),
         needs_open: Count::new(summary.needs_open, "need open", "needs open"),
         todos_open: Count::new(summary.todos_open, "to-do open", "to-dos open"),
         job_count: Count::new(summary.jobs, "job", "jobs"),

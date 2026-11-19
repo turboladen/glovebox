@@ -127,9 +127,15 @@ async fn home_lists_open_appointments_and_jobs_not_scheduled() {
     );
     assert!(
         body.contains(
+            r#"<span data-l="Status"><span class="pill pill--wait">Booked</span></span>"#
+        ),
+        "the dated appointment reads booked: {body}"
+    );
+    assert!(
+        body.contains(
             r#"<span data-l="Status"><span class="pill pill--plain">Planning</span></span>"#
         ),
-        "{body}"
+        "the undated one reads planning: {body}"
     );
     assert!(
         body.contains(r#"<span class="num" data-l="Jobs"><span class="vh">Jobs </span>1</span>"#),

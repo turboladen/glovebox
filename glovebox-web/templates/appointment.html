@@ -9,7 +9,7 @@
     <div><span class="l">Vehicle</span>{{ vehicle }}</div>
     {% if let Some(shop) = shop %}<div><span class="l">Shop</span>{{ shop }}</div>{% endif %}
     {% if let Some(date) = date %}<div><span class="l">Date</span>{{ date }}</div>{% endif %}
-    <div><span class="l">Status</span><span class="pill pill--{{ status_kind }}">{{ status_text }}</span></div>
+    <div><span class="l">Status</span><span class="pill pill--{{ status.kind }}">{{ status.text }}</span></div>
     <div><span class="l cap">{{ needs_open.text }}</span>{{ needs_open.n }}</div>
     <div><span class="l cap">{{ todos_open.text }}</span>{{ todos_open.n }}</div>
     <div><span class="l cap">{{ job_count.text }}</span>{{ job_count.n }}</div>

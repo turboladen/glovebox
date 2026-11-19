@@ -169,13 +169,18 @@ need has a decision, every decision has a reason, and every part ordered has arr
     from the appointment's "Print sheet" link.
 12. When the trip happens, file the invoice with `record_service`, passing `appointment_id`,
     `work_item_ids` for the jobs it finished and `part_ids` for the parts the shop fitted (see
-    "Filing an invoice"). The appointment reads `done` by itself once every job on it is done or
-    dropped. Do not set `status: "done"` before filing: closing an appointment takes every job that
-    is still planned off it, and `record_service` then refuses an appointment that is closed.
-    Use `update_appointment` with `status` set to `done` or `cancelled` only to put away a trip
-    that will produce no invoice. Its still-planned jobs go back to "not scheduled" with their
-    needs and research, and the result lists them in `unassigned_job_ids`; tell Steve which jobs
-    those are.
+    "Filing an invoice"). An open appointment's `phase` reads `booked` before its planned date and
+    `in_shop` from that date on, and the appointment reads `done` by itself once every job on it is
+    done or dropped. `in_shop` comes from the date alone, so when the date is more than a few days
+    past, ask Steve whether the trip happened, then offer to file the invoice, re-date the
+    appointment or cancel it. Do not set `status: "done"` before filing: closing is refused while a
+    job is still planned, and `record_service` refuses an appointment that is closed. When the shop
+    did work but gave no paperwork, mark those jobs done with `update_planned_work` and the
+    appointment reads `done` by itself. An appointment with no jobs never reads `done` by itself,
+    so once the trip has happened and its to-dos are ticked, close it with `update_appointment` and
+    `status` set to `done`. Use `status` set to `cancelled` only for a trip that did not happen.
+    Its still-planned jobs go back to "not scheduled" with their needs and research, and the result
+    lists them in `unassigned_job_ids`; tell Steve which jobs those are.
 
 ## Answering "what's coming"
 

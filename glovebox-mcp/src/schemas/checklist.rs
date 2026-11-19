@@ -64,10 +64,13 @@ pub struct UpdateAppointmentInput {
     /// Appointment id, from `plan_appointment` or `list_appointments`.
     pub appointment_id: i32,
     /// `done` closes the appointment by hand, `cancelled` cancels it, and
-    /// `planning` reopens either. Closing or cancelling takes every job that
-    /// is still planned off the appointment, with its needs and research
-    /// intact, and the result lists their ids in `unassigned_job_ids`. Omit to
-    /// leave the status alone.
+    /// `planning` reopens either. Closing is refused while a job is still
+    /// planned or a to-do is open. Cancelling takes every planned job and open
+    /// to-do off the appointment, with the jobs' needs and research intact,
+    /// and the result lists their ids in `unassigned_job_ids` and
+    /// `unassigned_todo_ids`. The `phase` a read shows (`booked`, `in_shop`)
+    /// follows from the planned date and cannot be set. Omit to leave the
+    /// status alone.
     pub status: Option<AppointmentStatus>,
     /// New purpose.
     pub purpose: Option<String>,

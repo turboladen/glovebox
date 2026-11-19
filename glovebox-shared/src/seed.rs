@@ -524,16 +524,23 @@ mod tests {
             .unwrap();
         assert_eq!(vehicle.name, "Demo GTI");
         assert!(vehicle.vin.is_none() && vehicle.license_plate.is_none());
-        let appointments = appointment::list(&db, vehicle.id, true).await.unwrap();
+        let appointments = appointment::list(&db, vehicle.id, true, crate::services::today())
+            .await
+            .unwrap();
         assert_eq!(appointments.len(), 1);
         assert_eq!(
             appointments[0].appointment.purpose,
             "60k service + loose ends"
         );
 
-        let list = checklist::for_appointment(&db, vehicle.id, appointments[0].appointment.id)
-            .await
-            .unwrap();
+        let list = checklist::for_appointment(
+            &db,
+            vehicle.id,
+            appointments[0].appointment.id,
+            crate::services::today(),
+        )
+        .await
+        .unwrap();
         let mut stages: Vec<Stage> = list
             .jobs
             .iter()

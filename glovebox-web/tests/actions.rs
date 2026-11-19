@@ -250,7 +250,12 @@ async fn appointment_page_shows_next_steps_then_jobs() {
             "{label}: {body}"
         );
     }
-    assert!(body.contains("Planning"), "{body}");
+    assert!(
+        body.contains(
+            r#"<span class="l">Status</span><span class="pill pill--wait">Booked</span>"#
+        ),
+        "a dated appointment before its day reads booked: {body}"
+    );
     let steps = body.find("Next steps").expect("next steps heading");
     let jobs = body.find("By job").expect("by-job heading");
     assert!(steps < jobs, "next steps come before the jobs");
@@ -293,6 +298,38 @@ async fn appointment_header_omits_a_missing_shop_and_date() {
     );
     assert!(!body.contains(r#"<span class="l">Shop</span>"#), "{body}");
     assert!(!body.contains(r#"<span class="l">Date</span>"#), "{body}");
+    assert!(
+        body.contains(
+            r#"<span class="l">Status</span><span class="pill pill--plain">Planning</span>"#
+        ),
+        "an undated appointment reads planning: {body}"
+    );
+}
+
+#[tokio::test]
+async fn an_appointment_reads_in_the_shop_from_its_date() {
+    let w = World::new().await;
+    let pill = r#"<span class="pill pill--wait">In the shop</span>"#;
+    for planned in [common::today(), common::today() - chrono::Days::new(3)] {
+        appointment::update_with_status(
+            &w.db,
+            w.vehicle,
+            w.appointment,
+            glovebox_shared::inputs::appointment::UpdateAppointment {
+                planned_date: Some(Some(planned)),
+                ..Default::default()
+            },
+            None,
+            common::today(),
+        )
+        .await
+        .unwrap();
+
+        let (_, page) = w.get(&w.page_path()).await;
+        assert!(page.contains(pill), "{planned}: {page}");
+        let (_, home) = w.get("/").await;
+        assert!(home.contains(pill), "{planned}: {home}");
+    }
 }
 
 #[tokio::test]

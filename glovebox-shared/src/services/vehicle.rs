@@ -316,7 +316,7 @@ fn validate_sale(price_cents: Option<i32>, mileage: Option<i32>) -> DomainResult
 // A garage list leaves an archived car out, so work still open on one would
 // show nowhere; it is settled before the car leaves.
 async fn refuse_open_work(db: &impl ConnectionTrait, id: i32) -> DomainResult<()> {
-    let appointments = super::appointment::open_by_vehicle(db, &[id])
+    let appointments = super::appointment::open_by_vehicle(db, &[id], super::today())
         .await?
         .remove(&id)
         .map_or(0, |a| a.len());
