@@ -3,7 +3,7 @@
 
 use rmcp::{ErrorData as McpError, model::CallToolResult, tool, tool_router};
 
-use glovebox_shared::services::{appointment, checklist, need, todo, work_sheet};
+use glovebox_shared::services::{appointment, checklist, need, today, todo, work_sheet};
 
 use super::{GloveboxMcp, Parameters, deleted_result, domain_result};
 use crate::schemas::{
@@ -60,7 +60,7 @@ impl GloveboxMcp {
                 appointment_id,
                 input,
                 change,
-                glovebox_shared::services::today(),
+                today(),
             )
             .await,
         )
@@ -68,13 +68,12 @@ impl GloveboxMcp {
 
     #[tool(
         name = "list_appointments",
-        description = "The vehicle's appointments with their status, `booked` (true when a \
-                       planned date is set), their `phase` (`planning` with no date, `booked` \
-                       before the date, `in_shop` from the date until the appointment is done, \
-                       then `done` or `cancelled`), and counts of jobs, open needs and open \
-                       to-dos, soonest first. Done and cancelled ones are left out unless \
-                       `include_closed` is set. Use `get_checklist` to read one appointment in \
-                       full."
+        description = "The vehicle's appointments with their status, their `phase` (`planning` \
+                       with no date, `booked` before the date, `in_shop` from the date until the \
+                       appointment is done, then `done` or `cancelled`), and counts of jobs, open \
+                       needs and open to-dos, soonest first. Done and cancelled ones are left out \
+                       unless `include_closed` is set. Use `get_checklist` to read one \
+                       appointment in full."
     )]
     async fn list_appointments(
         &self,
@@ -86,7 +85,7 @@ impl GloveboxMcp {
                 &*self.db,
                 p.vehicle_id,
                 p.include_closed.unwrap_or(false),
-                glovebox_shared::services::today(),
+                today(),
             )
             .await,
         )
@@ -130,15 +129,7 @@ impl GloveboxMcp {
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "get_checklist");
         let (vehicle_id, scope) = domain_input!(p.into_domain());
-        domain_result(
-            checklist::get(
-                &*self.db,
-                vehicle_id,
-                scope,
-                glovebox_shared::services::today(),
-            )
-            .await,
-        )
+        domain_result(checklist::get(&*self.db, vehicle_id, scope, today()).await)
     }
 
     #[tool(

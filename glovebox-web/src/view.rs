@@ -417,7 +417,7 @@ pub struct HomeAppointmentRow {
     pub shop_name: Option<String>,
     /// The planned date, or the words the shared row gives when there is none.
     pub when: String,
-    pub booked: bool,
+    pub dated: bool,
     pub status: Tag,
     pub jobs: usize,
     pub needs_open: usize,
@@ -431,7 +431,7 @@ impl From<&HomeAppointment> for HomeAppointmentRow {
             purpose: a.purpose.clone(),
             shop_name: a.shop_name.clone(),
             when: a.when.clone(),
-            booked: a.booked,
+            dated: a.dated,
             status: Tag::of_phase(a.phase),
             jobs: a.jobs,
             needs_open: a.needs_open,

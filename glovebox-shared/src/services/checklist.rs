@@ -702,7 +702,7 @@ pub struct HomeAppointment {
     /// Holds the planned date, or `not booked` when there is none.
     pub when: String,
     /// True when the appointment has a planned date.
-    pub booked: bool,
+    pub dated: bool,
     /// Holds the appointment's phase on the day the home page was read.
     pub phase: super::appointment::AppointmentPhase,
     /// Counts the jobs on the appointment.
@@ -759,7 +759,7 @@ fn home_appointment(s: AppointmentSummary) -> HomeAppointment {
             .appointment
             .planned_date
             .map_or_else(|| "not booked".to_owned(), super::date_label),
-        booked: s.booked,
+        dated: s.appointment.planned_date.is_some(),
         phase: s.phase,
         jobs: s.jobs,
         needs_open: s.needs_open,
@@ -1950,7 +1950,7 @@ mod tests {
                     a.id,
                     a.purpose.as_str(),
                     a.when.as_str(),
-                    a.booked,
+                    a.dated,
                     a.needs_open,
                     a.todos_open,
                 )

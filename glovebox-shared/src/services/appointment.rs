@@ -28,8 +28,6 @@ pub struct AppointmentSummary {
     /// Where the appointment stands, as [`phase`] reads it from the status,
     /// the planned date and today's date.
     pub phase: AppointmentPhase,
-    /// True when the appointment has a planned date.
-    pub booked: bool,
     pub jobs: usize,
     pub needs_open: usize,
     pub todos_open: usize,
@@ -384,7 +382,6 @@ pub(crate) fn summarize(
     AppointmentSummary {
         status,
         phase: phase(status, appointment.planned_date, today),
-        booked: appointment.planned_date.is_some(),
         jobs: job_statuses.len(),
         needs_open,
         todos_open,
@@ -1301,16 +1298,22 @@ mod tests {
         let all = list(&db, v, true, crate::services::today()).await.unwrap();
         let s = all.iter().find(|s| s.appointment.id == a.id).unwrap();
         assert_eq!(
-            (s.status, s.booked, s.jobs, s.needs_open, s.todos_open),
-            (AppointmentStatus::Planning, true, 2, 2, 1)
+            (s.status, s.phase, s.jobs, s.needs_open, s.todos_open),
+            (
+                AppointmentStatus::Planning,
+                AppointmentPhase::Booked,
+                2,
+                2,
+                1
+            )
         );
         let u = all
             .iter()
             .find(|s| s.appointment.id == unbooked.id)
             .unwrap();
         assert_eq!(
-            (u.booked, u.jobs, u.needs_open, u.todos_open),
-            (false, 0, 0, 0)
+            (u.phase, u.jobs, u.needs_open, u.todos_open),
+            (AppointmentPhase::Planning, 0, 0, 0)
         );
 
         cancel(&db, v, unbooked.id).await.unwrap();

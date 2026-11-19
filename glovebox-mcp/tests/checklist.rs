@@ -771,7 +771,7 @@ async fn appointment_status_changes_report_the_jobs_they_release() {
         )
         .await;
     assert_eq!(edited["appointment"]["purpose"], "60k service");
-    assert_eq!(edited["appointment"]["booked"], true);
+    assert_eq!(edited["appointment"]["planned_date"], "2026-12-01");
     assert_eq!(edited["appointment"]["jobs"], 1);
     assert_eq!(edited["unassigned_job_ids"], json!([]));
 
@@ -782,7 +782,8 @@ async fn appointment_status_changes_report_the_jobs_they_release() {
             json!({ "vehicle_id": v, "appointment_id": appt, "planned_date": null }),
         )
         .await;
-    assert_eq!(cleared["appointment"]["booked"], false);
+    assert_eq!(cleared["appointment"]["planned_date"], Value::Null);
+    assert_eq!(cleared["appointment"]["phase"], "planning");
 
     let cancelled = t
         .call(

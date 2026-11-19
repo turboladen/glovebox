@@ -171,7 +171,7 @@ need has a decision, every decision has a reason, and every part ordered has arr
     `work_item_ids` for the jobs it finished and `part_ids` for the parts the shop fitted (see
     "Filing an invoice"). An open appointment's `phase` reads `booked` before its planned date and
     `in_shop` from that date on, and the appointment reads `done` by itself once every job on it is
-    done or dropped. `booked: true` only means a date is set; go by `phase`. `in_shop` comes from
+    done or dropped. `in_shop` comes from
     the date alone, so when the date is more than a few days past, ask Steve whether the trip
     happened, then offer to file the invoice, re-date the appointment or cancel it. Do not set
     `status: "done"` before filing: closing is refused while a job is still planned, and

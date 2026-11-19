@@ -425,14 +425,15 @@ async fn appointment_page(
         open,
         failure,
     } = view;
-    let list = checklist::for_appointment(&state.db, vid, id, (state.today)()).await?;
+    let today = (state.today)();
+    let list = checklist::for_appointment(&state.db, vid, id, today).await?;
     let car = vehicle::require(&state.db, vid).await?;
     let summary = list
         .appointment
         .as_ref()
         .ok_or_else(|| DomainError::NotFound(format!("Appointment {id} not found")))?;
     let back = appointment_path(vid, id);
-    let today = today_label(state);
+    let today = glovebox_shared::services::date_label(today);
     let ctx = CardContext {
         vid,
         back: &back,

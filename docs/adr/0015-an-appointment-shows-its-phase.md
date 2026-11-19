@@ -7,8 +7,7 @@
 
 An appointment's status is `planning`, `done` or `cancelled`, derived from its closed and
 cancelled dates and its jobs. The status has no value for a trip whose date has come, so an
-appointment with the car at the shop and one with no date yet both read `planning`. A planned
-date sets only the `booked` flag, which means "has a date". The same
+appointment with the car at the shop and one with no date yet both read `planning`. The same
 vocabulary is also `update_appointment`'s `status` argument, so a new value there would be one a
 caller could send as a change that means nothing.
 
@@ -18,7 +17,9 @@ caller could send as a change that means nothing.
 date and today's date: an open appointment is `planning` with no date, `booked` before its date
 and `in_shop` from its date on, and `done` and `cancelled` carry over. Every
 `AppointmentSummary` carries it, so `list_appointments` and `get_checklist` return it, and the web
-pills show it: "Booked" and "In the shop" as `wait` pills.
+pills show it: "Booked" and "In the shop" as `wait` pills. A summary carries no separate `booked`
+flag, because `planned_date` already says whether a date is set and a flag beside the `booked`
+phase would read as the same thing.
 
 **No rule keys on the phase.** Closing, reopening, what a list shows as open and what takes new
 work all still read the status or the stored dates. The phase only reports.
@@ -32,7 +33,7 @@ phase.
 
 - **New values in `AppointmentStatus`.** That would split the input vocabulary from the output
   one, or let a caller set `booked` by hand.
-- **A web-only label from the `booked` flag.** Claude Desktop would still read `planning` and
+- **A web-only label from whether a date is set.** Claude Desktop would still read `planning` and
   tell the owner the trip had not happened.
 
 ## Consequences
