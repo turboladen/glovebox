@@ -261,8 +261,6 @@ async fn apply_update(
 /// What a need has decided. It is read from and written to the need's chosen
 /// option, decision date and decision reason, which hold together as the
 /// table's CHECK constraints require.
-// `clear_choice` also writes those columns, all to null, which every
-// supplier allows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Decision {
     /// No option is chosen and the shop does not supply the need.
@@ -302,24 +300,12 @@ impl Decision {
         }
     }
 
-    // No choice, with `reason`, for a need `supplied_by` supplies. Only the
-    // shop's need holds a reason without a choice.
-    fn unchosen(supplied_by: Option<Supplier>, reason: Option<String>) -> DomainResult<Self> {
-        Ok(match (supplied_by, reason) {
-            (Some(Supplier::Shop), reason) => Self::ShopSupplies { reason },
-            (_, None) => Self::Undecided,
-            (_, Some(_)) => return Err(reason_refused()),
-        })
-    }
-
     // The decision once `supplied_by` supplies the need. A choice stays; with
     // none, the shop's reason goes when the shop stops supplying it.
     fn for_supplier(self, supplied_by: Option<Supplier>) -> Self {
         match self {
             Self::Chosen { .. } => self,
-            Self::ShopSupplies { .. } | Self::Undecided if supplied_by != Some(Supplier::Shop) => {
-                Self::Undecided
-            }
+            _ if supplied_by != Some(Supplier::Shop) => Self::Undecided,
             Self::ShopSupplies { reason } => Self::ShopSupplies { reason },
             Self::Undecided => Self::ShopSupplies { reason: None },
         }
@@ -412,53 +398,43 @@ pub async fn add_option<C: ConnectionTrait + TransactionTrait>(
     Ok(out)
 }
 
-// Clears the need's choice, the date it was made and the reason given for it
-// when the need has chosen `option_id`. The database nulls the reference when
-// an option row goes, but it cannot clear the other two.
-async fn clear_choice(db: &impl ConnectionTrait, need_id: i32, option_id: i32) -> DomainResult<()> {
-    job_need::Entity::update_many()
-        .col_expr(job_need::Column::ChosenOptionId, Expr::value(None::<i32>))
-        .col_expr(
-            job_need::Column::DecidedOn,
-            Expr::value(None::<chrono::NaiveDate>),
-        )
-        .col_expr(
-            job_need::Column::DecisionReason,
-            Expr::value(None::<String>),
-        )
-        .col_expr(job_need::Column::UpdatedAt, Expr::value(super::now()))
-        .filter(job_need::Column::Id.eq(need_id))
-        .filter(job_need::Column::ChosenOptionId.eq(option_id))
-        .exec(db)
-        .await?;
-    Ok(())
-}
+// The reason and date a need gave its choice, which an option keeps after
+// that choice is ruled out.
+type KeptChoice = (Option<String>, chrono::NaiveDate);
 
-// Copies the reason and date of the need's choice onto the option when the
-// need has chosen `option_id`, so clearing the choice keeps the owner's
-// reasoning for past decisions.
-async fn keep_choice_on_option(
+// Takes the choice off the need that has chosen `option` and returns the
+// reason and date it held. A need that chose another option, or none, is left
+// alone.
+async fn unchoose(
     db: &impl ConnectionTrait,
-    need_id: i32,
-    option_id: i32,
-) -> DomainResult<()> {
-    let Some(need) = job_need::Entity::find_by_id(need_id)
-        .filter(job_need::Column::ChosenOptionId.eq(option_id))
+    option: &need_option::Model,
+) -> DomainResult<Option<KeptChoice>> {
+    let Some(need) = job_need::Entity::find_by_id(option.need_id)
+        .filter(job_need::Column::ChosenOptionId.eq(option.id))
         .one(db)
         .await?
     else {
-        return Ok(());
+        return Ok(None);
     };
-    need_option::Entity::update_many()
-        .col_expr(
-            need_option::Column::ChosenReason,
-            Expr::value(need.decision_reason),
-        )
-        .col_expr(need_option::Column::ChosenOn, Expr::value(need.decided_on))
-        .filter(need_option::Column::Id.eq(option_id))
-        .exec(db)
-        .await?;
-    Ok(())
+    let Decision::Chosen { on, reason, .. } = Decision::of(&need)? else {
+        return Ok(None);
+    };
+    let supplied_by = need.supplied_by;
+    let mut active: job_need::ActiveModel = need.into();
+    Decision::Undecided
+        .for_supplier(supplied_by)
+        .write(&mut active);
+    active.updated_at = Set(super::now());
+    active.update(db).await?;
+    Ok(Some((reason, on)))
+}
+
+// Sets the choice an option keeps, or clears it for `None`. The table keeps a
+// kept reason only with its date.
+fn keep_choice(active: &mut need_option::ActiveModel, kept: Option<KeptChoice>) {
+    let (reason, on) = kept.map_or((None, None), |(reason, on)| (reason, Some(on)));
+    active.chosen_reason = Set(reason);
+    active.chosen_on = Set(on);
 }
 
 /// Changes an option. Rejecting or marking `does_not_fit` the option its need
@@ -494,7 +470,19 @@ pub async fn update_option<C: ConnectionTrait + TransactionTrait>(
             "must not be blank; clear the reason to un-reject the option",
         ));
     }
-    let mut active: need_option::ActiveModel = existing.clone().into();
+    // Ruling out the chosen option takes the choice off the need in the same
+    // transaction, so a need never keeps a choice that was just rejected.
+    let now_unusable = input.fitment == Some(Fitment::DoesNotFit)
+        || input.rejected_reason.as_ref().is_some_and(Option::is_some);
+    let kept = if now_unusable {
+        unchoose(db, &existing).await?
+    } else {
+        None
+    };
+    let mut active: need_option::ActiveModel = existing.into();
+    if kept.is_some() {
+        keep_choice(&mut active, kept);
+    }
     if let Some(value) = input.description {
         active.description = Set(value);
     }
@@ -524,17 +512,7 @@ pub async fn update_option<C: ConnectionTrait + TransactionTrait>(
         active.rejected_reason = Set(reason.clone());
     }
     active.updated_at = Set(super::now());
-
-    let now_unusable = input.fitment == Some(Fitment::DoesNotFit)
-        || input.rejected_reason.as_ref().is_some_and(Option::is_some);
-    // The option write and the choice clearing commit together, so a need
-    // never keeps a choice that was just rejected.
-    let mut updated = active.update(&txn).await?;
-    if now_unusable {
-        keep_choice_on_option(&txn, updated.need_id, updated.id).await?;
-        clear_choice(&txn, updated.need_id, updated.id).await?;
-        updated = require_option(&txn, vehicle_id, option_id).await?;
-    }
+    let updated = active.update(db).await?;
     txn.commit().await?;
     Ok(updated)
 }
@@ -551,7 +529,8 @@ pub async fn delete_option<C: ConnectionTrait + TransactionTrait>(
 ) -> DomainResult<()> {
     let option = require_option(db, vehicle_id, option_id).await?;
     let txn = super::begin_write(db).await?;
-    clear_choice(&txn, option.need_id, option.id).await?;
+    // The database refuses to delete an option a need has chosen.
+    unchoose(&txn, &option).await?;
     option.delete(&txn).await?;
     txn.commit().await?;
     Ok(())
@@ -615,11 +594,16 @@ pub async fn decide<C: ConnectionTrait + TransactionTrait>(
     let need = require(db, vehicle_id, need_id).await?;
     let current = Decision::of(&need)?;
     let decision = match option_id {
-        None => Decision::unchosen(need.supplied_by, reason)?,
+        None => Decision::Undecided
+            .for_supplier(need.supplied_by)
+            .with_reason(reason)?,
         Some(option_id) => {
             let option = choosable(db, need_id, option_id).await?;
-            if option.chosen_reason.is_some() || option.chosen_on.is_some() {
-                clear_choice_history(db, option_id).await?;
+            if option.chosen_on.is_some() {
+                let mut kept: need_option::ActiveModel = option.into();
+                keep_choice(&mut kept, None);
+                kept.updated_at = Set(super::now());
+                kept.update(db).await?;
             }
             let on = match current {
                 Decision::Chosen {
@@ -671,25 +655,6 @@ async fn choosable(
         )));
     }
     Ok(option)
-}
-
-// Clears the reason and date an option kept from an earlier choice, which
-// `keep_choice_on_option` copied there when that choice was ruled out.
-async fn clear_choice_history(db: &impl ConnectionTrait, option_id: i32) -> DomainResult<()> {
-    need_option::Entity::update_many()
-        .col_expr(
-            need_option::Column::ChosenReason,
-            Expr::value(None::<String>),
-        )
-        .col_expr(
-            need_option::Column::ChosenOn,
-            Expr::value(None::<chrono::NaiveDate>),
-        )
-        .col_expr(need_option::Column::UpdatedAt, Expr::value(super::now()))
-        .filter(need_option::Column::Id.eq(option_id))
-        .exec(db)
-        .await?;
-    Ok(())
 }
 
 /// A need with the part linked to it and the stage that results.

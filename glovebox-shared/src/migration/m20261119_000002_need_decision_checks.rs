@@ -1,7 +1,7 @@
 //! Adds CHECK constraints that keep a need's chosen option, decision date and
 //! decision reason together, and an option's rejection and kept choice in
-//! pairs. It also makes deleting an option a need has chosen fail, where
-//! before the database cleared the choice and left its date behind.
+//! pairs. It also makes the chosen option's key `ON DELETE RESTRICT`, so
+//! deleting an option a need has chosen fails.
 //!
 //! It refuses to finish, and changes nothing, while a stored row breaks one
 //! of the rules. Running it again finds everything in place and edits nothing.
