@@ -258,7 +258,7 @@ uses it. Rejecting or ruling out a chosen option keeps the need's reason and dat
 `chosen_reason` and `chosen_on` until the option is chosen again, and `past_decisions` lists both
 kinds under `rejected`, so it still reports them. Choosing the option a need
 already has keeps `decided_on`. A need's chosen option, decision date and reason are written only
-through `need::Decision`: a choice always carries its date, and a need with no chosen option holds
+through `need::Decision` (`supplied_by` stays its own column): a choice always carries its date, and a need with no chosen option holds
 a `decision_reason` only while the shop supplies it. `need::update` refuses a new reason otherwise,
 and moving the need off `shop` drops the stored one, even when the same call sends it back.
 Clearing a choice the need does not have keeps its reason. The database refuses to delete an

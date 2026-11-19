@@ -85,13 +85,14 @@ The areas convert in this order, one pull request each:
    replaced, `returned_on` and `return_reason` exactly while returned, `returned_from_need_id` only
    while returned (its `ON DELETE SET NULL` key clears it when the need is deleted), and
    `received_on` not before `purchase_date`.
-2. **A need's decision.** The state is undecided, shop-supplied (with an optional reason) or
-   chosen (with the option, the date and an optional reason). An option's rejection and its kept
-   choice each become one optional pair. This retires `holds_reason` and the date branches in
-   `decide`, and narrows the resent-reason exemption to the call that moves a need off the shop. The `chosen_option_id` key changes to `ON DELETE RESTRICT`,
-   so the choice, its date and its reason leave together. Its CHECK constraints: choice and date set
-   together, a reason only with a choice or a shop supplier, the rejected pair together, and a
-   kept reason only with its date.
+2. **A need's decision.** The state is undecided, shop-supplied (with an optional reason) or chosen
+   (with the option, the date and an optional reason), whoever supplies the need, since
+   `supplied_by` stays its own column. An option's rejection and its kept choice each become one
+   optional pair. This retires `holds_reason` and the date branches in `decide`, and narrows the
+   resent-reason exemption to the call that moves a need off the shop. The `chosen_option_id` key
+   changes to `ON DELETE RESTRICT`, so the choice, its date and its reason leave together. Its CHECK
+   constraints: choice and date set together, a reason only with a choice or a shop supplier, the
+   rejected pair together, and a kept reason only with its date.
 3. **An appointment's ending.** The state is open, closed on a date or cancelled on a date.
    `shows_as_open` reads the variant. The CHECK: the two dates are never both set.
 4. **The single-row rules.** These need no enum, only CHECK constraints: a job's completing

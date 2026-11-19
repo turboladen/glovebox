@@ -239,7 +239,7 @@ async fn apply_update(
         // is no reason sent, so it goes with the shop.
         Some(Some(reason))
             if decision == Decision::Undecided
-                && existing.decision_reason.as_ref() == Some(&reason) => {}
+                && existing.decision_reason.as_deref().map(str::trim) == Some(reason.trim()) => {}
         Some(reason) => decision = decision.with_reason(reason)?,
     }
     let mut active: job_need::ActiveModel = existing.into();
@@ -260,7 +260,8 @@ async fn apply_update(
 
 /// What a need has decided. It is read from and written to the need's chosen
 /// option, decision date and decision reason, which hold together as the
-/// table's CHECK constraints require.
+/// table's CHECK constraints require. `supplied_by` stays its own column: it
+/// only tells `ShopSupplies` from `Undecided` when no option is chosen.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Decision {
     /// No option is chosen and the shop does not supply the need.
@@ -527,8 +528,8 @@ pub async fn delete_option<C: ConnectionTrait + TransactionTrait>(
     vehicle_id: i32,
     option_id: i32,
 ) -> DomainResult<()> {
-    let option = require_option(db, vehicle_id, option_id).await?;
     let txn = super::begin_write(db).await?;
+    let option = require_option(&txn, vehicle_id, option_id).await?;
     // The database refuses to delete an option a need has chosen.
     unchoose(&txn, &option).await?;
     option.delete(&txn).await?;
@@ -1210,7 +1211,7 @@ mod tests {
             n.id,
             UpdateNeed {
                 supplied_by: Some(Some(Supplier::Owner)),
-                decision_reason: Some(Some("They bleed it".into())),
+                decision_reason: Some(Some("They bleed it ".into())),
                 ..Default::default()
             },
         )
