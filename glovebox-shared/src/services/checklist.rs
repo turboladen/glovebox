@@ -203,7 +203,7 @@ pub async fn for_appointment(
     let job_statuses: Vec<JobStatus> = views.iter().map(|j| j.job.status).collect();
     let needs_open = views.iter().map(JobView::open_needs).sum();
     let todos_open = todos.iter().filter(|t| t.done_on.is_none()).count();
-    let summary = appointment::summarize(found, &job_statuses, needs_open, todos_open, today);
+    let summary = appointment::summarize(found, &job_statuses, needs_open, todos_open, today)?;
     Ok(assemble(Some(summary), views, todos))
 }
 

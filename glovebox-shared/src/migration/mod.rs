@@ -13,6 +13,7 @@ mod m20261118_000001_part_contents;
 mod m20261118_000002_parts_search;
 mod m20261119_000001_part_life_cycle_checks;
 mod m20261119_000002_need_decision_checks;
+mod m20261119_000003_appointment_ending_check;
 mod schema;
 
 pub struct Migrator;
@@ -34,6 +35,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261118_000002_parts_search::Migration),
             Box::new(m20261119_000001_part_life_cycle_checks::Migration),
             Box::new(m20261119_000002_need_decision_checks::Migration),
+            Box::new(m20261119_000003_appointment_ending_check::Migration),
         ]
     }
 }
