@@ -439,12 +439,7 @@ impl MarkNeedOrderedInput {
                 purchase_date: dates::parse_optional_date("purchase_date", self.purchase_date)?,
                 cost_cents: self.cost_cents,
                 order_ref: self.order_ref,
-                contents: self
-                    .contents
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
+                contents: super::kit_contents(self.contents),
             },
         ))
     }

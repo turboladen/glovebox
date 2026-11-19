@@ -778,6 +778,7 @@ async fn services_tools_reject_unknown_arguments() {
     .await;
     common::assert_unknown_field_rejected(&t, "record_service", json!({ "vehicle_id": 1, "service_date": "2026-11-10", "line_items": [{ "description": "Oil", "work_kind": "maintenance", "category": "x" }] }), "category").await;
     common::assert_unknown_field_rejected(&t, "record_service", json!({ "vehicle_id": 1, "service_date": "2026-11-10", "parts": [{ "name": "Filter", "brand": "Mann" }] }), "brand").await;
+    common::assert_unknown_field_rejected(&t, "record_service", json!({ "vehicle_id": 1, "service_date": "2026-11-10", "parts": [{ "name": "Kit", "contents": [{ "name": "Filter", "sku": "x" }] }] }), "sku").await;
 }
 
 #[tokio::test]
@@ -1561,20 +1562,4 @@ async fn an_inline_kit_on_an_invoice_records_its_contents() {
         1,
         "a refused invoice records nothing"
     );
-}
-
-#[tokio::test]
-async fn an_inline_kit_item_with_an_unknown_field_is_a_tool_error() {
-    let t = connect().await;
-    common::assert_unknown_field_rejected(
-        &t,
-        "record_service",
-        json!({
-            "vehicle_id": 1,
-            "service_date": "2026-04-01",
-            "parts": [{ "name": "Kit", "contents": [{ "name": "Filter", "sku": "x" }] }]
-        }),
-        "sku",
-    )
-    .await;
 }

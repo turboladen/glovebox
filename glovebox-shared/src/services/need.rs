@@ -2292,7 +2292,7 @@ mod tests {
                 purchase_date: Some(date("2026-11-02")),
                 cost_cents: Some(8_500),
                 order_ref: Some("112-445".into()),
-                contents: Vec::new(),
+                ..Default::default()
             },
         )
         .await

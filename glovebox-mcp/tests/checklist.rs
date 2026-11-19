@@ -1280,6 +1280,14 @@ async fn unknown_field_is_a_tool_error_naming_it() {
         "bogus",
     )
     .await;
+    // So is a kit item on an order.
+    assert_unknown_field_rejected(
+        &t,
+        "mark_need_ordered",
+        json!({ "vehicle_id": 1, "need_id": 1, "contents": [{ "name": "x", "bogus": true }] }),
+        "bogus",
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -1675,13 +1683,6 @@ async fn mark_need_ordered_records_a_kits_contents() {
     )
     .await;
 
-    common::assert_unknown_field_rejected(
-        &t,
-        "mark_need_ordered",
-        json!({ "vehicle_id": v, "need_id": need, "contents": [{ "name": "Filter", "sku": "x" }] }),
-        "sku",
-    )
-    .await;
     let ordered = t
         .call(
             "mark_need_ordered",

@@ -419,12 +419,7 @@ impl InlinePartInput {
             warranty_expires_miles: self.warranty_expires_miles,
             order_ref: self.order_ref,
             need_id: self.need_id,
-            contents: self
-                .contents
-                .unwrap_or_default()
-                .into_iter()
-                .map(Into::into)
-                .collect(),
+            contents: kit_contents(self.contents),
             ..Default::default()
         })
     }
@@ -496,6 +491,12 @@ pub struct PartContentInput {
     pub id: Option<i32>,
 }
 
+/// A kit's items as the shared service takes them; none when the argument
+/// is left out.
+fn kit_contents(items: Option<Vec<PartContentInput>>) -> Vec<NewPartContent> {
+    items.into_iter().flatten().map(Into::into).collect()
+}
+
 impl From<PartContentInput> for NewPartContent {
     fn from(item: PartContentInput) -> Self {
         NewPartContent {
@@ -536,12 +537,7 @@ impl RecordPartInput {
                 supplied_by: self.supplied_by,
                 order_ref: self.order_ref,
                 need_id: None,
-                contents: self
-                    .contents
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
+                contents: kit_contents(self.contents),
             },
         ))
     }
