@@ -1,6 +1,10 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
+/// The `source` of the reading a service logs, which names that service in
+/// `service_record_id`.
+pub const SERVICE_SOURCE: &str = "service";
+
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "mileage_log")]
 pub struct Model {

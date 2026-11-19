@@ -34,7 +34,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     if input
         .source
         .as_deref()
-        .is_some_and(|s| s.trim().eq_ignore_ascii_case("service"))
+        .is_some_and(|s| s.trim().eq_ignore_ascii_case(mileage_log::SERVICE_SOURCE))
     {
         return Err(DomainError::invalid(
             "source",

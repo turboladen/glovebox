@@ -43,17 +43,18 @@ fn validate_who_and_when(
             "must not be before service_date",
         ));
     }
-    if performed_by == Performer::Owner && shop_name.is_some() {
-        return Err(DomainError::invalid(
-            "shop_name",
-            "a self-performed service has no shop",
-        ));
-    }
-    if performed_by == Performer::Owner && shop_id.is_some() {
-        return Err(DomainError::invalid(
-            "shop_id",
-            "a self-performed service has no shop",
-        ));
+    if performed_by == Performer::Owner {
+        for (field, named) in [
+            ("shop_name", shop_name.is_some()),
+            ("shop_id", shop_id.is_some()),
+        ] {
+            if named {
+                return Err(DomainError::invalid(
+                    field,
+                    "a self-performed service has no shop",
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -452,7 +453,7 @@ async fn insert_auto_mileage_log(
         vehicle_id: Set(vehicle_id),
         mileage: Set(miles),
         recorded_at: Set(record.service_date.into()),
-        source: Set(Some("service".to_string())),
+        source: Set(Some(mileage_log::SERVICE_SOURCE.to_owned())),
         notes: Set(None),
         service_record_id: Set(Some(record.id)),
         ..Default::default()

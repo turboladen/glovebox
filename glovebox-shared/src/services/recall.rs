@@ -512,6 +512,7 @@ mod tests {
             work_item as work_item_svc,
         },
         test_support::{VehicleFixture, set_job_status, test_db},
+        vocab::Vocabulary,
     };
 
     fn recall_info(campaign: &str, subject: &str) -> RecallInfo {
@@ -974,10 +975,7 @@ mod tests {
 
     #[test]
     fn a_stored_status_reads_back_as_the_status_that_wrote_it() {
-        for status in <RecallStatus as crate::vocab::Vocabulary>::ALL
-            .iter()
-            .copied()
-        {
+        for status in RecallStatus::ALL.iter().copied() {
             assert_eq!(RecallStatus::from_stored(status.stored()), status);
         }
     }

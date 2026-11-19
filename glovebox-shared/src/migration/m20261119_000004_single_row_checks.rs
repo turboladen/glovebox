@@ -76,7 +76,7 @@ mod tests {
 
     use crate::migration::{
         Migrator,
-        schema::testing::{fts_integrity, migrated_to, text},
+        schema::testing::{count, fts_integrity, migrated_to, text},
     };
 
     // The number of migrations that run before this one.
@@ -131,8 +131,8 @@ mod tests {
         .await
     }
 
-    // Everything in `sqlite_schema` that belongs to the five tables but their
-    // own rows: indexes and the FTS triggers.
+    // The five tables' indexes and FTS triggers: their entries in
+    // `sqlite_schema` other than the tables' own.
     async fn surroundings(db: &DatabaseConnection) -> String {
         text(
             db,
@@ -159,16 +159,19 @@ mod tests {
             );
         }
         assert_eq!(surroundings(&db).await, around);
-        assert_eq!(
-            text(
-                &db,
-                "SELECT group_concat(n, ',') FROM (SELECT count(*) AS n FROM work_items UNION ALL \
-                 SELECT count(*) FROM service_records UNION ALL SELECT count(*) FROM mileage_log \
-                 UNION ALL SELECT count(*) FROM research_findings)"
-            )
-            .await,
-            "1,1,1,1"
-        );
+        for (table, rows) in [
+            ("work_items", 1),
+            ("service_records", 1),
+            ("mileage_log", 1),
+            ("research_findings", 1),
+            ("maintenance_schedule_items WHERE id >= 900", 2),
+        ] {
+            assert_eq!(
+                count(&db, &format!("SELECT count(*) FROM {table}")).await,
+                rows,
+                "{table}"
+            );
+        }
         fts_integrity(
             &db,
             &[
