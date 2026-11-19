@@ -65,7 +65,7 @@ pub async fn upcoming(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResul
     let recalls = open_recalls(db, vehicle_id).await?;
     let open_incidents = open_incidents(db, vehicle_id).await?;
 
-    let appointments = appointment::list(db, vehicle_id, false).await?;
+    let appointments = appointment::list(db, vehicle_id, false, today).await?;
 
     Ok(Upcoming {
         reminders,

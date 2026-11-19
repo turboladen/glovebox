@@ -103,7 +103,9 @@ pub async fn for_appointment(
     vehicle_id: i32,
     appointment_id: i32,
 ) -> DomainResult<WorkSheet> {
-    let list = checklist::for_appointment(db, vehicle_id, appointment_id).await?;
+    // The sheet keeps only the appointment's row, so the day does not matter.
+    let list = checklist::for_appointment(db, vehicle_id, appointment_id, crate::services::today())
+        .await?;
     let car = vehicle::require(db, vehicle_id).await?;
     let appointment = list
         .appointment
@@ -581,7 +583,9 @@ mod tests {
         let to_order = chosen_need(&db, v, job, "Cabin filter", None, Some("CU 1")).await;
 
         let sheet = for_appointment(&db, v, a).await.unwrap();
-        let list = checklist::for_appointment(&db, v, a).await.unwrap();
+        let list = checklist::for_appointment(&db, v, a, crate::services::today())
+            .await
+            .unwrap();
 
         let job = only_job(&sheet);
         assert_empty(&job.owner_supplies);

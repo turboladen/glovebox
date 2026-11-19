@@ -226,6 +226,10 @@ reopened and the jobs that left a cancelled one. A quote for work not done is a 
 `quote_service_id` naming the invoice it came with, which lists it in `quoted_work_items`;
 `delete_service` keeps such a quote and names it in `quotes_unlinked`
 (`docs/adr/0012-a-quote-is-planned-work.md`). Re-recording the service does not close the appointment again.
+Beside the status, `appointment::phase` reads an open appointment as `planning` (no date),
+`booked` (before its date) or `in_shop` (from its date on). Every summary carries it and the web
+pills show it, but no rule keys on it. The readers that build summaries take `today` for it
+(`docs/adr/0015-an-appointment-shows-its-phase.md`).
 Deleting a service, or correcting its `part_ids` as work that did not happen, also unlinks from its
 need every shop-supplied part the service stops installing that goes back to purchased; a part a later service replaced
 keeps its status and its need. `correct_part` setting an installed or replaced part to
@@ -437,9 +441,10 @@ role per control style, and `YYYY-MM-DD` dates.
   rebuilt with it, because an older binary cannot read a row that holds the new value. Removing
   or renaming one needs a migration that rewrites the rows, placed after
   `m20261115_000001_vocabulary_values`, whose lists stay as written.
-  An enum that no column stores lives in the service that uses it. Three of them are derived
-  statuses (`recall::ShownRecallStatus`, `appointment::AppointmentStatus` and
-  `reminders::DueStatus`, which reminders and planned work's revisit share). The other four are
+  An enum that no column stores lives in the service that uses it. Four of them are derived
+  statuses (`recall::ShownRecallStatus`, `appointment::AppointmentStatus`,
+  `appointment::AppointmentPhase` and `reminders::DueStatus`, which reminders and planned work's
+  revisit share). The other four are
   arguments: `recall::RecallStatus`, which the recall service maps to and from the stored finding
   status, `service_record::CompletedWork`, `schedule::LinkMode` and `search::SearchScope`. A
   filter on a column never takes one of these.

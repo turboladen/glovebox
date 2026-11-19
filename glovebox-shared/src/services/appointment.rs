@@ -25,6 +25,9 @@ pub struct AppointmentSummary {
     #[serde(flatten)]
     pub appointment: appointment::Model,
     pub status: AppointmentStatus,
+    /// Where the appointment stands, as [`phase`] reads it from the status,
+    /// the planned date and today's date.
+    pub phase: AppointmentPhase,
     /// True when the appointment has a planned date.
     pub booked: bool,
     pub jobs: usize,
@@ -105,6 +108,39 @@ pub fn status(a: &appointment::Model, job_statuses: &[JobStatus]) -> Appointment
     }
 }
 
+crate::vocab::vocabulary! {
+    /// Where an appointment stands, as [`phase`] derives it.
+    // No column stores it. `planning`, `booked` and `in_shop` split an open
+    // appointment by its planned date: none, after today, or today or
+    // earlier. No rule keys on it, and `AppointmentStatus` stays the value a
+    // caller sets, so a phase is never a status change.
+    pub enum AppointmentPhase {
+        Planning => "planning",
+        Booked => "booked",
+        InShop => "in_shop",
+        Done => "done",
+        Cancelled => "cancelled",
+    }
+}
+
+/// The phase of an appointment with `status` and `planned_date` on `today`.
+/// An open appointment is `planning` without a date, `booked` before its
+/// date and `in_shop` from its date on. `done` and `cancelled` carry over.
+#[must_use]
+pub fn phase(
+    status: AppointmentStatus,
+    planned_date: Option<chrono::NaiveDate>,
+    today: chrono::NaiveDate,
+) -> AppointmentPhase {
+    match (status, planned_date) {
+        (AppointmentStatus::Done, _) => AppointmentPhase::Done,
+        (AppointmentStatus::Cancelled, _) => AppointmentPhase::Cancelled,
+        (AppointmentStatus::Planning, None) => AppointmentPhase::Planning,
+        (AppointmentStatus::Planning, Some(date)) if date > today => AppointmentPhase::Booked,
+        (AppointmentStatus::Planning, Some(_)) => AppointmentPhase::InShop,
+    }
+}
+
 /// Creates an appointment for a vehicle.
 ///
 /// # Errors
@@ -171,8 +207,8 @@ pub(crate) async fn update(
 }
 
 /// Edits an appointment and, when `change` is present, closes, cancels or
-/// reopens it, in one transaction. A refused status change leaves the edits
-/// unapplied.
+/// reopens it, in one transaction, and returns its summary on `today`. A
+/// refused status change leaves the edits unapplied.
 ///
 /// # Errors
 /// `NotFound` for an appointment that is not the vehicle's or a missing shop;
@@ -184,6 +220,7 @@ pub async fn update_with_status<C: ConnectionTrait + TransactionTrait>(
     id: i32,
     input: UpdateAppointment,
     change: Option<StatusChange>,
+    today: chrono::NaiveDate,
 ) -> DomainResult<RevisedAppointment> {
     let txn = super::begin_write(db).await?;
     update(&txn, vehicle_id, id, input).await?;
@@ -202,7 +239,7 @@ pub async fn update_with_status<C: ConnectionTrait + TransactionTrait>(
         }
         None => (Vec::new(), Vec::new()),
     };
-    let appointment = summary(&txn, vehicle_id, id).await?;
+    let appointment = summary(&txn, vehicle_id, id, today).await?;
     txn.commit().await?;
     Ok(RevisedAppointment {
         appointment,
@@ -278,9 +315,10 @@ pub async fn list(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     include_closed: bool,
+    today: chrono::NaiveDate,
 ) -> DomainResult<Vec<AppointmentSummary>> {
     super::vehicle::require(db, vehicle_id).await?;
-    let mut out = summaries(db, &[vehicle_id], None).await?;
+    let mut out = summaries(db, &[vehicle_id], None, today).await?;
     if !include_closed {
         out.retain(shows_as_open);
     }
@@ -292,9 +330,10 @@ pub async fn list(
 pub(crate) async fn open_by_vehicle(
     db: &impl ConnectionTrait,
     vehicle_ids: &[i32],
+    today: chrono::NaiveDate,
 ) -> DomainResult<HashMap<i32, Vec<AppointmentSummary>>> {
     let mut grouped: HashMap<i32, Vec<AppointmentSummary>> = HashMap::new();
-    for summary in summaries(db, vehicle_ids, None).await? {
+    for summary in summaries(db, vehicle_ids, None, today).await? {
         if shows_as_open(&summary) {
             grouped
                 .entry(summary.appointment.vehicle_id)
@@ -322,25 +361,29 @@ pub async fn summary(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     id: i32,
+    today: chrono::NaiveDate,
 ) -> DomainResult<AppointmentSummary> {
     require(db, vehicle_id, id).await?;
-    summaries(db, &[vehicle_id], Some(id))
+    summaries(db, &[vehicle_id], Some(id), today)
         .await?
         .into_iter()
         .next()
         .ok_or_else(|| DomainError::NotFound(format!("Appointment {id} not found")))
 }
 
-/// The summary of `appointment` from the statuses of its jobs and its counts
-/// of open needs and open to-dos.
+/// The summary of `appointment` on `today` from the statuses of its jobs and
+/// its counts of open needs and open to-dos.
 pub(crate) fn summarize(
     appointment: appointment::Model,
     job_statuses: &[JobStatus],
     needs_open: usize,
     todos_open: usize,
+    today: chrono::NaiveDate,
 ) -> AppointmentSummary {
+    let status = status(&appointment, job_statuses);
     AppointmentSummary {
-        status: status(&appointment, job_statuses),
+        status,
+        phase: phase(status, appointment.planned_date, today),
         booked: appointment.planned_date.is_some(),
         jobs: job_statuses.len(),
         needs_open,
@@ -355,6 +398,7 @@ async fn summaries(
     db: &impl ConnectionTrait,
     vehicle_ids: &[i32],
     only: Option<i32>,
+    today: chrono::NaiveDate,
 ) -> DomainResult<Vec<AppointmentSummary>> {
     let mut query = appointment::Entity::find()
         .filter(appointment::Column::VehicleId.is_in(vehicle_ids.iter().copied()));
@@ -418,7 +462,7 @@ async fn summaries(
             let job_statuses = statuses.get(&a.id).map_or(&[][..], Vec::as_slice);
             let needs = needs_open.get(&a.id).copied().unwrap_or(0);
             let todos = todos_open.get(&a.id).copied().unwrap_or(0);
-            summarize(a, job_statuses, needs, todos)
+            summarize(a, job_statuses, needs, todos, today)
         })
         .collect();
     out.sort_by(|a, b| {
@@ -761,6 +805,29 @@ mod tests {
         );
     }
 
+    #[test]
+    fn phase_table() {
+        use AppointmentPhase as P;
+        use AppointmentStatus as S;
+        let today = date("2026-11-18");
+        let cases = [
+            (S::Planning, None, P::Planning),
+            (S::Planning, Some("2026-11-19"), P::Booked),
+            (S::Planning, Some("2026-11-18"), P::InShop),
+            (S::Planning, Some("2026-11-10"), P::InShop),
+            (S::Done, Some("2026-12-01"), P::Done),
+            (S::Done, None, P::Done),
+            (S::Cancelled, Some("2026-11-10"), P::Cancelled),
+        ];
+        for (status, planned, expected) in cases {
+            assert_eq!(
+                phase(status, planned.map(date), today),
+                expected,
+                "{status:?} on {planned:?}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn create_rejects_blank_purpose() {
         let db = test_db().await;
@@ -934,6 +1001,7 @@ mod tests {
                 ..Default::default()
             },
             Some(StatusChange::Cancel),
+            crate::services::today(),
         )
         .await
         .unwrap();
@@ -947,6 +1015,7 @@ mod tests {
             a.id,
             UpdateAppointment::default(),
             Some(StatusChange::Reopen),
+            crate::services::today(),
         )
         .await
         .unwrap();
@@ -959,6 +1028,7 @@ mod tests {
             a.id,
             UpdateAppointment::default(),
             Some(StatusChange::Close),
+            crate::services::today(),
         )
         .await
         .unwrap();
@@ -975,6 +1045,7 @@ mod tests {
                 ..Default::default()
             },
             None,
+            crate::services::today(),
         )
         .await
         .unwrap();
@@ -1000,6 +1071,7 @@ mod tests {
                 ..Default::default()
             },
             Some(StatusChange::Cancel),
+            crate::services::today(),
         )
         .await
         .unwrap_err();
@@ -1014,12 +1086,26 @@ mod tests {
         let v = VehicleFixture::new().insert_id(&db).await;
         let other = VehicleFixture::new().name("Other").insert_id(&db).await;
         let a = create(&db, v, appt("Brakes")).await.unwrap();
-        let missing = update_with_status(&db, other, 99_999, UpdateAppointment::default(), None)
-            .await
-            .unwrap_err();
-        let wrong = update_with_status(&db, other, a.id, UpdateAppointment::default(), None)
-            .await
-            .unwrap_err();
+        let missing = update_with_status(
+            &db,
+            other,
+            99_999,
+            UpdateAppointment::default(),
+            None,
+            crate::services::today(),
+        )
+        .await
+        .unwrap_err();
+        let wrong = update_with_status(
+            &db,
+            other,
+            a.id,
+            UpdateAppointment::default(),
+            None,
+            crate::services::today(),
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(wrong, DomainError::NotFound(_)));
         assert_eq!(
             wrong.to_string().replace(&a.id.to_string(), "N"),
@@ -1212,7 +1298,7 @@ mod tests {
             .unwrap();
         let _ = open_todo;
 
-        let all = list(&db, v, true).await.unwrap();
+        let all = list(&db, v, true, crate::services::today()).await.unwrap();
         let s = all.iter().find(|s| s.appointment.id == a.id).unwrap();
         assert_eq!(
             (s.status, s.booked, s.jobs, s.needs_open, s.todos_open),
@@ -1228,7 +1314,7 @@ mod tests {
         );
 
         cancel(&db, v, unbooked.id).await.unwrap();
-        let open_only = list(&db, v, false).await.unwrap();
+        let open_only = list(&db, v, false, crate::services::today()).await.unwrap();
         assert_eq!(open_only.len(), 1);
         assert_eq!(open_only[0].appointment.id, a.id);
     }
@@ -1283,7 +1369,7 @@ mod tests {
         .await
         .unwrap();
 
-        let open = list(&db, v, false).await.unwrap();
+        let open = list(&db, v, false, crate::services::today()).await.unwrap();
         assert_eq!(open.len(), 1);
         assert_eq!(
             (open[0].status, open[0].todos_open),
@@ -1291,7 +1377,12 @@ mod tests {
         );
 
         todo_svc::complete(&db, v, t.id, None).await.unwrap();
-        assert!(list(&db, v, false).await.unwrap().is_empty());
+        assert!(
+            list(&db, v, false, crate::services::today())
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -1328,11 +1419,16 @@ mod tests {
         assert_eq!(returned.left_cancelled_appointment_id, Some(cancelled.id));
         assert_eq!(returned.reopened_appointment_id, None);
 
-        let reopened = summary(&db, v, closed.id).await.unwrap();
+        let reopened = summary(&db, v, closed.id, crate::services::today())
+            .await
+            .unwrap();
         assert_eq!(reopened.status, AppointmentStatus::Planning);
         assert_eq!(reopened.appointment.closed_on, None);
         assert_eq!(
-            summary(&db, v, cancelled.id).await.unwrap().status,
+            summary(&db, v, cancelled.id, crate::services::today())
+                .await
+                .unwrap()
+                .status,
             AppointmentStatus::Cancelled
         );
         let unscheduled = job::get(&db, v, on_cancelled).await.unwrap();
@@ -1431,7 +1527,12 @@ mod tests {
 
         let cancelled = cancel(&db, v, a.id).await.unwrap();
         assert_eq!(cancelled.unassigned_todo_ids, vec![t]);
-        assert!(list(&db, v, false).await.unwrap().is_empty());
+        assert!(
+            list(&db, v, false, crate::services::today())
+                .await
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             todo_svc::require(&db, v, t).await.unwrap().appointment_id,
             None
@@ -1459,7 +1560,7 @@ mod tests {
             .unwrap();
         }
         set_job_status(&db, v, dropped, JobStatus::Dropped).await;
-        let all = list(&db, v, true).await.unwrap();
+        let all = list(&db, v, true, crate::services::today()).await.unwrap();
         assert_eq!(all[0].needs_open, 1);
     }
 

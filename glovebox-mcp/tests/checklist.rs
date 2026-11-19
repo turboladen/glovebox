@@ -986,6 +986,55 @@ async fn closing_waits_for_open_work_and_un_ticking_reopens_the_appointment() {
 }
 
 #[tokio::test]
+async fn an_appointment_reads_its_phase_from_its_date() {
+    let t = connect().await;
+    let v = add_vehicle(&t, "GTI").await;
+    for (purpose, planned_date) in [
+        ("Past", json!("2000-01-01")),
+        ("Future", json!("2099-01-01")),
+        ("Undated", Value::Null),
+    ] {
+        t.call(
+            "plan_appointment",
+            json!({ "vehicle_id": v, "purpose": purpose, "planned_date": planned_date }),
+        )
+        .await;
+    }
+
+    let listed = t
+        .call("list_appointments", json!({ "vehicle_id": v }))
+        .await;
+    let phases: Vec<(&str, &str, &str)> = listed
+        .as_array()
+        .expect("a list")
+        .iter()
+        .map(|a| {
+            (
+                a["purpose"].as_str().unwrap(),
+                a["status"].as_str().unwrap(),
+                a["phase"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        phases,
+        [
+            ("Past", "planning", "in_shop"),
+            ("Future", "planning", "booked"),
+            ("Undated", "planning", "planning"),
+        ]
+    );
+    let past = listed[0]["id"].as_i64().unwrap();
+    let sheet = t
+        .call(
+            "get_checklist",
+            json!({ "vehicle_id": v, "appointment_id": past }),
+        )
+        .await;
+    assert_eq!(sheet["appointment"]["phase"], "in_shop", "got: {sheet}");
+}
+
+#[tokio::test]
 async fn todos_tick_untick_move_and_delete() {
     let t = connect().await;
     let v = add_vehicle(&t, "GTI").await;

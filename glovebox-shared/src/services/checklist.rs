@@ -179,7 +179,7 @@ pub struct PastDecision {
     pub returned_parts: Vec<super::part::PartView>,
 }
 
-/// The checklist of one appointment.
+/// The checklist of one appointment, with its phase on `today`.
 ///
 /// # Errors
 /// `NotFound` for an appointment that is not the vehicle's.
@@ -187,6 +187,7 @@ pub async fn for_appointment(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     appointment_id: i32,
+    today: chrono::NaiveDate,
 ) -> DomainResult<Checklist> {
     let found = appointment::require(db, vehicle_id, appointment_id).await?;
     let jobs = work_item::Entity::find()
@@ -202,7 +203,7 @@ pub async fn for_appointment(
     let job_statuses: Vec<JobStatus> = views.iter().map(|j| j.job.status).collect();
     let needs_open = views.iter().map(JobView::open_needs).sum();
     let todos_open = todos.iter().filter(|t| t.done_on.is_none()).count();
-    let summary = appointment::summarize(found, &job_statuses, needs_open, todos_open);
+    let summary = appointment::summarize(found, &job_statuses, needs_open, todos_open, today);
     Ok(assemble(Some(summary), views, todos))
 }
 
@@ -295,7 +296,7 @@ pub enum ChecklistRead {
 }
 
 /// Reads the checklist `scope` names, through [`for_appointment`],
-/// [`for_job`] or [`for_unscheduled`].
+/// [`for_job`] or [`for_unscheduled`], with an appointment's phase on `today`.
 ///
 /// # Errors
 /// As for the function that reads the scope.
@@ -303,9 +304,10 @@ pub async fn get(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     scope: ChecklistScope,
+    today: chrono::NaiveDate,
 ) -> DomainResult<ChecklistRead> {
     match scope {
-        ChecklistScope::Appointment(id) => for_appointment(db, vehicle_id, id)
+        ChecklistScope::Appointment(id) => for_appointment(db, vehicle_id, id, today)
             .await
             .map(ChecklistRead::Checklist),
         ChecklistScope::Job(id) => for_job(db, vehicle_id, id).await.map(ChecklistRead::Job),
@@ -701,8 +703,8 @@ pub struct HomeAppointment {
     pub when: String,
     /// True when the appointment has a planned date.
     pub booked: bool,
-    /// Holds the appointment's status as `appointment::summary` derives it.
-    pub status: super::appointment::AppointmentStatus,
+    /// Holds the appointment's phase on the day the home page was read.
+    pub phase: super::appointment::AppointmentPhase,
     /// Counts the jobs on the appointment.
     pub jobs: usize,
     /// Counts the needs that are still open.
@@ -726,7 +728,7 @@ pub async fn home(
     // functions the per-vehicle lists use, so the page and the tools agree.
     let vehicles = super::vehicle::list(db, false).await?;
     let ids: Vec<i32> = vehicles.iter().map(|v| v.id).collect();
-    let mut appointments = appointment::open_by_vehicle(db, &ids).await?;
+    let mut appointments = appointment::open_by_vehicle(db, &ids, today).await?;
     let mut todos: HashMap<i32, Vec<todo::Model>> = HashMap::new();
     for open in todo_svc::list_unchecked(db, &ids, Some(None), false).await? {
         todos.entry(open.vehicle_id).or_default().push(open);
@@ -758,7 +760,7 @@ fn home_appointment(s: AppointmentSummary) -> HomeAppointment {
             .planned_date
             .map_or_else(|| "not booked".to_owned(), super::date_label),
         booked: s.booked,
-        status: s.status,
+        phase: s.phase,
         jobs: s.jobs,
         needs_open: s.needs_open,
         todos_open: s.todos_open,
@@ -1064,7 +1066,9 @@ mod tests {
         .await
         .unwrap();
 
-        let list = for_appointment(&db, v, a).await.unwrap();
+        let list = for_appointment(&db, v, a, crate::services::today())
+            .await
+            .unwrap();
         assert_eq!(list.appointment.as_ref().unwrap().appointment.id, a);
         let steps = &list.next_steps;
         assert_eq!(
@@ -1105,7 +1109,9 @@ mod tests {
         need::decide(&db, v, n, Some(option_id), None)
             .await
             .unwrap();
-        let list = for_appointment(&db, v, a).await.unwrap();
+        let list = for_appointment(&db, v, a, crate::services::today())
+            .await
+            .unwrap();
         assert_eq!(
             rows(&list.next_steps.decide),
             [("Rear pads", "Rear pads: who supplies it is not decided")]
@@ -1120,7 +1126,9 @@ mod tests {
         let job = add_job(&db, v, "Brakes", Some(a)).await;
         let n = new_need(&db, v, job, "Rear pads").await;
         set_supplier(&db, v, n, Supplier::Shop).await;
-        let list = for_appointment(&db, v, a).await.unwrap();
+        let list = for_appointment(&db, v, a, crate::services::today())
+            .await
+            .unwrap();
         let steps = &list.next_steps;
         assert!(steps.decide.is_empty() && steps.order.is_empty() && steps.arriving.is_empty());
         assert_eq!(steps.done.len(), 1);
@@ -1136,7 +1144,9 @@ mod tests {
         let job = add_job(&db, v, "Brakes", Some(a)).await;
         new_need(&db, v, job, "Rear pads").await;
         set_job_status(&db, v, job, JobStatus::Dropped).await;
-        let list = for_appointment(&db, v, a).await.unwrap();
+        let list = for_appointment(&db, v, a, crate::services::today())
+            .await
+            .unwrap();
         let steps = &list.next_steps;
         assert!(
             steps.decide.is_empty()
@@ -1157,7 +1167,9 @@ mod tests {
         new_need(&db, v, job, "Rear pads").await;
         to_order_need(&db, v, job, "Rear rotors", "OE rotors").await;
         set_job_status(&db, v, job, JobStatus::Done).await;
-        let list = for_appointment(&db, v, a).await.unwrap();
+        let list = for_appointment(&db, v, a, crate::services::today())
+            .await
+            .unwrap();
         let steps = &list.next_steps;
         assert!(steps.decide.is_empty() && steps.order.is_empty() && steps.arriving.is_empty());
         assert_eq!(steps.done.len(), 2);
@@ -1212,7 +1224,9 @@ mod tests {
             option("5W-40 oil", Some("Liqui Moly"), Some("2332"), None),
         )
         .await;
-        let list = for_appointment(&db, v, a).await.unwrap();
+        let list = for_appointment(&db, v, a, crate::services::today())
+            .await
+            .unwrap();
         assert_eq!(
             rows(&list.next_steps.order),
             [
@@ -1249,7 +1263,9 @@ mod tests {
         .await
         .unwrap();
 
-        let list = for_appointment(&db, v, a).await.unwrap();
+        let list = for_appointment(&db, v, a, crate::services::today())
+            .await
+            .unwrap();
 
         assert_eq!(
             rows(&list.next_steps.order),
@@ -1344,7 +1360,9 @@ mod tests {
             },
         )
         .await;
-        let list = for_appointment(&db, v, a).await.unwrap();
+        let list = for_appointment(&db, v, a, crate::services::today())
+            .await
+            .unwrap();
         assert_eq!(list.next_steps.order[0].summary, "Wiper blades: order A123");
     }
 
@@ -1372,7 +1390,9 @@ mod tests {
             .into();
         part.status = Set(PartStatus::Installed);
         part.update(&db).await.unwrap();
-        let list = for_appointment(&db, v, a).await.unwrap();
+        let list = for_appointment(&db, v, a, crate::services::today())
+            .await
+            .unwrap();
         assert_eq!(
             rows(&list.next_steps.done),
             [
@@ -1385,7 +1405,9 @@ mod tests {
         let open = new_need(&db, v, job, "Wipers").await;
         let _ = open;
         set_job_status(&db, v, job, JobStatus::Done).await;
-        let list = for_appointment(&db, v, a).await.unwrap();
+        let list = for_appointment(&db, v, a, crate::services::today())
+            .await
+            .unwrap();
         let wipers = list.next_steps.done.last().unwrap();
         assert_eq!(wipers.summary, "Wipers: the job is done");
     }
@@ -1418,7 +1440,9 @@ mod tests {
         .unwrap();
         need::link_part(&db, v, n, bought.id, None).await.unwrap();
 
-        let list = for_appointment(&db, v, a).await.unwrap();
+        let list = for_appointment(&db, v, a, crate::services::today())
+            .await
+            .unwrap();
         let mismatch =
             "The linked part's number (5Q0615601F) differs from the chosen option's (5Q0615601E).";
         assert_eq!(list.jobs[0].needs[0].notes, [UNCONFIRMED, mismatch]);
@@ -1466,7 +1490,9 @@ mod tests {
         .await
         .unwrap();
         need::link_part(&db, v, n, bought.id, None).await.unwrap();
-        let list = for_appointment(&db, v, a).await.unwrap();
+        let list = for_appointment(&db, v, a, crate::services::today())
+            .await
+            .unwrap();
         assert!(list.warnings().is_empty(), "{:?}", list.warnings());
     }
 
@@ -1540,7 +1566,9 @@ mod tests {
             .await
             .unwrap();
 
-        let list = for_appointment(&db, v, a).await.unwrap();
+        let list = for_appointment(&db, v, a, crate::services::today())
+            .await
+            .unwrap();
 
         let needs = &list.jobs[0].needs;
         let kit_view = needs[0].part.as_ref().unwrap();
@@ -1619,8 +1647,12 @@ mod tests {
         let v2 = VehicleFixture::new().name("Other").insert_id(&db).await;
         let a = appointment_id(&db, v1).await;
         let job = add_job(&db, v1, "Brakes", Some(a)).await;
-        let missing_appointment = for_appointment(&db, v1, 99_999).await.unwrap_err();
-        let wrong_appointment = for_appointment(&db, v2, a).await.unwrap_err();
+        let missing_appointment = for_appointment(&db, v1, 99_999, crate::services::today())
+            .await
+            .unwrap_err();
+        let wrong_appointment = for_appointment(&db, v2, a, crate::services::today())
+            .await
+            .unwrap_err();
         assert!(matches!(wrong_appointment, DomainError::NotFound(_)));
         assert_eq!(
             wrong_appointment.to_string().replace(&a.to_string(), "N"),
@@ -1899,7 +1931,9 @@ mod tests {
             .await
             .unwrap();
 
-        let home = home(&db, crate::services::today()).await.unwrap();
+        let home = home(&db, crate::test_support::date("2026-11-18"))
+            .await
+            .unwrap();
 
         let names: Vec<&str> = home.iter().map(|h| h.vehicle.name.as_str()).collect();
         assert_eq!(
@@ -1929,12 +1963,12 @@ mod tests {
                 (unbooked, "Tire swap", "not booked", false, 0, 0),
             ]
         );
-        let state: Vec<_> = g.appointments.iter().map(|a| (a.status, a.jobs)).collect();
+        let state: Vec<_> = g.appointments.iter().map(|a| (a.phase, a.jobs)).collect();
         assert_eq!(
             state,
             [
-                (super::appointment::AppointmentStatus::Planning, 1),
-                (super::appointment::AppointmentStatus::Planning, 0)
+                (super::appointment::AppointmentPhase::Booked, 1),
+                (super::appointment::AppointmentPhase::Planning, 0)
             ]
         );
         let jobs: Vec<(&str, usize)> = g
@@ -1989,13 +2023,31 @@ mod tests {
         let loose = add_job(&db, v, "Wipers", None).await;
         new_need(&db, v, loose, "Blades").await;
 
-        let got = get(&db, v, ChecklistScope::Appointment(a)).await.unwrap();
-        let want = for_appointment(&db, v, a).await.unwrap();
+        let got = get(
+            &db,
+            v,
+            ChecklistScope::Appointment(a),
+            crate::services::today(),
+        )
+        .await
+        .unwrap();
+        let want = for_appointment(&db, v, a, crate::services::today())
+            .await
+            .unwrap();
         assert_eq!(json(&got), json(&want));
-        let got = get(&db, v, ChecklistScope::Job(loose)).await.unwrap();
+        let got = get(&db, v, ChecklistScope::Job(loose), crate::services::today())
+            .await
+            .unwrap();
         let want = for_job(&db, v, loose).await.unwrap();
         assert_eq!(json(&got), json(&want));
-        let got = get(&db, v, ChecklistScope::Unscheduled).await.unwrap();
+        let got = get(
+            &db,
+            v,
+            ChecklistScope::Unscheduled,
+            crate::services::today(),
+        )
+        .await
+        .unwrap();
         let want = for_unscheduled(&db, v).await.unwrap();
         assert_eq!(json(&got), json(&want));
         assert_eq!(json(&got)["jobs"][0]["job"]["id"], loose);
@@ -2013,8 +2065,14 @@ mod tests {
                 loose,
             ),
         ] {
-            let wrong = get(&db, other, scope).await.unwrap_err().to_string();
-            let absent = get(&db, v, missing).await.unwrap_err().to_string();
+            let wrong = get(&db, other, scope, crate::services::today())
+                .await
+                .unwrap_err()
+                .to_string();
+            let absent = get(&db, v, missing, crate::services::today())
+                .await
+                .unwrap_err()
+                .to_string();
             assert_eq!(
                 wrong.replace(&id.to_string(), "N"),
                 absent.replace("99999", "N"),
