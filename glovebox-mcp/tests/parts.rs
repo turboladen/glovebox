@@ -283,3 +283,106 @@ async fn a_kits_contents_are_recorded_listed_added_to_and_removed_by_id() {
         .await;
     assert_eq!(emptied["contents"], json!([]));
 }
+
+#[tokio::test]
+async fn a_status_takes_only_the_details_it_has() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+
+    // Install details on a part that stays purchased are refused, on a new
+    // part and on a stored one.
+    let err = t
+        .call_err(
+            "record_part",
+            json!({ "vehicle_id": v.id, "name": "Pads", "installed_date": "2026-11-01" }),
+        )
+        .await;
+    assert!(
+        err.contains("A purchased part takes no install details"),
+        "{err}"
+    );
+    let part = t
+        .call("record_part", json!({ "vehicle_id": v.id, "name": "Pads" }))
+        .await;
+    let pid = part["id"].clone();
+    let err = t
+        .call_err(
+            "correct_part",
+            json!({ "vehicle_id": v.id, "part_id": pid, "installed_odometer": 40_000 }),
+        )
+        .await;
+    assert!(
+        err.contains("is purchased, so it takes no install or replacement details"),
+        "{err}"
+    );
+
+    // An installed part takes replacement details only as replaced.
+    t.call(
+        "correct_part",
+        json!({ "vehicle_id": v.id, "part_id": pid, "status": "installed",
+                "installed_odometer": 40_000 }),
+    )
+    .await;
+    let err = t
+        .call_err(
+            "correct_part",
+            json!({ "vehicle_id": v.id, "part_id": pid, "replaced_date": "2026-11-10" }),
+        )
+        .await;
+    assert!(
+        err.contains("is installed, so it takes no replacement details"),
+        "{err}"
+    );
+    let replaced = t
+        .call(
+            "correct_part",
+            json!({ "vehicle_id": v.id, "part_id": pid, "status": "replaced",
+                    "replaced_date": "2026-11-10" }),
+        )
+        .await;
+    assert_eq!(replaced["replaced_date"], "2026-11-10", "{replaced}");
+    assert_eq!(replaced["installed_odometer"], 40_000, "{replaced}");
+
+    // Setting it back to installed clears the replacement in the same call.
+    let err = t
+        .call_err(
+            "correct_part",
+            json!({ "vehicle_id": v.id, "part_id": pid, "status": "installed" }),
+        )
+        .await;
+    assert!(
+        err.contains("clear its replacement date and odometer"),
+        "{err}"
+    );
+    let back = t
+        .call(
+            "correct_part",
+            json!({ "vehicle_id": v.id, "part_id": pid, "status": "installed",
+                    "replaced_date": null }),
+        )
+        .await;
+    assert_eq!(back["status"], "installed", "{back}");
+    assert!(back["replaced_date"].is_null(), "{back}");
+}
+
+#[tokio::test]
+async fn a_part_is_never_received_before_it_was_bought() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let part = t
+        .call(
+            "record_part",
+            json!({ "vehicle_id": v.id, "name": "Pads", "purchase_date": "2026-11-05" }),
+        )
+        .await;
+    let err = t
+        .call_err(
+            "correct_part",
+            json!({ "vehicle_id": v.id, "part_id": part["id"], "received_on": "2026-11-04" }),
+        )
+        .await;
+    assert!(
+        err.contains("received_on: is before the purchase date 2026-11-05"),
+        "{err}"
+    );
+}

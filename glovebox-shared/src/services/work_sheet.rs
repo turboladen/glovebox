@@ -203,10 +203,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        entities::{
-            part::{PartStatus, Supplier},
-            work_item::JobStatus,
-        },
+        entities::{part::Supplier, work_item::JobStatus},
         inputs::{
             appointment::NewAppointment,
             need::{NewNeed, NewOption, OrderDetails, UpdateNeed},
@@ -613,8 +610,10 @@ mod tests {
             n,
             NewPart {
                 name: "Cabin filter".into(),
-                status: Some(PartStatus::Installed),
-                installed_date: Some(date("2026-11-01")),
+                fitting: crate::inputs::part::NewFitting::Installed(crate::inputs::part::Install {
+                    date: Some(date("2026-11-01")),
+                    ..Default::default()
+                }),
                 supplied_by: Some(Supplier::Owner),
                 ..Default::default()
             },

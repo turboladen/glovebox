@@ -16,7 +16,7 @@ use crate::{
     },
     error::{DomainError, DomainResult},
     inputs::{
-        part::NewPart,
+        part::{Install, NewFitting, NewPart},
         service_record::{NewLineItem, NewServiceRecord, UpdateServiceRecord},
     },
     services::{
@@ -642,9 +642,9 @@ async fn install_parts(
     new_parts: Vec<NewPart>,
 ) -> DomainResult<()> {
     // A record with no odometer reading leaves each part's own reading.
-    let odometer = record.mileage.map_or(NotSet, |miles| Set(Some(miles)));
+    let odometer = record.mileage.map(Some);
     for part_id in existing_ids {
-        part_svc::install(txn, vehicle_id, part_id, record, odometer.clone()).await?;
+        part_svc::install(txn, vehicle_id, part_id, record, odometer).await?;
     }
 
     for (n, mut new_part) in (1..).zip(new_parts) {
@@ -656,10 +656,11 @@ async fn install_parts(
             }
             other => other,
         })?;
-        new_part.status = Some(PartStatus::Installed);
-        new_part.installed_service_id = Some(record.id);
-        new_part.installed_date = Some(record.service_date);
-        new_part.installed_odometer = record.mileage;
+        new_part.fitting = NewFitting::Installed(Install {
+            service_id: Some(record.id),
+            date: Some(record.service_date),
+            odometer: record.mileage,
+        });
         let need_id = new_part.need_id;
         let created = part_svc::create(txn, vehicle_id, new_part).await?;
         if let Some(need_id) = need_id {
@@ -1033,7 +1034,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     part_svc::release_from_service(&txn, removal.parts, choice).await?;
     if let Some(new_part_ids) = input.part_ids {
         for &part_id in &new_part_ids {
-            part_svc::install(&txn, vehicle_id, part_id, &record, Set(record.mileage)).await?;
+            part_svc::install(&txn, vehicle_id, part_id, &record, Some(record.mileage)).await?;
         }
     }
     if !parts_listed && (record.service_date != date_before || record.mileage != mileage_before) {
@@ -2772,6 +2773,8 @@ mod tests {
             name: Set("Rotors".into()),
             status: Set(PartStatus::Returned),
             supplied_by: Set(Supplier::Owner),
+            returned_on: Set(Some(date("2026-11-06"))),
+            return_reason: Set(Some("Wrong size".into())),
             ..Default::default()
         }
         .insert(&db)

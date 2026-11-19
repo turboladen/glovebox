@@ -18,7 +18,7 @@ use glovebox_shared::{
     inputs::{
         incident::NewIncident,
         mileage::NewMileageEntry,
-        part::{NewPart, NewPartContent},
+        part::{Install, NewFitting, NewPart, NewPartContent},
         service_record::{NewLineItem, NewServiceRecord},
         vehicle::VehicleSale,
         work_item::NewWorkItem,
@@ -448,7 +448,9 @@ pub struct RecordPartInput {
     /// `shop` (the shop sourced it and billed for it).
     pub supplied_by: Option<Supplier>,
     /// Lifecycle status: `purchased`, `installed` or `replaced`. Defaults to
-    /// `purchased`. A return is made on the need, not here.
+    /// `purchased`. A return is made on the need, not here. Install details
+    /// need `installed` or `replaced`: a purchased part takes none. Put
+    /// instructions for a later install, such as a torque value, in `notes`.
     pub status: Option<PartStatus>,
     /// Where it goes on the car (free text), e.g. "Front brakes".
     pub location: Option<String>,
@@ -524,10 +526,14 @@ impl RecordPartInput {
                 cost_currency: None,
                 manufacturer_url: None,
                 retailer_url: self.retailer_url,
-                status: self.status,
-                installed_date: dates::parse_optional_date("installed_date", self.installed_date)?,
-                installed_odometer: self.installed_odometer,
-                installed_service_id: self.installed_service_id,
+                fitting: NewFitting::from_fields(
+                    self.status,
+                    Install {
+                        service_id: self.installed_service_id,
+                        date: dates::parse_optional_date("installed_date", self.installed_date)?,
+                        odometer: self.installed_odometer,
+                    },
+                )?,
                 notes: self.notes,
                 location: self.location,
                 warranty_expires_on: dates::parse_optional_date(

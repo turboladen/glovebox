@@ -691,6 +691,9 @@ mod tests {
             supplied_by: Set(Supplier::Owner),
             cost_cents: Set(Some(cents)),
             purchase_date: Set(Some(date(purchase_date))),
+            // A returned part records when and why it went back.
+            returned_on: Set((status == PartStatus::Returned).then(|| date(purchase_date))),
+            return_reason: Set((status == PartStatus::Returned).then(|| "Wrong size".into())),
             ..Default::default()
         }
         .insert(db)

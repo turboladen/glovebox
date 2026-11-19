@@ -639,10 +639,7 @@ async fn every_page_loads_the_bundled_typeface_and_labels_the_database() {
 // (vehicle, appointment, brakes job).
 async fn sheet_fixture(db: &DatabaseConnection) -> (i32, i32, i32) {
     use glovebox_shared::{
-        entities::{
-            part::{PartStatus, Supplier},
-            work_item::JobStatus,
-        },
+        entities::{part::Supplier, work_item::JobStatus},
         inputs::{need::UpdateNeed, part::NewPart},
         services::part,
         test_support::{add_job, set_job_status},
@@ -711,8 +708,12 @@ async fn sheet_fixture(db: &DatabaseConnection) -> (i32, i32, i32) {
         v,
         NewPart {
             name: "Cabin filter".into(),
-            status: Some(PartStatus::Installed),
-            installed_date: Some(date("2026-11-01")),
+            fitting: glovebox_shared::inputs::part::NewFitting::Installed(
+                glovebox_shared::inputs::part::Install {
+                    date: Some(date("2026-11-01")),
+                    ..Default::default()
+                },
+            ),
             supplied_by: Some(Supplier::Owner),
             ..Default::default()
         },
