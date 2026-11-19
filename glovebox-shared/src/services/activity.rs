@@ -43,12 +43,8 @@ pub struct ActivityItem {
 /// The `limit` most recent services + incidents + mileage logs for a
 /// vehicle, merged and sorted newest-first by their own dates.
 ///
-/// Mileage logs auto-created by service records are excluded: the service
-/// item already carries that odometer reading, and showing both would
-/// double-report every service. Exclusion keys on the real linkage
-/// (`service_record_id`, maintained by the service-record create/update/
-/// delete paths), not the free-text `source` label, so a deleted service
-/// takes its auto-log with it instead of leaving a hidden ghost.
+/// The reading a service logs is left out, because the service's own item
+/// already carries that odometer reading.
 pub async fn recent(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -76,6 +72,8 @@ pub async fn recent(
 
     let mileage_logs = mileage_log::Entity::find()
         .filter(mileage_log::Column::VehicleId.eq(vehicle_id))
+        // The link the service paths keep, not the `source` text, decides,
+        // so a deleted service takes its reading with it.
         .filter(mileage_log::Column::ServiceRecordId.is_null())
         .order_by_desc(mileage_log::Column::RecordedAt)
         .order_by_desc(mileage_log::Column::Id)

@@ -465,7 +465,8 @@ role per control style, and `YYYY-MM-DD` dates.
   `vocab::parse`. Explain a variant in a `//` comment or in the argument's description: the
   macro refuses a doc comment on a variant, because one turns the schema's `enum` list into
   `oneOf`. A query filter takes a variant (`Column::Status.eq(JobStatus::Planned)`), never a
-  string literal. Adding a value is one line in the macro call, and every program must be
+  string literal. Adding a value is one line in the macro call (and, for
+  `research_finding::FindingStatus`, a migration that rewrites its CHECK), and every program must be
   rebuilt with it, because an older binary cannot read a row that holds the new value. Removing
   or renaming one needs a migration that rewrites the rows, placed after
   `m20261115_000001_vocabulary_values`, whose lists stay as written.

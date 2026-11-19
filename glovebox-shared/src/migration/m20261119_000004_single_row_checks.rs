@@ -11,8 +11,9 @@ use sea_orm_migration::prelude::*;
 
 use super::schema::{Check, add_checks};
 
-// The rules as they were written for this migration. They stay as they are,
-// because a later migration that rewrites the rows depends on them.
+// The rules as this migration adds them. A rule changes only through a new
+// migration, because `has_check` finds a constraint by its name and a fresh
+// database must end up with what a migrated one has.
 const CHECKS: &[Check] = &[
     Check {
         table: "work_items",
@@ -218,6 +219,22 @@ mod tests {
             let err = db.execute_unprepared(sql).await.expect_err(sql).to_string();
             assert!(err.contains(rule), "{sql}: {err}");
         }
+    }
+
+    // A value added to `FindingStatus` needs a migration that rewrites this
+    // rule, so the two lists cannot part.
+    #[test]
+    fn the_status_rule_lists_every_finding_status() {
+        use crate::{entities::research_finding::FindingStatus, vocab::Vocabulary};
+        let listed: Vec<String> = FindingStatus::ALL
+            .iter()
+            .map(|s| format!("'{}'", s.as_str()))
+            .collect();
+        let rule = super::CHECKS
+            .iter()
+            .find(|c| c.name == "research_findings_status_listed")
+            .unwrap();
+        assert_eq!(rule.holds, format!("status IN ({})", listed.join(", ")));
     }
 
     #[tokio::test]
