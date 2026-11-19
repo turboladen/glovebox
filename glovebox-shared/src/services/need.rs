@@ -607,7 +607,8 @@ async fn clear_choice_history(db: &impl ConnectionTrait, option_id: i32) -> Doma
 #[derive(Serialize, Debug)]
 pub struct NeedPurchase {
     pub need: job_need::Model,
-    pub part: part::Model,
+    /// The linked part, with its kit contents.
+    pub part: super::part::PartView,
     pub stage: Stage,
 }
 
@@ -617,7 +618,8 @@ pub struct NeedPurchase {
 #[derive(Serialize, Debug)]
 pub struct ReturnOutcome {
     pub need: job_need::Model,
-    pub returned_part: part::Model,
+    /// The returned part, with its kit contents.
+    pub returned_part: super::part::PartView,
     pub todo: todo::Model,
     pub stage: Stage,
 }
@@ -669,8 +671,8 @@ async fn set_need_part(
     Ok(active.update(db).await?)
 }
 
-fn purchase(need: job_need::Model, part: part::Model) -> NeedPurchase {
-    let stage = stage(&need, Some(&part));
+fn purchase(need: job_need::Model, part: super::part::PartView) -> NeedPurchase {
+    let stage = stage(&need, Some(&part.part));
     NeedPurchase { need, part, stage }
 }
 
@@ -732,7 +734,7 @@ pub async fn mark_ordered<C: ConnectionTrait + TransactionTrait>(
     })?;
     let purchase_date = details.purchase_date.unwrap_or_else(crate::services::today);
     let cost_cents = details.cost_cents.or(order_cost_cents(&need, &option));
-    let created = super::part::create(
+    let created = super::part::record(
         &txn,
         vehicle_id,
         NewPart {
@@ -749,7 +751,7 @@ pub async fn mark_ordered<C: ConnectionTrait + TransactionTrait>(
         },
     )
     .await?;
-    let need = set_need_part(&txn, need, Some(created.id), Some(Supplier::Owner)).await?;
+    let need = set_need_part(&txn, need, Some(created.part.id), Some(Supplier::Owner)).await?;
     txn.commit().await?;
     Ok(purchase(need, created))
 }
@@ -806,6 +808,7 @@ pub async fn link_part<C: ConnectionTrait + TransactionTrait>(
         None => found,
     };
     let need = set_need_part(&txn, need, Some(part_id), supplier).await?;
+    let found = super::part::view(&txn, found).await?;
     txn.commit().await?;
     Ok(purchase(need, found))
 }
@@ -931,7 +934,7 @@ async fn set_received<C: ConnectionTrait + TransactionTrait>(
     let mut active: part::ActiveModel = found.into();
     active.received_on = Set(on);
     active.updated_at = Set(super::now());
-    let found = active.update(&txn).await?;
+    let found = super::part::view(&txn, active.update(&txn).await?).await?;
     txn.commit().await?;
     Ok(purchase(need, found))
 }
@@ -1053,6 +1056,7 @@ pub async fn return_part<C: ConnectionTrait + TransactionTrait>(
 
     let returned_part =
         super::part::mark_returned(&txn, found, input.reason.clone(), need_id).await?;
+    let returned_part = super::part::view(&txn, returned_part).await?;
     set_need_part(&txn, need, None, None).await?;
     if let Some(option_id) = chosen_option_id.filter(|_| input.option_was_wrong) {
         // The rejection goes through the option update so the need's whole
@@ -2252,19 +2256,19 @@ mod tests {
             .await
             .unwrap();
         let today = crate::services::today();
-        assert_eq!(bought.part.name, o.description);
-        assert_eq!(bought.part.manufacturer.as_deref(), Some("Zimmermann"));
-        assert_eq!(bought.part.part_number.as_deref(), Some("100.3394.20"));
-        assert_eq!(bought.part.seller.as_deref(), Some("FCP Euro"));
-        assert_eq!(bought.part.cost_cents, Some(18_000));
+        assert_eq!(bought.part.part.name, o.description);
+        assert_eq!(bought.part.part.manufacturer.as_deref(), Some("Zimmermann"));
+        assert_eq!(bought.part.part.part_number.as_deref(), Some("100.3394.20"));
+        assert_eq!(bought.part.part.seller.as_deref(), Some("FCP Euro"));
+        assert_eq!(bought.part.part.cost_cents, Some(18_000));
         assert_eq!(
-            bought.part.retailer_url.as_deref(),
+            bought.part.part.retailer_url.as_deref(),
             Some("https://example.com/rotors")
         );
-        assert_eq!(bought.part.purchase_date, Some(today));
-        assert_eq!(bought.part.supplied_by, Supplier::Owner);
-        assert_eq!(bought.part.status, PartStatus::Purchased);
-        assert_eq!(bought.need.part_id, Some(bought.part.id));
+        assert_eq!(bought.part.part.purchase_date, Some(today));
+        assert_eq!(bought.part.part.supplied_by, Supplier::Owner);
+        assert_eq!(bought.part.part.status, PartStatus::Purchased);
+        assert_eq!(bought.need.part_id, Some(bought.part.part.id));
         assert_eq!(bought.need.supplied_by, Some(Supplier::Owner));
         assert_eq!(bought.stage, Stage::Ordered);
 
@@ -2290,10 +2294,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(bought.part.seller.as_deref(), Some("Amazon"));
-        assert_eq!(bought.part.purchase_date, Some(date("2026-11-02")));
-        assert_eq!(bought.part.cost_cents, Some(8_500));
-        assert_eq!(bought.part.order_ref.as_deref(), Some("112-445"));
+        assert_eq!(bought.part.part.seller.as_deref(), Some("Amazon"));
+        assert_eq!(bought.part.part.purchase_date, Some(date("2026-11-02")));
+        assert_eq!(bought.part.part.cost_cents, Some(8_500));
+        assert_eq!(bought.part.part.order_ref.as_deref(), Some("112-445"));
     }
 
     #[tokio::test]
@@ -2318,7 +2322,7 @@ mod tests {
         let bought = mark_ordered(&db, vehicle_id, n.id, OrderDetails::default())
             .await
             .unwrap();
-        assert_eq!(bought.part.cost_cents, Some(13_800));
+        assert_eq!(bought.part.part.cost_cents, Some(13_800));
     }
 
     #[tokio::test]
@@ -2758,14 +2762,14 @@ mod tests {
         let linked = link_part(&db, vehicle_id, n.id, p.id, Some(date("2026-11-05")))
             .await
             .unwrap();
-        assert_eq!(linked.part.received_on, Some(date("2026-11-05")));
+        assert_eq!(linked.part.part.received_on, Some(date("2026-11-05")));
         assert_eq!(linked.stage, Stage::Received);
         assert_eq!(linked.need.supplied_by, Some(Supplier::Owner));
 
         let m = add(&db, vehicle_id, job_id, need("Rotors")).await.unwrap();
         let q = new_part(&db, vehicle_id, "Rotors").await;
         let linked = link_part(&db, vehicle_id, m.id, q.id, None).await.unwrap();
-        assert_eq!(linked.part.received_on, None);
+        assert_eq!(linked.part.part.received_on, None);
         assert_eq!(linked.stage, Stage::Ordered);
     }
 
@@ -2784,14 +2788,14 @@ mod tests {
         let got = mark_received(&db, vehicle_id, n.id, Some(date("2026-11-07")))
             .await
             .unwrap();
-        assert_eq!(got.part.received_on, Some(date("2026-11-07")));
+        assert_eq!(got.part.part.received_on, Some(date("2026-11-07")));
         assert_eq!(got.stage, Stage::Received);
         let cleared = clear_received(&db, vehicle_id, n.id).await.unwrap();
-        assert_eq!(cleared.part.received_on, None);
+        assert_eq!(cleared.part.part.received_on, None);
         assert_eq!(cleared.stage, Stage::Ordered);
         let today = crate::services::today();
         let got = mark_received(&db, vehicle_id, n.id, None).await.unwrap();
-        assert_eq!(got.part.received_on, Some(today));
+        assert_eq!(got.part.part.received_on, Some(today));
         // With no date given, a part that has one keeps it.
         let err = mark_received(&db, vehicle_id, n.id, None)
             .await
@@ -2801,7 +2805,7 @@ mod tests {
             format!("Need {}'s part was already received on {today}", n.id)
         );
         assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
-        let part_id = got.part.id;
+        let part_id = got.part.part.id;
         assert_eq!(received_on(&db, vehicle_id, part_id).await, Some(today));
 
         let bare = add(&db, vehicle_id, job_id, need("Fluid")).await.unwrap();
@@ -2840,13 +2844,13 @@ mod tests {
         .await
         .unwrap();
         let today = crate::services::today();
-        assert_eq!(out.returned_part.status, PartStatus::Returned);
+        assert_eq!(out.returned_part.part.status, PartStatus::Returned);
         assert_eq!(
-            out.returned_part.return_reason.as_deref(),
+            out.returned_part.part.return_reason.as_deref(),
             Some("wrong diameter")
         );
-        assert_eq!(out.returned_part.returned_on, Some(today));
-        assert_eq!(out.returned_part.returned_from_need_id, Some(n.id));
+        assert_eq!(out.returned_part.part.returned_on, Some(today));
+        assert_eq!(out.returned_part.part.returned_from_need_id, Some(n.id));
         assert_eq!(out.need.part_id, None);
         assert_eq!(out.need.chosen_option_id, Some(o.id));
         assert_eq!(out.stage, Stage::ToOrder);
@@ -3338,7 +3342,7 @@ mod tests {
             panic!("expected a link: {linked:?}");
         };
         assert_eq!(purchase.need.part_id, Some(p.id));
-        assert_eq!(purchase.part.received_on, Some(date("2026-11-01")));
+        assert_eq!(purchase.part.part.received_on, Some(date("2026-11-01")));
         assert_eq!(purchase.stage, Stage::Received);
         let json = serde_json::to_value(&linked).unwrap();
         assert_eq!(json["need"]["part_id"], p.id, "{json}");
@@ -3370,12 +3374,12 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(got.part.received_on, Some(date("2026-11-01")));
+        assert_eq!(got.part.part.received_on, Some(date("2026-11-01")));
         assert_eq!(got.stage, Stage::Received);
         let got = set_arrival(&db, vehicle_id, n.id, ArrivalChange::NotReceived)
             .await
             .unwrap();
-        assert_eq!(got.part.received_on, None);
+        assert_eq!(got.part.part.received_on, None);
         assert_eq!(got.stage, Stage::Ordered);
     }
 
@@ -3431,7 +3435,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(linked.stage, Stage::Installed);
-        assert_eq!(linked.part.received_on, None);
+        assert_eq!(linked.part.part.received_on, None);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

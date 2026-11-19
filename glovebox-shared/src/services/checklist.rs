@@ -133,13 +133,20 @@ pub struct NeedView {
     pub chosen: Option<need_option::Model>,
     /// Every option other than the chosen one, rejected ones included.
     pub other_options: Vec<need_option::Model>,
-    pub part: Option<part::Model>,
+    /// The linked part, with its kit contents.
+    pub part: Option<super::part::PartView>,
     /// The linked part's seller, date, price and order number, as present.
     pub purchase_summary: Option<String>,
     pub notes: Vec<String>,
 }
 
 impl NeedView {
+    /// The linked part's own record, without its kit contents.
+    #[must_use]
+    pub fn linked_part(&self) -> Option<&part::Model> {
+        self.part.as_ref().map(|p| &p.part)
+    }
+
     /// A sentence counting the need's options and how many are rejected,
     /// such as `3 options researched, 1 rejected`.
     #[must_use]
@@ -169,7 +176,7 @@ pub struct PastDecision {
     /// reason and date of that choice as `chosen_reason` and `chosen_on`.
     pub rejected: Vec<need_option::Model>,
     /// Parts bought for the need that went back.
-    pub returned_parts: Vec<part::Model>,
+    pub returned_parts: Vec<super::part::PartView>,
 }
 
 /// The checklist of one appointment.
@@ -375,14 +382,14 @@ pub async fn past_decisions(
         .map(|v| (v.id, v))
         .collect();
     let mut options = options_by_need(db, &need_ids).await?;
-    let mut returned: HashMap<i32, Vec<part::Model>> = HashMap::new();
-    for p in part::Entity::find()
+    let mut returned: HashMap<i32, Vec<super::part::PartView>> = HashMap::new();
+    let returned_parts = part::Entity::find()
         .filter(part::Column::ReturnedFromNeedId.is_in(need_ids))
         .order_by_asc(part::Column::Id)
         .all(db)
-        .await?
-    {
-        if let Some(need_id) = p.returned_from_need_id {
+        .await?;
+    for p in super::part::views(db, returned_parts).await? {
+        if let Some(need_id) = p.part.returned_from_need_id {
             returned.entry(need_id).or_default().push(p);
         }
     }
@@ -431,8 +438,8 @@ async fn options_by_need(
     Ok(grouped)
 }
 
-// Loads the needs, options and parts of every job in three batched queries
-// and returns the views in the order of `jobs`.
+// Loads the needs, options, parts and kit contents of every job in four
+// batched queries and returns the views in the order of `jobs`.
 async fn job_views(
     db: &impl ConnectionTrait,
     jobs: Vec<work_item::Model>,
@@ -445,16 +452,19 @@ async fn job_views(
         .await?;
     let need_ids: Vec<i32> = needs.iter().map(|n| n.id).collect();
     let mut options = options_by_need(db, &need_ids).await?;
-    let parts: HashMap<i32, part::Model> = part::Entity::find()
+    let parts = part::Entity::find()
         .filter(part::Column::Id.is_in(needs.iter().filter_map(|n| n.part_id)))
         .all(db)
+        .await?;
+    let mut parts: HashMap<i32, super::part::PartView> = super::part::views(db, parts)
         .await?
         .into_iter()
-        .map(|p| (p.id, p))
+        .map(|p| (p.part.id, p))
         .collect();
     let mut by_job: HashMap<i32, Vec<NeedView>> = HashMap::new();
     for need in needs {
-        let linked = need.part_id.and_then(|id| parts.get(&id).cloned());
+        // A part links to at most one need, so each is moved out once.
+        let linked = need.part_id.and_then(|id| parts.remove(&id));
         let job_id = need.work_item_id;
         let own_options = options.remove(&need.id).unwrap_or_default();
         by_job
@@ -474,7 +484,7 @@ async fn job_views(
 fn need_view(
     need: job_need::Model,
     options: Vec<need_option::Model>,
-    part: Option<part::Model>,
+    part: Option<super::part::PartView>,
 ) -> NeedView {
     let (chosen, other_options): (Vec<_>, Vec<_>) = options
         .into_iter()
@@ -488,7 +498,7 @@ fn need_view(
         notes.push("Fitment of the chosen option is not confirmed.".to_string());
     }
     if let (Some(part), Some(chosen)) = (&part, &chosen)
-        && let (Some(have), Some(want)) = (&part.part_number, &chosen.part_number)
+        && let (Some(have), Some(want)) = (&part.part.part_number, &chosen.part_number)
         && !have.trim().eq_ignore_ascii_case(want.trim())
     {
         notes.push(format!(
@@ -500,8 +510,8 @@ fn need_view(
         notes.push(NO_DECISION_NOTE.to_string());
     }
     NeedView {
-        stage: stage(&need, part.as_ref()),
-        purchase_summary: part.as_ref().and_then(purchase_summary),
+        stage: stage(&need, part.as_ref().map(|p| &p.part)),
+        purchase_summary: part.as_ref().and_then(|p| purchase_summary(&p.part)),
         need,
         chosen,
         other_options,
@@ -651,8 +661,8 @@ fn step_detail(view: &NeedView) -> String {
             format!("order{what}")
         }
         Stage::Ordered => {
-            let seller = view.part.as_ref().and_then(|p| p.seller.as_ref());
-            let date = view.part.as_ref().and_then(|p| p.purchase_date.as_ref());
+            let seller = view.linked_part().and_then(|p| p.seller.as_ref());
+            let date = view.linked_part().and_then(|p| p.purchase_date.as_ref());
             format!(
                 "ordered{}{}",
                 seller.map_or_else(String::new, |s| format!(" from {s}")),
@@ -660,7 +670,7 @@ fn step_detail(view: &NeedView) -> String {
             )
         }
         Stage::ShopSupplies => "the shop supplies it".to_owned(),
-        Stage::Received => match view.part.as_ref().and_then(|p| p.received_on.as_ref()) {
+        Stage::Received => match view.linked_part().and_then(|p| p.received_on.as_ref()) {
             Some(date) => format!("received on {date}"),
             None => "received".to_owned(),
         },
@@ -763,7 +773,7 @@ mod tests {
         inputs::{
             appointment::NewAppointment,
             need::{NewNeed, NewOption, OrderDetails, ReturnInput, UpdateNeed, UpdateOption},
-            part::NewPart,
+            part::{NewPart, NewPartContent},
             todo::NewTodo,
         },
         services::{need, part as part_svc},
@@ -1493,6 +1503,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_linked_kit_carries_its_contents() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let a = appointment_id(&db, v).await;
+        let job = add_job(&db, v, "Oil change", Some(a)).await;
+        let n = new_need(&db, v, job, "Oil and filter").await;
+        let plain = new_need(&db, v, job, "Wipers").await;
+        let kit = part_svc::create(
+            &db,
+            v,
+            NewPart {
+                name: "Oil change kit".into(),
+                contents: vec![NewPartContent {
+                    name: "Oil filter".into(),
+                    part_number: Some("HU 7020 z".into()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let wipers = part_svc::create(
+            &db,
+            v,
+            NewPart {
+                name: "Wipers".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        need::link_part(&db, v, n, kit.id, None).await.unwrap();
+        need::link_part(&db, v, plain, wipers.id, None)
+            .await
+            .unwrap();
+
+        let list = for_appointment(&db, v, a).await.unwrap();
+
+        let needs = &list.jobs[0].needs;
+        let kit_view = needs[0].part.as_ref().unwrap();
+        assert_eq!(
+            kit_view.contents[0].part_number.as_deref(),
+            Some("HU 7020 z")
+        );
+        crate::test_support::assert_empty(&needs[1].part.as_ref().unwrap().contents);
+    }
+
+    #[tokio::test]
     async fn purchase_summary_uses_only_the_parts_present() {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
@@ -1688,7 +1747,7 @@ mod tests {
         );
         assert_eq!(d.returned_parts.len(), 1);
         assert_eq!(
-            d.returned_parts[0].return_reason.as_deref(),
+            d.returned_parts[0].part.return_reason.as_deref(),
             Some("wrong box")
         );
         assert_eq!(d.chosen.as_ref().unwrap().id, right);

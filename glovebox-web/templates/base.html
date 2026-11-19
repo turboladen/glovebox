@@ -193,6 +193,10 @@
     .opt--bad .pn { text-decoration: line-through; }
   }
   .memo .note { font-weight: 600; }
+  .memo .kit { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; }
+  .memo .kit .l { grid-column: 1; grid-row: 1; }
+  .memo .kit-item { grid-column: 2; }
+  .memo .kit-item .pn { margin-left: 0.6rem; }
   .lone { padding: 0.5rem var(--pad) 0.75rem; }
   .work { display: grid; gap: 0.75rem; padding: 0.75rem var(--pad) 1rem; border-top: 1px solid var(--rule); grid-template-columns: var(--cols); column-gap: var(--gap); }
   .work > * { grid-column: 3 / 9; }

@@ -1476,3 +1476,43 @@ async fn the_worked_invoice_example_reports_14000_out_of_pocket_and_45000_covere
     assert_eq!(work["covered_by_others_cents"], 45_000);
     assert!(work.get("total_cost_cents").is_none());
 }
+
+#[tokio::test]
+async fn a_service_shows_each_installed_kits_contents() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let kit = t
+        .call(
+            "record_part",
+            json!({
+                "vehicle_id": v.id,
+                "name": "Oil change kit",
+                "contents": [{ "name": "Oil filter", "part_number": "HU 7020 z" }]
+            }),
+        )
+        .await;
+    let service = t
+        .call(
+            "record_service",
+            json!({
+                "vehicle_id": v.id,
+                "service_date": "2026-04-01",
+                "part_ids": [kit["id"]]
+            }),
+        )
+        .await;
+    assert_eq!(
+        service["parts"][0]["contents"][0]["part_number"], "HU 7020 z",
+        "got: {service}"
+    );
+
+    let got = t
+        .call(
+            "get_service",
+            json!({ "vehicle_id": v.id, "service_id": service["id"] }),
+        )
+        .await;
+    assert_eq!(got["parts"][0]["contents"][0]["name"], "Oil filter");
+    let listed = t.call("list_services", json!({ "vehicle_id": v.id })).await;
+    assert_eq!(listed[0]["parts"][0]["contents"][0]["name"], "Oil filter");
+}

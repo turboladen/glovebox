@@ -482,6 +482,9 @@ pub struct PartContentInput {
     /// How many of it one kit holds, whatever the need's quantity. Defaults
     /// to 1.
     pub quantity: Option<i32>,
+    /// The `id` an item carries in a reply. It is ignored, so an item copied
+    /// from a reply can be sent as it is; a new item gets a new id.
+    pub id: Option<i32>,
 }
 
 impl From<PartContentInput> for NewPartContent {

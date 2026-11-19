@@ -100,13 +100,13 @@ impl GloveboxMcp {
                        `next_steps` in the order the owner works (`decide` for needs nobody has \
                        decided, `order` for decided needs still to buy, `arriving` for ordered \
                        parts not yet received, `todos`, then `done`), each job with its needs \
-                       (stage, supplier, chosen option, fitment, reason, purchase and the other \
-                       options with their rejection reasons), and `warnings`. With neither id, \
-                       the same view for the planned jobs that have needs and are on no \
-                       appointment. With `work_item_id`, one job and its needs. Call it before \
-                       advising on what is left to do, and read the `warnings` aloud: an option \
-                       whose fitment is only `unconfirmed`, or a part number that differs from \
-                       the chosen option's. Pass at most one id."
+                       (stage, supplier, chosen option, fitment, reason, purchase, the linked \
+                       `part` with a kit's `contents`, and the other options with their rejection \
+                       reasons), and `warnings`. With neither id, the same view for the planned \
+                       jobs that have needs and are on no appointment. With `work_item_id`, one \
+                       job and its needs. Call it before advising on what is left to do, and read \
+                       the `warnings` aloud: an option whose fitment is only `unconfirmed`, or a \
+                       part number that differs from the chosen option's. Pass at most one id."
     )]
     async fn get_checklist(
         &self,

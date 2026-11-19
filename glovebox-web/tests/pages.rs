@@ -770,7 +770,7 @@ async fn print_sheet_boxes_each_owner_part_and_lists_a_kits_contents() {
         v,
         rotors,
         UpdatePart {
-            contents: Some(vec![
+            add_contents: vec![
                 NewPartContent {
                     name: "Rotor bolts".into(),
                     manufacturer: Some("Febi".into()),
@@ -781,7 +781,7 @@ async fn print_sheet_boxes_each_owner_part_and_lists_a_kits_contents() {
                     name: "Anti-squeal paste".into(),
                     ..Default::default()
                 },
-            ]),
+            ],
             ..Default::default()
         },
     )

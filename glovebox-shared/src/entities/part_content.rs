@@ -6,10 +6,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "part_contents")]
 pub struct Model {
-    // Replies carry only what a caller sends back in `contents`, so the
-    // bookkeeping columns are left out of the serialized form.
+    // Replies carry the id, which names an item to remove, and the fields a
+    // caller sends when adding one. The bookkeeping columns are left out.
     #[sea_orm(primary_key)]
-    #[serde(skip_serializing)]
     pub id: i32,
     #[serde(skip_serializing)]
     pub part_id: i32,

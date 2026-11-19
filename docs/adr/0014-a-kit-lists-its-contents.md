@@ -16,9 +16,16 @@ the part's notes.
 
 **A part has an ordered list of contents** in the `part_contents` table. Each item has a name, a
 manufacturer, the number on its own packaging, and a quantity. A part that is not a kit has none.
-`record_part` takes the list. `correct_part` takes a list that replaces the stored one whole, and
-an empty list clears it. `list_parts`, `record_part` and `correct_part` return each part with its
-contents.
+`record_part` takes the list. `correct_part` edits it by item: `add_contents` appends items after
+the ones the kit holds, and `remove_contents` names the ids of items to remove, so an item the call
+does not name stays as it is. An id that is not one of the part's items fails the call, which then
+writes nothing. Every reply that returns a part carries its contents with each item's id: the
+part tools, the service reads, the checklist, and the need replies (`mark_need_ordered`,
+`link_part_to_need`, `mark_need_received`, `return_part`, `past_decisions`) and `get_work_sheet`.
+The printed sheet leaves the ids off.
+
+**The job and appointment pages list a kit's items** in the need's row, under "In the kit", whether
+the row shows the linked part or a chosen option.
 
 **The work sheet lists a kit's contents under it.** Each item has its own tick box, and so does
 every line the owner brings. Those lines print the bought part's name. The need's name describes
@@ -34,13 +41,18 @@ and no contents, because the owner does not gather them.
   cost divided by guesswork.
 - **Printing the part's notes on the sheet.** Notes are free text, often about warranty or
   fitment, and give no number per item to check against.
-- **Tools that add, change and remove one item at a time.** A kit's list is short and is known
-  whole from the order or the box. Replacing it in one call keeps the order without position
-  arguments and needs one tool argument where three tools would be needed.
+- **A list that replaces the stored one whole.** It is one argument and keeps the order without
+  positions, but an item left out of the list is deleted. A caller that read a kit somewhere that
+  did not show its items, or that sent only the items it meant to add, would delete the rest.
+  Adding and removing by id makes every deletion one the caller names.
+- **Editing an item in place.** It would need a third argument with an update input per item. A
+  kit's items are few and rarely wrong, so a mistyped item is removed and added again, and it
+  then prints last.
 
 ## Consequences
 
 - Contents are entered after the purchase: by `correct_part` for a part that `mark_need_ordered`
   created, or a part recorded on an invoice through `record_service`, until those calls take
   contents themselves.
-- The job and appointment pages do not show contents yet. Only the work sheet does.
+- The ids in replies are what a caller sends to remove an item, so a part's replies carry them
+  everywhere it appears.

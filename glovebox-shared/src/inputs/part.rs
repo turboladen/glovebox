@@ -71,8 +71,10 @@ pub struct UpdatePart {
     pub order_ref: Option<Option<String>>,
     /// The date the part arrived.
     pub received_on: Option<Option<chrono::NaiveDate>>,
-    /// A list replaces the kit's contents, and an empty list clears them.
-    pub contents: Option<Vec<NewPartContent>>,
+    /// Kit items to add after the ones the kit already holds.
+    pub add_contents: Vec<NewPartContent>,
+    /// Ids of the kit items to remove.
+    pub remove_contents: Vec<i32>,
 }
 
 /// Filter for listing parts within a vehicle.

@@ -578,14 +578,15 @@ pub struct CorrectPartInput {
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<String>")]
     pub received_on: Option<Option<String>>,
-    /// For a kit: every item inside it, with the number printed on that
-    /// item's own packaging. The list replaces the stored contents whole, so
-    /// send every item, not only the new ones.
-    ///
-    /// Send `null` or `[]` to clear them; omit the key to leave them unchanged.
-    #[serde(default, deserialize_with = "nullable")]
-    #[schemars(with = "Option<Vec<PartContentInput>>")]
-    pub contents: Option<Option<Vec<PartContentInput>>>,
+    /// For a kit: items to add, each with the number printed on its own
+    /// packaging. They go after the items the kit already holds, and the
+    /// items already there stay as they are. `null` adds nothing.
+    pub add_contents: Option<Vec<PartContentInput>>,
+    /// For a kit: the `id`s of items to remove, as `contents` in any reply
+    /// that shows the kit lists them. Items not named stay. To fix an
+    /// item, remove it and add it again; it then prints last. `null` removes
+    /// nothing; to empty a kit, name every item.
+    pub remove_contents: Option<Vec<i32>>,
 }
 
 impl CorrectPartInput {
@@ -617,9 +618,13 @@ impl CorrectPartInput {
                 warranty_expires_miles: self.warranty_expires_miles,
                 order_ref: self.order_ref,
                 received_on: dates::parse_date_change("received_on", self.received_on)?,
-                contents: self
-                    .contents
-                    .map(|items| items.into_iter().flatten().map(Into::into).collect()),
+                add_contents: self
+                    .add_contents
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+                remove_contents: self.remove_contents.unwrap_or_default(),
                 ..Default::default()
             },
         ))
