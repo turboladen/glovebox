@@ -103,11 +103,12 @@ impl Ending {
         active.cancelled_on = Set(cancelled);
     }
 
-    fn label(self) -> &'static str {
+    // How the appointment was put away, or `None` while it is open.
+    fn put_away_as(self) -> Option<&'static str> {
         match self {
-            Self::Open => "open",
-            Self::Closed(_) => "closed",
-            Self::Cancelled(_) => "cancelled",
+            Self::Open => None,
+            Self::Closed(_) => Some("closed"),
+            Self::Cancelled(_) => Some("cancelled"),
         }
     }
 }
@@ -257,11 +258,11 @@ pub async fn update_with_status<C: ConnectionTrait + TransactionTrait>(
     update(&txn, vehicle_id, id, input).await?;
     let (unassigned_job_ids, unassigned_todo_ids) = match change {
         Some(StatusChange::Close) => {
-            put_away(&txn, vehicle_id, id, Ending::Closed).await?;
+            put_away(&txn, vehicle_id, id, Ending::Closed, today).await?;
             (Vec::new(), Vec::new())
         }
         Some(StatusChange::Cancel) => {
-            let cancelled = put_away(&txn, vehicle_id, id, Ending::Cancelled).await?;
+            let cancelled = put_away(&txn, vehicle_id, id, Ending::Cancelled, today).await?;
             (cancelled.unassigned_job_ids, cancelled.unassigned_todo_ids)
         }
         Some(StatusChange::Reopen) => {
@@ -303,11 +304,9 @@ pub(crate) async fn require_assignable(
     id: i32,
 ) -> DomainResult<appointment::Model> {
     let found = require(db, vehicle_id, id).await?;
-    let ending = Ending::of(&found)?;
-    if ending != Ending::Open {
+    if let Some(how) = Ending::of(&found)?.put_away_as() {
         return Err(DomainError::BadRequest(format!(
-            "Appointment {id} is {}, so it takes no new work",
-            ending.label()
+            "Appointment {id} is {how}, so it takes no new work"
         )));
     }
     Ok(found)
@@ -522,7 +521,7 @@ pub async fn close<C: ConnectionTrait + TransactionTrait>(
     id: i32,
 ) -> DomainResult<ClosedAppointment> {
     let txn = super::begin_write(db).await?;
-    let closed = put_away(&txn, vehicle_id, id, Ending::Closed).await?;
+    let closed = put_away(&txn, vehicle_id, id, Ending::Closed, super::today()).await?;
     txn.commit().await?;
     Ok(closed)
 }
@@ -540,26 +539,25 @@ pub async fn cancel<C: ConnectionTrait + TransactionTrait>(
     id: i32,
 ) -> DomainResult<ClosedAppointment> {
     let txn = super::begin_write(db).await?;
-    let cancelled = put_away(&txn, vehicle_id, id, Ending::Cancelled).await?;
+    let cancelled = put_away(&txn, vehicle_id, id, Ending::Cancelled, super::today()).await?;
     txn.commit().await?;
     Ok(cancelled)
 }
 
 // Closes or cancels on the caller's transaction, with `ending` (one of the
-// two variants) dated today.
+// two variants) dated `today`.
 async fn put_away(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     id: i32,
     ending: fn(chrono::NaiveDate) -> Ending,
+    today: chrono::NaiveDate,
 ) -> DomainResult<ClosedAppointment> {
-    let ending = ending(super::today());
+    let ending = ending(today);
     let existing = require(db, vehicle_id, id).await?;
-    let current = Ending::of(&existing)?;
-    if current != Ending::Open {
+    if let Some(how) = Ending::of(&existing)?.put_away_as() {
         return Err(DomainError::BadRequest(format!(
-            "Appointment {id} is already {}",
-            current.label()
+            "Appointment {id} is already {how}"
         )));
     }
     let planned_jobs = work_item::Entity::find()

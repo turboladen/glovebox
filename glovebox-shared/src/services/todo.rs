@@ -657,10 +657,10 @@ mod tests {
             (None, Some(cancelled))
         );
         let a = appointment::require(&db, v, cancelled).await.unwrap();
-        assert_ne!(
+        assert!(matches!(
             appointment::Ending::of(&a).unwrap(),
-            appointment::Ending::Open
-        );
+            appointment::Ending::Cancelled(_)
+        ));
     }
 
     #[tokio::test]

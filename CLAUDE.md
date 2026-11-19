@@ -223,9 +223,10 @@ lists needs, and a need lists researched options. A need's stage (`undecided`, `
 `shop_supplies`, `ordered`, `received`, `installed`) is derived by `need::stage` and never stored;
 the first matching row wins, so a linked part decides the stage, and a part that is installed or
 replaced reads `installed`. An appointment reads `done` when
-it has jobs and every one is done or dropped; only `cancelled` and a hand-closed date are stored,
-never both, and only through `appointment::Ending`,
-closing is refused while a job is still planned, and cancelling unassigns them. A closed or cancelled
+it has jobs and every one is done or dropped. Only `cancelled` and a hand-closed date are stored,
+never both, and `appointment::Ending` writes them (reopening hand-closed appointments in bulk
+only clears `closed_on`). Closing is refused while a job is still planned, and cancelling
+unassigns them. A closed or cancelled
 appointment therefore never holds a planned job: when a job on one returns to `planned` (its
 service is deleted, or its status is set back), a hand-closed appointment opens again and a
 cancelled one lets the job go to the unscheduled pool (`appointment::settle_reopened_jobs`).
