@@ -399,6 +399,14 @@ role per control style, and `YYYY-MM-DD` dates.
   entity and sets both stamps itself.
 - New domain logic gets service-level unit tests in `glovebox-shared` (via `test_support::test_db()`)
   and MCP coverage in `glovebox-mcp/tests`.
+- **Columns that describe one fact** (a part's status and its install, replace and return
+  details; a need's choice, date and reason; an appointment's two ending dates) get one enum with
+  data in its variants, in the owning service, and only the function that writes the enum back
+  sets them. Entities and serialized output stay flat, an input is a command such as
+  `StatusChange`, and a converted area adds CHECK constraints to its table. An area keeps its
+  hand-written guards until it converts, and a new table starts with its enum.
+  `docs/adr/0016-a-state-whose-fields-depend-on-each-other-is-one-enum.md` lists the areas in
+  order.
 - **Cross-reference guards**: services guard every foreign id they accept (schedule items, work
   items, incidents, recall findings, services, parts). MCP calls services directly with no
   pre-checks. A wrong-parent id must produce the byte-identical `NotFound` that a nonexistent id
