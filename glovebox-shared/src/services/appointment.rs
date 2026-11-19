@@ -31,6 +31,17 @@ pub struct AppointmentSummary {
     pub jobs: usize,
     pub needs_open: usize,
     pub todos_open: usize,
+    #[serde(skip)]
+    ending: Ending,
+}
+
+impl AppointmentSummary {
+    /// True while the appointment takes new jobs and to-dos: it is neither
+    /// closed by hand nor cancelled. One whose jobs are all done still does.
+    #[must_use]
+    pub fn accepts_work(&self) -> bool {
+        self.ending == Ending::Open
+    }
 }
 
 /// What closing an appointment did.
@@ -53,35 +64,58 @@ pub struct RevisedAppointment {
     pub unassigned_todo_ids: Vec<i32>,
 }
 
-/// How an appointment was put away by hand, read from its dates. A cancelled
-/// one counts as cancelled even when it also carries a closed date.
+/// Whether an appointment was put away by hand, and when. It is read from
+/// and written to `closed_on` and `cancelled_on`, which are never both set.
+// `reopen_closed_among` clears `closed_on` in bulk, which leaves each row it
+// touches open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Ending {
-    Closed,
-    Cancelled,
+pub(crate) enum Ending {
+    Open,
+    Closed(chrono::NaiveDate),
+    Cancelled(chrono::NaiveDate),
 }
 
 impl Ending {
-    fn of(a: &appointment::Model) -> Option<Self> {
-        if a.cancelled_on.is_some() {
-            Some(Self::Cancelled)
-        } else if a.closed_on.is_some() {
-            Some(Self::Closed)
-        } else {
-            None
+    /// Reads a stored appointment.
+    ///
+    /// # Errors
+    /// `Internal` for one that holds both dates.
+    pub(crate) fn of(a: &appointment::Model) -> DomainResult<Self> {
+        match (a.closed_on, a.cancelled_on) {
+            (None, None) => Ok(Self::Open),
+            (Some(on), None) => Ok(Self::Closed(on)),
+            (None, Some(on)) => Ok(Self::Cancelled(on)),
+            (Some(_), Some(_)) => Err(DomainError::Internal(format!(
+                "appointment {} is both closed and cancelled",
+                a.id
+            ))),
         }
     }
 
-    fn label(self) -> &'static str {
+    /// Sets `closed_on` and `cancelled_on`.
+    pub(crate) fn write(self, active: &mut appointment::ActiveModel) {
+        let (closed, cancelled) = match self {
+            Self::Open => (None, None),
+            Self::Closed(on) => (Some(on), None),
+            Self::Cancelled(on) => (None, Some(on)),
+        };
+        active.closed_on = Set(closed);
+        active.cancelled_on = Set(cancelled);
+    }
+
+    // How the appointment was put away, or `None` while it is open.
+    fn put_away_as(self) -> Option<&'static str> {
         match self {
-            Self::Closed => "closed",
-            Self::Cancelled => "cancelled",
+            Self::Open => None,
+            Self::Closed(_) => Some("closed"),
+            Self::Cancelled(_) => Some("cancelled"),
         }
     }
 }
 
 crate::vocab::vocabulary! {
-    /// An appointment's status, as [`status`] derives it.
+    /// An appointment's status: `cancelled` when cancelled, `done` when closed by hand or when
+    /// it has jobs and every one is done or dropped, otherwise `planning`.
     // No column stores it: the closed and cancelled dates and the jobs'
     // statuses decide it, and a `StatusChange` moves an appointment to one.
     pub enum AppointmentStatus {
@@ -91,18 +125,18 @@ crate::vocab::vocabulary! {
     }
 }
 
-/// The appointment's state from its dates and its jobs' statuses: `cancelled`
-/// when cancelled, `done` when closed by hand or when it has jobs and every
-/// one is done or dropped, otherwise `planning`.
-#[must_use]
-pub fn status(a: &appointment::Model, job_statuses: &[JobStatus]) -> AppointmentStatus {
-    match Ending::of(a) {
-        Some(Ending::Cancelled) => AppointmentStatus::Cancelled,
-        Some(Ending::Closed) => AppointmentStatus::Done,
-        None if !job_statuses.is_empty() && job_statuses.iter().all(|s| s.is_finished()) => {
+// Derives the status `AppointmentStatus` describes from the appointment's
+// ending and its jobs' statuses.
+fn status(ending: Ending, job_statuses: &[JobStatus]) -> AppointmentStatus {
+    match ending {
+        Ending::Cancelled(_) => AppointmentStatus::Cancelled,
+        Ending::Closed(_) => AppointmentStatus::Done,
+        Ending::Open
+            if !job_statuses.is_empty() && job_statuses.iter().all(|s| s.is_finished()) =>
+        {
             AppointmentStatus::Done
         }
-        None => AppointmentStatus::Planning,
+        Ending::Open => AppointmentStatus::Planning,
     }
 }
 
@@ -224,11 +258,11 @@ pub async fn update_with_status<C: ConnectionTrait + TransactionTrait>(
     update(&txn, vehicle_id, id, input).await?;
     let (unassigned_job_ids, unassigned_todo_ids) = match change {
         Some(StatusChange::Close) => {
-            put_away(&txn, vehicle_id, id, Ending::Closed).await?;
+            put_away(&txn, vehicle_id, id, Ending::Closed, today).await?;
             (Vec::new(), Vec::new())
         }
         Some(StatusChange::Cancel) => {
-            let cancelled = put_away(&txn, vehicle_id, id, Ending::Cancelled).await?;
+            let cancelled = put_away(&txn, vehicle_id, id, Ending::Cancelled, today).await?;
             (cancelled.unassigned_job_ids, cancelled.unassigned_todo_ids)
         }
         Some(StatusChange::Reopen) => {
@@ -262,13 +296,6 @@ pub async fn require(
         .ok_or_else(|| DomainError::NotFound(format!("Appointment {id} not found")))
 }
 
-/// True while the appointment takes new jobs and to-dos: it is neither
-/// closed by hand nor cancelled. One whose jobs are all done still does.
-#[must_use]
-pub fn accepts_work(a: &appointment::Model) -> bool {
-    Ending::of(a).is_none()
-}
-
 /// [`require`] for an appointment that is about to receive a job, a to-do or
 /// an invoice: a cancelled or hand-closed appointment is refused.
 pub(crate) async fn require_assignable(
@@ -277,10 +304,9 @@ pub(crate) async fn require_assignable(
     id: i32,
 ) -> DomainResult<appointment::Model> {
     let found = require(db, vehicle_id, id).await?;
-    if let Some(ending) = Ending::of(&found) {
+    if let Some(how) = Ending::of(&found)?.put_away_as() {
         return Err(DomainError::BadRequest(format!(
-            "Appointment {id} is {}, so it takes no new work",
-            ending.label()
+            "Appointment {id} is {how}, so it takes no new work"
         )));
     }
     Ok(found)
@@ -302,7 +328,10 @@ pub(crate) async fn open_id(
         .filter(appointment::Column::VehicleId.eq(vehicle_id))
         .one(db)
         .await?;
-    Ok(found.filter(accepts_work).map(|a| a.id))
+    match found {
+        Some(a) if Ending::of(&a)? == Ending::Open => Ok(Some(a.id)),
+        _ => Ok(None),
+    }
 }
 
 /// Lists a vehicle's appointments with their counts, soonest planned date
@@ -346,9 +375,7 @@ pub(crate) async fn open_by_vehicle(
 // hand-closed or cancelled one has been put away on purpose.
 fn shows_as_open(s: &AppointmentSummary) -> bool {
     s.status == AppointmentStatus::Planning
-        || (s.status == AppointmentStatus::Done
-            && s.appointment.closed_on.is_none()
-            && s.todos_open > 0)
+        || (s.status == AppointmentStatus::Done && s.accepts_work() && s.todos_open > 0)
 }
 
 /// One appointment of the vehicle with its counts, whatever its status.
@@ -371,22 +398,28 @@ pub async fn summary(
 
 /// The summary of `appointment` on `today` from the statuses of its jobs and
 /// its counts of open needs and open to-dos.
+///
+/// # Errors
+/// `Internal` for an appointment that holds both a closed and a cancelled
+/// date.
 pub(crate) fn summarize(
     appointment: appointment::Model,
     job_statuses: &[JobStatus],
     needs_open: usize,
     todos_open: usize,
     today: chrono::NaiveDate,
-) -> AppointmentSummary {
-    let status = status(&appointment, job_statuses);
-    AppointmentSummary {
+) -> DomainResult<AppointmentSummary> {
+    let ending = Ending::of(&appointment)?;
+    let status = status(ending, job_statuses);
+    Ok(AppointmentSummary {
         status,
+        ending,
         phase: phase(status, appointment.planned_date, today),
         jobs: job_statuses.len(),
         needs_open,
         todos_open,
         appointment,
-    }
+    })
 }
 
 // Builds the summaries for every appointment of the vehicles, or for the one
@@ -461,7 +494,7 @@ async fn summaries(
             let todos = todos_open.get(&a.id).copied().unwrap_or(0);
             summarize(a, job_statuses, needs, todos, today)
         })
-        .collect();
+        .collect::<DomainResult<_>>()?;
     out.sort_by(|a, b| {
         let key = |s: &AppointmentSummary| {
             (
@@ -488,7 +521,7 @@ pub async fn close<C: ConnectionTrait + TransactionTrait>(
     id: i32,
 ) -> DomainResult<ClosedAppointment> {
     let txn = super::begin_write(db).await?;
-    let closed = put_away(&txn, vehicle_id, id, Ending::Closed).await?;
+    let closed = put_away(&txn, vehicle_id, id, Ending::Closed, super::today()).await?;
     txn.commit().await?;
     Ok(closed)
 }
@@ -506,23 +539,25 @@ pub async fn cancel<C: ConnectionTrait + TransactionTrait>(
     id: i32,
 ) -> DomainResult<ClosedAppointment> {
     let txn = super::begin_write(db).await?;
-    let cancelled = put_away(&txn, vehicle_id, id, Ending::Cancelled).await?;
+    let cancelled = put_away(&txn, vehicle_id, id, Ending::Cancelled, super::today()).await?;
     txn.commit().await?;
     Ok(cancelled)
 }
 
-// Closes or cancels on the caller's transaction.
+// Closes or cancels on the caller's transaction, with `ending` (one of the
+// two variants) dated `today`.
 async fn put_away(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     id: i32,
-    ending: Ending,
+    ending: fn(chrono::NaiveDate) -> Ending,
+    today: chrono::NaiveDate,
 ) -> DomainResult<ClosedAppointment> {
+    let ending = ending(today);
     let existing = require(db, vehicle_id, id).await?;
-    if let Some(current) = Ending::of(&existing) {
+    if let Some(how) = Ending::of(&existing)?.put_away_as() {
         return Err(DomainError::BadRequest(format!(
-            "Appointment {id} is already {}",
-            current.label()
+            "Appointment {id} is already {how}"
         )));
     }
     let planned_jobs = work_item::Entity::find()
@@ -540,7 +575,7 @@ async fn put_away(
     // A closed appointment records a trip that happened, so what is still open
     // on it needs the owner's word first. A cancelled trip did not happen, so
     // its open work goes back to the pool.
-    if ending == Ending::Closed && !(planned_jobs.is_empty() && open_todos.is_empty()) {
+    if matches!(ending, Ending::Closed(_)) && !(planned_jobs.is_empty() && open_todos.is_empty()) {
         return Err(still_open(id, &planned_jobs, &open_todos));
     }
     let unassigned_job_ids: Vec<i32> = planned_jobs.iter().map(|j| j.id).collect();
@@ -561,12 +596,8 @@ async fn put_away(
             .exec(db)
             .await?;
     }
-    let today = crate::services::today();
     let mut active: appointment::ActiveModel = existing.into();
-    match ending {
-        Ending::Cancelled => active.cancelled_on = Set(Some(today)),
-        Ending::Closed => active.closed_on = Set(Some(today)),
-    }
+    ending.write(&mut active);
     active.updated_at = Set(super::now());
     let appointment = active.update(db).await?;
     Ok(ClosedAppointment {
@@ -671,19 +702,24 @@ async fn reopen_closed_among(
     db: &impl ConnectionTrait,
     ids: Vec<i32>,
 ) -> DomainResult<(Vec<i32>, Vec<i32>)> {
-    let (cancelled, closed): (Vec<appointment::Model>, Vec<appointment::Model>) =
-        appointment::Entity::find()
-            .filter(appointment::Column::Id.is_in(ids))
-            .filter(
-                Condition::any()
-                    .add(appointment::Column::CancelledOn.is_not_null())
-                    .add(appointment::Column::ClosedOn.is_not_null()),
-            )
-            .all(db)
-            .await?
-            .into_iter()
-            .partition(|a| Ending::of(a) == Some(Ending::Cancelled));
-    let mut reopened: Vec<i32> = closed.iter().map(|a| a.id).collect();
+    let mut cancelled = Vec::new();
+    let mut reopened = Vec::new();
+    for a in appointment::Entity::find()
+        .filter(appointment::Column::Id.is_in(ids))
+        .filter(
+            Condition::any()
+                .add(appointment::Column::CancelledOn.is_not_null())
+                .add(appointment::Column::ClosedOn.is_not_null()),
+        )
+        .all(db)
+        .await?
+    {
+        match Ending::of(&a)? {
+            Ending::Cancelled(_) => cancelled.push(a.id),
+            Ending::Closed(_) => reopened.push(a.id),
+            Ending::Open => {}
+        }
+    }
     reopened.sort_unstable();
     if !reopened.is_empty() {
         appointment::Entity::update_many()
@@ -696,7 +732,7 @@ async fn reopen_closed_among(
             .exec(db)
             .await?;
     }
-    Ok((reopened, cancelled.iter().map(|a| a.id).collect()))
+    Ok((reopened, cancelled))
 }
 
 /// Clears both `closed_on` and `cancelled_on`. Jobs and to-dos that
@@ -713,8 +749,7 @@ pub async fn reopen<C: ConnectionTrait + TransactionTrait>(
     let db = &txn;
     let existing = require(db, vehicle_id, id).await?;
     let mut active: appointment::ActiveModel = existing.into();
-    active.cancelled_on = Set(None);
-    active.closed_on = Set(None);
+    Ending::Open.write(&mut active);
     active.updated_at = Set(super::now());
     let out = active.update(db).await?;
     txn.commit().await?;
@@ -779,27 +814,44 @@ mod tests {
 
     #[test]
     fn status_table() {
-        let open = model(None, None);
-        assert_eq!(status(&open, &[]), AppointmentStatus::Planning);
+        let closed = Ending::Closed(date("2026-11-02"));
+        let cancelled = Ending::Cancelled(date("2026-11-01"));
+        assert_eq!(status(Ending::Open, &[]), AppointmentStatus::Planning);
         assert_eq!(
-            status(&open, &[JobStatus::Done, JobStatus::Dropped]),
+            status(Ending::Open, &[JobStatus::Done, JobStatus::Dropped]),
             AppointmentStatus::Done
         );
         assert_eq!(
-            status(&open, &[JobStatus::Done, JobStatus::Planned]),
+            status(Ending::Open, &[JobStatus::Done, JobStatus::Planned]),
             AppointmentStatus::Planning
         );
         assert_eq!(
-            status(
-                &model(Some("2026-11-01"), Some("2026-11-02")),
-                &[JobStatus::Done]
-            ),
+            status(cancelled, &[JobStatus::Done]),
             AppointmentStatus::Cancelled
         );
         assert_eq!(
-            status(&model(None, Some("2026-11-02")), &[JobStatus::Planned]),
+            status(closed, &[JobStatus::Planned]),
             AppointmentStatus::Done
         );
+        let both = model(Some("2026-11-01"), Some("2026-11-02"));
+        assert!(matches!(Ending::of(&both), Err(DomainError::Internal(_))));
+    }
+
+    #[tokio::test]
+    async fn each_ending_reads_back_as_written() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let a = create(&db, v, appt("Brakes")).await.unwrap();
+        for ending in [
+            Ending::Closed(date("2026-11-01")),
+            Ending::Cancelled(date("2026-11-02")),
+            Ending::Open,
+        ] {
+            let mut active: appointment::ActiveModel = a.clone().into();
+            ending.write(&mut active);
+            let stored = active.update(&db).await.unwrap();
+            assert_eq!(Ending::of(&stored).unwrap(), ending);
+        }
     }
 
     #[test]

@@ -632,7 +632,10 @@ mod tests {
             (Some(closed), None)
         );
         let a = appointment::require(&db, v, closed).await.unwrap();
-        assert!(appointment::accepts_work(&a));
+        assert_eq!(
+            appointment::Ending::of(&a).unwrap(),
+            appointment::Ending::Open
+        );
 
         // Naming the cancelled appointment while un-ticking asks for open work
         // on it, which is refused.
@@ -654,7 +657,10 @@ mod tests {
             (None, Some(cancelled))
         );
         let a = appointment::require(&db, v, cancelled).await.unwrap();
-        assert!(!appointment::accepts_work(&a));
+        assert!(matches!(
+            appointment::Ending::of(&a).unwrap(),
+            appointment::Ending::Cancelled(_)
+        ));
     }
 
     #[tokio::test]

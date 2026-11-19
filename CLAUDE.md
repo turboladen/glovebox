@@ -141,7 +141,8 @@ replacement or return details do not fit its status or it was received before it
 then adds those rules to `parts` as CHECK constraints (`schema::add_checks`), and
 `m20261119_000002_need_decision_checks`, which does the same for a need's choice, date and reason
 and an option's rejection and kept choice, and makes the chosen option's key `ON DELETE
-RESTRICT`. They run on startup.
+RESTRICT`, and `m20261119_000003_appointment_ending_check`, which refuses to finish while an
+appointment is both closed and cancelled and then adds that rule as a CHECK. They run on startup.
 
 **Test harness** (`test_support.rs`): `test_db()` is an in-memory SQLite database with migrations
 applied. It is compiled under `#[cfg(any(test, feature = "test-support"))]`; `glovebox-mcp` uses it
@@ -222,8 +223,10 @@ lists needs, and a need lists researched options. A need's stage (`undecided`, `
 `shop_supplies`, `ordered`, `received`, `installed`) is derived by `need::stage` and never stored;
 the first matching row wins, so a linked part decides the stage, and a part that is installed or
 replaced reads `installed`. An appointment reads `done` when
-it has jobs and every one is done or dropped; only `cancelled` and a hand-closed date are stored,
-closing is refused while a job is still planned, and cancelling unassigns them. A closed or cancelled
+it has jobs and every one is done or dropped. Only `cancelled` and a hand-closed date are stored,
+never both, and `appointment::Ending` writes them (reopening hand-closed appointments in bulk
+only clears `closed_on`). Closing is refused while a job is still planned, and cancelling
+unassigns them. A closed or cancelled
 appointment therefore never holds a planned job: when a job on one returns to `planned` (its
 service is deleted, or its status is set back), a hand-closed appointment opens again and a
 cancelled one lets the job go to the unscheduled pool (`appointment::settle_reopened_jobs`).
@@ -471,7 +474,7 @@ role per control style, and `YYYY-MM-DD` dates.
   status, `service_record::CompletedWork`, `schedule::LinkMode` and `search::SearchScope`. A
   filter on a column never takes one of these.
   `docs/adr/0004-typed-vocabularies.md` records why.
-- **Migrations**: new migrations go after `m20261119_000002_need_decision_checks`; the
+- **Migrations**: new migrations go after `m20261119_000003_appointment_ending_check`; the
   `new-migration` skill has the templates. Use `Expr::cust()` for expressions inside builder queries; raw
   `execute_unprepared` only where no builder form exists (FTS5 DDL, cross-table copies).
 - **Migrations are not transactional on SQLite** (sea-orm-migration only wraps Postgres), so write
