@@ -229,7 +229,7 @@ async fn the_calls_return_part_names_undo_a_return() {
     let ordered = t
         .call(
             "mark_need_ordered",
-            json!({ "vehicle_id": v, "need_id": rotors }),
+            json!({ "vehicle_id": v, "need_id": rotors, "purchase_date": "2026-10-30" }),
         )
         .await;
     let part = ordered["part"]["id"].as_i64().unwrap();
@@ -364,7 +364,7 @@ async fn a_replaced_part_reads_installed_and_cannot_be_returned_or_redated() {
     let ordered = t
         .call(
             "mark_need_ordered",
-            json!({ "vehicle_id": v, "need_id": rotors }),
+            json!({ "vehicle_id": v, "need_id": rotors, "purchase_date": "2026-10-30" }),
         )
         .await;
     let part = ordered["part"]["id"].as_i64().unwrap();

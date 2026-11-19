@@ -135,7 +135,10 @@ nothing and refuses to finish while a vocabulary column holds a value outside it
 `quote_service_id` (an `ON DELETE SET NULL` key added with the column), and
 `m20261118_000001_part_contents`, which adds a kit's items (`part_contents`, cascading with the
 part), and `m20261118_000002_parts_search`, which adds the FTS5 indexes `fts_parts` and
-`fts_part_contents` and fills them from the stored rows. They run on startup.
+`fts_part_contents` and fills them from the stored rows, and
+`m20261119_000001_part_life_cycle_checks`, which refuses to finish while a part's install,
+replacement or return details do not fit its status or it was received before it was bought, and
+then adds those rules to `parts` as CHECK constraints (`schema::add_checks`). They run on startup.
 
 **Test harness** (`test_support.rs`): `test_db()` is an in-memory SQLite database with migrations
 applied. It is compiled under `#[cfg(any(test, feature = "test-support"))]`; `glovebox-mcp` uses it
@@ -235,7 +238,12 @@ need every shop-supplied part the service stops installing that goes back to pur
 keeps its status and its need. `correct_part` setting an installed or replaced part to
 `purchased` clears its install and replace details and fills an empty `received_on` from the
 install date, so its need reads received; it refuses a shop-supplied part, install or
-replacement details sent in the same call, and a cleared `received_on`. `delete_service` refuses a service that recorded work as done
+replacement details sent in the same call, and a cleared `received_on`. A part's status and its
+install, replacement and return columns are written only through `part::PartState`, which
+`part::Fitting` (a correction) and `part::NewFitting` (a new part) move: install details need
+`installed` or `replaced`, replacement details need `replaced`, a replaced part goes back to
+`installed` only when the same call clears its replacement date and odometer, and a service that
+installs a replaced part clears them. No write sets `received_on` before `purchase_date`. `delete_service` refuses a service that recorded work as done
 (jobs, installed parts, resolved incidents, recalls) until `completed_work` says whether that
 work did not happen, which undoes it, or was done another way, which keeps it and drops only the
 invoice. `correct_service` asks the same when its `work_item_ids`, `part_ids` or
@@ -457,7 +465,7 @@ role per control style, and `YYYY-MM-DD` dates.
   status, `service_record::CompletedWork`, `schedule::LinkMode` and `search::SearchScope`. A
   filter on a column never takes one of these.
   `docs/adr/0004-typed-vocabularies.md` records why.
-- **Migrations**: new migrations go after `m20261118_000002_parts_search`; the
+- **Migrations**: new migrations go after `m20261119_000001_part_life_cycle_checks`; the
   `new-migration` skill has the templates. Use `Expr::cust()` for expressions inside builder queries; raw
   `execute_unprepared` only where no builder form exists (FTS5 DDL, cross-table copies).
 - **Migrations are not transactional on SQLite** (sea-orm-migration only wraps Postgres), so write

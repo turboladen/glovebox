@@ -11,6 +11,7 @@ mod m20261115_000001_vocabulary_values;
 mod m20261117_000001_work_item_quotes;
 mod m20261118_000001_part_contents;
 mod m20261118_000002_parts_search;
+mod m20261119_000001_part_life_cycle_checks;
 mod schema;
 
 pub struct Migrator;
@@ -30,6 +31,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261117_000001_work_item_quotes::Migration),
             Box::new(m20261118_000001_part_contents::Migration),
             Box::new(m20261118_000002_parts_search::Migration),
+            Box::new(m20261119_000001_part_life_cycle_checks::Migration),
         ]
     }
 }

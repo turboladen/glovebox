@@ -765,7 +765,8 @@ pub async fn mark_ordered<C: ConnectionTrait + TransactionTrait>(
 /// # Errors
 /// `NotFound` for a need or part that is not the vehicle's; `BadRequest` for
 /// a returned part, a part linked to another need, a need that already has
-/// another part, or an arrival date given for an installed or replaced part.
+/// another part, or an arrival date given for an installed or replaced part;
+/// `Invalid` for an arrival date before the part's purchase date.
 pub async fn link_part<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -803,8 +804,9 @@ pub async fn link_part<C: ConnectionTrait + TransactionTrait>(
     let supplier = need.supplied_by.is_none().then_some(found.supplied_by);
     let found = match received_on {
         Some(date) => {
+            let purchase_date = found.purchase_date;
             let mut active: part::ActiveModel = found.into();
-            active.received_on = Set(Some(date));
+            super::part::set_received(&mut active, Some(date), purchase_date)?;
             active.updated_at = Set(super::now());
             active.update(&txn).await?
         }
@@ -934,8 +936,9 @@ async fn set_received<C: ConnectionTrait + TransactionTrait>(
     let found = linked_part(&txn, &need).await?;
     require_unfitted(&found, action)?;
     let on = date_for(&found)?;
+    let purchase_date = found.purchase_date;
     let mut active: part::ActiveModel = found.into();
-    active.received_on = Set(on);
+    super::part::set_received(&mut active, on, purchase_date)?;
     active.updated_at = Set(super::now());
     let found = super::part::view(&txn, active.update(&txn).await?).await?;
     txn.commit().await?;
@@ -948,7 +951,8 @@ async fn set_received<C: ConnectionTrait + TransactionTrait>(
 /// # Errors
 /// `NotFound` for a need that is not the vehicle's; `BadRequest` when it has
 /// no part, its part is installed or replaced, or `on` is `None` and the
-/// part already has a date.
+/// part already has a date; `Invalid` for a date before the part's purchase
+/// date.
 pub async fn mark_received<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -2222,9 +2226,12 @@ mod tests {
             Some(18_000),
         )
         .await;
-        mark_ordered(db, vehicle_id, n.id, OrderDetails::default())
-            .await
-            .unwrap();
+        // Bought before every arrival date the tests give.
+        let details = OrderDetails {
+            purchase_date: Some(date("2026-11-01")),
+            ..OrderDetails::default()
+        };
+        mark_ordered(db, vehicle_id, n.id, details).await.unwrap();
         (require(db, vehicle_id, n.id).await.unwrap(), o)
     }
 
@@ -2736,7 +2743,12 @@ mod tests {
         return_part(&txn, vehicle_id, n.id, input).await.unwrap();
         let correcting = tokio::spawn(async move {
             let input = crate::inputs::part::UpdatePart {
-                status: Some(PartStatus::Installed),
+                fitting: crate::inputs::part::Fitting::from_fields(
+                    Some(PartStatus::Installed),
+                    crate::inputs::part::InstallPatch::default(),
+                    crate::inputs::part::ReplacePatch::default(),
+                )
+                .unwrap(),
                 ..Default::default()
             };
             crate::services::part::update(&second, vehicle_id, part_id, input).await
@@ -2803,14 +2815,14 @@ mod tests {
         let (vehicle_id, job_id) = seed_job(&db).await;
         let n = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
         let p = new_part(&db, vehicle_id, "Pads").await;
-        part::ActiveModel {
-            id: Unchanged(p.id),
-            status: Set(PartStatus::Returned),
-            ..Default::default()
+        let mut returned: part::ActiveModel = p.clone().into();
+        crate::services::part::PartState::Returned {
+            on: date("2026-11-06"),
+            reason: "Wrong size".into(),
+            need_id: None,
         }
-        .update(&db)
-        .await
-        .unwrap();
+        .write(&mut returned);
+        returned.update(&db).await.unwrap();
         let err = link_part(&db, vehicle_id, n.id, p.id, None)
             .await
             .unwrap_err();
@@ -2835,6 +2847,34 @@ mod tests {
         let linked = link_part(&db, vehicle_id, m.id, q.id, None).await.unwrap();
         assert_eq!(linked.part.part.received_on, None);
         assert_eq!(linked.stage, Stage::Ordered);
+    }
+
+    #[tokio::test]
+    async fn a_need_part_is_never_received_before_it_was_bought() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let (n, _) = ordered_need(&db, vehicle_id, job_id).await;
+        let err = mark_received(&db, vehicle_id, n.id, Some(date("2026-10-31")))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "received_on: is before the purchase date 2026-11-01; correct the purchase date first \
+             if it is wrong"
+        );
+        let part = new_part(&db, vehicle_id, "Pads").await;
+        let mut dated: part::ActiveModel = part.into();
+        dated.purchase_date = Set(Some(date("2026-11-01")));
+        let part = dated.update(&db).await.unwrap();
+        let other = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
+        let err = link_part(&db, vehicle_id, other.id, part.id, Some(date("2026-10-31")))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "received_on: is before the purchase date 2026-11-01; correct the purchase date first \
+             if it is wrong"
+        );
     }
 
     #[tokio::test]
@@ -3263,7 +3303,12 @@ mod tests {
             vehicle_id,
             part_id,
             crate::inputs::part::UpdatePart {
-                status: Some(status),
+                fitting: crate::inputs::part::Fitting::from_fields(
+                    Some(status),
+                    crate::inputs::part::InstallPatch::default(),
+                    crate::inputs::part::ReplacePatch::default(),
+                )
+                .unwrap(),
                 ..Default::default()
             },
         )

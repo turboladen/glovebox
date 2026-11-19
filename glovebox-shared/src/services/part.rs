@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use chrono::NaiveDate;
 use sea_orm::{sea_query::Expr, *};
 use serde::Serialize;
 
@@ -10,7 +11,9 @@ use crate::{
         part_content, service_record,
     },
     error::{DomainError, DomainResult},
-    inputs::part::{NewPart, NewPartContent, PartFilter, UpdatePart},
+    inputs::part::{
+        Fitting, Install, InstallPatch, NewFitting, NewPart, NewPartContent, PartFilter, UpdatePart,
+    },
     services::service_record::CompletedWork,
 };
 
@@ -48,65 +51,250 @@ pub(crate) async fn mark_returned(
     need_id: i32,
 ) -> DomainResult<part::Model> {
     let mut active: part::ActiveModel = p.into();
-    active.status = Set(PartStatus::Returned);
-    active.returned_on = Set(Some(super::today()));
-    active.return_reason = Set(Some(reason));
-    active.returned_from_need_id = Set(Some(need_id));
+    PartState::Returned {
+        on: super::today(),
+        reason,
+        need_id: Some(need_id),
+    }
+    .write(&mut active);
     active.updated_at = Set(super::now());
     Ok(active.update(db).await?)
 }
 
-// `returned` is reachable only through the return action on a need, which
-// records the reason and unlinks the part in the same write.
-fn refuse_returned(status: PartStatus) -> DomainResult<()> {
-    if status == PartStatus::Returned {
-        return Err(DomainError::BadRequest(
-            "A part is marked returned by returning it from its need (return_part)".into(),
-        ));
-    }
-    Ok(())
+/// Where a part stands, with the details its status takes.
+// Every write of the status, install, replacement and return columns of
+// `parts` goes through `PartState::write`, except two bulk writes that patch
+// the install details of fitted parts (`follow_service` and the done-another-way
+// release) and the `ON DELETE SET NULL` keys, which the CHECK constraints keep
+// inside a state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PartState {
+    Purchased,
+    Installed(Install),
+    Replaced {
+        install: Install,
+        on: Option<NaiveDate>,
+        odometer: Option<i32>,
+    },
+    /// `need_id` is cleared when the need is deleted.
+    Returned {
+        on: NaiveDate,
+        reason: String,
+        need_id: Option<i32>,
+    },
 }
 
-// A returned part may only go back to `purchased`.
-fn validate_status_change(existing: &part::Model, status: PartStatus) -> DomainResult<()> {
-    refuse_returned(status)?;
-    if is_returned(existing) && status != PartStatus::Purchased {
-        return Err(DomainError::BadRequest(format!(
-            "Part {} was returned; its status can only change back to purchased",
-            existing.id
-        )));
+impl PartState {
+    /// The state `p` holds.
+    ///
+    /// # Errors
+    /// `Internal`, naming the part, for a row whose columns no state holds.
+    pub(crate) fn of(p: &part::Model) -> DomainResult<Self> {
+        let install = Install {
+            service_id: p.installed_service_id,
+            date: p.installed_date,
+            odometer: p.installed_odometer,
+        };
+        let replaced = p.replaced_date.is_some() || p.replaced_odometer.is_some();
+        let returned = p.returned_on.is_some()
+            || p.return_reason.is_some()
+            || p.returned_from_need_id.is_some();
+        let state = match p.status {
+            PartStatus::Purchased if install.is_empty() && !replaced && !returned => {
+                Some(Self::Purchased)
+            }
+            PartStatus::Installed if !replaced && !returned => Some(Self::Installed(install)),
+            PartStatus::Replaced if !returned => Some(Self::Replaced {
+                install,
+                on: p.replaced_date,
+                odometer: p.replaced_odometer,
+            }),
+            PartStatus::Returned if install.is_empty() && !replaced => {
+                match (p.returned_on, &p.return_reason) {
+                    (Some(on), Some(reason)) => Some(Self::Returned {
+                        on,
+                        reason: reason.clone(),
+                        need_id: p.returned_from_need_id,
+                    }),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        state.ok_or_else(|| {
+            DomainError::Internal(format!(
+                "part {} is {} but its install, replacement or return details do not fit that \
+                 status",
+                p.id, p.status
+            ))
+        })
     }
-    Ok(())
-}
 
-// A returned part is not on the car, so it takes no install details unless the
-// same update makes it `purchased` again.
-fn validate_install_details(existing: &part::Model, input: &UpdatePart) -> DomainResult<()> {
-    let goes_back = input.status == Some(PartStatus::Purchased);
-    if is_returned(existing) && sets_install(input) && !goes_back {
-        return Err(DomainError::BadRequest(format!(
-            "Part {} was returned and cannot be given install details",
-            existing.id
-        )));
+    /// The state a new part starts in.
+    fn new(fitting: NewFitting) -> Self {
+        match fitting {
+            NewFitting::Purchased => Self::Purchased,
+            NewFitting::Installed(install) => Self::Installed(install),
+            NewFitting::Replaced(install) => Self::Replaced {
+                install,
+                on: None,
+                odometer: None,
+            },
+        }
     }
-    Ok(())
+
+    /// The install details of a fitted part, and `None` for one off the car.
+    fn install(&self) -> Option<Install> {
+        match self {
+            Self::Installed(install) | Self::Replaced { install, .. } => Some(*install),
+            Self::Purchased | Self::Returned { .. } => None,
+        }
+    }
+
+    fn status(&self) -> PartStatus {
+        match self {
+            Self::Purchased => PartStatus::Purchased,
+            Self::Installed(_) => PartStatus::Installed,
+            Self::Replaced { .. } => PartStatus::Replaced,
+            Self::Returned { .. } => PartStatus::Returned,
+        }
+    }
+
+    /// Sets the status and every install, replacement and return column of
+    /// `active` from this state.
+    pub(crate) fn write(self, active: &mut part::ActiveModel) {
+        active.status = Set(self.status());
+        let (install, (replaced_on, replaced_odometer), (returned_on, reason, need_id)) = match self
+        {
+            Self::Purchased => (Install::default(), (None, None), (None, None, None)),
+            Self::Installed(install) => (install, (None, None), (None, None, None)),
+            Self::Replaced {
+                install,
+                on,
+                odometer,
+            } => (install, (on, odometer), (None, None, None)),
+            Self::Returned {
+                on,
+                reason,
+                need_id,
+            } => (
+                Install::default(),
+                (None, None),
+                (Some(on), Some(reason), need_id),
+            ),
+        };
+        active.installed_service_id = Set(install.service_id);
+        active.installed_date = Set(install.date);
+        active.installed_odometer = Set(install.odometer);
+        active.replaced_date = Set(replaced_on);
+        active.replaced_odometer = Set(replaced_odometer);
+        active.returned_on = Set(returned_on);
+        active.return_reason = Set(reason);
+        active.returned_from_need_id = Set(need_id);
+    }
+
+    /// The state `change` moves `existing`, a part in this state, to. A part
+    /// that comes off the car also returns the date it reads as received.
+    ///
+    /// `supplied_by` and `purchase_date` are the values the part has once
+    /// the same correction is applied, and `received_on` is the arrival date
+    /// it sends.
+    fn apply(
+        self,
+        change: Fitting,
+        existing: &part::Model,
+        supplied_by: Supplier,
+        purchase_date: Option<NaiveDate>,
+        received_on: Option<Option<NaiveDate>>,
+    ) -> DomainResult<(Self, Option<NaiveDate>)> {
+        let id = existing.id;
+        let refused = |message: String| Err(DomainError::BadRequest(message));
+        // A fitted part's install details are the base a change patches.
+        let base = self.install().unwrap_or_default();
+        let next = match (self, change) {
+            (Self::Returned { .. } | Self::Purchased, Fitting::Purchased) => Self::Purchased,
+            (Self::Returned { .. }, Fitting::Installed(..) | Fitting::Replaced(..)) => {
+                return refused(format!(
+                    "Part {id} was returned; its status can only change back to purchased"
+                ));
+            }
+            (returned @ Self::Returned { .. }, Fitting::Keep(install, replace)) => {
+                if install.sets_any() || replace.sets_any() {
+                    return refused(format!(
+                        "Part {id} was returned and cannot be given install details"
+                    ));
+                }
+                returned
+            }
+            (Self::Purchased, Fitting::Keep(install, replace)) => {
+                if install.sets_any() || replace.sets_any() {
+                    return refused(format!(
+                        "Part {id} is purchased, so it takes no install or replacement details; \
+                         set its status to installed or replaced with them"
+                    ));
+                }
+                Self::Purchased
+            }
+            (Self::Installed(_), Fitting::Keep(_, replace)) if replace.sets_any() => {
+                return refused(format!(
+                    "Part {id} is installed, so it takes no replacement details; set its status \
+                     to replaced with them"
+                ));
+            }
+            (
+                Self::Purchased | Self::Installed(_),
+                Fitting::Installed(install, _) | Fitting::Keep(install, _),
+            ) => Self::Installed(base.patched(install)),
+            (Self::Purchased | Self::Installed(_), Fitting::Replaced(install, replace)) => {
+                Self::Replaced {
+                    install: base.patched(install),
+                    on: replace.date.flatten(),
+                    odometer: replace.odometer.flatten(),
+                }
+            }
+            (
+                Self::Replaced { on, odometer, .. },
+                Fitting::Keep(install, replace) | Fitting::Replaced(install, replace),
+            ) => Self::Replaced {
+                install: base.patched(install),
+                on: replace.date.unwrap_or(on),
+                odometer: replace.odometer.unwrap_or(odometer),
+            },
+            (Self::Replaced { on, odometer, .. }, Fitting::Installed(install, cleared)) => {
+                // Going back to installed says the part was never replaced, so
+                // the details of the replacement must be cleared with it.
+                // `cleared` holds no value but `Some(None)`.
+                if cleared.date.unwrap_or(on).is_some()
+                    || cleared.odometer.unwrap_or(odometer).is_some()
+                {
+                    return refused(format!(
+                        "Part {id} was replaced; clear its replacement date and odometer in the \
+                         same change to set it back to installed"
+                    ));
+                }
+                Self::Installed(base.patched(install))
+            }
+            (Self::Installed(_) | Self::Replaced { .. }, Fitting::Purchased) => {
+                let received = coming_off(existing, supplied_by, purchase_date, received_on)?;
+                return Ok((Self::Purchased, Some(received)));
+            }
+        };
+        Ok((next, None))
+    }
 }
 
 // A part set back to `purchased` from the car is one the owner holds: a part
 // the shop fitted never was, so saying it was not fitted is a correction to
-// the service or a deleted part. Install details would contradict the change,
-// so the same call takes none.
+// the service or a deleted part.
 //
-// Returns the date the part reads as received when it comes off the car, and
-// `None` when the update leaves it where it is.
-fn validate_coming_off(
+// Returns the date the part reads as received.
+fn coming_off(
     existing: &part::Model,
-    input: &UpdatePart,
-) -> DomainResult<Option<chrono::NaiveDate>> {
-    if input.status != Some(PartStatus::Purchased) || !was_fitted(existing) {
-        return Ok(None);
-    }
-    if input.supplied_by.unwrap_or(existing.supplied_by) == Supplier::Shop {
+    supplied_by: Supplier,
+    purchase_date: Option<NaiveDate>,
+    received_on: Option<Option<NaiveDate>>,
+) -> DomainResult<NaiveDate> {
+    if supplied_by == Supplier::Shop {
         // Dropping a replaced part from its service leaves it replaced, so
         // only deleting it applies.
         let instead = if existing.status == PartStatus::Installed {
@@ -120,14 +308,7 @@ fn validate_coming_off(
             existing.id
         )));
     }
-    if sets_install(input) || sets_replaced(input) {
-        return Err(DomainError::BadRequest(format!(
-            "Part {} cannot go back to purchased and be given install or replacement details at \
-             once",
-            existing.id
-        )));
-    }
-    if input.received_on == Some(None) {
+    if received_on == Some(None) {
         return Err(DomainError::BadRequest(format!(
             "Part {} goes back to purchased in the owner's hands, so its received date cannot be \
              cleared",
@@ -135,25 +316,36 @@ fn validate_coming_off(
         )));
     }
     // A part is never received before it was bought.
-    let installed = existing
-        .installed_date
-        .map(|d| Ord::max(d, existing.purchase_date.unwrap_or(d)));
-    Ok(Some(
-        existing
-            .received_on
-            .or(installed)
-            .unwrap_or_else(super::today),
-    ))
+    let not_before_purchase = |d: NaiveDate| Ord::max(d, purchase_date.unwrap_or(d));
+    Ok(existing
+        .received_on
+        .or(existing.installed_date.map(not_before_purchase))
+        .unwrap_or_else(|| not_before_purchase(super::today())))
 }
 
-fn sets_replaced(input: &UpdatePart) -> bool {
-    matches!(input.replaced_date, Some(Some(_))) || matches!(input.replaced_odometer, Some(Some(_)))
-}
-
-fn sets_install(input: &UpdatePart) -> bool {
-    matches!(input.installed_service_id, Some(Some(_)))
-        || matches!(input.installed_date, Some(Some(_)))
-        || matches!(input.installed_odometer, Some(Some(_)))
+/// Sets the date the part arrived to `on`.
+///
+/// # Errors
+/// `Invalid` for a date before `purchase_date`, the date the part has once
+/// the caller's write is applied.
+pub(crate) fn set_received(
+    active: &mut part::ActiveModel,
+    on: Option<NaiveDate>,
+    purchase_date: Option<NaiveDate>,
+) -> DomainResult<()> {
+    if let (Some(received), Some(bought)) = (on, purchase_date)
+        && received < bought
+    {
+        return Err(DomainError::invalid(
+            "received_on",
+            format!(
+                "is before the purchase date {bought}; correct the purchase date first if it is \
+                 wrong"
+            ),
+        ));
+    }
+    active.received_on = Set(on);
+    Ok(())
 }
 
 /// A part with the items inside it, when it was bought as a kit.
@@ -359,8 +551,8 @@ pub async fn get(db: &impl ConnectionTrait, vehicle_id: i32, id: i32) -> DomainR
 ///
 /// # Errors
 /// `NotFound` for a vehicle or an installing service that is not the
-/// vehicle's; `BadRequest` for the status `returned`; `Invalid` for a kit item
-/// with a blank name or a quantity below 1.
+/// vehicle's; `Invalid` for a kit item with a blank name or a quantity below
+/// 1, or a `received_on` before the purchase date.
 pub async fn create<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -377,14 +569,16 @@ async fn insert_part(
     validate_contents("contents", &input.contents)?;
     super::vehicle::require(db, vehicle_id).await?;
     let supplied_by = input.supplied_by.unwrap_or(Supplier::Owner);
-    if let Some(status) = input.status {
-        refuse_returned(status)?;
-    }
-    if let Some(service_id) = input.installed_service_id {
+    let state = PartState::new(input.fitting);
+    if let Some(Install {
+        service_id: Some(service_id),
+        ..
+    }) = state.install()
+    {
         super::service_record::require(db, vehicle_id, service_id).await?;
     }
 
-    let model = part::ActiveModel {
+    let mut model = part::ActiveModel {
         vehicle_id: Set(vehicle_id),
         name: Set(input.name),
         manufacturer: Set(input.manufacturer),
@@ -396,10 +590,6 @@ async fn insert_part(
         cost_currency: Set(input.cost_currency),
         manufacturer_url: Set(input.manufacturer_url),
         retailer_url: Set(input.retailer_url),
-        status: Set(input.status.unwrap_or(PartStatus::Purchased)),
-        installed_date: Set(input.installed_date),
-        installed_odometer: Set(input.installed_odometer),
-        installed_service_id: Set(input.installed_service_id),
         notes: Set(input.notes),
         location: Set(input.location),
         warranty_expires_on: Set(input.warranty_expires_on),
@@ -408,47 +598,33 @@ async fn insert_part(
         order_ref: Set(input.order_ref),
         ..Default::default()
     };
+    state.write(&mut model);
     let out = model.insert(db).await?;
     let contents = insert_contents(db, out.id, 0, input.contents).await?;
     Ok((out, contents))
 }
 
-/// Clears the service, date and odometer a part was installed with.
-fn clear_install(active: &mut part::ActiveModel) {
-    active.installed_service_id = Set(None);
-    active.installed_date = Set(None);
-    active.installed_odometer = Set(None);
-}
-
-/// Clears a part's install details and the date and odometer it was
-/// replaced at, and records it received on `received`, so its need reads
-/// received.
-fn clear_fitting(active: &mut part::ActiveModel, received: chrono::NaiveDate) {
-    clear_install(active);
-    active.replaced_date = Set(None);
-    active.replaced_odometer = Set(None);
-    active.received_on = Set(Some(received));
-}
-
 /// Corrects a part's fields, in one transaction.
 ///
 /// # Errors
-/// `NotFound` for a part or an installing service that is not the vehicle's;
-/// `BadRequest` for the status `returned`, which only `return_part` sets, for
-/// any status but `purchased` on a returned part, for install details on a
-/// returned part that the same update does not make `purchased`, and for each
-/// refusal of the change to `purchased` described below; `NotFound` for a kit
-/// item to remove that is not the part's; `Invalid` for an added kit item with
-/// a blank name or a quantity below 1.
+/// `NotFound` for a part or an installing service that is not the vehicle's,
+/// and for a kit item to remove that is not the part's; `Invalid` for an
+/// added kit item with a blank name or a quantity below 1, and for a
+/// `received_on` before the purchase date. `BadRequest` when `fitting` does
+/// not fit the part: a returned part only goes back to `purchased` and takes
+/// no details; a purchased part takes no install or replacement details and
+/// an installed one no replacement details while its status stays; a
+/// replaced part goes back to `installed` only when the same change clears
+/// its replacement date and odometer; and each refusal of the change to
+/// `purchased` described below.
 ///
 /// Removed kit items go first, and added ones follow the items that remain.
 ///
 /// Changing an installed or replaced part to `purchased` clears its install
 /// and replace details and, when the part has no received date, sets it to
-/// the install date, or to the purchase date when that is later, or to today
-/// when there is no install date. The change is refused for a part the shop
-/// supplied, when the same update sends install or replacement details, and
-/// when it clears the received date.
+/// the install date, or to today when there is no install date, and never to
+/// a day before the purchase date. The change is refused for a part the shop
+/// supplied and when it clears the received date.
 pub async fn update<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -470,21 +646,25 @@ async fn apply_update(
     validate_contents("add_contents", &input.add_contents)?;
     let existing = get(db, vehicle_id, id).await?;
 
-    if let Some(Some(service_id)) = input.installed_service_id {
+    if let Some(service_id) = input.fitting.service_id() {
         super::service_record::require(db, vehicle_id, service_id).await?;
     }
 
-    if let Some(status) = input.status {
-        validate_status_change(&existing, status)?;
-    }
-    validate_install_details(&existing, &input)?;
-    let shelved_on = validate_coming_off(&existing, &input)?;
+    let purchase_date = input.purchase_date.unwrap_or(existing.purchase_date);
+    let (state, shelved_on) = PartState::of(&existing)?.apply(
+        input.fitting,
+        &existing,
+        input.supplied_by.unwrap_or(existing.supplied_by),
+        purchase_date,
+        input.received_on,
+    )?;
+    let received_on = input
+        .received_on
+        .unwrap_or(shelved_on.or(existing.received_on));
 
-    let existing_returned = is_returned(&existing);
     let mut active: part::ActiveModel = existing.into();
-    if let Some(received) = shelved_on {
-        clear_fitting(&mut active, received);
-    }
+    state.write(&mut active);
+    set_received(&mut active, received_on, purchase_date)?;
 
     if let Some(v) = input.supplied_by {
         active.supplied_by = Set(v);
@@ -519,29 +699,6 @@ async fn apply_update(
     if let Some(v) = input.retailer_url {
         active.retailer_url = Set(v);
     }
-    if let Some(v) = input.status {
-        if existing_returned {
-            active.returned_on = Set(None);
-            active.return_reason = Set(None);
-            active.returned_from_need_id = Set(None);
-        }
-        active.status = Set(v);
-    }
-    if let Some(v) = input.installed_date {
-        active.installed_date = Set(v);
-    }
-    if let Some(v) = input.installed_odometer {
-        active.installed_odometer = Set(v);
-    }
-    if let Some(v) = input.installed_service_id {
-        active.installed_service_id = Set(v);
-    }
-    if let Some(v) = input.replaced_date {
-        active.replaced_date = Set(v);
-    }
-    if let Some(v) = input.replaced_odometer {
-        active.replaced_odometer = Set(v);
-    }
     if let Some(v) = input.notes {
         active.notes = Set(v);
     }
@@ -557,9 +714,6 @@ async fn apply_update(
     if let Some(v) = input.order_ref {
         active.order_ref = Set(v);
     }
-    if let Some(v) = input.received_on {
-        active.received_on = Set(v);
-    }
 
     active.updated_at = Set(super::now());
     let updated = active.update(db).await?;
@@ -568,27 +722,46 @@ async fn apply_update(
 }
 
 /// Marks a vehicle's part as installed by `record` on the record's date.
-/// `odometer` is written to `installed_odometer` as given, so `NotSet`
-/// keeps the reading the part already has. A part of another vehicle reads
-/// as nonexistent, and a `returned` part is refused with `BadRequest`.
+/// `odometer` patches `installed_odometer`, so `None` keeps the reading the
+/// part already has. A part another service installed and a later one
+/// replaced becomes installed again, with its replacement details cleared; a
+/// replaced part this record already installed stays replaced. A part of another vehicle reads as
+/// nonexistent, and a `returned` part is refused with `BadRequest`.
 pub(crate) async fn install(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     part_id: i32,
     record: &service_record::Model,
-    odometer: ActiveValue<Option<i32>>,
+    odometer: Option<Option<i32>>,
 ) -> DomainResult<()> {
     let existing = get(db, vehicle_id, part_id).await?;
-    if is_returned(&existing) {
+    let state = PartState::of(&existing)?;
+    if matches!(state, PartState::Returned { .. }) {
         return Err(DomainError::BadRequest(format!(
             "Part {part_id} was returned and cannot be installed"
         )));
     }
+    let install = state.install().unwrap_or_default().patched(InstallPatch {
+        service_id: Some(Some(record.id)),
+        date: Some(Some(record.service_date)),
+        odometer,
+    });
+    let fitted = match state {
+        // A later service took off a part this record put on, so the
+        // replacement stands.
+        PartState::Replaced {
+            install: before,
+            on,
+            odometer,
+        } if before.service_id == Some(record.id) => PartState::Replaced {
+            install,
+            on,
+            odometer,
+        },
+        _ => PartState::Installed(install),
+    };
     let mut active: part::ActiveModel = existing.into();
-    active.status = Set(PartStatus::Installed);
-    active.installed_service_id = Set(Some(record.id));
-    active.installed_date = Set(Some(record.service_date));
-    active.installed_odometer = odometer;
+    fitted.write(&mut active);
     active.updated_at = Set(super::now());
     active.update(db).await?;
     Ok(())
@@ -597,6 +770,8 @@ pub(crate) async fn install(
 /// Moves the install date of every part `record` installed to the record's
 /// date, and their install odometer to its mileage when it has one. A record
 /// with no mileage leaves each part's own reading.
+// A part that names its installing service is installed or replaced, which
+// both take install details, so the write needs no `PartState`.
 pub(crate) async fn follow_service(
     db: &impl ConnectionTrait,
     record: &service_record::Model,
@@ -632,6 +807,7 @@ pub(crate) async fn release_from_service(
         return Ok(());
     }
     if completed == CompletedWork::DoneAnotherWay {
+        // Clearing one install detail keeps every part in its state.
         part::Entity::update_many()
             .col_expr(part::Column::InstalledServiceId, Expr::value(None::<i32>))
             .col_expr(part::Column::UpdatedAt, Expr::value(super::now()))
@@ -659,12 +835,17 @@ pub(crate) async fn release_from_service(
             .await?;
     }
     for p in parts {
-        let revert = reverts(&p);
+        let next = match PartState::of(&p)? {
+            PartState::Installed(_) => PartState::Purchased,
+            PartState::Replaced { on, odometer, .. } => PartState::Replaced {
+                install: Install::default(),
+                on,
+                odometer,
+            },
+            other => other,
+        };
         let mut active: part::ActiveModel = p.into();
-        if revert {
-            active.status = Set(PartStatus::Purchased);
-        }
-        clear_install(&mut active);
+        next.write(&mut active);
         active.updated_at = Set(super::now());
         active.update(db).await?;
     }
@@ -699,7 +880,10 @@ mod tests {
     }
 
     use super::*;
-    use crate::test_support::{VehicleFixture, assert_empty, date, row_count, test_db};
+    use crate::{
+        inputs::part::ReplacePatch,
+        test_support::{VehicleFixture, assert_empty, date, row_count, test_db},
+    };
 
     async fn seed_vehicle(db: &impl ConnectionTrait) -> i32 {
         VehicleFixture::new().insert_id(db).await
@@ -718,6 +902,19 @@ mod tests {
         .id
     }
 
+    fn fitting(status: PartStatus) -> Fitting {
+        Fitting::from_fields(
+            Some(status),
+            InstallPatch::default(),
+            ReplacePatch::default(),
+        )
+        .unwrap()
+    }
+
+    fn install_patch(patch: InstallPatch) -> Fitting {
+        Fitting::Keep(patch, ReplacePatch::default())
+    }
+
     fn minimal_part(name: &str, installed_service_id: Option<i32>) -> NewPart {
         NewPart {
             name: name.into(),
@@ -730,10 +927,12 @@ mod tests {
             cost_currency: None,
             manufacturer_url: None,
             retailer_url: None,
-            status: None,
-            installed_date: None,
-            installed_odometer: None,
-            installed_service_id,
+            fitting: installed_service_id.map_or(NewFitting::Purchased, |id| {
+                NewFitting::Installed(Install {
+                    service_id: Some(id),
+                    ..Install::default()
+                })
+            }),
             notes: None,
             location: None,
             warranty_expires_on: None,
@@ -787,7 +986,7 @@ mod tests {
             vid,
             created.id,
             UpdatePart {
-                status: Some(PartStatus::Installed),
+                fitting: fitting(PartStatus::Installed),
                 ..Default::default()
             },
         )
@@ -826,7 +1025,7 @@ mod tests {
             vid,
             p.id,
             UpdatePart {
-                status: Some(PartStatus::Installed),
+                fitting: fitting(PartStatus::Installed),
                 ..Default::default()
             },
         )
@@ -841,7 +1040,10 @@ mod tests {
             vid,
             p.id,
             UpdatePart {
-                installed_service_id: Some(None),
+                fitting: install_patch(InstallPatch {
+                    service_id: Some(None),
+                    ..InstallPatch::default()
+                }),
                 ..Default::default()
             },
         )
@@ -883,7 +1085,10 @@ mod tests {
                 owner,
                 p.id,
                 UpdatePart {
-                    installed_service_id: Some(Some(foreign_svc)),
+                    fitting: install_patch(InstallPatch {
+                        service_id: Some(Some(foreign_svc)),
+                        ..InstallPatch::default()
+                    }),
                     ..Default::default()
                 },
             )
@@ -904,7 +1109,7 @@ mod tests {
             &db,
             vid,
             NewPart {
-                status: Some(PartStatus::Installed),
+                fitting: NewFitting::Installed(Install::default()),
                 ..minimal_part("A", None)
             },
         )
@@ -914,7 +1119,7 @@ mod tests {
             &db,
             vid,
             NewPart {
-                status: Some(PartStatus::Purchased),
+                fitting: NewFitting::Purchased,
                 ..minimal_part("B", None)
             },
         )
@@ -1259,7 +1464,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let p = seed_returned(&db, vid).await;
-        let err = install(&db, vid, p.id, &record, NotSet).await.unwrap_err();
+        let err = install(&db, vid, p.id, &record, None).await.unwrap_err();
         assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
         let after = get(&db, vid, p.id).await.unwrap();
         assert_eq!(after.status, PartStatus::Returned);
@@ -1312,47 +1517,25 @@ mod tests {
         .unwrap()
     }
 
-    #[tokio::test]
-    async fn returned_cannot_be_set_through_create_or_update() {
-        let db = test_db().await;
-        let vid = seed_vehicle(&db).await;
-        let err = create(
-            &db,
-            vid,
-            NewPart {
-                status: Some(PartStatus::Returned),
-                ..minimal_part("Rotors", None)
-            },
+    #[test]
+    fn returned_cannot_be_set_through_create_or_update() {
+        // The status is refused while the arguments are read, before any write.
+        let err =
+            NewFitting::from_fields(Some(PartStatus::Returned), Install::default()).unwrap_err();
+        assert!(
+            matches!(&err, DomainError::BadRequest(m) if m.contains("return_part")),
+            "{err:?}"
+        );
+        let err = Fitting::from_fields(
+            Some(PartStatus::Returned),
+            InstallPatch::default(),
+            ReplacePatch::default(),
         )
-        .await
         .unwrap_err();
         assert!(
             matches!(&err, DomainError::BadRequest(m) if m.contains("return_part")),
             "{err:?}"
         );
-        let p = create(&db, vid, minimal_part("Rotors", None))
-            .await
-            .unwrap();
-        let err = update(
-            &db,
-            vid,
-            p.id,
-            UpdatePart {
-                status: Some(PartStatus::Returned),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(
-            matches!(&err, DomainError::BadRequest(m) if m.contains("return_part")),
-            "{err:?}"
-        );
-        assert_eq!(
-            get(&db, vid, p.id).await.unwrap().status,
-            PartStatus::Purchased
-        );
-        assert_eq!(row_count::<part::Entity>(&db).await, 1);
     }
 
     #[tokio::test]
@@ -1360,17 +1543,13 @@ mod tests {
         let db = test_db().await;
         let vid = seed_vehicle(&db).await;
         let p = seed_returned(&db, vid).await;
-        for status in [
-            PartStatus::Installed,
-            PartStatus::Replaced,
-            PartStatus::Returned,
-        ] {
+        for status in [PartStatus::Installed, PartStatus::Replaced] {
             let err = update(
                 &db,
                 vid,
                 p.id,
                 UpdatePart {
-                    status: Some(status),
+                    fitting: fitting(status),
                     ..Default::default()
                 },
             )
@@ -1399,7 +1578,7 @@ mod tests {
             vid,
             p.id,
             UpdatePart {
-                status: Some(PartStatus::Purchased),
+                fitting: fitting(PartStatus::Purchased),
                 ..Default::default()
             },
         )
@@ -1412,30 +1591,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn deleting_a_service_leaves_a_returned_part_returned() {
-        let db = test_db().await;
-        let vid = seed_vehicle(&db).await;
-        let sid = seed_service(&db, vid).await;
-        let p = seed_returned(&db, vid).await;
-        part::ActiveModel {
-            id: Unchanged(p.id),
-            installed_service_id: Set(Some(sid)),
-            ..Default::default()
-        }
-        .update(&db)
-        .await
-        .unwrap();
-        super::super::service_record::delete(&db, vid, sid, super::super::service_record::UNDO)
-            .await
-            .unwrap();
-        let after = get(&db, vid, p.id).await.unwrap();
-        assert_eq!(after.status, PartStatus::Returned);
-        assert_eq!(after.returned_on, Some(date("2026-11-06")));
-        assert_eq!(after.return_reason.as_deref(), Some("wrong size"));
-        assert_eq!(after.installed_service_id, None);
-    }
-
-    #[tokio::test]
     async fn a_returned_part_cannot_be_given_install_details() {
         let db = test_db().await;
         let vid = seed_vehicle(&db).await;
@@ -1443,15 +1598,24 @@ mod tests {
         let p = seed_returned(&db, vid).await;
         let attempts = [
             UpdatePart {
-                installed_service_id: Some(Some(sid)),
+                fitting: install_patch(InstallPatch {
+                    service_id: Some(Some(sid)),
+                    ..InstallPatch::default()
+                }),
                 ..Default::default()
             },
             UpdatePart {
-                installed_date: Some(Some(date("2026-11-10"))),
+                fitting: install_patch(InstallPatch {
+                    date: Some(Some(date("2026-11-10"))),
+                    ..InstallPatch::default()
+                }),
                 ..Default::default()
             },
             UpdatePart {
-                installed_odometer: Some(Some(50_000)),
+                fitting: install_patch(InstallPatch {
+                    odometer: Some(Some(50_000)),
+                    ..InstallPatch::default()
+                }),
                 ..Default::default()
             },
         ];
@@ -1464,7 +1628,10 @@ mod tests {
             vid,
             p.id,
             UpdatePart {
-                installed_date: Some(None),
+                fitting: install_patch(InstallPatch {
+                    date: Some(None),
+                    ..InstallPatch::default()
+                }),
                 ..Default::default()
             },
         )
@@ -1478,10 +1645,12 @@ mod tests {
             db,
             vid,
             NewPart {
-                status: Some(PartStatus::Installed),
-                installed_date: Some(date("2024-01-01")),
-                installed_odometer: Some(40_000),
-                ..minimal_part("Brake pads", Some(sid))
+                fitting: NewFitting::Installed(Install {
+                    service_id: Some(sid),
+                    date: Some(date("2024-01-01")),
+                    odometer: Some(40_000),
+                }),
+                ..minimal_part("Brake pads", None)
             },
         )
         .await
@@ -1490,7 +1659,7 @@ mod tests {
 
     fn to_purchased() -> UpdatePart {
         UpdatePart {
-            status: Some(PartStatus::Purchased),
+            fitting: fitting(PartStatus::Purchased),
             ..Default::default()
         }
     }
@@ -1529,9 +1698,13 @@ mod tests {
             vid,
             p.id,
             UpdatePart {
-                status: Some(PartStatus::Replaced),
-                replaced_date: Some(Some(date("2025-01-01"))),
-                replaced_odometer: Some(Some(50_000)),
+                fitting: Fitting::Replaced(
+                    InstallPatch::default(),
+                    ReplacePatch {
+                        date: Some(Some(date("2025-01-01"))),
+                        odometer: Some(Some(50_000)),
+                    },
+                ),
                 ..Default::default()
             },
         )
@@ -1548,21 +1721,74 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_purchased_part_set_to_purchased_keeps_its_fields() {
+    async fn a_purchased_part_takes_no_install_or_replacement_details() {
         let db = test_db().await;
         let vid = seed_vehicle(&db).await;
-        let p = create(
+        let p = create(&db, vid, minimal_part("Wiper", None)).await.unwrap();
+        let attempts = [
+            install_patch(InstallPatch {
+                date: Some(Some(date("2024-01-01"))),
+                ..InstallPatch::default()
+            }),
+            Fitting::Keep(
+                InstallPatch::default(),
+                ReplacePatch {
+                    odometer: Some(Some(9_000)),
+                    ..ReplacePatch::default()
+                },
+            ),
+        ];
+        for attempt in attempts {
+            let err = update(
+                &db,
+                vid,
+                p.id,
+                UpdatePart {
+                    fitting: attempt,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "Part {} is purchased, so it takes no install or replacement details; set its \
+                     status to installed or replaced with them",
+                    p.id
+                )
+            );
+        }
+        let after = get(&db, vid, p.id).await.unwrap();
+        assert_eq!(PartState::of(&after).unwrap(), PartState::Purchased);
+
+        // Clearing a detail the part does not hold changes nothing.
+        let cleared = update(
             &db,
             vid,
-            NewPart {
-                installed_date: Some(date("2024-01-01")),
-                ..minimal_part("Wiper", None)
+            p.id,
+            UpdatePart {
+                fitting: install_patch(InstallPatch {
+                    date: Some(None),
+                    ..InstallPatch::default()
+                }),
+                ..Default::default()
             },
         )
         .await
         .unwrap();
-        let updated = update(&db, vid, p.id, to_purchased()).await.unwrap();
-        assert_eq!(updated.installed_date, Some(date("2024-01-01")));
+        assert_eq!(cleared.status, PartStatus::Purchased);
+
+        // A new part with install details names its status.
+        let err = NewFitting::from_fields(
+            None,
+            Install {
+                date: Some(date("2024-01-01")),
+                ..Install::default()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
     }
 
     #[tokio::test]
@@ -1572,24 +1798,38 @@ mod tests {
         let sid = seed_service(&db, vid).await;
         let p = seed_installed(&db, vid, sid).await;
 
-        let attempts = [
-            UpdatePart {
-                installed_odometer: Some(Some(41_000)),
-                ..to_purchased()
-            },
-            UpdatePart {
-                replaced_date: Some(Some(date("2025-01-01"))),
-                ..to_purchased()
-            },
+        for (install, replace) in [
+            (
+                InstallPatch {
+                    odometer: Some(Some(41_000)),
+                    ..InstallPatch::default()
+                },
+                ReplacePatch::default(),
+            ),
+            (
+                InstallPatch::default(),
+                ReplacePatch {
+                    date: Some(Some(date("2025-01-01"))),
+                    ..ReplacePatch::default()
+                },
+            ),
+        ] {
+            let err =
+                Fitting::from_fields(Some(PartStatus::Purchased), install, replace).unwrap_err();
+            assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
+        }
+        let err = update(
+            &db,
+            vid,
+            p.id,
             UpdatePart {
                 received_on: Some(None),
                 ..to_purchased()
             },
-        ];
-        for attempt in attempts {
-            let err = update(&db, vid, p.id, attempt).await.unwrap_err();
-            assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
-        }
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
         let after = get(&db, vid, p.id).await.unwrap();
         assert_eq!(after.status, PartStatus::Installed);
         assert_eq!(after.installed_odometer, Some(40_000));
@@ -1613,7 +1853,6 @@ mod tests {
             &db,
             vid,
             NewPart {
-                status: Some(PartStatus::Installed),
                 ..minimal_part("Wiper", Some(sid))
             },
         )
@@ -1640,7 +1879,6 @@ mod tests {
             &db,
             vid,
             NewPart {
-                status: Some(PartStatus::Installed),
                 ..minimal_part("Bulb", Some(sid))
             },
         )
@@ -1654,10 +1892,13 @@ mod tests {
             &db,
             vid,
             NewPart {
-                status: Some(PartStatus::Installed),
-                installed_date: Some(date("2024-01-01")),
+                fitting: NewFitting::Installed(Install {
+                    service_id: Some(sid),
+                    date: Some(date("2024-01-01")),
+                    odometer: None,
+                }),
                 purchase_date: Some(date("2024-03-01")),
-                ..minimal_part("Fuse", Some(sid))
+                ..minimal_part("Fuse", None)
             },
         )
         .await
@@ -1677,8 +1918,15 @@ mod tests {
                 vid,
                 NewPart {
                     supplied_by: Some(Supplier::Shop),
-                    status: Some(status),
-                    ..minimal_part("Wiper blades", Some(sid))
+                    fitting: NewFitting::from_fields(
+                        Some(status),
+                        Install {
+                            service_id: Some(sid),
+                            ..Install::default()
+                        },
+                    )
+                    .unwrap(),
+                    ..minimal_part("Wiper blades", None)
                 },
             )
             .await
@@ -1734,5 +1982,353 @@ mod tests {
         })
         .await;
         assert!(results.iter().all(Result::is_ok), "{results:?}");
+    }
+
+    async fn refit(
+        db: &DatabaseConnection,
+        vid: i32,
+        id: i32,
+        fitting: Fitting,
+    ) -> DomainResult<part::Model> {
+        update(
+            db,
+            vid,
+            id,
+            UpdatePart {
+                fitting,
+                ..Default::default()
+            },
+        )
+        .await
+    }
+
+    fn replace(
+        date_sent: Option<Option<chrono::NaiveDate>>,
+        odometer: Option<Option<i32>>,
+    ) -> ReplacePatch {
+        ReplacePatch {
+            date: date_sent,
+            odometer,
+        }
+    }
+
+    #[tokio::test]
+    async fn each_state_reads_back_as_written() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let sid = seed_service(&db, vid).await;
+        let install = Install {
+            service_id: Some(sid),
+            date: Some(date("2024-01-01")),
+            odometer: Some(40_000),
+        };
+        let need_part = create(&db, vid, minimal_part("Pads", None)).await.unwrap();
+        for state in [
+            PartState::Purchased,
+            PartState::Installed(install),
+            PartState::Installed(Install::default()),
+            PartState::Replaced {
+                install,
+                on: Some(date("2025-01-01")),
+                odometer: Some(50_000),
+            },
+            PartState::Replaced {
+                install: Install::default(),
+                on: None,
+                odometer: None,
+            },
+            PartState::Returned {
+                on: date("2026-11-06"),
+                reason: "wrong size".into(),
+                need_id: None,
+            },
+        ] {
+            let mut active: part::ActiveModel = need_part.clone().into();
+            state.clone().write(&mut active);
+            let stored = active.update(&db).await.unwrap();
+            assert_eq!(PartState::of(&stored).unwrap(), state);
+            // The reply keeps the flat keys.
+            let json = serde_json::to_value(view(&db, stored).await.unwrap()).unwrap();
+            for key in [
+                "status",
+                "installed_service_id",
+                "installed_date",
+                "replaced_date",
+                "returned_on",
+                "return_reason",
+            ] {
+                assert!(json.get(key).is_some(), "{key} in {json}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_row_no_state_fits_reads_as_an_internal_error() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let p = create(&db, vid, minimal_part("Pads", None)).await.unwrap();
+        let unreadable = [
+            part::Model {
+                installed_date: Some(date("2024-01-01")),
+                ..p.clone()
+            },
+            part::Model {
+                status: PartStatus::Installed,
+                replaced_odometer: Some(1),
+                ..p.clone()
+            },
+            part::Model {
+                status: PartStatus::Returned,
+                returned_on: Some(date("2024-01-01")),
+                ..p.clone()
+            },
+            part::Model {
+                return_reason: Some("wrong".into()),
+                ..p.clone()
+            },
+        ];
+        for row in unreadable {
+            let err = PartState::of(&row).unwrap_err();
+            assert!(
+                matches!(&err, DomainError::Internal(m) if m.starts_with(&format!("part {} is", p.id))),
+                "{err:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_installed_part_takes_replacement_details_only_as_replaced() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let sid = seed_service(&db, vid).await;
+        let p = seed_installed(&db, vid, sid).await;
+        let err = refit(
+            &db,
+            vid,
+            p.id,
+            Fitting::Keep(
+                InstallPatch::default(),
+                replace(Some(Some(date("2025-01-01"))), None),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "Part {} is installed, so it takes no replacement details; set its status to \
+                 replaced with them",
+                p.id
+            )
+        );
+        let err = Fitting::from_fields(
+            Some(PartStatus::Installed),
+            InstallPatch::default(),
+            replace(None, Some(Some(50_000))),
+        )
+        .unwrap_err();
+        assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
+
+        let replaced = refit(
+            &db,
+            vid,
+            p.id,
+            Fitting::Replaced(
+                InstallPatch::default(),
+                replace(Some(Some(date("2025-01-01"))), None),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            PartState::of(&replaced).unwrap(),
+            PartState::Replaced {
+                install: Install {
+                    service_id: Some(sid),
+                    date: Some(date("2024-01-01")),
+                    odometer: Some(40_000),
+                },
+                on: Some(date("2025-01-01")),
+                odometer: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_replaced_part_goes_back_to_installed_only_with_its_replacement_cleared() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let sid = seed_service(&db, vid).await;
+        let p = seed_installed(&db, vid, sid).await;
+        refit(
+            &db,
+            vid,
+            p.id,
+            Fitting::Replaced(
+                InstallPatch::default(),
+                replace(Some(Some(date("2025-01-01"))), Some(Some(50_000))),
+            ),
+        )
+        .await
+        .unwrap();
+        let to_installed = |replace_sent| {
+            Fitting::from_fields(
+                Some(PartStatus::Installed),
+                InstallPatch::default(),
+                replace_sent,
+            )
+            .unwrap()
+        };
+        for half in [
+            replace(None, None),
+            replace(Some(None), None),
+            replace(None, Some(None)),
+        ] {
+            let err = refit(&db, vid, p.id, to_installed(half)).await.unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "Part {} was replaced; clear its replacement date and odometer in the same \
+                     change to set it back to installed",
+                    p.id
+                )
+            );
+        }
+        let back = refit(
+            &db,
+            vid,
+            p.id,
+            to_installed(replace(Some(None), Some(None))),
+        )
+        .await
+        .unwrap();
+        assert_eq!(back.status, PartStatus::Installed);
+        assert_eq!((back.replaced_date, back.replaced_odometer), (None, None));
+        assert_eq!(back.installed_service_id, Some(sid));
+    }
+
+    #[tokio::test]
+    async fn a_service_installing_a_replaced_part_clears_its_replacement() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let first = seed_service(&db, vid).await;
+        let p = seed_replaced(&db, vid, first).await;
+        let second = service_by_id(&db, seed_service(&db, vid).await).await;
+        install(&db, vid, p.id, &second, None).await.unwrap();
+        let after = get(&db, vid, p.id).await.unwrap();
+        assert_eq!(
+            PartState::of(&after).unwrap(),
+            PartState::Installed(Install {
+                service_id: Some(second.id),
+                date: Some(date("2024-01-01")),
+                odometer: Some(40_000),
+            }),
+            "the stored odometer is kept"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_service_that_installed_a_replaced_part_leaves_it_replaced() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let sid = seed_service(&db, vid).await;
+        let p = seed_replaced(&db, vid, sid).await;
+        let record = service_by_id(&db, sid).await;
+        install(&db, vid, p.id, &record, None).await.unwrap();
+        let after = get(&db, vid, p.id).await.unwrap();
+        assert_eq!(
+            PartState::of(&after).unwrap(),
+            PartState::Replaced {
+                install: Install {
+                    service_id: Some(sid),
+                    date: Some(date("2024-01-01")),
+                    odometer: Some(40_000),
+                },
+                on: Some(date("2025-01-01")),
+                odometer: None,
+            }
+        );
+    }
+
+    async fn service_by_id(db: &DatabaseConnection, id: i32) -> service_record::Model {
+        service_record::Entity::find_by_id(id)
+            .one(db)
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    // A part `sid` installed that a later service replaced on 2025-01-01.
+    async fn seed_replaced(db: &DatabaseConnection, vid: i32, sid: i32) -> part::Model {
+        let p = seed_installed(db, vid, sid).await;
+        refit(
+            db,
+            vid,
+            p.id,
+            Fitting::Replaced(
+                InstallPatch::default(),
+                replace(Some(Some(date("2025-01-01"))), None),
+            ),
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_part_is_never_received_before_it_was_bought() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let p = create(
+            &db,
+            vid,
+            NewPart {
+                purchase_date: Some(date("2026-11-05")),
+                ..minimal_part("Rotors", None)
+            },
+        )
+        .await
+        .unwrap();
+        let early = UpdatePart {
+            received_on: Some(Some(date("2026-11-04"))),
+            ..Default::default()
+        };
+        let err = update(&db, vid, p.id, early).await.unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "received_on: is before the purchase date 2026-11-05; correct the purchase date first \
+             if it is wrong"
+        );
+        update(
+            &db,
+            vid,
+            p.id,
+            UpdatePart {
+                received_on: Some(Some(date("2026-11-05"))),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        // A later purchase date is refused against the stored arrival.
+        let err = update(
+            &db,
+            vid,
+            p.id,
+            UpdatePart {
+                purchase_date: Some(Some(date("2026-11-06"))),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "received_on: is before the purchase date 2026-11-06; correct the purchase date first \
+             if it is wrong"
+        );
+        assert_eq!(
+            get(&db, vid, p.id).await.unwrap().purchase_date,
+            Some(date("2026-11-05"))
+        );
     }
 }

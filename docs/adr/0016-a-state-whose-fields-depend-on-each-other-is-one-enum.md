@@ -73,17 +73,18 @@ Neither a constraint on one row nor an enum built from one row can state them.
 
 The areas convert in this order, one pull request each:
 
-1. **A part's life cycle.** The state is purchased (with an optional received date), installed
-   (with its service, date and odometer, each optional, because `delete_service` keeps a part
-   fitted another way and the `ON DELETE SET NULL` key on `installed_service_id` clears the
-   service), replaced (with the install details and the replace date and odometer) or returned
-   (with its date, its reason and the need while that need exists). The command replaces the
-   status, install and replace fields of `correct_part`. It retires the validators and clearing
-   functions named above, and it refuses a `received_on` before `purchase_date`, which no write
-   checks now. Its CHECK constraints: install columns only while installed or replaced, replace
-   columns only while replaced, `returned_on` and `return_reason` exactly while returned,
-   `returned_from_need_id` only while returned (its `ON DELETE SET NULL` key clears it when the
-   need is deleted), and `received_on` not before `purchase_date`.
+1. **A part's life cycle.** The state is purchased, installed (with its service, date and odometer,
+   each optional, because `delete_service` keeps a part fitted another way and the `ON DELETE SET
+   NULL` key on `installed_service_id` clears the service), replaced (with the install details and
+   the replace date and odometer) or returned (with its date, its reason and the need while that
+   need exists). `received_on` stays a column of its own, because an installed or returned part
+   keeps the date it arrived and a need's stage reads it. The command replaces the status, install
+   and replace fields of `correct_part`. It retires the validators and clearing functions named
+   above, and it refuses a `received_on` before `purchase_date`, which no write checks now. Its
+   CHECK constraints: install columns only while installed or replaced, replace columns only while
+   replaced, `returned_on` and `return_reason` exactly while returned, `returned_from_need_id` only
+   while returned (its `ON DELETE SET NULL` key clears it when the need is deleted), and
+   `received_on` not before `purchase_date`.
 2. **A need's decision.** The state is undecided, shop-supplied (with an optional reason) or
    chosen (with the option, the date and an optional reason). An option's rejection and its kept
    choice each become one optional pair. This retires `holds_reason`, the resent-reason exemption

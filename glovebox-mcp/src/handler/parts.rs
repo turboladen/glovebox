@@ -57,12 +57,13 @@ impl GloveboxMcp {
                        to mark a part `replaced` or to link it to the service that installed it. \
                        Status `returned` cannot be set here (a return is made with \
                        `return_part`); setting a returned part back to `purchased` is how a \
-                       mistaken return is undone, and it clears the return details. `order_ref` \
-                       and `received_on` correct the order number and arrival date. For a kit, \
-                       `add_contents` adds items after the ones it holds and `remove_contents` \
-                       removes items by the `id` every part reply shows in `contents`; items not \
-                       named stay. To remove a part that should never have been recorded, use \
-                       `delete_part`."
+                       mistaken return is undone, and it clears the return details. Install \
+                       details go with `installed` or `replaced` and replacement details with \
+                       `replaced`, as `status` describes. `order_ref` and `received_on` correct \
+                       the order number and arrival date. For a kit, `add_contents` adds items \
+                       after the ones it holds and `remove_contents` removes items by the `id` \
+                       every part reply shows in `contents`; items not named stay. To remove a \
+                       part that should never have been recorded, use `delete_part`."
     )]
     async fn correct_part(
         &self,

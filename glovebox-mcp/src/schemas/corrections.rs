@@ -15,7 +15,7 @@ use glovebox_shared::{
     error::DomainResult,
     inputs::{
         incident::{NewFollowup, UpdateIncident},
-        part::UpdatePart,
+        part::{Fitting, InstallPatch, ReplacePatch, UpdatePart},
         schedule::{NewScheduleItem, UpdateScheduleItem},
         service_record::UpdateServiceRecord,
         vehicle::{NewVehicle, UpdateVehicle},
@@ -463,7 +463,12 @@ pub struct CorrectPartInput {
     /// the need's quantity beside it.
     pub name: Option<String>,
     /// `purchased`, `installed` or `replaced`. A return is made on the need,
-    /// not here; a returned part can only be set back to `purchased`.
+    /// not here; a returned part can only be set back to `purchased`. With
+    /// no status, install details are refused for a purchased part, and
+    /// replacement details for any part but a replaced one. `installed` takes
+    /// no replacement details, and setting a replaced part to `installed`
+    /// needs `replaced_date: null` and `replaced_odometer: null` for the ones
+    /// it holds.
     /// Setting an installed or replaced part to `purchased` clears its
     /// install and replacement details. A part with no received date gets its
     /// install date, or today when it has none; a `received_on` date sent in
@@ -596,7 +601,18 @@ impl CorrectPartInput {
             self.part_id,
             UpdatePart {
                 name: self.name,
-                status: self.status,
+                fitting: Fitting::from_fields(
+                    self.status,
+                    InstallPatch {
+                        service_id: self.installed_service_id,
+                        date: dates::parse_date_change("installed_date", self.installed_date)?,
+                        odometer: self.installed_odometer,
+                    },
+                    ReplacePatch {
+                        date: dates::parse_date_change("replaced_date", self.replaced_date)?,
+                        odometer: self.replaced_odometer,
+                    },
+                )?,
                 supplied_by: self.supplied_by,
                 manufacturer: self.manufacturer,
                 part_number: self.part_number,
@@ -604,11 +620,6 @@ impl CorrectPartInput {
                 purchase_date: dates::parse_date_change("purchase_date", self.purchase_date)?,
                 cost_cents: self.cost_cents,
                 retailer_url: self.retailer_url,
-                installed_date: dates::parse_date_change("installed_date", self.installed_date)?,
-                installed_odometer: self.installed_odometer,
-                installed_service_id: self.installed_service_id,
-                replaced_date: dates::parse_date_change("replaced_date", self.replaced_date)?,
-                replaced_odometer: self.replaced_odometer,
                 notes: self.notes,
                 location: self.location,
                 warranty_expires_on: dates::parse_date_change(

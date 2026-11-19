@@ -189,7 +189,7 @@ instead.
    Foreign keys are enforced: `db::connect` turns them on.
 4. **Always index FK columns** with a named index: `idx_{table}_{column}`.
 5. **Column types**: `.text()` for strings (SQLite TEXT), `.integer()` for numbers.
-6. **No builder form**: CHECK constraints, partial-index predicates the builder cannot express, and
+6. **No builder form**: CHECK constraints on a new table, partial-index predicates the builder cannot express, and
    FTS5 tables with their triggers go through `manager.get_connection().execute_unprepared()`.
    For FTS5, list `FtsSpec`s and call `schema::create_fts` (and `drop_fts` in `down()`), as
    `m20261118_000002_parts_search.rs` does, then fill each index from stored rows with
@@ -221,3 +221,8 @@ To add a foreign key to an existing column, follow `add_foreign_keys` in
 `docs/adr/0003-foreign-keys-by-editing-the-table-definition.md` first. SQLite does not check the
 stored rows against a key added this way, so clear the dangling ids before the edit and confirm
 the key with `pragma_foreign_key_list` after it.
+
+To add a CHECK constraint to an existing table, list each rule as a `schema::Check` and call
+`schema::add_checks` in a transaction that holds the write lock, as
+`m20261119_000001_part_life_cycle_checks.rs` does. It refuses while a stored row breaks a rule,
+naming the rows, and skips a constraint the table already has.

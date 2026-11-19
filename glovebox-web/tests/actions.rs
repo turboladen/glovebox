@@ -4,15 +4,13 @@ use axum::{Router, body::Body, http::StatusCode};
 use common::{app, db, page, post_to, request};
 use glovebox_shared::{
     db::DatabaseConnection,
-    entities::{
-        job_need::Approach,
-        need_option::Fitment,
-        part::{PartStatus, Supplier},
-    },
+    entities::{job_need::Approach, need_option::Fitment, part::Supplier},
     inputs::{
         appointment::NewAppointment,
         need::{NewNeed, NewOption, OrderDetails, UpdateNeed},
-        part::{NewPart, NewPartContent, PartFilter, UpdatePart},
+        part::{
+            Fitting, InstallPatch, NewPart, NewPartContent, PartFilter, ReplacePatch, UpdatePart,
+        },
         todo::NewTodo,
         work_item::NewWorkItem,
     },
@@ -730,7 +728,7 @@ async fn a_stale_received_post_keeps_the_date_already_stored() {
     w.order_it().await;
     let back = w.page_path();
     // The page was loaded before the part was marked received elsewhere.
-    need::mark_received(&w.db, w.vehicle, w.need, Some(date("2026-11-10")))
+    need::mark_received(&w.db, w.vehicle, w.need, Some(date("2026-11-13")))
         .await
         .unwrap();
 
@@ -739,7 +737,7 @@ async fn a_stale_received_post_keeps_the_date_already_stored() {
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(body.contains("Not saved"), "{body}");
     let refusal = format!(
-        "Need {}&#39;s part was already received on 2026-11-10",
+        "Need {}&#39;s part was already received on 2026-11-13",
         w.need
     );
     assert!(body.contains(&refusal), "{body}");
@@ -750,7 +748,7 @@ async fn a_stale_received_post_keeps_the_date_already_stored() {
         .part_id
         .unwrap();
     let stored = part::get(&w.db, w.vehicle, part_id).await.unwrap();
-    assert_eq!(stored.received_on, Some(date("2026-11-10")));
+    assert_eq!(stored.received_on, Some(date("2026-11-13")));
 }
 
 #[tokio::test]
@@ -772,7 +770,7 @@ async fn a_stale_arrival_post_for_an_installed_part_is_refused() {
         w.vehicle,
         part_id,
         UpdatePart {
-            status: Some(PartStatus::Installed),
+            fitting: Fitting::Installed(InstallPatch::default(), ReplacePatch::default()),
             ..Default::default()
         },
     )
@@ -864,7 +862,7 @@ async fn a_replaced_part_reads_installed_and_offers_no_return() {
         w.vehicle,
         part_id,
         UpdatePart {
-            status: Some(PartStatus::Replaced),
+            fitting: Fitting::Replaced(InstallPatch::default(), ReplacePatch::default()),
             ..Default::default()
         },
     )

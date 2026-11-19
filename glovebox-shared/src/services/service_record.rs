@@ -16,7 +16,7 @@ use crate::{
     },
     error::{DomainError, DomainResult},
     inputs::{
-        part::NewPart,
+        part::{Install, NewFitting, NewPart},
         service_record::{NewLineItem, NewServiceRecord, UpdateServiceRecord},
     },
     services::{
@@ -642,9 +642,9 @@ async fn install_parts(
     new_parts: Vec<NewPart>,
 ) -> DomainResult<()> {
     // A record with no odometer reading leaves each part's own reading.
-    let odometer = record.mileage.map_or(NotSet, |miles| Set(Some(miles)));
+    let odometer = record.mileage.map(Some);
     for part_id in existing_ids {
-        part_svc::install(txn, vehicle_id, part_id, record, odometer.clone()).await?;
+        part_svc::install(txn, vehicle_id, part_id, record, odometer).await?;
     }
 
     for (n, mut new_part) in (1..).zip(new_parts) {
@@ -656,10 +656,11 @@ async fn install_parts(
             }
             other => other,
         })?;
-        new_part.status = Some(PartStatus::Installed);
-        new_part.installed_service_id = Some(record.id);
-        new_part.installed_date = Some(record.service_date);
-        new_part.installed_odometer = record.mileage;
+        new_part.fitting = NewFitting::Installed(Install {
+            service_id: Some(record.id),
+            date: Some(record.service_date),
+            odometer: record.mileage,
+        });
         let need_id = new_part.need_id;
         let created = part_svc::create(txn, vehicle_id, new_part).await?;
         if let Some(need_id) = need_id {
@@ -1033,7 +1034,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     part_svc::release_from_service(&txn, removal.parts, choice).await?;
     if let Some(new_part_ids) = input.part_ids {
         for &part_id in &new_part_ids {
-            part_svc::install(&txn, vehicle_id, part_id, &record, Set(record.mileage)).await?;
+            part_svc::install(&txn, vehicle_id, part_id, &record, record.mileage.map(Some)).await?;
         }
     }
     if !parts_listed && (record.service_date != date_before || record.mileage != mileage_before) {
@@ -2767,16 +2768,19 @@ mod tests {
     async fn installing_a_returned_part_through_a_service_is_refused() {
         let db = test_db().await;
         let vid = seed_vehicle(&db).await;
-        let returned = part::ActiveModel {
+        let mut returned = part::ActiveModel {
             vehicle_id: Set(vid),
             name: Set("Rotors".into()),
-            status: Set(PartStatus::Returned),
             supplied_by: Set(Supplier::Owner),
             ..Default::default()
+        };
+        part_svc::PartState::Returned {
+            on: date("2026-11-06"),
+            reason: "Wrong size".into(),
+            need_id: None,
         }
-        .insert(&db)
-        .await
-        .unwrap();
+        .write(&mut returned);
+        let returned = returned.insert(&db).await.unwrap();
         let err = create(
             &db,
             vid,
@@ -3583,6 +3587,65 @@ mod tests {
             cleared.parts[0].part.installed_date,
             Some(date("2024-03-10"))
         );
+
+        // So does listing the part again on the service with no mileage.
+        let part_id = cleared.parts[0].part.id;
+        let relisted = update(
+            &db,
+            v,
+            svc.record.id,
+            UpdateServiceRecord {
+                part_ids: Some(vec![part_id]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(relisted.parts[0].part.installed_odometer, Some(50_500));
+    }
+
+    #[tokio::test]
+    async fn listing_a_part_a_later_service_replaced_keeps_its_replacement() {
+        use crate::inputs::part::{Fitting, InstallPatch, ReplacePatch, UpdatePart};
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let svc = create(
+            &db,
+            v,
+            NewServiceRecord {
+                service_date: date("2024-03-01"),
+                parts: Some(vec![inline_part("Pads", Supplier::Shop)]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let part_id = svc.parts[0].part.id;
+        let replaced = ReplacePatch {
+            date: Some(Some(date("2025-06-01"))),
+            odometer: Some(Some(60_000)),
+        };
+        let off = UpdatePart {
+            fitting: Fitting::Replaced(InstallPatch::default(), replaced),
+            ..Default::default()
+        };
+        part_svc::update(&db, v, part_id, off).await.unwrap();
+
+        let corrected = update(
+            &db,
+            v,
+            svc.record.id,
+            UpdateServiceRecord {
+                part_ids: Some(vec![part_id]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let part = &corrected.parts[0].part;
+        assert_eq!(part.status, PartStatus::Replaced);
+        assert_eq!(part.replaced_date, Some(date("2025-06-01")));
+        assert_eq!(part.replaced_odometer, Some(60_000));
     }
 
     #[tokio::test]

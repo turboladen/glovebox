@@ -184,6 +184,127 @@ pub(super) async fn scalar<T: sea_orm::TryGetable>(
     row.try_get_by_index::<T>(0)
 }
 
+/// A rule one row of `table` must keep, added as the table constraint
+/// `CONSTRAINT "name" CHECK (holds)`.
+pub(super) struct Check {
+    pub table: &'static str,
+    pub name: &'static str,
+    pub holds: &'static str,
+}
+
+// The ids a refusal names for each broken rule, enough to find the rows.
+const IDS_SHOWN: usize = 10;
+
+/// Adds each check its table lacks by editing the table's stored definition
+/// on `txn`, a transaction holding the write lock. Triggers and indexes are
+/// rows of their own in `sqlite_schema`, so they are left as they are.
+///
+/// # Errors
+/// `DbErr::Migration`, with nothing changed, while a stored row breaks a
+/// check (the message names the table, the check, the count and the first
+/// ids), when a definition does not end in `)`, or when the soundness checks
+/// of [`edit_definitions`] differ afterwards.
+pub(super) async fn add_checks<C: ConnectionTrait>(
+    txn: &C,
+    what: &str,
+    checks: &[Check],
+) -> Result<(), DbErr> {
+    // SQLite does not test stored rows against a constraint added to the
+    // definition, so they are tested here. A CHECK fails only when its
+    // expression is false, which is exactly when `NOT (holds)` is true.
+    let mut broken = Vec::new();
+    for check in checks {
+        let ids: Vec<i64> = rows(
+            txn,
+            &format!(
+                "SELECT id FROM {} WHERE NOT ({}) ORDER BY id",
+                check.table, check.holds
+            ),
+        )
+        .await?
+        .iter()
+        .map(|row| row.try_get_by_index::<i64>(0))
+        .collect::<Result<_, _>>()?;
+        if !ids.is_empty() {
+            let shown: Vec<String> = ids.iter().take(IDS_SHOWN).map(i64::to_string).collect();
+            let more = if ids.len() > IDS_SHOWN { ", ..." } else { "" };
+            let (noun, verb) = if ids.len() == 1 {
+                ("row", "breaks")
+            } else {
+                ("rows", "break")
+            };
+            broken.push(format!(
+                "{} {noun} of {} {verb} {} (id {}{more})",
+                ids.len(),
+                check.table,
+                check.name,
+                shown.join(", ")
+            ));
+        }
+    }
+    if !broken.is_empty() {
+        return Err(DbErr::Migration(format!(
+            "{what} stopped, because these rows break a rule: {}. Correct them, then start again. \
+             Nothing was changed.",
+            broken.join("; ")
+        )));
+    }
+
+    let mut missing = Vec::new();
+    for check in checks {
+        if !has_check(txn, check).await? {
+            missing.push(check);
+        }
+    }
+    if missing.is_empty() {
+        return Ok(());
+    }
+    edit_definitions(txn, what, async |txn: &C| {
+        for check in &missing {
+            // The closing parenthesis of the definition is replaced by the
+            // constraint and a new one. A definition spelled another way
+            // matches nothing and is reported below.
+            txn.execute_unprepared(&format!(
+                "UPDATE sqlite_schema SET sql = rtrim(substr(rtrim(sql), 1, length(rtrim(sql)) - \
+                 1)) || ', CONSTRAINT \"{name}\" CHECK ({holds}) )' WHERE type = 'table' AND name \
+                 = '{table}' AND rtrim(sql) LIKE '%)'",
+                name = check.name,
+                holds = check.holds.replace('\'', "''"),
+                table = check.table,
+            ))
+            .await?;
+        }
+        Ok(true)
+    })
+    .await?;
+
+    let mut absent = Vec::new();
+    for check in missing {
+        if !has_check(txn, check).await? {
+            absent.push(format!("{}.{}", check.table, check.name));
+        }
+    }
+    if !absent.is_empty() {
+        return Err(DbErr::Migration(format!(
+            "{what} did not finish: no constraint was added for: [{}]. Nothing was changed.",
+            absent.join(", ")
+        )));
+    }
+    Ok(())
+}
+
+async fn has_check(db: &impl ConnectionTrait, check: &Check) -> Result<bool, DbErr> {
+    scalar::<bool>(
+        db,
+        &format!(
+            "SELECT count(*) > 0 FROM sqlite_schema WHERE type = 'table' AND name = '{}' AND \
+             instr(sql, 'CONSTRAINT \"{}\" ') > 0",
+            check.table, check.name
+        ),
+    )
+    .await
+}
+
 /// One external-content FTS5 index over `content`'s `cols`. Every column
 /// must exist on the content table, because FTS5 reads values back by rowid.
 pub(super) struct FtsSpec {
