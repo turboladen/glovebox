@@ -395,6 +395,10 @@ pub struct InlinePartInput {
     /// supplied that was not recorded beforehand. The part is linked to the
     /// need in the same write. The need must have no part yet.
     pub need_id: Option<i32>,
+    /// For a kit: each item inside it, with the number printed on that item's
+    /// own packaging, in the order the work sheet should list them. Omit for a
+    /// part that is not a kit.
+    pub contents: Option<Vec<PartContentInput>>,
 }
 
 impl InlinePartInput {
@@ -416,6 +420,7 @@ impl InlinePartInput {
             warranty_expires_miles: self.warranty_expires_miles,
             order_ref: self.order_ref,
             need_id: self.need_id,
+            contents: kit_contents(self.contents),
             ..Default::default()
         })
     }
@@ -487,6 +492,12 @@ pub struct PartContentInput {
     pub id: Option<i32>,
 }
 
+/// A kit's items as the shared service takes them; none when the argument
+/// is left out.
+fn kit_contents(items: Option<Vec<PartContentInput>>) -> Vec<NewPartContent> {
+    items.into_iter().flatten().map(Into::into).collect()
+}
+
 impl From<PartContentInput> for NewPartContent {
     fn from(item: PartContentInput) -> Self {
         NewPartContent {
@@ -527,12 +538,7 @@ impl RecordPartInput {
                 supplied_by: self.supplied_by,
                 order_ref: self.order_ref,
                 need_id: None,
-                contents: self
-                    .contents
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
+                contents: kit_contents(self.contents),
             },
         ))
     }

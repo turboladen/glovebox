@@ -51,8 +51,10 @@ and no contents, because the owner does not gather them.
 
 ## Consequences
 
-- Contents are entered after the purchase: by `correct_part` for a part that `mark_need_ordered`
-  created, or a part recorded on an invoice through `record_service`, until those calls take
-  contents themselves.
+- Claude enters contents with the purchase: `record_part`, `mark_need_ordered` and the inline
+  parts of `record_service` all take them, and `correct_part` adds and removes them later. The web
+  page's order form takes none, so a kit ordered there gets its items through Claude.
+- A kit the shop billed may hold contents too. The job and appointment pages show them, and the
+  work sheet leaves them off with the rest of the shop's line.
 - The ids in replies are what a caller sends to remove an item, so a part's replies carry them
   everywhere it appears.

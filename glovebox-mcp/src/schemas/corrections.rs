@@ -618,12 +618,7 @@ impl CorrectPartInput {
                 warranty_expires_miles: self.warranty_expires_miles,
                 order_ref: self.order_ref,
                 received_on: dates::parse_date_change("received_on", self.received_on)?,
-                add_contents: self
-                    .add_contents
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
+                add_contents: super::kit_contents(self.add_contents),
                 remove_contents: self.remove_contents.unwrap_or_default(),
                 ..Default::default()
             },

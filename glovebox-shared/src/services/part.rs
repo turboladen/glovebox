@@ -257,7 +257,7 @@ pub async fn correct<C: ConnectionTrait + TransactionTrait>(
 
 // The messages count items from 1, as the owner would, and name no argument
 // syntax, because they reach the web page as well as a tool result.
-fn validate_contents(field: &str, contents: &[NewPartContent]) -> DomainResult<()> {
+pub(crate) fn validate_contents(field: &str, contents: &[NewPartContent]) -> DomainResult<()> {
     for (n, item) in (1..).zip(contents) {
         if item.name.trim().is_empty() {
             return Err(DomainError::invalid(

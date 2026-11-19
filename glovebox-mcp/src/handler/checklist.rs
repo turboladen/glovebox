@@ -275,11 +275,11 @@ impl GloveboxMcp {
                        need as `ordered`. Fields left out take the option's values, the option's \
                        unit price times the need's quantity for the cost, or today for the date; \
                        pass what the order actually was (`order_ref`, `cost_cents`, \
-                       `purchase_date`, `seller`). The need needs a chosen option and a supplier \
-                       other than `shop`. For a part that is already recorded, use \
-                       `link_part_to_need` so it is not entered twice. A mistaken order is \
-                       corrected with `correct_part`, `link_part_to_need` or `return_part`. Next, \
-                       `mark_need_received` when it arrives."
+                       `purchase_date`, `seller`), and for a kit its `contents`. The need needs a \
+                       chosen option and a supplier other than `shop`. For a part that is already \
+                       recorded, use `link_part_to_need` so it is not entered twice. A mistaken \
+                       order is corrected with `correct_part`, `link_part_to_need` or \
+                       `return_part`. Next, `mark_need_received` when it arrives."
     )]
     async fn mark_need_ordered(
         &self,

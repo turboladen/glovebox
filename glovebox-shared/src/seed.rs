@@ -10,7 +10,7 @@ use crate::{
     inputs::{
         appointment::NewAppointment,
         need::{NewNeed, NewOption, OrderDetails, ReturnInput, UpdateOption},
-        part::{NewPartContent, UpdatePart},
+        part::NewPartContent,
         service_record::NewServiceRecord,
         todo::NewTodo,
         vehicle::NewVehicle,
@@ -134,6 +134,7 @@ async fn order_and_receive(
     need_id: i32,
     candidate: NewOption,
     order_ref: &str,
+    contents: Vec<NewPartContent>,
 ) -> DomainResult<()> {
     choose(
         db,
@@ -143,7 +144,7 @@ async fn order_and_receive(
         "Matches the original part.",
     )
     .await?;
-    order(db, vehicle_id, need_id, order_ref).await?;
+    order(db, vehicle_id, need_id, order_ref, contents).await?;
     need::mark_received(db, vehicle_id, need_id, None).await?;
     Ok(())
 }
@@ -153,9 +154,11 @@ async fn order(
     vehicle_id: i32,
     need_id: i32,
     order_ref: &str,
+    contents: Vec<NewPartContent>,
 ) -> DomainResult<()> {
     let details = OrderDetails {
         order_ref: Some(order_ref.into()),
+        contents,
         ..Default::default()
     };
     need::mark_ordered(db, vehicle_id, need_id, details).await?;
@@ -323,6 +326,8 @@ async fn brakes(db: &(impl ConnectionTrait + TransactionTrait), at: &Visit) -> D
     .await?;
 
     let front_rotors = self_need(db, v, brakes, "Front rotors").await?;
+    // The kit's number is the seller's, so the order lists what is in the box
+    // with the numbers printed on each item, and the work sheet prints them.
     order_and_receive(
         db,
         v,
@@ -334,35 +339,20 @@ async fn brakes(db: &(impl ConnectionTrait + TransactionTrait), at: &Visit) -> D
             16_200,
         ),
         "FCP-10458",
-    )
-    .await?;
-    // The kit's number is the seller's, so the work sheet lists what is in
-    // the box with the numbers printed on each item.
-    let kit = need::require(db, v, front_rotors)
-        .await?
-        .part_id
-        .ok_or_else(|| DomainError::Internal("the front rotors have no part".into()))?;
-    services::part::update(
-        db,
-        v,
-        kit,
-        UpdatePart {
-            add_contents: vec![
-                NewPartContent {
-                    name: "Front rotor".into(),
-                    manufacturer: Some("Zimmermann".into()),
-                    part_number: Some("100.3367.20".into()),
-                    quantity: Some(2),
-                },
-                NewPartContent {
-                    name: "Rotor retaining screw".into(),
-                    manufacturer: Some("Volkswagen".into()),
-                    part_number: Some("N 911 568 01".into()),
-                    quantity: Some(2),
-                },
-            ],
-            ..Default::default()
-        },
+        vec![
+            NewPartContent {
+                name: "Front rotor".into(),
+                manufacturer: Some("Zimmermann".into()),
+                part_number: Some("100.3367.20".into()),
+                quantity: Some(2),
+            },
+            NewPartContent {
+                name: "Rotor retaining screw".into(),
+                manufacturer: Some("Volkswagen".into()),
+                part_number: Some("N 911 568 01".into()),
+                quantity: Some(2),
+            },
+        ],
     )
     .await?;
 
@@ -394,6 +384,7 @@ async fn oil_change(
         filter,
         option("Oil filter cartridge", "Mann", "HU 7008 z", 1_299),
         "FCP-10459",
+        Vec::new(),
     )
     .await?;
     let filter_part = need::require(db, v, filter).await?.part_id;
@@ -430,7 +421,7 @@ async fn small_jobs(
         "Matches the original part.",
     )
     .await?;
-    order(db, v, cabin, "FCP-10460").await?;
+    order(db, v, cabin, "FCP-10460", Vec::new()).await?;
     let wipers = self_need(db, v, small, "Wiper blades").await?;
     choose(
         db,
@@ -448,7 +439,7 @@ async fn small_jobs(
         "Best reviews for this car.",
     )
     .await?;
-    order(db, v, wipers, "AMZ-77120").await?;
+    order(db, v, wipers, "AMZ-77120", Vec::new()).await?;
     need::return_part(
         db,
         v,

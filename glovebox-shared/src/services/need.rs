@@ -694,7 +694,8 @@ pub fn order_cost_cents(need: &job_need::Model, option: &need_option::Model) -> 
 /// # Errors
 /// `NotFound` for a need that is not the vehicle's; `BadRequest` when the
 /// need has no chosen option, already has a part or is supplied by the shop;
-/// `Invalid` for a negative cost.
+/// `Invalid` for a negative cost or for a kit item with a blank name or a
+/// quantity below 1.
 pub async fn mark_ordered<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -702,6 +703,7 @@ pub async fn mark_ordered<C: ConnectionTrait + TransactionTrait>(
     details: OrderDetails,
 ) -> DomainResult<NeedPurchase> {
     validate_price(details.cost_cents)?;
+    super::part::validate_contents("contents", &details.contents)?;
     let txn = super::begin_write(db).await?;
     // Only the first of two orders for one need links a part: the second
     // finds the part linked and its conditional write changes nothing.
@@ -747,6 +749,7 @@ pub async fn mark_ordered<C: ConnectionTrait + TransactionTrait>(
             retailer_url: option.url,
             supplied_by: Some(Supplier::Owner),
             order_ref: details.order_ref,
+            contents: details.contents,
             ..Default::default()
         },
     )
@@ -2290,6 +2293,7 @@ mod tests {
                 purchase_date: Some(date("2026-11-02")),
                 cost_cents: Some(8_500),
                 order_ref: Some("112-445".into()),
+                ..Default::default()
             },
         )
         .await
@@ -2323,6 +2327,66 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(bought.part.part.cost_cents, Some(13_800));
+    }
+
+    #[tokio::test]
+    async fn mark_ordered_records_a_kits_contents() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let (n, _) = chosen_need(&db, vehicle_id, job_id, "Oil change", None, None).await;
+        let item = |name: &str| crate::inputs::part::NewPartContent {
+            name: name.into(),
+            ..Default::default()
+        };
+
+        let bought = mark_ordered(
+            &db,
+            vehicle_id,
+            n.id,
+            OrderDetails {
+                contents: vec![item("Oil filter"), item("Drain plug")],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let names: Vec<&str> = bought
+            .part
+            .contents
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+        assert_eq!(names, ["Oil filter", "Drain plug"]);
+    }
+
+    #[tokio::test]
+    async fn a_bad_kit_item_refuses_the_order_and_leaves_the_need_unordered() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let (n, _) = chosen_need(&db, vehicle_id, job_id, "Oil change", None, None).await;
+
+        let before = stage(&n, None);
+        let err = mark_ordered(
+            &db,
+            vehicle_id,
+            n.id,
+            OrderDetails {
+                contents: vec![crate::inputs::part::NewPartContent {
+                    name: " ".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, DomainError::Invalid { .. }), "{err:?}");
+        assert_eq!(row_count::<part::Entity>(&db).await, 0);
+        let n = require(&db, vehicle_id, n.id).await.unwrap();
+        assert_eq!(n.part_id, None);
+        assert_eq!(stage(&n, None), before);
     }
 
     #[tokio::test]
