@@ -138,7 +138,10 @@ part), and `m20261118_000002_parts_search`, which adds the FTS5 indexes `fts_par
 `fts_part_contents` and fills them from the stored rows, and
 `m20261119_000001_part_life_cycle_checks`, which refuses to finish while a part's install,
 replacement or return details do not fit its status or it was received before it was bought, and
-then adds those rules to `parts` as CHECK constraints (`schema::add_checks`). They run on startup.
+then adds those rules to `parts` as CHECK constraints (`schema::add_checks`), and
+`m20261119_000002_need_decision_checks`, which does the same for a need's choice, date and reason
+and an option's rejection and kept choice, and makes the chosen option's key `ON DELETE
+RESTRICT`. They run on startup.
 
 **Test harness** (`test_support.rs`): `test_db()` is an in-memory SQLite database with migrations
 applied. It is compiled under `#[cfg(any(test, feature = "test-support"))]`; `glovebox-mcp` uses it
@@ -254,9 +257,12 @@ open when `need::counts_as_open` says so (an open stage on a planned job); every
 uses it. Rejecting or ruling out a chosen option keeps the need's reason and date on the option as
 `chosen_reason` and `chosen_on` until the option is chosen again, and `past_decisions` lists both
 kinds under `rejected`, so it still reports them. Choosing the option a need
-already has keeps `decided_on`. A need with no chosen option holds a `decision_reason` only while
-the shop supplies it: `need::update` refuses a new one otherwise (sending back the reason it already holds is no change) and clears the stored one when the
-supplier moves away from `shop`. Clearing a choice the need does not have keeps its reason. The web
+already has keeps `decided_on`. A need's chosen option, decision date and reason are written only
+through `need::Decision` (`supplied_by` stays its own column): a choice always carries its date, and a need with no chosen option holds
+a `decision_reason` only while the shop supplies it. `need::update` refuses a new reason otherwise,
+and moving the need off `shop` drops the stored one, even when the same call sends it back.
+Clearing a choice the need does not have keeps its reason. The database refuses to delete an
+option a need has chosen, so `delete_option` clears the choice first. The web
 decision form sends back the reason it showed, so with no option chosen an unedited reason counts
 as none sent, and the form goes through `need::update_with_choice` like `update_need`.
 `mark_ordered` claims the need with a conditional write as the first statement of its transaction,
@@ -465,7 +471,7 @@ role per control style, and `YYYY-MM-DD` dates.
   status, `service_record::CompletedWork`, `schedule::LinkMode` and `search::SearchScope`. A
   filter on a column never takes one of these.
   `docs/adr/0004-typed-vocabularies.md` records why.
-- **Migrations**: new migrations go after `m20261119_000001_part_life_cycle_checks`; the
+- **Migrations**: new migrations go after `m20261119_000002_need_decision_checks`; the
   `new-migration` skill has the templates. Use `Expr::cust()` for expressions inside builder queries; raw
   `execute_unprepared` only where no builder form exists (FTS5 DDL, cross-table copies).
 - **Migrations are not transactional on SQLite** (sea-orm-migration only wraps Postgres), so write

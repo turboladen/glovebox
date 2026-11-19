@@ -124,8 +124,9 @@ where
     E::find().count(db).await.unwrap()
 }
 
-/// Sets the stored decision date of a need, so a test can tell an untouched
-/// date from one stamped today. Panics if the write fails.
+/// Sets the stored decision date of a need that has a chosen option, so a
+/// test can tell an untouched date from one stamped today. Panics if the
+/// write fails, as it does for a need with no chosen option.
 pub async fn set_decided_on(db: &DatabaseConnection, need_id: i32, date: &str) {
     use sea_orm::{ColumnTrait, QueryFilter, sea_query::Expr};
 

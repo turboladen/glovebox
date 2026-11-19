@@ -119,7 +119,8 @@ fn validate_price(price_cents: Option<i32>) -> DomainResult<()> {
 /// chosen, and it is kept as history.
 #[must_use]
 pub fn is_rejected(option: &need_option::Model) -> bool {
-    option.rejected_reason.is_some() || option.rejected_on.is_some()
+    // The table keeps a rejection's reason and date together.
+    option.rejected_reason.is_some()
 }
 
 /// Returns true when `option` cannot be chosen: it has been rejected, or it
@@ -195,10 +196,10 @@ pub async fn add<C: ConnectionTrait + TransactionTrait>(
 
 /// Changes a need's name, quantity, supplier, approach or decision reason. A
 /// need with no chosen option holds a reason only while the shop supplies it,
-/// judged with the supplier this call leaves: such a reason is refused unless
-/// it is the one the need already holds, which changes nothing. Moving a need
-/// with no chosen option away from `shop` clears its stored reason, whether or
-/// not the call sends that reason back. Clearing a reason is always allowed.
+/// judged with the supplier this call leaves, so any other reason is refused.
+/// Moving a need with no chosen option away from `shop` clears its stored
+/// reason, whether or not the call sends that reason back. Clearing a reason
+/// is always allowed.
 ///
 /// # Errors
 /// `NotFound` for a need that is not the vehicle's; `Invalid` as for [`add`],
@@ -231,24 +232,16 @@ async fn apply_update(
         validate_quantity(quantity)?;
     }
     let supplied_by = input.supplied_by.unwrap_or(existing.supplied_by);
-    let can_hold = holds_reason(supplied_by, existing.chosen_option_id);
-    // A need may hold a reason it could not take now. Sending that reason
-    // back is no change, so the need stays editable.
-    let resent = matches!(
-        &input.decision_reason,
-        Some(Some(reason)) if existing.decision_reason.as_ref() == Some(reason)
-    );
-    if matches!(input.decision_reason, Some(Some(_))) && !resent && !can_hold {
-        return Err(reason_refused());
+    let mut decision = Decision::of(&existing)?.for_supplier(supplied_by);
+    match input.decision_reason {
+        None => {}
+        // A reason the need held before a supplier change in the same call
+        // is no reason sent, so it goes with the shop.
+        Some(Some(reason))
+            if decision == Decision::Undecided
+                && existing.decision_reason.as_deref().map(str::trim) == Some(reason.trim()) => {}
+        Some(reason) => decision = decision.with_reason(reason)?,
     }
-    // Only a real change of supplier clears, because the web supplier form
-    // resends the stored supplier with every approach edit. A resent reason
-    // clears the same way an absent one does.
-    let clears_reason = (input.decision_reason.is_none() || resent)
-        && existing.decision_reason.is_some()
-        && existing.supplied_by == Some(Supplier::Shop)
-        && supplied_by != existing.supplied_by
-        && existing.chosen_option_id.is_none();
     let mut active: job_need::ActiveModel = existing.into();
     if let Some(name) = input.name {
         active.name = Set(name);
@@ -256,29 +249,97 @@ async fn apply_update(
     if let Some(quantity) = input.quantity {
         active.quantity = Set(quantity);
     }
-    if let Some(value) = input.supplied_by {
-        active.supplied_by = Set(value);
-    }
+    active.supplied_by = Set(supplied_by);
     if let Some(value) = input.approach {
         active.approach = Set(value);
     }
-    if clears_reason {
-        // A reason with no chosen option explains why the shop supplies the
-        // need, so it goes when the shop stops supplying it, the way a
-        // cleared choice takes its reason along.
-        active.decision_reason = Set(None);
-    } else if let Some(value) = input.decision_reason {
-        active.decision_reason = Set(value);
-    }
+    decision.write(&mut active);
     active.updated_at = Set(super::now());
     Ok(active.update(db).await?)
 }
 
-// Whether a need with this supplier and chosen option may hold a decision
-// reason: one with a chosen option always may, and one with none only while
-// the shop supplies it.
-fn holds_reason(supplied_by: Option<Supplier>, chosen_option_id: Option<i32>) -> bool {
-    chosen_option_id.is_some() || supplied_by == Some(Supplier::Shop)
+/// What a need has decided. It is read from and written to the need's chosen
+/// option, decision date and decision reason, which hold together as the
+/// table's CHECK constraints require. `supplied_by` stays its own column: it
+/// only tells `ShopSupplies` from `Undecided` when no option is chosen.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Decision {
+    /// No option is chosen and the shop does not supply the need.
+    Undecided,
+    /// No option is chosen and the shop supplies the need, perhaps with the
+    /// reason it does.
+    ShopSupplies { reason: Option<String> },
+    /// An option was chosen on `on`, whoever supplies the need.
+    Chosen {
+        option_id: i32,
+        on: chrono::NaiveDate,
+        reason: Option<String>,
+    },
+}
+
+impl Decision {
+    /// Reads a stored need.
+    ///
+    /// # Errors
+    /// `Internal` for a row whose columns fit no decision.
+    pub(crate) fn of(need: &job_need::Model) -> DomainResult<Self> {
+        let reason = need.decision_reason.clone();
+        match (need.chosen_option_id, need.decided_on) {
+            (Some(option_id), Some(on)) => Ok(Self::Chosen {
+                option_id,
+                on,
+                reason,
+            }),
+            (None, None) if need.supplied_by == Some(Supplier::Shop) => {
+                Ok(Self::ShopSupplies { reason })
+            }
+            (None, None) if reason.is_none() => Ok(Self::Undecided),
+            _ => Err(DomainError::Internal(format!(
+                "need {} holds a choice, decision date or reason that do not fit together",
+                need.id
+            ))),
+        }
+    }
+
+    // The decision once `supplied_by` supplies the need. A choice stays; with
+    // none, the shop's reason goes when the shop stops supplying it.
+    fn for_supplier(self, supplied_by: Option<Supplier>) -> Self {
+        match self {
+            Self::Chosen { .. } => self,
+            _ if supplied_by != Some(Supplier::Shop) => Self::Undecided,
+            Self::ShopSupplies { reason } => Self::ShopSupplies { reason },
+            Self::Undecided => Self::ShopSupplies { reason: None },
+        }
+    }
+
+    fn with_reason(self, reason: Option<String>) -> DomainResult<Self> {
+        Ok(match self {
+            Self::Chosen { option_id, on, .. } => Self::Chosen {
+                option_id,
+                on,
+                reason,
+            },
+            Self::ShopSupplies { .. } => Self::ShopSupplies { reason },
+            Self::Undecided if reason.is_none() => Self::Undecided,
+            Self::Undecided => return Err(reason_refused()),
+        })
+    }
+
+    /// Sets the need's chosen option, decision date and decision reason.
+    pub(crate) fn write(self, active: &mut job_need::ActiveModel) {
+        let (option_id, on, reason) = match self {
+            Self::Undecided => (None, None, None),
+            Self::ShopSupplies { reason } => (None, None, reason),
+            Self::Chosen {
+                option_id,
+                on,
+                reason,
+            } => (Some(option_id), Some(on), reason),
+        };
+        active.chosen_option_id = Set(option_id);
+        active.decided_on = Set(on);
+        active.decision_reason = Set(reason);
+    }
 }
 
 fn reason_refused() -> DomainError {
@@ -338,53 +399,43 @@ pub async fn add_option<C: ConnectionTrait + TransactionTrait>(
     Ok(out)
 }
 
-// Clears the need's choice, the date it was made and the reason given for it
-// when the need has chosen `option_id`. The database nulls the reference when
-// an option row goes, but it cannot clear the other two.
-async fn clear_choice(db: &impl ConnectionTrait, need_id: i32, option_id: i32) -> DomainResult<()> {
-    job_need::Entity::update_many()
-        .col_expr(job_need::Column::ChosenOptionId, Expr::value(None::<i32>))
-        .col_expr(
-            job_need::Column::DecidedOn,
-            Expr::value(None::<chrono::NaiveDate>),
-        )
-        .col_expr(
-            job_need::Column::DecisionReason,
-            Expr::value(None::<String>),
-        )
-        .col_expr(job_need::Column::UpdatedAt, Expr::value(super::now()))
-        .filter(job_need::Column::Id.eq(need_id))
-        .filter(job_need::Column::ChosenOptionId.eq(option_id))
-        .exec(db)
-        .await?;
-    Ok(())
-}
+// The reason and date a need gave its choice, which an option keeps after
+// that choice is ruled out.
+type KeptChoice = (Option<String>, chrono::NaiveDate);
 
-// Copies the reason and date of the need's choice onto the option when the
-// need has chosen `option_id`, so clearing the choice keeps the owner's
-// reasoning for past decisions.
-async fn keep_choice_on_option(
+// Takes the choice off the need that has chosen `option` and returns the
+// reason and date it held. A need that chose another option, or none, is left
+// alone.
+async fn unchoose(
     db: &impl ConnectionTrait,
-    need_id: i32,
-    option_id: i32,
-) -> DomainResult<()> {
-    let Some(need) = job_need::Entity::find_by_id(need_id)
-        .filter(job_need::Column::ChosenOptionId.eq(option_id))
+    option: &need_option::Model,
+) -> DomainResult<Option<KeptChoice>> {
+    let Some(need) = job_need::Entity::find_by_id(option.need_id)
+        .filter(job_need::Column::ChosenOptionId.eq(option.id))
         .one(db)
         .await?
     else {
-        return Ok(());
+        return Ok(None);
     };
-    need_option::Entity::update_many()
-        .col_expr(
-            need_option::Column::ChosenReason,
-            Expr::value(need.decision_reason),
-        )
-        .col_expr(need_option::Column::ChosenOn, Expr::value(need.decided_on))
-        .filter(need_option::Column::Id.eq(option_id))
-        .exec(db)
-        .await?;
-    Ok(())
+    let Decision::Chosen { on, reason, .. } = Decision::of(&need)? else {
+        return Ok(None);
+    };
+    let supplied_by = need.supplied_by;
+    let mut active: job_need::ActiveModel = need.into();
+    Decision::Undecided
+        .for_supplier(supplied_by)
+        .write(&mut active);
+    active.updated_at = Set(super::now());
+    active.update(db).await?;
+    Ok(Some((reason, on)))
+}
+
+// Sets the choice an option keeps, or clears it for `None`. The table keeps a
+// kept reason only with its date.
+fn keep_choice(active: &mut need_option::ActiveModel, kept: Option<KeptChoice>) {
+    let (reason, on) = kept.map_or((None, None), |(reason, on)| (reason, Some(on)));
+    active.chosen_reason = Set(reason);
+    active.chosen_on = Set(on);
 }
 
 /// Changes an option. Rejecting or marking `does_not_fit` the option its need
@@ -420,7 +471,19 @@ pub async fn update_option<C: ConnectionTrait + TransactionTrait>(
             "must not be blank; clear the reason to un-reject the option",
         ));
     }
-    let mut active: need_option::ActiveModel = existing.clone().into();
+    // Ruling out the chosen option takes the choice off the need in the same
+    // transaction, so a need never keeps a choice that was just rejected.
+    let now_unusable = input.fitment == Some(Fitment::DoesNotFit)
+        || input.rejected_reason.as_ref().is_some_and(Option::is_some);
+    let kept = if now_unusable {
+        unchoose(db, &existing).await?
+    } else {
+        None
+    };
+    let mut active: need_option::ActiveModel = existing.into();
+    if kept.is_some() {
+        keep_choice(&mut active, kept);
+    }
     if let Some(value) = input.description {
         active.description = Set(value);
     }
@@ -450,17 +513,7 @@ pub async fn update_option<C: ConnectionTrait + TransactionTrait>(
         active.rejected_reason = Set(reason.clone());
     }
     active.updated_at = Set(super::now());
-
-    let now_unusable = input.fitment == Some(Fitment::DoesNotFit)
-        || input.rejected_reason.as_ref().is_some_and(Option::is_some);
-    // The option write and the choice clearing commit together, so a need
-    // never keeps a choice that was just rejected.
-    let mut updated = active.update(&txn).await?;
-    if now_unusable {
-        keep_choice_on_option(&txn, updated.need_id, updated.id).await?;
-        clear_choice(&txn, updated.need_id, updated.id).await?;
-        updated = require_option(&txn, vehicle_id, option_id).await?;
-    }
+    let updated = active.update(db).await?;
     txn.commit().await?;
     Ok(updated)
 }
@@ -475,9 +528,10 @@ pub async fn delete_option<C: ConnectionTrait + TransactionTrait>(
     vehicle_id: i32,
     option_id: i32,
 ) -> DomainResult<()> {
-    let option = require_option(db, vehicle_id, option_id).await?;
     let txn = super::begin_write(db).await?;
-    clear_choice(&txn, option.need_id, option.id).await?;
+    let option = require_option(&txn, vehicle_id, option_id).await?;
+    // The database refuses to delete an option a need has chosen.
+    unchoose(&txn, &option).await?;
     option.delete(&txn).await?;
     txn.commit().await?;
     Ok(())
@@ -539,68 +593,69 @@ pub async fn decide<C: ConnectionTrait + TransactionTrait>(
     let txn = super::begin_write(db).await?;
     let db = &txn;
     let need = require(db, vehicle_id, need_id).await?;
-    // The choice this call makes decides, never the stored one.
-    if reason.is_some() && !holds_reason(need.supplied_by, option_id) {
-        return Err(reason_refused());
-    }
-    let mut has_history = false;
-    if let Some(option_id) = option_id {
-        let option = need_option::Entity::find_by_id(option_id)
-            .filter(need_option::Column::NeedId.eq(need_id))
-            .one(db)
-            .await?
-            .ok_or_else(|| {
-                DomainError::BadRequest(format!(
-                    "Option {option_id} does not belong to need {need_id}"
-                ))
-            })?;
-        if option.fitment == Fitment::DoesNotFit {
-            return Err(DomainError::BadRequest(format!(
-                "Option {option_id} does not fit; change its fitment first"
-            )));
+    let current = Decision::of(&need)?;
+    let decision = match option_id {
+        None => Decision::Undecided
+            .for_supplier(need.supplied_by)
+            .with_reason(reason)?,
+        Some(option_id) => {
+            let option = choosable(db, need_id, option_id).await?;
+            if option.chosen_on.is_some() {
+                let mut kept: need_option::ActiveModel = option.into();
+                keep_choice(&mut kept, None);
+                kept.updated_at = Set(super::now());
+                kept.update(db).await?;
+            }
+            let on = match current {
+                Decision::Chosen {
+                    option_id: kept,
+                    on,
+                    ..
+                } if kept == option_id => on,
+                _ => crate::services::today(),
+            };
+            Decision::Chosen {
+                option_id,
+                on,
+                reason,
+            }
         }
-        if is_rejected(&option) {
-            return Err(DomainError::BadRequest(format!(
-                "Option {option_id} is rejected; clear its rejection first"
-            )));
-        }
-        has_history = option.chosen_reason.is_some() || option.chosen_on.is_some();
-    }
-    let decided_on = if option_id.is_some() && option_id == need.chosen_option_id {
-        need.decided_on
-    } else {
-        option_id.map(|_| crate::services::today())
     };
     let mut active: job_need::ActiveModel = need.into();
-    active.chosen_option_id = Set(option_id);
-    active.decision_reason = Set(reason);
-    active.decided_on = Set(decided_on);
+    decision.write(&mut active);
     active.updated_at = Set(super::now());
-    if let Some(option_id) = option_id.filter(|_| has_history) {
-        clear_choice_history(db, option_id).await?;
-    }
     let out = active.update(db).await?;
     txn.commit().await?;
     Ok(out)
 }
 
-// Clears the reason and date an option kept from an earlier choice, which
-// `keep_choice_on_option` copied there when that choice was ruled out.
-async fn clear_choice_history(db: &impl ConnectionTrait, option_id: i32) -> DomainResult<()> {
-    need_option::Entity::update_many()
-        .col_expr(
-            need_option::Column::ChosenReason,
-            Expr::value(None::<String>),
-        )
-        .col_expr(
-            need_option::Column::ChosenOn,
-            Expr::value(None::<chrono::NaiveDate>),
-        )
-        .col_expr(need_option::Column::UpdatedAt, Expr::value(super::now()))
-        .filter(need_option::Column::Id.eq(option_id))
-        .exec(db)
-        .await?;
-    Ok(())
+// Loads `option_id` when the need may choose it: it is the need's, it fits
+// and it is not rejected.
+async fn choosable(
+    db: &impl ConnectionTrait,
+    need_id: i32,
+    option_id: i32,
+) -> DomainResult<need_option::Model> {
+    let option = need_option::Entity::find_by_id(option_id)
+        .filter(need_option::Column::NeedId.eq(need_id))
+        .one(db)
+        .await?
+        .ok_or_else(|| {
+            DomainError::BadRequest(format!(
+                "Option {option_id} does not belong to need {need_id}"
+            ))
+        })?;
+    if option.fitment == Fitment::DoesNotFit {
+        return Err(DomainError::BadRequest(format!(
+            "Option {option_id} does not fit; change its fitment first"
+        )));
+    }
+    if is_rejected(&option) {
+        return Err(DomainError::BadRequest(format!(
+            "Option {option_id} is rejected; clear its rejection first"
+        )));
+    }
+    Ok(option)
 }
 
 /// A need with the part linked to it and the stage that results.
@@ -1121,54 +1176,6 @@ mod tests {
         }
     }
 
-    // A need with no choice and no shop supplier may hold a reason it could
-    // not take now. An edit that sends that reason back is no change, and a
-    // new reason is still refused.
-    #[tokio::test]
-    async fn a_reason_a_need_already_holds_can_be_sent_back() {
-        let db = test_db().await;
-        let (vehicle_id, job_id) = seed_job(&db).await;
-        let n = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
-        job_need::ActiveModel {
-            id: Unchanged(n.id),
-            decision_reason: Set(Some("old reason".into())),
-            ..Default::default()
-        }
-        .update(&db)
-        .await
-        .unwrap();
-
-        let resent = update(
-            &db,
-            vehicle_id,
-            n.id,
-            UpdateNeed {
-                name: Some("Front pads".into()),
-                decision_reason: Some(Some("old reason".into())),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            (resent.name.as_str(), resent.decision_reason.as_deref()),
-            ("Front pads", Some("old reason"))
-        );
-
-        let err = update(
-            &db,
-            vehicle_id,
-            n.id,
-            UpdateNeed {
-                decision_reason: Some(Some("new reason".into())),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, DomainError::Invalid { .. }), "{err:?}");
-    }
-
     // A shop need's reason goes when the shop stops supplying it, even when
     // the same call sends that reason back.
     #[tokio::test]
@@ -1204,7 +1211,7 @@ mod tests {
             n.id,
             UpdateNeed {
                 supplied_by: Some(Some(Supplier::Owner)),
-                decision_reason: Some(Some("They bleed it".into())),
+                decision_reason: Some(Some("They bleed it ".into())),
                 ..Default::default()
             },
         )
@@ -1515,7 +1522,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn deleting_a_chosen_option_nulls_the_reference_in_the_database() {
+    async fn the_database_refuses_to_delete_a_chosen_option() {
         let db = test_db().await;
         let (vehicle_id, job_id) = seed_job(&db).await;
         let n = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
@@ -1525,16 +1532,75 @@ mod tests {
         decide(&db, vehicle_id, n.id, Some(o.id), None)
             .await
             .unwrap();
-        need_option::Entity::delete_by_id(o.id)
+        let err = need_option::Entity::delete_by_id(o.id)
             .exec(&db)
             .await
-            .unwrap();
+            .unwrap_err();
+        assert!(err.to_string().contains("FOREIGN KEY"), "{err}");
         let after = job_need::Entity::find_by_id(n.id)
             .one(&db)
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(after.chosen_option_id, None);
+        assert_eq!(after.chosen_option_id, Some(o.id));
+    }
+
+    #[tokio::test]
+    async fn a_row_no_decision_fits_reads_as_an_internal_error() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let n = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
+        let unreadable = [
+            job_need::Model {
+                chosen_option_id: Some(1),
+                ..n.clone()
+            },
+            job_need::Model {
+                decided_on: Some(date("2026-11-01")),
+                ..n.clone()
+            },
+            job_need::Model {
+                supplied_by: Some(Supplier::Owner),
+                decision_reason: Some("cheap".into()),
+                ..n.clone()
+            },
+        ];
+        for row in unreadable {
+            let err = Decision::of(&row).unwrap_err();
+            assert!(matches!(err, DomainError::Internal(_)), "{err:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn each_decision_reads_back_as_written() {
+        let db = test_db().await;
+        let (vehicle_id, job_id) = seed_job(&db).await;
+        let n = shop_need(&db, vehicle_id, job_id).await;
+        let o = add_option(&db, vehicle_id, n.id, option("Pads"))
+            .await
+            .unwrap();
+        for decision in [
+            Decision::Undecided,
+            Decision::ShopSupplies { reason: None },
+            Decision::ShopSupplies {
+                reason: Some("OEM only".into()),
+            },
+            Decision::Chosen {
+                option_id: o.id,
+                on: date("2026-11-01"),
+                reason: Some("quiet".into()),
+            },
+        ] {
+            let supplier = match decision {
+                Decision::Undecided => None,
+                _ => Some(Supplier::Shop),
+            };
+            let mut active: job_need::ActiveModel = n.clone().into();
+            active.supplied_by = Set(supplier);
+            decision.clone().write(&mut active);
+            let stored = active.update(&db).await.unwrap();
+            assert_eq!(Decision::of(&stored).unwrap(), decision);
+        }
     }
 
     #[tokio::test]
@@ -1772,19 +1838,6 @@ mod tests {
         }
     }
 
-    // Writes a reason straight to a need with no chosen option, bypassing the
-    // rule that `update` enforces.
-    async fn store_reason(db: &DatabaseConnection, need_id: i32, text: &str) {
-        job_need::ActiveModel {
-            id: Unchanged(need_id),
-            decision_reason: Set(Some(text.into())),
-            ..Default::default()
-        }
-        .update(db)
-        .await
-        .unwrap();
-    }
-
     async fn shop_need(db: &DatabaseConnection, vehicle_id: i32, job_id: i32) -> job_need::Model {
         add(
             db,
@@ -1878,13 +1931,15 @@ mod tests {
     async fn clearing_a_reason_is_always_allowed() {
         let db = test_db().await;
         let (vehicle_id, job_id) = seed_job(&db).await;
-        let owner = add(&db, vehicle_id, job_id, need("Wipers")).await.unwrap();
-        store_reason(&db, owner.id, "legacy").await;
+        let shop = shop_need(&db, vehicle_id, job_id).await;
+        update(&db, vehicle_id, shop.id, reason("OEM only"))
+            .await
+            .unwrap();
         let clear = UpdateNeed {
             decision_reason: Some(None),
             ..Default::default()
         };
-        let cleared = update(&db, vehicle_id, owner.id, clear).await.unwrap();
+        let cleared = update(&db, vehicle_id, shop.id, clear).await.unwrap();
         assert_eq!(cleared.decision_reason, None);
     }
 
@@ -1943,39 +1998,29 @@ mod tests {
         assert_eq!(same.decision_reason.as_deref(), Some("OEM only"));
 
         // The web supplier form sends the supplier and the approach together.
-        let owner = add(
-            &db,
-            vehicle_id,
-            job_id,
-            NewNeed {
-                supplied_by: Some(Supplier::Owner),
-                ..need("Pads")
-            },
-        )
-        .await
-        .unwrap();
-        store_reason(&db, owner.id, "legacy").await;
         let edited = update(
             &db,
             vehicle_id,
-            owner.id,
+            shop.id,
             UpdateNeed {
-                supplied_by: Some(Some(Supplier::Owner)),
+                supplied_by: Some(Some(Supplier::Shop)),
                 approach: Some(Some(job_need::Approach::Upgrade)),
                 ..Default::default()
             },
         )
         .await
         .unwrap();
-        assert_eq!(edited.decision_reason.as_deref(), Some("legacy"));
+        assert_eq!(edited.decision_reason.as_deref(), Some("OEM only"));
     }
 
     #[tokio::test]
     async fn an_unrelated_edit_keeps_a_stored_reason() {
         let db = test_db().await;
         let (vehicle_id, job_id) = seed_job(&db).await;
-        let n = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
-        store_reason(&db, n.id, "legacy").await;
+        let n = shop_need(&db, vehicle_id, job_id).await;
+        update(&db, vehicle_id, n.id, reason("OEM only"))
+            .await
+            .unwrap();
         let renamed = update(
             &db,
             vehicle_id,
@@ -1989,14 +2034,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(renamed.name, "Front pads");
-        assert_eq!(renamed.decision_reason.as_deref(), Some("legacy"));
-
-        // Only leaving the shop clears, so deciding an undecided supplier
-        // keeps the stored reason.
-        let owner = update(&db, vehicle_id, n.id, supplier(Some(Supplier::Owner)))
-            .await
-            .unwrap();
-        assert_eq!(owner.decision_reason.as_deref(), Some("legacy"));
+        assert_eq!(renamed.decision_reason.as_deref(), Some("OEM only"));
     }
 
     // Leaving the shop clears its reason inside the transaction, and the
@@ -2052,20 +2090,6 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(kept.decision_reason.as_deref(), Some("OEM only"));
-    }
-
-    // An owner need that holds a reason and no choice is not refused when the
-    // choice it does not have is cleared.
-    #[tokio::test]
-    async fn clearing_no_choice_on_an_owner_need_changes_nothing() {
-        let db = test_db().await;
-        let (vehicle_id, job_id) = seed_job(&db).await;
-        let n = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
-        store_reason(&db, n.id, "legacy").await;
-        let same = update_with_choice(&db, vehicle_id, n.id, clear_choice_with(None), Some(None))
-            .await
-            .unwrap();
-        assert_eq!(same.decision_reason.as_deref(), Some("legacy"));
     }
 
     #[tokio::test]
