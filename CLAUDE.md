@@ -27,6 +27,7 @@ cargo test -p glovebox-shared test_name           # One service-level test
 cargo test -p glovebox-mcp --test rehearsal       # One MCP integration test file
 
 just ci                   # Everything CI runs: nightly fmt-check, layering, typos, clippy, docs, build, test
+                          # (often over 2 minutes: give the Bash call a 600000 ms timeout)
 just fmt                  # cargo +nightly fmt — rustfmt.toml uses nightly-only options (it also rewraps `///` text, so run it after editing docs); plain `cargo fmt` passes locally but CI's format job will fail
 just check-layering       # Layering gate only (scripts/check-layering.sh)
 just backup               # Copy the current environment's database to data/backups/ now (glovebox backup)
@@ -331,6 +332,8 @@ A page is a view of the shared library, and a future page follows the same rules
   (`AppState::today`, `common::today()` = 2026-11-13); date fixtures by `common::today()`, not
   `services::today()`. Askama escapes only `{{ }}` values, so assert literal template text as
   written (`I'm`) and rendered values escaped (`&#39;bogus&#39;`).
+  Need-row and linked-part tests live in `tests/actions.rs`; its `need_summary` helper reads only
+  the row's `<summary>`, so markup a test checks there must sit inside it.
 - **The home page leads with what is waiting.** Per vehicle it lists the maintenance that is
   overdue or due soon, every planned job on no appointment, the open recalls and the open
   incidents (`waiting::waiting`), then the appointments and to-dos. Those four lists hold no
@@ -447,6 +450,10 @@ role per control style, and `YYYY-MM-DD` dates.
 - **Migrations are not transactional on SQLite** (sea-orm-migration only wraps Postgres), so write
   them rerun-safe: `IF NOT EXISTS` DDL, `INSERT OR IGNORE` or `NOT EXISTS`-gated DML,
   pragma-guarded ALTERs.
+- **Migration tests** start from `schema::testing::migrated_to(N)` (the N migrations before the one
+  under test), insert rows, then run `Migrator::up`; `count` and `fts_integrity` live there too.
+- **A change to a shared builder in `migration/schema.rs`** must leave the SQL of migrations that
+  already ran unchanged: compare `sqlite_schema` from a fresh database with a backup's.
 - **SQLite cannot `DROP COLUMN` named in an FK clause**; use the table-rebuild pattern. To add a
   foreign key to an existing column, edit the stored table definition as
   `docs/adr/0003-foreign-keys-by-editing-the-table-definition.md` describes. For FTS5,
