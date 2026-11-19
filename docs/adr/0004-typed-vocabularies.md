@@ -59,7 +59,9 @@ it.
   rewritten and the stored value would differ from the one tools print.
 - **CHECK constraints on the columns.** They would stop a bad value at the write, but the only
   writers are these enums, and adding a constraint to an existing table means editing its stored
-  definition for all twelve columns.
+  definition for all twelve columns. ADR-0016 adds CHECK constraints where a table's columns
+  depend on each other, and a vocabulary column on a table whose stored definition it edits
+  can gain one then.
 
 ## Consequences
 
