@@ -2768,18 +2768,19 @@ mod tests {
     async fn installing_a_returned_part_through_a_service_is_refused() {
         let db = test_db().await;
         let vid = seed_vehicle(&db).await;
-        let returned = part::ActiveModel {
+        let mut returned = part::ActiveModel {
             vehicle_id: Set(vid),
             name: Set("Rotors".into()),
-            status: Set(PartStatus::Returned),
             supplied_by: Set(Supplier::Owner),
-            returned_on: Set(Some(date("2026-11-06"))),
-            return_reason: Set(Some("Wrong size".into())),
             ..Default::default()
+        };
+        part_svc::PartState::Returned {
+            on: date("2026-11-06"),
+            reason: "Wrong size".into(),
+            need_id: None,
         }
-        .insert(&db)
-        .await
-        .unwrap();
+        .write(&mut returned);
+        let returned = returned.insert(&db).await.unwrap();
         let err = create(
             &db,
             vid,

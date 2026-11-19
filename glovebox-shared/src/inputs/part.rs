@@ -67,9 +67,9 @@ pub enum Fitting {
     Keep(InstallPatch, ReplacePatch),
     /// Off the car, or back from a return.
     Purchased,
-    /// On the car. The replacement details the call clears go with it, which
-    /// a replaced part needs to become installed again.
-    Installed(InstallPatch, ReplaceClears),
+    /// On the car. The replacement details hold only the ones the change
+    /// clears, which a replaced part needs to become installed again.
+    Installed(InstallPatch, ReplacePatch),
     Replaced(InstallPatch, ReplacePatch),
 }
 
@@ -77,13 +77,6 @@ impl Default for Fitting {
     fn default() -> Self {
         Self::Keep(InstallPatch::default(), ReplacePatch::default())
     }
-}
-
-/// The replacement details a change sends as cleared.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ReplaceClears {
-    pub date: bool,
-    pub odometer: bool,
 }
 
 /// The message for a status of `returned`, which only returning a part from
@@ -122,22 +115,16 @@ impl Fitting {
                  them"
                     .into(),
             )),
-            Some(PartStatus::Installed) => Ok(Self::Installed(
-                install,
-                ReplaceClears {
-                    date: replace.date == Some(None),
-                    odometer: replace.odometer == Some(None),
-                },
-            )),
+            Some(PartStatus::Installed) => Ok(Self::Installed(install, replace)),
             Some(PartStatus::Replaced) => Ok(Self::Replaced(install, replace)),
         }
     }
 
-    /// The install details the change sends, if any.
-    pub(crate) fn install(&self) -> Option<&InstallPatch> {
+    /// The installing service the change names, if any.
+    pub(crate) fn service_id(&self) -> Option<i32> {
         match self {
             Self::Keep(install, _) | Self::Installed(install, _) | Self::Replaced(install, _) => {
-                Some(install)
+                install.service_id.flatten()
             }
             Self::Purchased => None,
         }

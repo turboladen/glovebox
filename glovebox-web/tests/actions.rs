@@ -9,8 +9,7 @@ use glovebox_shared::{
         appointment::NewAppointment,
         need::{NewNeed, NewOption, OrderDetails, UpdateNeed},
         part::{
-            Fitting, InstallPatch, NewPart, NewPartContent, PartFilter, ReplaceClears,
-            ReplacePatch, UpdatePart,
+            Fitting, InstallPatch, NewPart, NewPartContent, PartFilter, ReplacePatch, UpdatePart,
         },
         todo::NewTodo,
         work_item::NewWorkItem,
@@ -771,7 +770,7 @@ async fn a_stale_arrival_post_for_an_installed_part_is_refused() {
         w.vehicle,
         part_id,
         UpdatePart {
-            fitting: Fitting::Installed(InstallPatch::default(), ReplaceClears::default()),
+            fitting: Fitting::Installed(InstallPatch::default(), ReplacePatch::default()),
             ..Default::default()
         },
     )

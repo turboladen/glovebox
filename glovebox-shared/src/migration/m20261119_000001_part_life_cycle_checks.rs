@@ -5,7 +5,6 @@
 //! It refuses to finish, and changes nothing, while a stored part breaks one
 //! of them. Running it again finds the constraints in place and edits nothing.
 
-use sea_orm::TransactionTrait;
 use sea_orm_migration::prelude::*;
 
 use super::schema::{Check, add_checks};
@@ -51,13 +50,9 @@ pub struct Migration;
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         // One transaction pins one connection, which `PRAGMA writable_schema`
-        // needs, and leaves nothing half done when a step fails.
-        let txn = manager.get_connection().begin().await?;
-        // A write first takes the write lock, waiting out another program's
-        // write. A transaction that reads first and writes later fails at once
-        // if anything was written in between.
-        txn.execute_unprepared("UPDATE seaql_migrations SET version = version WHERE 0")
-            .await?;
+        // needs, holds the write lock from its start and leaves nothing half
+        // done when a step fails.
+        let txn = crate::services::begin_write(manager.get_connection()).await?;
         add_checks(&txn, "adding the life-cycle checks of parts", CHECKS).await?;
         txn.commit().await
     }
@@ -87,29 +82,31 @@ mod tests {
     // service and a need, and one part in each status.
     async fn db_before() -> DatabaseConnection {
         let db = migrated_to(BEFORE).await;
-        db.execute_unprepared(
-            &"INSERT INTO vehicles (id, name, created_at, updated_at) VALUES (1, 'Golf', S, S);
+        db.execute_unprepared(&format!(
+            "INSERT INTO vehicles (id, name, created_at, updated_at)
+                 VALUES (1, 'Golf', {STAMP}, {STAMP});
              INSERT INTO service_records (id, vehicle_id, service_date, created_at, updated_at)
-                 VALUES (1, 1, '2026-01-02', S, S);
+                 VALUES (1, 1, '2026-01-02', {STAMP}, {STAMP});
              INSERT INTO work_items (id, vehicle_id, title, created_at, updated_at)
-                 VALUES (1, 1, 'Brakes', S, S);
+                 VALUES (1, 1, 'Brakes', {STAMP}, {STAMP});
              INSERT INTO job_needs (id, work_item_id, name, created_at, updated_at)
-                 VALUES (1, 1, 'Pads', S, S);
+                 VALUES (1, 1, 'Pads', {STAMP}, {STAMP});
              INSERT INTO parts (id, vehicle_id, name, status, purchase_date, received_on,
                      created_at, updated_at)
-                 VALUES (1, 1, 'Bought', 'purchased', '2026-01-01', '2026-01-01', S, S);
+                 VALUES (1, 1, 'Bought', 'purchased', '2026-01-01', '2026-01-01', {STAMP}, \
+             {STAMP});
              INSERT INTO parts (id, vehicle_id, name, status, installed_service_id,
                      installed_date, installed_odometer, created_at, updated_at)
-                 VALUES (2, 1, 'On', 'installed', 1, '2026-01-02', 1000, S, S);
+                 VALUES (2, 1, 'On', 'installed', 1, '2026-01-02', 1000, {STAMP}, {STAMP});
              INSERT INTO parts (id, vehicle_id, name, status, installed_date, replaced_date,
                      replaced_odometer, created_at, updated_at)
-                 VALUES (3, 1, 'Off', 'replaced', '2026-01-02', '2026-06-01', 9000, S, S);
+                 VALUES (3, 1, 'Off', 'replaced', '2026-01-02', '2026-06-01', 9000, {STAMP}, \
+             {STAMP});
              INSERT INTO parts (id, vehicle_id, name, status, returned_on, return_reason,
                      returned_from_need_id, created_at, updated_at)
-                 VALUES (4, 1, 'Back', 'returned', '2026-01-03', 'wrong size', 1, S, S);"
-                .replace(" S", &format!(" {STAMP}"))
-                .replace("(S", &format!("({STAMP}")),
-        )
+                 VALUES (4, 1, 'Back', 'returned', '2026-01-03', 'wrong size', 1, {STAMP}, \
+             {STAMP});"
+        ))
         .await
         .unwrap();
         db

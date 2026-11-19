@@ -61,9 +61,12 @@ pub(crate) async fn mark_returned(
     Ok(active.update(db).await?)
 }
 
-/// Where a part stands, with the details its status takes. The status, install,
-/// replacement and return columns of `parts` are written only through
-/// [`PartState::write`].
+/// Where a part stands, with the details its status takes.
+// Every write of the status, install, replacement and return columns of
+// `parts` goes through `PartState::write`, except two bulk writes that patch
+// the install details of fitted parts (`follow_service` and the done-another-way
+// release) and the `ON DELETE SET NULL` keys, which the CHECK constraints keep
+// inside a state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum PartState {
     Purchased,
@@ -140,6 +143,14 @@ impl PartState {
         }
     }
 
+    /// The install details of a fitted part, and `None` for one off the car.
+    fn install(&self) -> Option<Install> {
+        match self {
+            Self::Installed(install) | Self::Replaced { install, .. } => Some(*install),
+            Self::Purchased | Self::Returned { .. } => None,
+        }
+    }
+
     fn status(&self) -> PartStatus {
         match self {
             Self::Purchased => PartStatus::Purchased,
@@ -153,7 +164,8 @@ impl PartState {
     /// `active` from this state.
     pub(crate) fn write(self, active: &mut part::ActiveModel) {
         active.status = Set(self.status());
-        let (install, replaced, returned) = match self {
+        let (install, (replaced_on, replaced_odometer), (returned_on, reason, need_id)) = match self
+        {
             Self::Purchased => (Install::default(), (None, None), (None, None, None)),
             Self::Installed(install) => (install, (None, None), (None, None, None)),
             Self::Replaced {
@@ -174,11 +186,11 @@ impl PartState {
         active.installed_service_id = Set(install.service_id);
         active.installed_date = Set(install.date);
         active.installed_odometer = Set(install.odometer);
-        active.replaced_date = Set(replaced.0);
-        active.replaced_odometer = Set(replaced.1);
-        active.returned_on = Set(returned.0);
-        active.return_reason = Set(returned.1);
-        active.returned_from_need_id = Set(returned.2);
+        active.replaced_date = Set(replaced_on);
+        active.replaced_odometer = Set(replaced_odometer);
+        active.returned_on = Set(returned_on);
+        active.return_reason = Set(reason);
+        active.returned_from_need_id = Set(need_id);
     }
 
     /// The state `change` moves `existing`, a part in this state, to. A part
@@ -197,6 +209,8 @@ impl PartState {
     ) -> DomainResult<(Self, Option<NaiveDate>)> {
         let id = existing.id;
         let refused = |message: String| Err(DomainError::BadRequest(message));
+        // A fitted part's install details are the base a change patches.
+        let base = self.install().unwrap_or_default();
         let next = match (self, change) {
             (Self::Returned { .. } | Self::Purchased, Fitting::Purchased) => Self::Purchased,
             (Self::Returned { .. }, Fitting::Installed(..) | Fitting::Replaced(..)) => {
@@ -221,64 +235,47 @@ impl PartState {
                 }
                 Self::Purchased
             }
-            (Self::Purchased, Fitting::Installed(install, _)) => {
-                Self::Installed(Install::default().patched(install))
+            (Self::Installed(_), Fitting::Keep(_, replace)) if replace.sets_any() => {
+                return refused(format!(
+                    "Part {id} is installed, so it takes no replacement details; set its status \
+                     to replaced with them"
+                ));
             }
-            (Self::Purchased, Fitting::Replaced(install, replace)) => Self::Replaced {
-                install: Install::default().patched(install),
-                on: replace.date.flatten(),
-                odometer: replace.odometer.flatten(),
-            },
-            (Self::Installed(current), Fitting::Keep(install, replace)) => {
-                if replace.sets_any() {
-                    return refused(format!(
-                        "Part {id} is installed, so it takes no replacement details; set its \
-                         status to replaced with them"
-                    ));
-                }
-                Self::Installed(current.patched(install))
-            }
-            (Self::Installed(current), Fitting::Installed(install, _)) => {
-                Self::Installed(current.patched(install))
-            }
-            (Self::Installed(current), Fitting::Replaced(install, replace)) => Self::Replaced {
-                install: current.patched(install),
-                on: replace.date.flatten(),
-                odometer: replace.odometer.flatten(),
-            },
             (
+                Self::Purchased | Self::Installed(_),
+                Fitting::Installed(install, _) | Fitting::Keep(install, _),
+            ) => Self::Installed(base.patched(install)),
+            (Self::Purchased | Self::Installed(_), Fitting::Replaced(install, replace)) => {
                 Self::Replaced {
-                    install: current,
-                    on,
-                    odometer,
-                },
+                    install: base.patched(install),
+                    on: replace.date.flatten(),
+                    odometer: replace.odometer.flatten(),
+                }
+            }
+            (
+                Self::Replaced { on, odometer, .. },
                 Fitting::Keep(install, replace) | Fitting::Replaced(install, replace),
             ) => Self::Replaced {
-                install: current.patched(install),
+                install: base.patched(install),
                 on: replace.date.unwrap_or(on),
                 odometer: replace.odometer.unwrap_or(odometer),
             },
-            (
-                Self::Replaced {
-                    install: current,
-                    on,
-                    odometer,
-                },
-                Fitting::Installed(install, clears),
-            ) => {
+            (Self::Replaced { on, odometer, .. }, Fitting::Installed(install, cleared)) => {
                 // Going back to installed says the part was never replaced, so
                 // the details of the replacement must be cleared with it.
-                if (on.is_some() && !clears.date) || (odometer.is_some() && !clears.odometer) {
+                // `cleared` holds no value but `Some(None)`.
+                if cleared.date.unwrap_or(on).is_some()
+                    || cleared.odometer.unwrap_or(odometer).is_some()
+                {
                     return refused(format!(
                         "Part {id} was replaced; clear its replacement date and odometer in the \
                          same change to set it back to installed"
                     ));
                 }
-                Self::Installed(current.patched(install))
+                Self::Installed(base.patched(install))
             }
-            (fitted @ (Self::Installed(_) | Self::Replaced { .. }), Fitting::Purchased) => {
-                let received =
-                    coming_off(&fitted, existing, supplied_by, purchase_date, received_on)?;
+            (Self::Installed(_) | Self::Replaced { .. }, Fitting::Purchased) => {
+                let received = coming_off(existing, supplied_by, purchase_date, received_on)?;
                 return Ok((Self::Purchased, Some(received)));
             }
         };
@@ -292,7 +289,6 @@ impl PartState {
 //
 // Returns the date the part reads as received.
 fn coming_off(
-    fitted: &PartState,
     existing: &part::Model,
     supplied_by: Supplier,
     purchase_date: Option<NaiveDate>,
@@ -301,7 +297,7 @@ fn coming_off(
     if supplied_by == Supplier::Shop {
         // Dropping a replaced part from its service leaves it replaced, so
         // only deleting it applies.
-        let instead = if matches!(fitted, PartState::Installed(_)) {
+        let instead = if existing.status == PartStatus::Installed {
             "correct the service that installed it or delete the part"
         } else {
             "delete the part"
@@ -327,18 +323,26 @@ fn coming_off(
         .unwrap_or_else(|| not_before_purchase(super::today())))
 }
 
-/// Refuses an arrival date before the purchase date.
-pub(crate) fn require_received_after_purchase(
-    received_on: Option<NaiveDate>,
+/// Sets the date the part arrived to `on`.
+///
+/// # Errors
+/// `Invalid` for a date before `purchase_date`, the date the part has once
+/// the caller's write is applied.
+pub(crate) fn set_received(
+    active: &mut part::ActiveModel,
+    on: Option<NaiveDate>,
     purchase_date: Option<NaiveDate>,
 ) -> DomainResult<()> {
-    match (received_on, purchase_date) {
-        (Some(received), Some(bought)) if received < bought => Err(DomainError::invalid(
+    if let (Some(received), Some(bought)) = (on, purchase_date)
+        && received < bought
+    {
+        return Err(DomainError::invalid(
             "received_on",
             format!("is before the purchase date {bought}"),
-        )),
-        _ => Ok(()),
+        ));
     }
+    active.received_on = Set(on);
+    Ok(())
 }
 
 /// A part with the items inside it, when it was bought as a kit.
@@ -563,17 +567,10 @@ async fn insert_part(
     super::vehicle::require(db, vehicle_id).await?;
     let supplied_by = input.supplied_by.unwrap_or(Supplier::Owner);
     let state = PartState::new(input.fitting);
-    if let PartState::Installed(Install {
+    if let Some(Install {
         service_id: Some(service_id),
         ..
-    })
-    | PartState::Replaced {
-        install: Install {
-            service_id: Some(service_id),
-            ..
-        },
-        ..
-    } = state
+    }) = state.install()
     {
         super::service_record::require(db, vehicle_id, service_id).await?;
     }
@@ -646,12 +643,8 @@ async fn apply_update(
     validate_contents("add_contents", &input.add_contents)?;
     let existing = get(db, vehicle_id, id).await?;
 
-    if let Some(InstallPatch {
-        service_id: Some(Some(service_id)),
-        ..
-    }) = input.fitting.install()
-    {
-        super::service_record::require(db, vehicle_id, *service_id).await?;
+    if let Some(service_id) = input.fitting.service_id() {
+        super::service_record::require(db, vehicle_id, service_id).await?;
     }
 
     let purchase_date = input.purchase_date.unwrap_or(existing.purchase_date);
@@ -665,11 +658,10 @@ async fn apply_update(
     let received_on = input
         .received_on
         .unwrap_or(shelved_on.or(existing.received_on));
-    require_received_after_purchase(received_on, purchase_date)?;
 
     let mut active: part::ActiveModel = existing.into();
     state.write(&mut active);
-    active.received_on = Set(received_on);
+    set_received(&mut active, received_on, purchase_date)?;
 
     if let Some(v) = input.supplied_by {
         active.supplied_by = Set(v);
@@ -739,15 +731,13 @@ pub(crate) async fn install(
     odometer: Option<Option<i32>>,
 ) -> DomainResult<()> {
     let existing = get(db, vehicle_id, part_id).await?;
-    let current = match PartState::of(&existing)? {
-        PartState::Returned { .. } => {
-            return Err(DomainError::BadRequest(format!(
-                "Part {part_id} was returned and cannot be installed"
-            )));
-        }
-        PartState::Purchased => Install::default(),
-        PartState::Installed(install) | PartState::Replaced { install, .. } => install,
-    };
+    let state = PartState::of(&existing)?;
+    if matches!(state, PartState::Returned { .. }) {
+        return Err(DomainError::BadRequest(format!(
+            "Part {part_id} was returned and cannot be installed"
+        )));
+    }
+    let current = state.install().unwrap_or_default();
     let mut active: part::ActiveModel = existing.into();
     PartState::Installed(current.patched(InstallPatch {
         service_id: Some(Some(record.id)),

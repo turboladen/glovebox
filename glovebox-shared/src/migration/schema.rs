@@ -260,25 +260,21 @@ pub(super) async fn add_checks<C: ConnectionTrait>(
         return Ok(());
     }
     edit_definitions(txn, what, async |txn: &C| {
-        let mut changed = false;
         for check in &missing {
             // The closing parenthesis of the definition is replaced by the
             // constraint and a new one. A definition spelled another way
             // matches nothing and is reported below.
-            let edit = txn
-                .execute_unprepared(&format!(
-                    "UPDATE sqlite_schema SET sql = rtrim(substr(rtrim(sql), 1, \
-                     length(rtrim(sql)) - 1)) || ', CONSTRAINT \"{name}\" CHECK ({holds}) )' \
-                     WHERE type = 'table' AND name = '{table}' AND rtrim(sql) LIKE '%)' AND \
-                     instr(sql, 'CONSTRAINT \"{name}\" ') = 0",
-                    name = check.name,
-                    holds = check.holds.replace('\'', "''"),
-                    table = check.table,
-                ))
-                .await?;
-            changed |= edit.rows_affected() > 0;
+            txn.execute_unprepared(&format!(
+                "UPDATE sqlite_schema SET sql = rtrim(substr(rtrim(sql), 1, length(rtrim(sql)) - \
+                 1)) || ', CONSTRAINT \"{name}\" CHECK ({holds}) )' WHERE type = 'table' AND name \
+                 = '{table}' AND rtrim(sql) LIKE '%)'",
+                name = check.name,
+                holds = check.holds.replace('\'', "''"),
+                table = check.table,
+            ))
+            .await?;
         }
-        Ok(changed)
+        Ok(true)
     })
     .await?;
 

@@ -803,9 +803,9 @@ pub async fn link_part<C: ConnectionTrait + TransactionTrait>(
     let supplier = need.supplied_by.is_none().then_some(found.supplied_by);
     let found = match received_on {
         Some(date) => {
-            super::part::require_received_after_purchase(Some(date), found.purchase_date)?;
+            let purchase_date = found.purchase_date;
             let mut active: part::ActiveModel = found.into();
-            active.received_on = Set(Some(date));
+            super::part::set_received(&mut active, Some(date), purchase_date)?;
             active.updated_at = Set(super::now());
             active.update(&txn).await?
         }
@@ -935,9 +935,9 @@ async fn set_received<C: ConnectionTrait + TransactionTrait>(
     let found = linked_part(&txn, &need).await?;
     require_unfitted(&found, action)?;
     let on = date_for(&found)?;
-    super::part::require_received_after_purchase(on, found.purchase_date)?;
+    let purchase_date = found.purchase_date;
     let mut active: part::ActiveModel = found.into();
-    active.received_on = Set(on);
+    super::part::set_received(&mut active, on, purchase_date)?;
     active.updated_at = Set(super::now());
     let found = super::part::view(&txn, active.update(&txn).await?).await?;
     txn.commit().await?;
@@ -2813,16 +2813,14 @@ mod tests {
         let (vehicle_id, job_id) = seed_job(&db).await;
         let n = add(&db, vehicle_id, job_id, need("Pads")).await.unwrap();
         let p = new_part(&db, vehicle_id, "Pads").await;
-        part::ActiveModel {
-            id: Unchanged(p.id),
-            status: Set(PartStatus::Returned),
-            returned_on: Set(Some(date("2026-11-06"))),
-            return_reason: Set(Some("Wrong size".into())),
-            ..Default::default()
+        let mut returned: part::ActiveModel = p.clone().into();
+        crate::services::part::PartState::Returned {
+            on: date("2026-11-06"),
+            reason: "Wrong size".into(),
+            need_id: None,
         }
-        .update(&db)
-        .await
-        .unwrap();
+        .write(&mut returned);
+        returned.update(&db).await.unwrap();
         let err = link_part(&db, vehicle_id, n.id, p.id, None)
             .await
             .unwrap_err();
