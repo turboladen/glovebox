@@ -703,6 +703,7 @@ pub async fn mark_ordered<C: ConnectionTrait + TransactionTrait>(
     details: OrderDetails,
 ) -> DomainResult<NeedPurchase> {
     validate_price(details.cost_cents)?;
+    super::part::validate_contents("contents", &details.contents)?;
     let txn = super::begin_write(db).await?;
     // Only the first of two orders for one need links a part: the second
     // finds the part linked and its conditional write changes nothing.

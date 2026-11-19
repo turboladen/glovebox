@@ -647,7 +647,15 @@ async fn install_parts(
         part_svc::install(txn, vehicle_id, part_id, record, odometer.clone()).await?;
     }
 
-    for mut new_part in new_parts {
+    for (n, mut new_part) in (1..).zip(new_parts) {
+        // A kit item's error names its part, because an invoice can list
+        // several kits and each counts its items from 1.
+        part_svc::validate_contents("parts", &new_part.contents).map_err(|e| match e {
+            DomainError::Invalid { field, message } => {
+                DomainError::invalid(field, format!("part {n}'s {message}"))
+            }
+            other => other,
+        })?;
         new_part.status = Some(PartStatus::Installed);
         new_part.installed_service_id = Some(record.id);
         new_part.installed_date = Some(record.service_date);

@@ -395,8 +395,9 @@ pub struct InlinePartInput {
     /// supplied that was not recorded beforehand. The part is linked to the
     /// need in the same write. The need must have no part yet.
     pub need_id: Option<i32>,
-    /// For a kit: every item inside it, with the number printed on that
-    /// item's own packaging, as `record_part` takes them.
+    /// For a kit: each item inside it, with the number printed on that item's
+    /// own packaging, in the order the work sheet should list them. Omit for a
+    /// part that is not a kit.
     pub contents: Option<Vec<PartContentInput>>,
 }
 

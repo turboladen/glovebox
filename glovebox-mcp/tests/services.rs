@@ -1551,11 +1551,14 @@ async fn an_inline_kit_on_an_invoice_records_its_contents() {
             json!({
                 "vehicle_id": v.id,
                 "service_date": "2026-04-02",
-                "parts": [{ "name": "Kit", "contents": [{ "name": " " }] }]
+                "parts": [
+                    { "name": "Oil kit", "contents": [{ "name": "Filter" }] },
+                    { "name": "Brake kit", "contents": [{ "name": " " }] }
+                ]
             }),
         )
         .await;
-    assert_eq!(refused, "contents: item 1 needs a name");
+    assert_eq!(refused, "parts: part 2's item 1 needs a name");
     let listed = t.call("list_services", json!({ "vehicle_id": v.id })).await;
     assert_eq!(
         listed.as_array().unwrap().len(),
