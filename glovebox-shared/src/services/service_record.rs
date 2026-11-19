@@ -1034,7 +1034,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     part_svc::release_from_service(&txn, removal.parts, choice).await?;
     if let Some(new_part_ids) = input.part_ids {
         for &part_id in &new_part_ids {
-            part_svc::install(&txn, vehicle_id, part_id, &record, Some(record.mileage)).await?;
+            part_svc::install(&txn, vehicle_id, part_id, &record, record.mileage.map(Some)).await?;
         }
     }
     if !parts_listed && (record.service_date != date_before || record.mileage != mileage_before) {
@@ -3587,6 +3587,65 @@ mod tests {
             cleared.parts[0].part.installed_date,
             Some(date("2024-03-10"))
         );
+
+        // So does listing the part again on the service with no mileage.
+        let part_id = cleared.parts[0].part.id;
+        let relisted = update(
+            &db,
+            v,
+            svc.record.id,
+            UpdateServiceRecord {
+                part_ids: Some(vec![part_id]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(relisted.parts[0].part.installed_odometer, Some(50_500));
+    }
+
+    #[tokio::test]
+    async fn listing_a_part_a_later_service_replaced_keeps_its_replacement() {
+        use crate::inputs::part::{Fitting, InstallPatch, ReplacePatch, UpdatePart};
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let svc = create(
+            &db,
+            v,
+            NewServiceRecord {
+                service_date: date("2024-03-01"),
+                parts: Some(vec![inline_part("Pads", Supplier::Shop)]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let part_id = svc.parts[0].part.id;
+        let replaced = ReplacePatch {
+            date: Some(Some(date("2025-06-01"))),
+            odometer: Some(Some(60_000)),
+        };
+        let off = UpdatePart {
+            fitting: Fitting::Replaced(InstallPatch::default(), replaced),
+            ..Default::default()
+        };
+        part_svc::update(&db, v, part_id, off).await.unwrap();
+
+        let corrected = update(
+            &db,
+            v,
+            svc.record.id,
+            UpdateServiceRecord {
+                part_ids: Some(vec![part_id]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let part = &corrected.parts[0].part;
+        assert_eq!(part.status, PartStatus::Replaced);
+        assert_eq!(part.replaced_date, Some(date("2025-06-01")));
+        assert_eq!(part.replaced_odometer, Some(60_000));
     }
 
     #[tokio::test]

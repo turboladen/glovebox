@@ -765,7 +765,8 @@ pub async fn mark_ordered<C: ConnectionTrait + TransactionTrait>(
 /// # Errors
 /// `NotFound` for a need or part that is not the vehicle's; `BadRequest` for
 /// a returned part, a part linked to another need, a need that already has
-/// another part, or an arrival date given for an installed or replaced part.
+/// another part, or an arrival date given for an installed or replaced part;
+/// `Invalid` for an arrival date before the part's purchase date.
 pub async fn link_part<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -950,7 +951,8 @@ async fn set_received<C: ConnectionTrait + TransactionTrait>(
 /// # Errors
 /// `NotFound` for a need that is not the vehicle's; `BadRequest` when it has
 /// no part, its part is installed or replaced, or `on` is `None` and the
-/// part already has a date.
+/// part already has a date; `Invalid` for a date before the part's purchase
+/// date.
 pub async fn mark_received<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -2857,7 +2859,8 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             err.to_string(),
-            "received_on: is before the purchase date 2026-11-01"
+            "received_on: is before the purchase date 2026-11-01; correct the purchase date first \
+             if it is wrong"
         );
         let part = new_part(&db, vehicle_id, "Pads").await;
         let mut dated: part::ActiveModel = part.into();
@@ -2869,7 +2872,8 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             err.to_string(),
-            "received_on: is before the purchase date 2026-11-01"
+            "received_on: is before the purchase date 2026-11-01; correct the purchase date first \
+             if it is wrong"
         );
     }
 

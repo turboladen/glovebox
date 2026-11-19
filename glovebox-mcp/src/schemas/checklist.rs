@@ -464,7 +464,9 @@ pub struct LinkPartToNeedInput {
     pub part_id: Option<Option<i32>>,
     /// The day the part arrived, `YYYY-MM-DD`, when linking a part that is
     /// already in hand. Ask the owner once and set it here. Not allowed when
-    /// `part_id` is `null`, or for a part that is installed or replaced.
+    /// `part_id` is `null`, or for a part that is installed or replaced. It
+    /// cannot fall before the part's `purchase_date`; fix a wrong one with
+    /// `correct_part` first.
     pub received_on: Option<String>,
 }
 
@@ -492,7 +494,9 @@ pub struct MarkNeedReceivedInput {
     pub received: Option<bool>,
     /// The day it arrived, `YYYY-MM-DD`. Defaults to today when the part has
     /// no arrival date yet; a part that has one is refused unless this names
-    /// the new date. Not allowed with `received: false`.
+    /// the new date. Not allowed with `received: false`. It cannot fall
+    /// before the part's `purchase_date`, which `mark_need_ordered` sets to
+    /// today when none is given; fix a wrong one with `correct_part` first.
     pub received_on: Option<String>,
 }
 

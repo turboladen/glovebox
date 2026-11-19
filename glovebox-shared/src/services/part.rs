@@ -338,7 +338,10 @@ pub(crate) fn set_received(
     {
         return Err(DomainError::invalid(
             "received_on",
-            format!("is before the purchase date {bought}"),
+            format!(
+                "is before the purchase date {bought}; correct the purchase date first if it is \
+                 wrong"
+            ),
         ));
     }
     active.received_on = Set(on);
@@ -548,8 +551,8 @@ pub async fn get(db: &impl ConnectionTrait, vehicle_id: i32, id: i32) -> DomainR
 ///
 /// # Errors
 /// `NotFound` for a vehicle or an installing service that is not the
-/// vehicle's; `BadRequest` for the status `returned`; `Invalid` for a kit item
-/// with a blank name or a quantity below 1.
+/// vehicle's; `Invalid` for a kit item with a blank name or a quantity below
+/// 1, or a `received_on` before the purchase date.
 pub async fn create<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -720,8 +723,9 @@ async fn apply_update(
 
 /// Marks a vehicle's part as installed by `record` on the record's date.
 /// `odometer` patches `installed_odometer`, so `None` keeps the reading the
-/// part already has. A replaced part becomes installed again, with its
-/// replacement details cleared. A part of another vehicle reads as
+/// part already has. A part another service installed and a later one
+/// replaced becomes installed again, with its replacement details cleared; a
+/// replaced part this record already installed stays replaced. A part of another vehicle reads as
 /// nonexistent, and a `returned` part is refused with `BadRequest`.
 pub(crate) async fn install(
     db: &impl ConnectionTrait,
@@ -737,14 +741,27 @@ pub(crate) async fn install(
             "Part {part_id} was returned and cannot be installed"
         )));
     }
-    let current = state.install().unwrap_or_default();
-    let mut active: part::ActiveModel = existing.into();
-    PartState::Installed(current.patched(InstallPatch {
+    let install = state.install().unwrap_or_default().patched(InstallPatch {
         service_id: Some(Some(record.id)),
         date: Some(Some(record.service_date)),
         odometer,
-    }))
-    .write(&mut active);
+    });
+    let fitted = match state {
+        // A later service took off a part this record put on, so the
+        // replacement stands.
+        PartState::Replaced {
+            install: before,
+            on,
+            odometer,
+        } if before.service_id == Some(record.id) => PartState::Replaced {
+            install,
+            on,
+            odometer,
+        },
+        _ => PartState::Installed(install),
+    };
+    let mut active: part::ActiveModel = existing.into();
+    fitted.write(&mut active);
     active.updated_at = Set(super::now());
     active.update(db).await?;
     Ok(())
@@ -2194,15 +2211,58 @@ mod tests {
     async fn a_service_installing_a_replaced_part_clears_its_replacement() {
         let db = test_db().await;
         let vid = seed_vehicle(&db).await;
+        let first = seed_service(&db, vid).await;
+        let p = seed_replaced(&db, vid, first).await;
+        let second = service_by_id(&db, seed_service(&db, vid).await).await;
+        install(&db, vid, p.id, &second, None).await.unwrap();
+        let after = get(&db, vid, p.id).await.unwrap();
+        assert_eq!(
+            PartState::of(&after).unwrap(),
+            PartState::Installed(Install {
+                service_id: Some(second.id),
+                date: Some(date("2024-01-01")),
+                odometer: Some(40_000),
+            }),
+            "the stored odometer is kept"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_service_that_installed_a_replaced_part_leaves_it_replaced() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
         let sid = seed_service(&db, vid).await;
-        let record = service_record::Entity::find_by_id(sid)
-            .one(&db)
+        let p = seed_replaced(&db, vid, sid).await;
+        let record = service_by_id(&db, sid).await;
+        install(&db, vid, p.id, &record, None).await.unwrap();
+        let after = get(&db, vid, p.id).await.unwrap();
+        assert_eq!(
+            PartState::of(&after).unwrap(),
+            PartState::Replaced {
+                install: Install {
+                    service_id: Some(sid),
+                    date: Some(date("2024-01-01")),
+                    odometer: Some(40_000),
+                },
+                on: Some(date("2025-01-01")),
+                odometer: None,
+            }
+        );
+    }
+
+    async fn service_by_id(db: &DatabaseConnection, id: i32) -> service_record::Model {
+        service_record::Entity::find_by_id(id)
+            .one(db)
             .await
             .unwrap()
-            .unwrap();
-        let p = seed_installed(&db, vid, sid).await;
+            .unwrap()
+    }
+
+    // A part `sid` installed that a later service replaced on 2025-01-01.
+    async fn seed_replaced(db: &DatabaseConnection, vid: i32, sid: i32) -> part::Model {
+        let p = seed_installed(db, vid, sid).await;
         refit(
-            &db,
+            db,
             vid,
             p.id,
             Fitting::Replaced(
@@ -2211,18 +2271,7 @@ mod tests {
             ),
         )
         .await
-        .unwrap();
-        install(&db, vid, p.id, &record, None).await.unwrap();
-        let after = get(&db, vid, p.id).await.unwrap();
-        assert_eq!(
-            PartState::of(&after).unwrap(),
-            PartState::Installed(Install {
-                service_id: Some(sid),
-                date: Some(date("2024-01-01")),
-                odometer: Some(40_000),
-            }),
-            "the stored odometer is kept"
-        );
+        .unwrap()
     }
 
     #[tokio::test]
@@ -2246,7 +2295,8 @@ mod tests {
         let err = update(&db, vid, p.id, early).await.unwrap_err();
         assert_eq!(
             err.to_string(),
-            "received_on: is before the purchase date 2026-11-05"
+            "received_on: is before the purchase date 2026-11-05; correct the purchase date first \
+             if it is wrong"
         );
         update(
             &db,
@@ -2273,7 +2323,8 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             err.to_string(),
-            "received_on: is before the purchase date 2026-11-06"
+            "received_on: is before the purchase date 2026-11-06; correct the purchase date first \
+             if it is wrong"
         );
         assert_eq!(
             get(&db, vid, p.id).await.unwrap().purchase_date,
