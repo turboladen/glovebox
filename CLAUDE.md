@@ -450,7 +450,8 @@ role per control style, and `YYYY-MM-DD` dates.
 - **SQLite cannot `DROP COLUMN` named in an FK clause**; use the table-rebuild pattern. To add a
   foreign key to an existing column, edit the stored table definition as
   `docs/adr/0003-foreign-keys-by-editing-the-table-definition.md` describes. For FTS5,
-  copy the external-content trigger trio in the initial schema migration; aggregating over `bm25()`
+  build the index and its triggers with `schema::create_fts` (and `drop_fts` in `down`), then fill
+  it from stored rows with `INSERT INTO fts_x(fts_x) VALUES ('rebuild')`; aggregating over `bm25()`
   arms needs a `MATERIALIZED` CTE because query flattening breaks `bm25`.
 - **Verify data-moving migrations against a populated copy of `data/glovebox.db`**, not just
   `test_db()`. To migrate a copy, run `GLOVEBOX_DB_PATH=<copy> target/release/glovebox-mcp < /dev/null`

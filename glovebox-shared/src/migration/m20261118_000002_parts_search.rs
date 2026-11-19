@@ -1,10 +1,6 @@
 //! Adds full-text indexes over parts and the items inside kits, so a search
 //! finds a part by its name or number and a kit by one of its items' numbers.
-//!
-//! Each index is an external-content FTS5 table kept in sync by triggers,
-//! built by the same `schema::create_fts` as the initial schema's indexes.
-//! `rebuild` fills each index from the rows already stored and is safe to run
-//! again, so a crash in the middle of `up()` reruns cleanly.
+//! Rows stored before the migration are indexed by it.
 
 use sea_orm_migration::prelude::*;
 
@@ -26,6 +22,7 @@ const FTS_SPECS: &[FtsSpec] = &[
             "location",
             "notes",
             "order_ref",
+            "return_reason",
         ],
     },
     FtsSpec {
@@ -39,6 +36,9 @@ const FTS_SPECS: &[FtsSpec] = &[
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         create_fts(manager, FTS_SPECS).await?;
+        // `rebuild` fills each index from the rows already stored, and running
+        // it again is harmless, so a crash in the middle of `up()` reruns
+        // cleanly.
         let db = manager.get_connection();
         for FtsSpec { fts, .. } in FTS_SPECS {
             db.execute_unprepared(&format!("INSERT INTO {fts}({fts}) VALUES ('rebuild')"))
@@ -54,23 +54,13 @@ impl MigrationTrait for Migration {
 
 #[cfg(test)]
 mod tests {
-    use sea_orm::{ConnectionTrait, DatabaseConnection};
+    use sea_orm::ConnectionTrait;
     use sea_orm_migration::prelude::*;
 
     use super::super::{
         Migrator,
-        schema::testing::{count, migrated_to},
+        schema::testing::{count, fts_integrity, migrated_to},
     };
-
-    async fn integrity(db: &DatabaseConnection) {
-        for fts in ["fts_parts", "fts_part_contents"] {
-            db.execute_unprepared(&format!(
-                "INSERT INTO {fts}({fts}) VALUES ('integrity-check')"
-            ))
-            .await
-            .unwrap();
-        }
-    }
 
     // Rows stored before the indexes exist are found once the migration runs,
     // running it again leaves the indexes sound, and the triggers follow a
@@ -99,14 +89,14 @@ mod tests {
             "SELECT count(*) FROM fts_part_contents WHERE fts_part_contents MATCH '\"7020\"'";
         assert_eq!(count(&db, kit).await, 1);
         assert_eq!(count(&db, item).await, 1);
-        integrity(&db).await;
+        fts_integrity(&db, &["fts_parts", "fts_part_contents"]).await;
 
         db.execute_unprepared("DELETE FROM vehicles WHERE id = 1")
             .await
             .unwrap();
         assert_eq!(count(&db, kit).await, 0);
         assert_eq!(count(&db, item).await, 0);
-        integrity(&db).await;
+        fts_integrity(&db, &["fts_parts", "fts_part_contents"]).await;
         assert_eq!(
             Migrator::get_pending_migrations(&db).await.unwrap().len(),
             0

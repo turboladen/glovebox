@@ -184,7 +184,6 @@ pub(super) async fn scalar<T: sea_orm::TryGetable>(
     row.try_get_by_index::<T>(0)
 }
 
-/// What the migration test modules share.
 /// One external-content FTS5 index over `content`'s `cols`. Every column
 /// must exist on the content table, because FTS5 reads values back by rowid.
 pub(super) struct FtsSpec {
@@ -257,6 +256,7 @@ pub(super) async fn drop_fts(manager: &SchemaManager<'_>, specs: &[FtsSpec]) -> 
     Ok(())
 }
 
+/// What the migration test modules share.
 #[cfg(test)]
 pub(super) mod testing {
     use sea_orm::{ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement};
@@ -282,6 +282,18 @@ pub(super) mod testing {
     /// the query fails or returns no row.
     pub async fn count(db: &DatabaseConnection, sql: &str) -> i64 {
         first_row(db, sql).await.try_get_by_index(0).unwrap()
+    }
+
+    /// Runs FTS5's `integrity-check` on each named index. Panics if one
+    /// fails.
+    pub async fn fts_integrity(db: &DatabaseConnection, indexes: &[&str]) {
+        for fts in indexes {
+            db.execute_unprepared(&format!(
+                "INSERT INTO {fts}({fts}) VALUES ('integrity-check')"
+            ))
+            .await
+            .unwrap();
+        }
     }
 
     async fn first_row(db: &DatabaseConnection, sql: &str) -> sea_orm::QueryResult {
