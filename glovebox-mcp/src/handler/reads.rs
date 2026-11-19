@@ -33,9 +33,11 @@ impl GloveboxMcp {
     #[tool(
         name = "search_records",
         description = "Full-text search across everything: vehicles, service history, incidents \
-                       (and their followups), research findings, maintenance schedule items, and \
-                       planned work. Returns ranked hits with snippets. Narrow with `scope` \
-                       and/or `vehicle_id`."
+                       (and their followups), research findings, maintenance schedule items, \
+                       planned work, and parts. A part is found by its own name and numbers or by \
+                       an item inside it when it is a kit, such as a filter's number in an oil \
+                       change kit; the hit is the part. Returns ranked hits with snippets. Narrow \
+                       with `scope` and/or `vehicle_id`."
     )]
     async fn search_records(
         &self,

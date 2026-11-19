@@ -38,6 +38,34 @@ async fn search_records_scopes_and_rejects_bad_scope() {
 }
 
 #[tokio::test]
+async fn search_records_finds_a_kit_by_an_items_number() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let kit = t
+        .call(
+            "record_part",
+            json!({
+                "vehicle_id": v.id,
+                "name": "Oil change kit",
+                "contents": [{ "name": "Oil filter", "manufacturer": "Mann", "part_number": "HU 7020 z" }]
+            }),
+        )
+        .await;
+
+    let hits = t
+        .call(
+            "search_records",
+            json!({ "query": "HU 7020 z", "scope": "parts" }),
+        )
+        .await;
+
+    assert_eq!(hits.as_array().unwrap().len(), 1, "got: {hits}");
+    assert_eq!(hits[0]["kind"], "part");
+    assert_eq!(hits[0]["id"], kit["id"]);
+    assert_eq!(hits[0]["title"], "Oil change kit");
+}
+
+#[tokio::test]
 async fn cost_summary_reports_integer_cents() {
     let t = connect().await;
     let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
