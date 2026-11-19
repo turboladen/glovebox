@@ -394,6 +394,7 @@ async fn order(
             purchase_date,
             cost_cents,
             order_ref: trim_to_none(&form.order_ref),
+            contents: Vec::new(),
         },
     )
     .await

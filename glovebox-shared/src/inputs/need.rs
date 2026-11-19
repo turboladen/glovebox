@@ -63,6 +63,8 @@ pub struct OrderDetails {
     pub purchase_date: Option<chrono::NaiveDate>,
     pub cost_cents: Option<i32>,
     pub order_ref: Option<String>,
+    /// The items inside the part when it is a kit.
+    pub contents: Vec<super::part::NewPartContent>,
 }
 
 /// Why a part is going back.

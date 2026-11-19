@@ -1655,3 +1655,45 @@ async fn every_need_reply_shows_the_linked_kits_contents() {
         "got: {past}"
     );
 }
+
+#[tokio::test]
+async fn mark_need_ordered_records_a_kits_contents() {
+    let t = connect().await;
+    let v = add_vehicle(&t, "Golf GTI").await;
+    let job = plan_job(&t, v, "Oil change", None).await;
+    let need = add_need(&t, v, job, "Oil and filter").await;
+    let option = add_option(
+        &t,
+        v,
+        need,
+        json!({ "description": "Oil change kit", "manufacturer": "Liqui Moly", "part_number": "06K115562LM" }),
+    )
+    .await;
+    t.call(
+        "update_need",
+        json!({ "vehicle_id": v, "need_id": need, "supplied_by": "self", "chosen_option_id": option }),
+    )
+    .await;
+
+    common::assert_unknown_field_rejected(
+        &t,
+        "mark_need_ordered",
+        json!({ "vehicle_id": v, "need_id": need, "contents": [{ "name": "Filter", "sku": "x" }] }),
+        "sku",
+    )
+    .await;
+    let ordered = t
+        .call(
+            "mark_need_ordered",
+            json!({
+                "vehicle_id": v,
+                "need_id": need,
+                "contents": [{ "name": "Oil filter", "manufacturer": "Mann", "part_number": "HU 7020 z" }]
+            }),
+        )
+        .await;
+
+    assert_eq!(ordered["stage"], "ordered", "got: {ordered}");
+    assert_eq!(ordered["part"]["part_number"], "06K115562LM");
+    assert_eq!(ordered["part"]["contents"][0]["part_number"], "HU 7020 z");
+}

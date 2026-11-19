@@ -395,6 +395,9 @@ pub struct InlinePartInput {
     /// supplied that was not recorded beforehand. The part is linked to the
     /// need in the same write. The need must have no part yet.
     pub need_id: Option<i32>,
+    /// For a kit: every item inside it, with the number printed on that
+    /// item's own packaging, as `record_part` takes them.
+    pub contents: Option<Vec<PartContentInput>>,
 }
 
 impl InlinePartInput {
@@ -416,6 +419,12 @@ impl InlinePartInput {
             warranty_expires_miles: self.warranty_expires_miles,
             order_ref: self.order_ref,
             need_id: self.need_id,
+            contents: self
+                .contents
+                .unwrap_or_default()
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             ..Default::default()
         })
     }

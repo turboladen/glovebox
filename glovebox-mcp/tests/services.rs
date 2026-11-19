@@ -1516,3 +1516,65 @@ async fn a_service_shows_each_installed_kits_contents() {
     let listed = t.call("list_services", json!({ "vehicle_id": v.id })).await;
     assert_eq!(listed[0]["parts"][0]["contents"][0]["name"], "Oil filter");
 }
+
+#[tokio::test]
+async fn an_inline_kit_on_an_invoice_records_its_contents() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+
+    let service = t
+        .call(
+            "record_service",
+            json!({
+                "vehicle_id": v.id,
+                "service_date": "2026-04-01",
+                "parts": [{
+                    "name": "Oil change kit",
+                    "supplied_by": "shop",
+                    "contents": [
+                        { "name": "Oil filter", "manufacturer": "Mann", "part_number": "HU 7020 z" },
+                        { "name": "Engine oil, 1 L", "quantity": 5 }
+                    ]
+                }]
+            }),
+        )
+        .await;
+
+    let contents = &service["parts"][0]["contents"];
+    assert_eq!(contents[0]["part_number"], "HU 7020 z", "got: {service}");
+    assert_eq!(contents[1]["quantity"], 5);
+
+    let refused = t
+        .call_err(
+            "record_service",
+            json!({
+                "vehicle_id": v.id,
+                "service_date": "2026-04-02",
+                "parts": [{ "name": "Kit", "contents": [{ "name": " " }] }]
+            }),
+        )
+        .await;
+    assert_eq!(refused, "contents: item 1 needs a name");
+    let listed = t.call("list_services", json!({ "vehicle_id": v.id })).await;
+    assert_eq!(
+        listed.as_array().unwrap().len(),
+        1,
+        "a refused invoice records nothing"
+    );
+}
+
+#[tokio::test]
+async fn an_inline_kit_item_with_an_unknown_field_is_a_tool_error() {
+    let t = connect().await;
+    common::assert_unknown_field_rejected(
+        &t,
+        "record_service",
+        json!({
+            "vehicle_id": 1,
+            "service_date": "2026-04-01",
+            "parts": [{ "name": "Kit", "contents": [{ "name": "Filter", "sku": "x" }] }]
+        }),
+        "sku",
+    )
+    .await;
+}

@@ -51,8 +51,8 @@ and no contents, because the owner does not gather them.
 
 ## Consequences
 
-- Contents are entered after the purchase: by `correct_part` for a part that `mark_need_ordered`
-  created, or a part recorded on an invoice through `record_service`, until those calls take
-  contents themselves.
+- Contents are entered with the purchase wherever a part is created: `record_part`,
+  `mark_need_ordered` and the inline parts of `record_service` all take them, and `correct_part`
+  adds and removes them later.
 - The ids in replies are what a caller sends to remove an item, so a part's replies carry them
   everywhere it appears.

@@ -422,6 +422,11 @@ pub struct MarkNeedOrderedInput {
     pub cost_cents: Option<i32>,
     /// The seller's order or confirmation number.
     pub order_ref: Option<String>,
+    /// For a kit: every item inside it, with the number printed on that
+    /// item's own packaging, as `record_part` takes them. The option's own
+    /// number is often the seller's kit number, which no item in the box
+    /// carries.
+    pub contents: Option<Vec<super::PartContentInput>>,
 }
 
 impl MarkNeedOrderedInput {
@@ -434,6 +439,12 @@ impl MarkNeedOrderedInput {
                 purchase_date: dates::parse_optional_date("purchase_date", self.purchase_date)?,
                 cost_cents: self.cost_cents,
                 order_ref: self.order_ref,
+                contents: self
+                    .contents
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
             },
         ))
     }

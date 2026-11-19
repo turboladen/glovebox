@@ -10,7 +10,7 @@ use crate::{
     inputs::{
         appointment::NewAppointment,
         need::{NewNeed, NewOption, OrderDetails, ReturnInput, UpdateOption},
-        part::{NewPartContent, UpdatePart},
+        part::NewPartContent,
         service_record::NewServiceRecord,
         todo::NewTodo,
         vehicle::NewVehicle,
@@ -323,7 +323,7 @@ async fn brakes(db: &(impl ConnectionTrait + TransactionTrait), at: &Visit) -> D
     .await?;
 
     let front_rotors = self_need(db, v, brakes, "Front rotors").await?;
-    order_and_receive(
+    choose(
         db,
         v,
         front_rotors,
@@ -333,21 +333,18 @@ async fn brakes(db: &(impl ConnectionTrait + TransactionTrait), at: &Visit) -> D
             "KIT-10458",
             16_200,
         ),
-        "FCP-10458",
+        "Matches the original part.",
     )
     .await?;
-    // The kit's number is the seller's, so the work sheet lists what is in
-    // the box with the numbers printed on each item.
-    let kit = need::require(db, v, front_rotors)
-        .await?
-        .part_id
-        .ok_or_else(|| DomainError::Internal("the front rotors have no part".into()))?;
-    services::part::update(
+    // The kit's number is the seller's, so the order lists what is in the box
+    // with the numbers printed on each item, and the work sheet prints them.
+    need::mark_ordered(
         db,
         v,
-        kit,
-        UpdatePart {
-            add_contents: vec![
+        front_rotors,
+        OrderDetails {
+            order_ref: Some("FCP-10458".into()),
+            contents: vec![
                 NewPartContent {
                     name: "Front rotor".into(),
                     manufacturer: Some("Zimmermann".into()),
@@ -365,6 +362,7 @@ async fn brakes(db: &(impl ConnectionTrait + TransactionTrait), at: &Visit) -> D
         },
     )
     .await?;
+    need::mark_received(db, v, front_rotors, None).await?;
 
     need::add(
         db,
