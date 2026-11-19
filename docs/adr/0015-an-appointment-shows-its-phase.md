@@ -25,7 +25,8 @@ phase would read as the same thing.
 work all still read the status or the stored dates. The phase only reports.
 
 **Today is a parameter.** The readers that build summaries take `today`, and so does
-`update_with_status`, so the web page's fixed test clock decides the phase. The work sheet and the
+`update_with_status`, which returns one, so the web page's clock (fixed in its tests) and the
+MCP server's clock each decide the phase they show. The work sheet and the
 open-work check before archiving a car read the clock themselves, because they never show a
 phase.
 

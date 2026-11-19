@@ -1295,7 +1295,7 @@ mod tests {
             .unwrap();
         let _ = open_todo;
 
-        let all = list(&db, v, true, crate::services::today()).await.unwrap();
+        let all = list(&db, v, true, date("2026-11-18")).await.unwrap();
         let s = all.iter().find(|s| s.appointment.id == a.id).unwrap();
         assert_eq!(
             (s.status, s.phase, s.jobs, s.needs_open, s.todos_open),
@@ -1380,11 +1380,8 @@ mod tests {
         );
 
         todo_svc::complete(&db, v, t.id, None).await.unwrap();
-        assert!(
-            list(&db, v, false, crate::services::today())
-                .await
-                .unwrap()
-                .is_empty()
+        crate::test_support::assert_empty(
+            &list(&db, v, false, crate::services::today()).await.unwrap(),
         );
     }
 
@@ -1530,11 +1527,8 @@ mod tests {
 
         let cancelled = cancel(&db, v, a.id).await.unwrap();
         assert_eq!(cancelled.unassigned_todo_ids, vec![t]);
-        assert!(
-            list(&db, v, false, crate::services::today())
-                .await
-                .unwrap()
-                .is_empty()
+        crate::test_support::assert_empty(
+            &list(&db, v, false, crate::services::today()).await.unwrap(),
         );
         assert_eq!(
             todo_svc::require(&db, v, t).await.unwrap().appointment_id,
