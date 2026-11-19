@@ -35,6 +35,7 @@ fn validate_who_and_when(
     end_date: Option<chrono::NaiveDate>,
     performed_by: Performer,
     shop_name: Option<&str>,
+    shop_id: Option<i32>,
 ) -> DomainResult<()> {
     if end_date.is_some_and(|end| end < service_date) {
         return Err(DomainError::invalid(
@@ -45,6 +46,12 @@ fn validate_who_and_when(
     if performed_by == Performer::Owner && shop_name.is_some() {
         return Err(DomainError::invalid(
             "shop_name",
+            "a self-performed service has no shop",
+        ));
+    }
+    if performed_by == Performer::Owner && shop_id.is_some() {
+        return Err(DomainError::invalid(
+            "shop_id",
             "a self-performed service has no shop",
         ));
     }
@@ -777,6 +784,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
         input.end_date,
         performed_by,
         input.shop_name.as_deref(),
+        input.shop_id,
     )?;
     let line_items_input = input.line_items.unwrap_or_default();
     if let Some(appointment_id) = input.appointment_id {
@@ -926,6 +934,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
             .as_ref()
             .unwrap_or(&existing.shop_name)
             .as_deref(),
+        input.shop_id.unwrap_or(existing.shop_id),
     )?;
     let invoice_ref = input
         .invoice_ref
@@ -2730,6 +2739,54 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "shop_name"));
+    }
+
+    #[tokio::test]
+    async fn a_self_performed_service_names_no_shop_id() {
+        use crate::entities::shop;
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let shop_id = shop::ActiveModel {
+            name: Set("Example VW".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap()
+        .id;
+        let err = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: date("2025-03-24"),
+                performed_by: Some(Performer::Owner),
+                shop_id: Some(shop_id),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "shop_id"));
+
+        let at_shop = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: date("2025-03-24"),
+                shop_id: Some(shop_id),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let self_done = UpdateServiceRecord {
+            performed_by: Some(Performer::Owner),
+            ..Default::default()
+        };
+        let err = update(&db, vid, at_shop.record.id, self_done)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "shop_id"));
     }
 
     #[tokio::test]

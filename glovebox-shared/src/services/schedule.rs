@@ -87,6 +87,12 @@ pub async fn create(
             "Exactly one of platform_id, model_template_id, or vehicle_id must be set",
         ));
     }
+    if input.overrides_item_id.is_some() && input.vehicle_id.is_none() {
+        return Err(DomainError::invalid(
+            "overrides_item_id",
+            "only a vehicle's own item overrides an inherited one",
+        ));
+    }
 
     let model = maintenance_schedule_item::ActiveModel {
         platform_id: Set(input.platform_id),
@@ -860,6 +866,25 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(err, DomainError::Invalid { .. }));
+    }
+
+    #[tokio::test]
+    async fn only_a_vehicle_item_overrides_another() {
+        let db = test_db().await;
+        let err = create(
+            &db,
+            NewScheduleItem {
+                platform_id: Some(1),
+                overrides_item_id: Some(1),
+                name: "Oil change".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, DomainError::Invalid { ref field, .. } if field == "overrides_item_id")
+        );
     }
 
     #[tokio::test]

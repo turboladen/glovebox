@@ -142,7 +142,10 @@ then adds those rules to `parts` as CHECK constraints (`schema::add_checks`), an
 `m20261119_000002_need_decision_checks`, which does the same for a need's choice, date and reason
 and an option's rejection and kept choice, and makes the chosen option's key `ON DELETE
 RESTRICT`, and `m20261119_000003_appointment_ending_check`, which refuses to finish while an
-appointment is both closed and cancelled and then adds that rule as a CHECK. They run on startup.
+appointment is both closed and cancelled and then adds that rule as a CHECK, and
+`m20261119_000004_single_row_checks`, which does the same for a job's completing service, a
+service's dates and shop, a service reading's source, a schedule item's override and a research
+finding's status. They run on startup.
 
 **Test harness** (`test_support.rs`): `test_db()` is an in-memory SQLite database with migrations
 applied. It is compiled under `#[cfg(any(test, feature = "test-support"))]`; `glovebox-mcp` uses it
@@ -307,7 +310,7 @@ case.
 Platforms and model templates are written only by migrations; `model_template::list` and
 `list_with_platform` are the only template services
 (`docs/adr/0013-templates-come-from-migrations.md`). Shops have their table, `shop_id` and
-`shop::require_if_named`, but no write path yet.
+`shop::require_if_named`, but no write path yet; a self-performed service names no shop.
 
 **Resources**: `glovebox://vehicles`, `glovebox://vehicles/{id}` and `…/{id}/activity`.
 `list_resources` enumerates concrete URIs from the database and `read_resource` parses them.
@@ -470,11 +473,11 @@ role per control style, and `YYYY-MM-DD` dates.
   statuses (`recall::ShownRecallStatus`, `appointment::AppointmentStatus`,
   `appointment::AppointmentPhase` and `reminders::DueStatus`, which reminders and planned work's
   revisit share). The other four are
-  arguments: `recall::RecallStatus`, which the recall service maps to and from the stored finding
-  status, `service_record::CompletedWork`, `schedule::LinkMode` and `search::SearchScope`. A
+  arguments: `recall::RecallStatus`, which the recall service maps to and from the stored
+  `research_finding::FindingStatus`, `service_record::CompletedWork`, `schedule::LinkMode` and `search::SearchScope`. A
   filter on a column never takes one of these.
   `docs/adr/0004-typed-vocabularies.md` records why.
-- **Migrations**: new migrations go after `m20261119_000003_appointment_ending_check`; the
+- **Migrations**: new migrations go after `m20261119_000004_single_row_checks`; the
   `new-migration` skill has the templates. Use `Expr::cust()` for expressions inside builder queries; raw
   `execute_unprepared` only where no builder form exists (FTS5 DDL, cross-table copies).
 - **Migrations are not transactional on SQLite** (sea-orm-migration only wraps Postgres), so write

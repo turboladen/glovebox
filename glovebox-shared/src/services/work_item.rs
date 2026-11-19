@@ -582,7 +582,7 @@ mod tests {
             report_id: Set(report.id),
             category: Set("recall".into()),
             title: Set("Recall".into()),
-            status: Set("new".into()),
+            status: Set(crate::entities::research_finding::FindingStatus::New),
             ..Default::default()
         }
         .insert(db)

@@ -2,7 +2,10 @@ use sea_orm::*;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    entities::{research_finding, research_report},
+    entities::{
+        research_finding::{self, FindingStatus},
+        research_report,
+    },
     error::{DomainError, DomainResult},
     services::{
         nhtsa::{self, RecallInfo},
@@ -242,7 +245,7 @@ async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
             description: Set(f.description),
             source_url: Set(f.source_url),
             severity: Set(f.severity),
-            status: Set("new".to_string()),
+            status: Set(FindingStatus::New),
             ..Default::default()
         };
         finding.insert(&txn).await?;
@@ -301,7 +304,7 @@ pub async fn file_finding<C: ConnectionTrait + TransactionTrait>(
         description: Set(input.description),
         source_url: Set(input.source_url),
         severity: Set(input.severity),
-        status: Set("new".to_string()),
+        status: Set(FindingStatus::New),
         ..Default::default()
     }
     .insert(db)

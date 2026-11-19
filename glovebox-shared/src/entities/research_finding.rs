@@ -1,6 +1,15 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
+crate::vocab::vocabulary! {
+    /// Where a finding stands: still to act on, acted on, or set aside.
+    pub enum FindingStatus {
+        New => "new",
+        Completed => "completed",
+        Dismissed => "dismissed",
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "research_findings")]
 pub struct Model {
@@ -12,7 +21,7 @@ pub struct Model {
     pub description: Option<String>,
     pub source_url: Option<String>,
     pub severity: Option<String>,
-    pub status: String,
+    pub status: FindingStatus,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
 }

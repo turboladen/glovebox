@@ -20,11 +20,27 @@ pub async fn list(
         .await?)
 }
 
+/// Logs an odometer reading by hand, with `source` `manual` unless the caller
+/// names another.
+///
+/// # Errors
+/// `NotFound` for a vehicle that does not exist; `Invalid` on `source` for
+/// `service`, which names only the reading a service logs.
 pub async fn create<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
     input: NewMileageEntry,
 ) -> DomainResult<mileage_log::Model> {
+    if input
+        .source
+        .as_deref()
+        .is_some_and(|s| s.trim().eq_ignore_ascii_case("service"))
+    {
+        return Err(DomainError::invalid(
+            "source",
+            "a reading from a service is recorded with the service",
+        ));
+    }
     let txn = super::begin_write(db).await?;
     let db = &txn;
     super::vehicle::require(db, vehicle_id).await?;
