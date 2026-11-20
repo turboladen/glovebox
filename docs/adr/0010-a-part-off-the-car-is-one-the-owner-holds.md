@@ -41,7 +41,9 @@ sets `supplied_by` to the owner is allowed.
 takes no installing service, install date or odometer, no replaced date or odometer, and no
 clearing of its received date in that call.
 
-The rules live in `part::update` (`validate_coming_off` and the clearing beside it).
+A part's status and its install, replacement and return columns are written only through
+`part::PartState` (in `glovebox-shared/src/services/part.rs`), which `inputs::part::Fitting` (a
+correction) and `inputs::part::NewFitting` (a new part) move, as ADR-0016 describes.
 
 ## Alternatives considered
 
@@ -60,8 +62,10 @@ The rules live in `part::update` (`validate_coming_off` and the clearing beside 
 - Saying a shop part was not fitted goes through `correct_service` (dropping it from `part_ids`) or
   `delete_service`, which apply ADR-0005's rules, or through `delete_part`.
 - An owner part that comes off the car shows as received on its need, ready to be fitted again.
-- `record_part`, a `correct_part` that sends install details without a status, and a returned part
-  set back to purchased can still give a purchased part an installing service. That case is
-  tracked as its own issue.
+- No write gives a purchased part install details. `inputs::part::NewFitting::from_fields` refuses
+  them on a new purchased part, `PartState::apply` refuses them on a part that stays purchased, and
+  the `parts_install_while_fitted` CHECK constraint (migration
+  `m20261119_000001_part_life_cycle_checks`) refuses such a row in the database, as ADR-0016
+  describes.
 - Taking a part off the car does not reopen its job. When the job should be done again, the job
   is set back to planned, or the service that completed it is corrected.
