@@ -50,9 +50,10 @@ is stored, and reopening an incident the invoice names is a wrong record.
   service came from it and the invoice did not name it. After `did_not_happen` the incident
   reads unresolved unless another service resolved it. After `done_another_way` it stays
   resolved and the service stops being one of its resolvers. No link is written or removed.
-- `update_incident` replaces the stored links only. A service that a job brings stays in
-  `resolved_by` whatever the list says, a list sent back from a read stores nothing for it, and
-  an empty list leaves the incident resolved while a job still resolves it.
+- `update_incident` replaces the stored links of the services no job brings. A service that a
+  job brings stays in `resolved_by` whatever the list says and keeps the link it has: a stored
+  one stays, and a list sent back from a read stores none. An empty list leaves the incident
+  resolved while a job still resolves it.
 - Deleting a completed job removes the job's record and says nothing about the work, so the
   service keeps the incident as a stored link (`incident::keep_resolver`), as it keeps the
   schedule item.
@@ -71,6 +72,10 @@ is stored, and reopening an incident the invoice names is a wrong record.
   completed job's incident. Such a row cannot say whether the invoice named the incident, so it
   is taken as the job's: each incident reads resolved by the same services before and after, and
   taking such a job off reopens its incident.
+- A job completed before this decision whose service held no `resolved` link to the job's
+  incident (the owner removed it, or the job was given the incident afterwards) reads as a
+  resolver of that incident from the upgrade on, whatever the incident's `resolved` flag says.
+  The flag is not changed. Clearing the job's incident takes the service off again.
 - One limit is accepted. `did_not_happen` reopens an incident that the owner marked resolved by
   hand before the job was completed, when no other service resolved it. Nothing stored says the
   flag was set before the job, and the refusal names the incident before the answer is given.

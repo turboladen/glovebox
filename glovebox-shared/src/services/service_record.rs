@@ -714,8 +714,7 @@ async fn same_day_peers(
 
 /// Links the record to the incidents its invoice says it fixed and the ones
 /// it noticed. A completed job that came from an incident fixes that incident
-/// too: the incident is marked resolved and no link is stored, because the
-/// job names the service.
+/// too, so the incident is marked resolved.
 async fn link_incidents(
     txn: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -724,6 +723,8 @@ async fn link_incidents(
     noticed_ids: Vec<i32>,
     completed: &[crate::entities::work_item::Model],
 ) -> DomainResult<()> {
+    // No link is stored for a job's incident, because the job names the
+    // service, and a stored link then always means the invoice named it.
     let from_jobs: Vec<i32> = completed.iter().filter_map(|w| w.incident_id).collect();
     incident_svc::mark_resolved(txn, vehicle_id, &super::dedup_ids(&from_jobs)).await?;
     for (ids, role) in [
@@ -5802,6 +5803,46 @@ mod tests {
                 .unwrap();
             assert_eq!(stored_incident_links(&db).await, 1);
             assert_eq!(resolvers(&db, v, incident).await, vec![svc, named]);
+        }
+
+        #[tokio::test]
+        async fn a_resolver_list_leaves_the_invoices_link_of_a_jobs_service_alone() {
+            use crate::inputs::incident::UpdateIncident;
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observation(&db, v, None).await;
+            let j = job_for(&db, v, incident).await;
+            let svc = create(
+                &db,
+                v,
+                NewServiceRecord {
+                    service_date: date("2026-11-01"),
+                    work_item_ids: Some(vec![j]),
+                    resolved_incident_ids: Some(vec![incident]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .record
+            .id;
+
+            // The list leaves the job's service out and cannot remove it.
+            let other = service_dated(&db, v, "2026-11-02").await;
+            let only_other = UpdateIncident {
+                resolved_by_service_ids: Some(vec![other]),
+                ..Default::default()
+            };
+            incident::update(&db, v, incident, only_other)
+                .await
+                .unwrap();
+            assert_eq!(resolvers(&db, v, incident).await, vec![svc, other]);
+
+            // The invoice's naming holds when the job is taken off.
+            update(&db, v, svc, jobs(vec![], Some(CompletedWork::DidNotHappen)))
+                .await
+                .unwrap();
+            assert_eq!(resolvers(&db, v, incident).await, vec![svc, other]);
         }
 
         #[tokio::test]

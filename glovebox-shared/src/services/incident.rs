@@ -518,14 +518,6 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     // or a completed job still resolves it.
     let mut cleared_all_resolvers = false;
     if let Some(sids) = input.resolved_by_service_ids {
-        let stored: Vec<i32> = incident_service_link::Entity::find()
-            .filter(incident_service_link::Column::IncidentId.eq(inc.id))
-            .filter(incident_service_link::Column::Role.eq(LinkRole::Resolved))
-            .all(&txn)
-            .await?
-            .into_iter()
-            .map(|l| l.service_record_id)
-            .collect();
         let from_jobs: Vec<i32> = work_item::Entity::find()
             .select_only()
             .column(work_item::Column::CompletedServiceId)
@@ -535,17 +527,29 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
             .all(&txn)
             .await?;
         cleared_all_resolvers = sids.is_empty() && from_jobs.is_empty();
-        incident_service_link::Entity::delete_many()
+        // The list cannot take off a service a job brings, so that service's
+        // links stay as they are: a stored one keeps saying the invoice named
+        // the incident, and none is stored for a list sent back from a read,
+        // which names the service because the job does.
+        let replaced: Vec<i32> = incident_service_link::Entity::find()
             .filter(incident_service_link::Column::IncidentId.eq(inc.id))
             .filter(incident_service_link::Column::Role.eq(LinkRole::Resolved))
-            .exec(&txn)
-            .await?;
-        // A read lists a job's service beside the stored ones, so a list
-        // sent back names it. Storing it would keep the service as a
-        // resolver after its job is taken off.
-        let only_a_job_brings = |sid: &i32| from_jobs.contains(sid) && !stored.contains(sid);
+            .all(&txn)
+            .await?
+            .into_iter()
+            .map(|l| l.service_record_id)
+            .filter(|sid| !from_jobs.contains(sid))
+            .collect();
+        if !replaced.is_empty() {
+            incident_service_link::Entity::delete_many()
+                .filter(incident_service_link::Column::IncidentId.eq(inc.id))
+                .filter(incident_service_link::Column::Role.eq(LinkRole::Resolved))
+                .filter(incident_service_link::Column::ServiceRecordId.is_in(replaced))
+                .exec(&txn)
+                .await?;
+        }
         for sid in super::dedup_ids(&sids) {
-            if !only_a_job_brings(&sid) {
+            if !from_jobs.contains(&sid) {
                 link_service(&txn, vehicle_id, inc.id, sid, LinkRole::Resolved).await?;
             }
         }

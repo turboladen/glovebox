@@ -476,3 +476,64 @@ async fn update_planned_work_names_the_schedule_item_that_stopped_counting() {
     assert_eq!(back["released_schedule_item_id"], item.id);
     assert_eq!(back["released_from_service_id"], service["id"]);
 }
+
+// Records a service that completes a new job, and logs an incident the job
+// was not filed from. Returns the job id, the service id and the incident id.
+async fn completed_job_and_an_incident(
+    t: &common::TestClient,
+    vehicle_id: i32,
+) -> (serde_json::Value, serde_json::Value, serde_json::Value) {
+    let job = t
+        .call(
+            "plan_work",
+            json!({ "vehicle_id": vehicle_id, "title": "Fix leak" }),
+        )
+        .await["id"]
+        .clone();
+    let service = t
+        .call(
+            "record_service",
+            json!({ "vehicle_id": vehicle_id, "service_date": "2026-06-01", "work_item_ids": [job] }),
+        )
+        .await["id"]
+        .clone();
+    let incident = t
+        .call(
+            "log_incident",
+            json!({ "vehicle_id": vehicle_id, "title": "Leak" }),
+        )
+        .await["id"]
+        .clone();
+    (job, service, incident)
+}
+
+#[tokio::test]
+async fn giving_a_completed_job_an_incident_resolves_it_and_deleting_the_job_keeps_that() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let (job, service, incident) = completed_job_and_an_incident(&t, v.id).await;
+
+    t.call(
+        "update_planned_work",
+        json!({ "vehicle_id": v.id, "work_item_id": job, "incident_id": incident }),
+    )
+    .await;
+    let read = || {
+        t.call(
+            "get_incident",
+            json!({ "vehicle_id": v.id, "incident_id": incident }),
+        )
+    };
+    let linked = read().await;
+    assert_eq!(linked["resolved"], true, "got: {linked}");
+    assert_eq!(linked["resolved_by"][0]["id"], service);
+
+    t.call(
+        "delete_planned_work",
+        json!({ "vehicle_id": v.id, "work_item_id": job }),
+    )
+    .await;
+    let kept = read().await;
+    assert_eq!(kept["resolved"], true, "got: {kept}");
+    assert_eq!(kept["resolved_by"][0]["id"], service);
+}
