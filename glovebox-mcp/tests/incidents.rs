@@ -433,3 +433,100 @@ async fn update_incident_sets_changes_and_clears_where_it_was_noticed() {
         missing.replace("99999", "N")
     );
 }
+
+// Records a service that completes a job filed from a new incident. With
+// `named`, the invoice names the incident as well.
+async fn service_completing_a_job_from_an_incident(
+    t: &common::TestClient,
+    vehicle_id: i32,
+    named: bool,
+) -> (serde_json::Value, serde_json::Value) {
+    let incident = t
+        .call(
+            "log_incident",
+            json!({ "vehicle_id": vehicle_id, "title": "Leak" }),
+        )
+        .await;
+    let job = t
+        .call(
+            "plan_work",
+            json!({ "vehicle_id": vehicle_id, "title": "Fix leak", "incident_id": incident["id"] }),
+        )
+        .await;
+    let mut args = json!({
+        "vehicle_id": vehicle_id,
+        "service_date": "2026-06-01",
+        "work_item_ids": [job["id"]]
+    });
+    if named {
+        args["resolved_incident_ids"] = json!([incident["id"]]);
+    }
+    let service = t.call("record_service", args).await;
+    (incident, service)
+}
+
+#[tokio::test]
+async fn an_incident_the_invoice_named_stays_resolved_when_its_job_is_taken_off() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let (incident, service) = service_completing_a_job_from_an_incident(&t, v.id, true).await;
+
+    let fixed = t
+        .call(
+            "correct_service",
+            json!({
+                "vehicle_id": v.id,
+                "service_id": service["id"],
+                "work_item_ids": [],
+                "completed_work": "did_not_happen"
+            }),
+        )
+        .await;
+    assert_eq!(fixed["resolved_incidents"][0]["id"], incident["id"]);
+    let read = t
+        .call(
+            "get_incident",
+            json!({ "vehicle_id": v.id, "incident_id": incident["id"] }),
+        )
+        .await;
+    assert_eq!(read["resolved"], true, "got: {read}");
+    assert_eq!(read["resolved_by"][0]["id"], service["id"]);
+}
+
+#[tokio::test]
+async fn an_incident_only_a_job_resolved_reopens_when_the_job_is_taken_off() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let (incident, service) = service_completing_a_job_from_an_incident(&t, v.id, false).await;
+    assert_eq!(service["resolved_incidents"][0]["id"], incident["id"]);
+
+    // The list the read gave, sent back, does not make the service a
+    // resolver the job cannot take with it.
+    t.call(
+        "update_incident",
+        json!({
+            "vehicle_id": v.id,
+            "incident_id": incident["id"],
+            "resolved_by_service_ids": [service["id"]]
+        }),
+    )
+    .await;
+    t.call(
+        "correct_service",
+        json!({
+            "vehicle_id": v.id,
+            "service_id": service["id"],
+            "work_item_ids": [],
+            "completed_work": "did_not_happen"
+        }),
+    )
+    .await;
+    let read = t
+        .call(
+            "get_incident",
+            json!({ "vehicle_id": v.id, "incident_id": incident["id"] }),
+        )
+        .await;
+    assert_eq!(read["resolved"], false, "got: {read}");
+    assert_eq!(read["resolved_by"], json!([]));
+}

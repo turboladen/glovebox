@@ -501,10 +501,14 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     let db = &txn;
     let existing = get(db, vehicle_id, id).await?;
     let satisfied = existing.completed_service_id.zip(existing.schedule_item_id);
+    let resolved = existing.completed_service_id.zip(existing.incident_id);
     existing.delete(db).await?;
     // The service did the work whether or not the job's record is kept, so
-    // the schedule item the job brought is stored as a link of the service
-    // and its reminder keeps counting from there.
+    // the incident the job resolved keeps the service as a stored link, and
+    // so does the schedule item, whose reminder keeps counting from there.
+    if let Some((service_id, incident_id)) = resolved {
+        super::incident::keep_resolver(db, incident_id, service_id).await?;
+    }
     if let Some((service_id, item_id)) = satisfied {
         super::schedule::insert_service_links(
             db,

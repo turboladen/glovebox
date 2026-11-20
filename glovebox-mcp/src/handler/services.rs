@@ -146,21 +146,23 @@ impl GloveboxMcp {
                        job taken off takes its incident, its recall, the parts fitted to its \
                        needs and the reminder baseline of its schedule item with it, and a job \
                        added resolves its incident and performs its recall, as `record_service` \
-                       does. When the call takes recorded work off the service (a job, a fitted \
-                       part, a recall or an incident), it refuses and names each item until you \
-                       pass `completed_work`. Ask the owner and never choose on your own: \
-                       `did_not_happen` when the work was not done (jobs go back to planned, \
-                       parts read `purchased` and a shop-supplied one leaves its need, recalls \
-                       read open, incidents are unresolved), or `done_another_way` when it was \
-                       done but not on this invoice. The reply names any appointment that \
-                       reopened (`reopened_appointment_ids`) and any job that left a cancelled \
-                       one (`unassigned_job_ids`). The schedule items that stopped counting from \
-                       this service are in `released_schedule_item_ids`; when the invoice did \
-                       cover one, `link_service_to_maintenance` names it on the service again. \
-                       Use this when the invoice was already recorded and something on it is \
-                       wrong; do not record the work a second time with `record_service`, which \
-                       creates a duplicate. To close an incident, use `record_service` for new \
-                       work or `update_incident`."
+                       does. An incident the invoice named in `resolved_incident_ids` stays \
+                       resolved by this service when its job is taken off. When the call takes \
+                       recorded work off the service (a job, a fitted part, a recall or an \
+                       incident), it refuses and names each item until you pass `completed_work`. \
+                       Ask the owner and never choose on your own: `did_not_happen` when the work \
+                       was not done (jobs go back to planned, parts read `purchased` and a \
+                       shop-supplied one leaves its need, recalls read open, incidents are \
+                       unresolved), or `done_another_way` when it was done but not on this \
+                       invoice. The reply names any appointment that reopened \
+                       (`reopened_appointment_ids`) and any job that left a cancelled one \
+                       (`unassigned_job_ids`). The schedule items that stopped counting from this \
+                       service are in `released_schedule_item_ids`; when the invoice did cover \
+                       one, `link_service_to_maintenance` names it on the service again. Use this \
+                       when the invoice was already recorded and something on it is wrong; do not \
+                       record the work a second time with `record_service`, which creates a \
+                       duplicate. To close an incident, use `record_service` for new work or \
+                       `update_incident`."
     )]
     async fn correct_service(
         &self,

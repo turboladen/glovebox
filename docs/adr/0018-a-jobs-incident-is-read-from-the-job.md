@@ -1,0 +1,68 @@
+# ADR-0018: A job's incident is read from the job
+
+- **Status:** Accepted
+- **Date:** 2026-11-19
+
+## Context
+
+A service resolves an incident in two ways. The invoice can name the incident
+(`resolved_incident_ids` on `record_service`, or `resolved_by_service_ids` on `update_incident`),
+which stores a `resolved` row in `incident_service_links`. Or the service can complete a planned
+job that was filed from the incident (`work_items.incident_id`).
+
+A stored link holds an incident id, a service id and a role. A link written for a completed job
+would be the same row as a link the invoice named, so nothing could tell them apart when
+`correct_service` takes the job off the service. ADR-0017 met the same shape for schedule items.
+
+## Decision
+
+**A job's incident is read from the job and never stored as a link.** A service resolved the
+incidents its stored `resolved` links name and the incident of each job it completes.
+`incident::resolvers_of_services` and `incident::resolvers_of_incidents` return that union, and
+every reader goes through one of them: a service's `resolved_incidents`, an incident's
+`resolved_by`, the work a correction or a delete would undo, and the check for another service
+that also resolved the incident. Completing a job marks its incident resolved
+(`incident::mark_resolved`) and stores nothing.
+
+**A stored link means the invoice named the incident, and it stays when the job leaves.** A
+service can hold both: the stored link beside a job filed from the same incident. Taking the job
+off then changes nothing about the incident, because the invoice still says the service fixed
+it.
+
+This is where incidents differ from ADR-0017, in which an item named beside its job follows the
+job. A schedule item named beside its job is usually a read sent back, and the reminder is
+derived, so dropping the link loses nothing the owner cannot see. An incident's `resolved` flag
+is stored, and reopening an incident the invoice names is a wrong record.
+
+## Alternatives considered
+
+- **The rule of ADR-0017: drop a stored link that repeats a job's incident.** One rule for both
+  link kinds, but taking the job off would reopen an incident the invoice resolved.
+- **A column on the link that names the job.** The link's primary key is the incident, the
+  service and the role, so one row cannot say that the invoice named the incident and a job also
+  brought it.
+- **Storing the link and removing it when the job is taken off.** The stored row cannot say
+  whether the invoice also named the incident.
+
+## Consequences
+
+- `correct_service` taking a job off releases the job's incident only when no other job of the
+  service came from it and the invoice did not name it. After `did_not_happen` the incident
+  reads unresolved unless another service resolved it. After `done_another_way` it stays
+  resolved and the service stops being one of its resolvers. No link is written or removed.
+- `update_incident` replaces the stored links only. A service that a job brings stays in
+  `resolved_by` whatever the list says, a list sent back from a read stores nothing for it, and
+  an empty list leaves the incident resolved while a job still resolves it.
+- Deleting a completed job removes the job's record and says nothing about the work, so the
+  service keeps the incident as a stored link (`incident::keep_resolver`), as it keeps the
+  schedule item.
+- Setting a completed job back to planned or dropped, or giving it another incident, with
+  `update_planned_work` takes the service out of the incident's resolvers and leaves the
+  `resolved` flag alone. Only a correction of the service says whether the work happened.
+- `m20261120_000002_job_incident_links` removes the stored `resolved` links that repeat a
+  completed job's incident. Such a row cannot say whether the invoice named the incident, so it
+  is taken as the job's: each incident reads resolved by the same services before and after, and
+  taking such a job off reopens its incident.
+- One limit is accepted. `did_not_happen` reopens an incident that the owner marked resolved by
+  hand before the job was completed, when no other service resolved it. Nothing stored says the
+  flag was set before the job, and the refusal names the incident before the answer is given.

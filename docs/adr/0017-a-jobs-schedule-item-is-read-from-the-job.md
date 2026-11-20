@@ -61,6 +61,5 @@ stores nothing for it.
   the job is taken off through `work_item_ids`.
 - `m20261120_000001_job_schedule_links` removes the stored links that repeat a completed job's
   item. Each service satisfies the same schedule items before and after it runs.
-- An incident has the same shape and is not covered here. A job filed from an incident and an
-  invoice that names the incident share one `resolved` link, so taking the job off reopens an
-  incident the invoice resolved.
+- An incident has the same shape, and ADR-0018 records its rule, which differs: an incident the
+  invoice named beside a job stays resolved when the job is taken off.
