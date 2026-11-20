@@ -1793,7 +1793,7 @@ async fn record_service_lists_the_incidents_still_open() {
     let leak = t
         .call(
             "log_incident",
-            json!({ "vehicle_id": v.id, "title": "Leak" }),
+            json!({ "vehicle_id": v.id, "title": "Leak", "occurred_at": "2026-05-01" }),
         )
         .await;
     let job = t
@@ -1805,7 +1805,7 @@ async fn record_service_lists_the_incidents_still_open() {
     let rattle = t
         .call(
             "log_incident",
-            json!({ "vehicle_id": v.id, "title": "Rattle" }),
+            json!({ "vehicle_id": v.id, "title": "Rattle", "occurred_at": "2026-05-02" }),
         )
         .await;
 
@@ -1848,6 +1848,24 @@ async fn record_service_lists_the_incidents_still_open() {
         )
         .await;
     assert!(read.get("open_incidents").is_none(), "got: {read}");
+
+    // An incident that happened after the visit is not one it could fix.
+    t.call(
+        "log_incident",
+        json!({ "vehicle_id": v.id, "title": "Chip", "occurred_at": "2026-07-01" }),
+    )
+    .await;
+    let again = t
+        .call(
+            "correct_service",
+            json!({
+                "vehicle_id": v.id,
+                "service_id": service["id"],
+                "work_item_ids": [job["id"]]
+            }),
+        )
+        .await;
+    assert_eq!(again["open_incidents"].as_array().unwrap().len(), 1);
 }
 
 #[tokio::test]

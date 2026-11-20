@@ -133,10 +133,10 @@ impl ServerHandler for GloveboxMcp {
                  `mark_need_received`, and `return_part` for a wrong part; `add_todo` and \
                  `update_todo` for plain to-dos; `past_decisions` for what was chosen before. \
                  When the invoice arrives, pass `appointment_id` to `record_service` and ask \
-                 about every entry in its `unfitted_needs`. After any `record_service`, name each \
-                 incident it resolved and ask whether the work fixed any in `open_incidents`. \
-                 Also: `log_mileage` whenever the user mentions an odometer reading \
-                 (`list_mileage` / `delete_mileage` fix a typo, `delete_vehicle` undoes a \
+                 about every entry in its `unfitted_needs`. After a `record_service` that wrote a \
+                 record, name each incident it resolved and ask whether the work fixed any in \
+                 `open_incidents`. Also: `log_mileage` whenever the user mentions an odometer \
+                 reading (`list_mileage` / `delete_mileage` fix a typo, `delete_vehicle` undoes a \
                  mistaken `add_vehicle`), `record_part` and `list_parts` / `correct_part` / \
                  `delete_part` for parts, `save_note` for facts worth keeping, \
                  `file_research_finding` for research worth keeping (read back with \

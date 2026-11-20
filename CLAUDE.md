@@ -314,9 +314,10 @@ Open to-dos follow the same rule as planned jobs: closing is refused while one i
 cancelling takes them off, and un-ticking a to-do reopens a hand-closed appointment or takes the
 to-do off a cancelled one (`appointment::settle_reopened_todo`). Naming an appointment in `record_service` installs and completes nothing; the
 result's `unfitted_needs` lists the linked parts the invoice did not install. The `record_service` reply, and a
-`correct_service` reply that changes `work_item_ids` or `resolved_incident_ids`, lists the
-vehicle's still-unresolved incidents in `open_incidents` (each with the planned jobs filed from
-it), so the client asks whether the work fixed one. `need_id` is accepted
+`correct_service` reply that changes `work_item_ids` or `resolved_incident_ids`, lists in `open_incidents` the
+unresolved incidents the service could have fixed (dated no later than it, not noticed during it,
+not brought by one of its jobs, each with the planned jobs filed from it), so the client asks
+whether the work fixed one. The key is absent when the call did not look. `need_id` is accepted
 on the inline parts of `record_service` only, and `get_checklist` takes at most one of
 `appointment_id` and `work_item_id`.
 A part bought as a kit lists its items in `contents`. `record_part`, `mark_need_ordered` and the
