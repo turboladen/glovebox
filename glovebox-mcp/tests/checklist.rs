@@ -760,16 +760,37 @@ async fn appointment_status_changes_report_the_jobs_they_release() {
     let v = add_vehicle(&t, "GTI").await;
     let appt = plan_appointment(&t, v, "60k").await;
     let job = plan_job(&t, v, "Brakes", Some(appt)).await;
+    let kw = id(&t.call("add_shop", json!({ "name": "KW Automotive" })).await);
+
+    let err = t
+        .call_err(
+            "update_appointment",
+            json!({ "vehicle_id": v, "appointment_id": appt, "shop_id": kw, "shop_name": "KW" }),
+        )
+        .await;
+    assert_eq!(err, "Name the shop by shop_id or by shop_name, not both");
+    let err = t
+        .call_err(
+            "update_appointment",
+            json!({ "vehicle_id": v, "appointment_id": appt, "shop_name": "KW" }),
+        )
+        .await;
+    assert!(
+        err.starts_with("No shop in the directory is named KW"),
+        "{err}"
+    );
 
     let edited = t
         .call(
             "update_appointment",
             json!({
                 "vehicle_id": v, "appointment_id": appt, "purpose": "60k service",
-                "shop_name": "KW", "planned_date": "2026-12-01"
+                "shop_name": "kw automotive", "planned_date": "2026-12-01"
             }),
         )
         .await;
+    assert_eq!(edited["appointment"]["shop_id"], kw);
+    assert_eq!(edited["appointment"]["shop_name"], "KW Automotive");
     assert_eq!(edited["appointment"]["purpose"], "60k service");
     assert_eq!(edited["appointment"]["planned_date"], "2026-12-01");
     assert_eq!(edited["appointment"]["jobs"], 1);

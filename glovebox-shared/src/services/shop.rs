@@ -9,7 +9,7 @@ use serde::Serialize;
 use crate::{
     entities::{appointment, service_record, shop, vehicle},
     error::{DomainError, DomainResult},
-    inputs::shop::{NewShop, UpdateShop},
+    inputs::shop::{NewShop, ShopChoice, UpdateShop},
 };
 
 use super::{appointment::AppointmentSummary, trim_to_none};
@@ -107,17 +107,71 @@ pub async fn get(db: &impl ConnectionTrait, id: i32) -> DomainResult<shop::Model
         .ok_or_else(|| not_found(id))
 }
 
-/// Refuses a shop id that names no shop, with `NotFound`; `None` passes.
-// The shop directory is global, so an id is checked for existence only. A
-// missing shop would otherwise surface as an opaque foreign-key failure.
-pub(crate) async fn require_if_named(
+/// The id of the shop `choice` names, or `None` for a blank name. An id must
+/// name a shop, and a name must match exactly one shop's name, ignoring ASCII
+/// case and surrounding spaces.
+///
+/// # Errors
+/// `NotFound` for an id that names no shop; `BadRequest` for a name that
+/// matches no shop or several.
+pub(crate) async fn resolve(
     db: &impl ConnectionTrait,
-    shop_id: Option<i32>,
-) -> DomainResult<()> {
-    if let Some(id) = shop_id {
-        get(db, id).await?;
+    choice: &ShopChoice,
+) -> DomainResult<Option<i32>> {
+    let name = match choice {
+        ShopChoice::Id(id) => return Ok(Some(get(db, *id).await?.id)),
+        ShopChoice::Name(name) => name.trim(),
+    };
+    if name.is_empty() {
+        return Ok(None);
     }
-    Ok(())
+    let key = text_key(name);
+    let matches: Vec<shop::Model> = shop::Entity::find()
+        .order_by_asc(shop::Column::Id)
+        .all(db)
+        .await?
+        .into_iter()
+        .filter(|s| text_key(&s.name) == key)
+        .collect();
+    match matches.as_slice() {
+        [only] => Ok(Some(only.id)),
+        [] => Err(DomainError::BadRequest(format!(
+            "No shop in the directory is named {name}. Add the shop to the directory first, or \
+             name one the directory holds"
+        ))),
+        several => Err(DomainError::BadRequest(format!(
+            "Several shops are named {name}: {}. Name the one meant by its id",
+            several
+                .iter()
+                .map(|s| match &s.address {
+                    Some(a) => format!("shop {} at {a}", s.id),
+                    None => format!("shop {} with no address", s.id),
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))),
+    }
+}
+
+/// The names of the shops `ids` name, for a read that prints a record's shop.
+pub(crate) async fn names(
+    db: &impl ConnectionTrait,
+    ids: impl IntoIterator<Item = i32>,
+) -> DomainResult<HashMap<i32, String>> {
+    let ids: std::collections::BTreeSet<i32> = ids.into_iter().collect();
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    Ok(shop::Entity::find()
+        .select_only()
+        .column(shop::Column::Id)
+        .column(shop::Column::Name)
+        .filter(shop::Column::Id.is_in(ids))
+        .into_tuple::<(i32, String)>()
+        .all(db)
+        .await?
+        .into_iter()
+        .collect())
 }
 
 // Two shops are the same when their names match by `text_key` and their
@@ -151,8 +205,8 @@ async fn refuse_duplicate(
             s.id, s.name
         ),
         None => format!(
-            "Shop {} is already {}, with no address. Use that shop, or give it its address \
-             first so this one can be told apart by a different address",
+            "Shop {} is already {}, with no address. Use that shop, or give it its address first \
+             so this one can be told apart by a different address",
             s.id, s.name
         ),
     }))

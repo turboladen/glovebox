@@ -1,6 +1,6 @@
 # ADR-0013: Platforms and templates come from migrations, and shops wait for their own design
 
-- **Status:** Accepted
+- **Status:** Accepted; the shop part is superseded by ADR-0021
 - **Date:** 2026-11-17
 
 ## Context

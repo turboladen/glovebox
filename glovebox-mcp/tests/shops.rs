@@ -1,7 +1,10 @@
 mod common;
 
 use common::{add_vehicle, assert_unknown_field_rejected, connect, id, minimal_service};
-use glovebox_shared::{inputs::service_record::NewServiceRecord, services::service_record};
+use glovebox_shared::{
+    inputs::{service_record::NewServiceRecord, shop::ShopChoice},
+    services::service_record,
+};
 use serde_json::json;
 
 #[tokio::test]
@@ -59,7 +62,7 @@ async fn merging_two_names_of_one_dealer_gives_one_history() {
             &t.db,
             vid,
             NewServiceRecord {
-                shop_id: Some(i32::try_from(shop).unwrap()),
+                shop: Some(ShopChoice::Id(i32::try_from(shop).unwrap())),
                 total_cost_cents: Some(10_000),
                 ..minimal_service(on, "Oil change")
             },

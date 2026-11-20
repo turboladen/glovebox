@@ -20,3 +20,22 @@ pub struct UpdateShop {
     pub specialty: Option<Option<String>>,
     pub notes: Option<Option<String>>,
 }
+
+/// The shop a service or appointment names: a directory entry by id, or by a
+/// name that must match exactly one entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShopChoice {
+    Id(i32),
+    Name(String),
+}
+
+impl ShopChoice {
+    /// The argument a refusal about this choice names.
+    #[must_use]
+    pub fn field(&self) -> &'static str {
+        match self {
+            ShopChoice::Id(_) => "shop_id",
+            ShopChoice::Name(_) => "shop_name",
+        }
+    }
+}

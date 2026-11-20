@@ -1,11 +1,12 @@
+use super::shop::ShopChoice;
+
 /// An appointment to create.
 #[derive(Default)]
 pub struct NewAppointment {
     /// What the visit is for; must not be blank.
     pub purpose: String,
-    pub shop_name: Option<String>,
-    /// A shop from the shop directory.
-    pub shop_id: Option<i32>,
+    /// The shop from the shop directory; a blank name names none.
+    pub shop: Option<ShopChoice>,
     /// The planned date; an appointment without one is not booked.
     pub planned_date: Option<chrono::NaiveDate>,
     pub notes: Option<String>,
@@ -16,8 +17,7 @@ pub struct NewAppointment {
 #[derive(Default)]
 pub struct UpdateAppointment {
     pub purpose: Option<String>,
-    pub shop_name: Option<Option<String>>,
-    pub shop_id: Option<Option<i32>>,
+    pub shop: Option<Option<ShopChoice>>,
     pub planned_date: Option<Option<chrono::NaiveDate>>,
     pub notes: Option<Option<String>>,
 }

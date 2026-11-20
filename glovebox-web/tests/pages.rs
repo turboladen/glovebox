@@ -650,7 +650,18 @@ async fn sheet_fixture(db: &DatabaseConnection) -> (i32, i32, i32) {
         v,
         NewAppointment {
             purpose: "Brakes".into(),
-            shop_name: Some("Smith Auto".into()),
+            shop: Some(glovebox_shared::inputs::shop::ShopChoice::Id(
+                glovebox_shared::services::shop::create(
+                    db,
+                    glovebox_shared::inputs::shop::NewShop {
+                        name: "Smith Auto".into(),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap()
+                .id,
+            )),
             planned_date: Some(date("2026-11-20")),
             ..Default::default()
         },

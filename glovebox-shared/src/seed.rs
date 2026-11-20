@@ -12,12 +12,14 @@ use crate::{
         need::{NewNeed, NewOption, OrderDetails, ReturnInput, UpdateOption},
         part::{NewPartContent, UpdatePart},
         service_record::NewServiceRecord,
+        shop::{NewShop, ShopChoice},
         todo::NewTodo,
         vehicle::NewVehicle,
         work_item::NewWorkItem,
     },
     services::{
-        self, appointment, model_template, need, part, service_record, todo, vehicle, work_item,
+        self, appointment, model_template, need, part, service_record, shop, todo, vehicle,
+        work_item,
     },
 };
 
@@ -203,12 +205,21 @@ async fn build(db: &(impl ConnectionTrait + TransactionTrait)) -> DomainResult<(
     )
     .await?;
     let v = car.id;
+    let shop = shop::create(
+        db,
+        NewShop {
+            name: "Demo Auto Works".into(),
+            address: Some("1 Example Way".into()),
+            ..Default::default()
+        },
+    )
+    .await?;
     let visit = appointment::create(
         db,
         v,
         NewAppointment {
             purpose: "60k service + loose ends".into(),
-            shop_name: Some("Demo Auto Works".into()),
+            shop: Some(ShopChoice::Id(shop.id)),
             planned_date: Some(services::today() + chrono::Duration::days(14)),
             ..Default::default()
         },

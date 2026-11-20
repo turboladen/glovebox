@@ -18,6 +18,8 @@ mod m20261119_000004_single_row_checks;
 mod m20261120_000001_job_schedule_links;
 mod m20261120_000002_job_incident_links;
 mod m20261120_000003_incident_resolved_by_hand;
+mod m20261121_000001_shops_search;
+mod m20261121_000002_shops_from_names;
 mod schema;
 
 pub struct Migrator;
@@ -44,6 +46,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20261120_000001_job_schedule_links::Migration),
             Box::new(m20261120_000002_job_incident_links::Migration),
             Box::new(m20261120_000003_incident_resolved_by_hand::Migration),
+            Box::new(m20261121_000001_shops_search::Migration),
+            Box::new(m20261121_000002_shops_from_names::Migration),
         ]
     }
 }

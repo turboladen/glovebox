@@ -308,6 +308,16 @@ pub async fn search(
             service_title,
             filt,
         ));
+        // A hit on a shop's name, address or notes finds every service it did.
+        subs.push(subquery(
+            "service",
+            "fts_shops",
+            "JOIN service_records s ON s.shop_id = fts_shops.rowid",
+            "s.id",
+            "s.vehicle_id",
+            service_title,
+            filt,
+        ));
     }
     if want(SearchScope::Incidents) {
         subs.push(subquery(
@@ -489,6 +499,41 @@ mod tests {
         assert_eq!(hit.vehicle_id, Some(vid));
         assert_eq!(hit.title, "Front brake job");
         assert!(hit.snippet.contains("brake"));
+    }
+
+    #[tokio::test]
+    async fn a_shops_name_finds_the_services_it_did() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db, "Golf R").await;
+        let shop = crate::services::shop::create(
+            &db,
+            crate::inputs::shop::NewShop {
+                name: "Clovis Volkswagen".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let sid = seed_service(&db, vid, "oil change").await;
+        entities::service_record::Entity::update_many()
+            .col_expr(
+                entities::service_record::Column::ShopId,
+                sea_orm::sea_query::Expr::value(shop.id),
+            )
+            .exec(&db)
+            .await
+            .unwrap();
+        seed_service(&db, vid, "elsewhere").await;
+
+        let hits = search(&db, "clovis", SearchScope::Services, Some(vid))
+            .await
+            .unwrap();
+        assert_eq!(
+            hits.iter()
+                .map(|h| (h.kind.as_str(), h.id))
+                .collect::<Vec<_>>(),
+            [("service", sid)]
+        );
     }
 
     #[tokio::test]

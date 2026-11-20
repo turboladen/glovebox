@@ -45,6 +45,9 @@ pub struct Model {
     pub labor_cost_currency: Option<String>,
     pub total_cost_cents: Option<i32>,
     pub total_cost_currency: Option<String>,
+    // Always NULL: a CHECK keeps it empty, and reads print the name of the
+    // shop `shop_id` names instead.
+    #[serde(skip_serializing)]
     pub shop_name: Option<String>,
     pub notes: Option<String>,
     pub created_at: DateTimeUtc,

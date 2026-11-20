@@ -365,7 +365,13 @@ pub struct CorrectServiceInput {
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<i32>")]
     pub total_cost_cents: Option<Option<i32>>,
-    /// Shop that did the work.
+    /// The shop that did the work, by its id from `list_shops`.
+    ///
+    /// Send `null` to clear it; omit the key to leave it unchanged.
+    #[serde(default, deserialize_with = "nullable")]
+    #[schemars(with = "Option<i32>")]
+    pub shop_id: Option<Option<i32>>,
+    /// The shop by name instead of `shop_id`. It must match one shop from `list_shops` (case and surrounding spaces aside); add a new shop with `add_shop` first.
     ///
     /// Send `null` to clear it; omit the key to leave it unchanged.
     #[serde(default, deserialize_with = "nullable")]
@@ -424,7 +430,7 @@ impl CorrectServiceInput {
                 parts_cost_cents: self.parts_cost_cents,
                 labor_cost_cents: self.labor_cost_cents,
                 total_cost_cents: self.total_cost_cents,
-                shop_name: self.shop_name,
+                shop: super::shop_change(self.shop_id, self.shop_name)?,
                 notes: self.notes,
                 payer_note: self.payer_note,
                 invoice_ref: self.invoice_ref,

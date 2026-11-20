@@ -442,6 +442,7 @@ async fn record_service_files_a_multi_line_invoice_in_one_call() {
         .await
         .unwrap()
         .id;
+    c.call("add_shop", json!({ "name": "Example VW" })).await;
     let out = c
         .call(
             "record_service",

@@ -165,7 +165,10 @@ pub async fn for_appointment(
     Ok(WorkSheet {
         appointment_id,
         vehicle: car.name,
-        shop: appointment.shop_name,
+        shop: super::shop::names(db, appointment.shop_id)
+            .await?
+            .into_values()
+            .next(),
         date: appointment.planned_date,
         jobs,
         unsettled,
@@ -780,12 +783,21 @@ mod tests {
     async fn header_names_the_vehicle_shop_and_date() {
         let db = test_db().await;
         let v = VehicleFixture::new().name("Golf GTI").insert_id(&db).await;
+        let shop = crate::services::shop::create(
+            &db,
+            crate::inputs::shop::NewShop {
+                name: "Smith Auto".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         let a = appointment::create(
             &db,
             v,
             NewAppointment {
                 purpose: "Brakes".into(),
-                shop_name: Some("Smith Auto".into()),
+                shop: Some(crate::inputs::shop::ShopChoice::Id(shop.id)),
                 planned_date: Some(date("2026-11-20")),
                 ..Default::default()
             },
