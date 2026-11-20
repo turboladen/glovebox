@@ -1065,10 +1065,8 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     link_incidents(&txn, vehicle_id, record.id, Vec::new(), Vec::new(), &added).await?;
     // These are the incidents of the jobs the correction took off, which no
     // other job of this service and no link of its invoice still resolves.
-    if choice == CompletedWork::DidNotHappen {
-        let incident_ids: Vec<i32> = removal.incidents.iter().map(|i| i.id).collect();
-        incident_svc::reopen_resolved(&txn, record.id, incident_ids).await?;
-    }
+    let incident_ids: Vec<i32> = removal.incidents.iter().map(|i| i.id).collect();
+    incident_svc::release_resolved(&txn, record.id, incident_ids, choice).await?;
 
     if let Some(mut item_ids) = input.schedule_item_ids {
         // A read lists a job's item beside the named ones, so a list sent
@@ -1418,10 +1416,8 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .collect();
     let settled = work_item::release_completed(&txn, &work.job_ids(), choice).await?;
     let finding_ids = work.recalls.iter().map(|r| r.finding_id).collect();
-    if choice == CompletedWork::DidNotHappen {
-        let incident_ids: Vec<i32> = work.incidents.iter().map(|i| i.id).collect();
-        incident_svc::reopen_resolved(&txn, existing.id, incident_ids).await?;
-    }
+    let incident_ids: Vec<i32> = work.incidents.iter().map(|i| i.id).collect();
+    incident_svc::release_resolved(&txn, existing.id, incident_ids, choice).await?;
     // The key clears these on delete too; the explicit write stamps them and
     // does not depend on the foreign_keys pragma.
     let unlinked_quote_ids: Vec<i32> = job::Entity::find()
@@ -5863,7 +5859,7 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn a_job_done_another_way_leaves_its_incident_resolved_by_no_service() {
+        async fn a_job_done_another_way_leaves_its_incident_resolved_on_the_owners_word() {
             let db = test_db().await;
             let v = seed_vehicle(&db).await;
             let incident = observation(&db, v, None).await;
@@ -5880,6 +5876,54 @@ mod tests {
             .unwrap();
             assert!(resolved(&db, v, incident).await);
             crate::test_support::assert_empty(&resolvers(&db, v, incident).await);
+            // No service resolves it, so a later job undone as not done
+            // leaves it resolved.
+            assert!(by_hand(&db, v, incident).await);
+        }
+
+        #[tokio::test]
+        async fn resolved_sent_for_an_incident_no_service_resolves_marks_it_by_hand() {
+            use crate::inputs::incident::UpdateIncident;
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observation(&db, v, None).await;
+            let j = job_for(&db, v, incident).await;
+            completing(&db, v, vec![j]).await;
+            // The job goes back to planned, which leaves the incident resolved
+            // with no service behind it.
+            job::update(
+                &db,
+                v,
+                j,
+                crate::inputs::work_item::UpdateWorkItem {
+                    status: Some(JobStatus::Planned),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            assert!(resolved(&db, v, incident).await);
+            assert!(!by_hand(&db, v, incident).await);
+
+            resolve_by_hand(&db, v, incident).await;
+            assert!(by_hand(&db, v, incident).await);
+
+            // Sent beside the service a job brings, the same word resolves an
+            // open incident through that service.
+            let svc = completing(&db, v, vec![j]).await;
+            let sent = |resolved| UpdateIncident {
+                resolved: Some(resolved),
+                resolved_by_service_ids: Some(vec![svc]),
+                ..Default::default()
+            };
+            incident::update(&db, v, incident, sent(false))
+                .await
+                .unwrap();
+            incident::update(&db, v, incident, sent(true))
+                .await
+                .unwrap();
+            assert!(resolved(&db, v, incident).await);
+            assert!(!by_hand(&db, v, incident).await);
         }
 
         #[tokio::test]

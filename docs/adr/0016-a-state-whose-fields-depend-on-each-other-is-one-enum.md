@@ -98,12 +98,14 @@ The areas convert in this order, one pull request each:
 4. **The single-row rules.** These need no enum, only CHECK constraints: a job's completing
    service, a service's dates and shop, a mileage reading's source, a schedule item's override,
    and `research_findings.status` as a vocabulary column (ADR-0004).
+5. **An incident's resolution.** The state is open, resolved by the owner's word or resolved by a
+   service (`incident::Resolution`, ADR-0019). The CHECK: `resolved_by_hand` only on a resolved
+   incident.
 
 These have no rule between their columns and stay as they are:
 
 - **The quote fields on a job.** They are independent by design (ADR-0012).
 - **A vehicle's sale details.** They outlast unarchiving.
-- **An incident's `resolved` flag.** The owner can override what its links imply.
 - **A to-do's `done_on`.** It is one optional date already.
 - **A schedule item's `enabled`.** No other column depends on it.
 - **The `*_currency` columns.** They carry defaults, so a currency with no amount is normal.

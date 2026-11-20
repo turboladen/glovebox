@@ -4,9 +4,8 @@
 //!
 //! A service resolves an incident through a stored `resolved` link or through
 //! a completed job filed from it. A resolved incident with a resolving service
-//! stays unmarked. A CHECK keeps the marker on resolved incidents only. Running
-//! it again finds the column and the constraint in place and marks the same
-//! incidents.
+//! stays unmarked. A CHECK keeps the marker on resolved incidents only. A run
+//! that finds the column in place marks nothing.
 
 use sea_orm_migration::prelude::*;
 
@@ -52,6 +51,18 @@ pub struct Migration;
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        // The marking reads what the records say at the moment the column
+        // arrives. A run that finds the column leaves the markers alone,
+        // because a write made since then may have left a resolved incident
+        // with no resolving service on purpose.
+        let marked_before = manager
+            .get_connection()
+            .query_one_raw(sea_orm::Statement::from_string(
+                manager.get_database_backend(),
+                "SELECT 1 FROM pragma_table_info('incidents') WHERE name = 'resolved_by_hand'",
+            ))
+            .await?
+            .is_some();
         add_column(
             manager,
             "incidents",
@@ -83,17 +94,19 @@ impl MigrationTrait for Migration {
             )
             .and_where(Expr::col((WorkItems::Table, WorkItems::CompletedServiceId)).is_not_null())
             .to_owned();
-        manager
-            .exec_stmt(
-                Query::update()
-                    .table(Incidents::Table)
-                    .value(Incidents::ResolvedByHand, 1)
-                    .and_where(Expr::col(Incidents::Resolved).eq(1))
-                    .and_where(Expr::not_exists(stored_resolver))
-                    .and_where(Expr::not_exists(completed_job))
-                    .to_owned(),
-            )
-            .await?;
+        if !marked_before {
+            manager
+                .exec_stmt(
+                    Query::update()
+                        .table(Incidents::Table)
+                        .value(Incidents::ResolvedByHand, 1)
+                        .and_where(Expr::col(Incidents::Resolved).eq(1))
+                        .and_where(Expr::not_exists(stored_resolver))
+                        .and_where(Expr::not_exists(completed_job))
+                        .to_owned(),
+                )
+                .await?;
+        }
 
         // One transaction pins one connection, which `PRAGMA writable_schema`
         // needs, holds the write lock from its start and leaves nothing half
