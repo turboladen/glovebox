@@ -939,8 +939,14 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         recall::require_recalls(db, vehicle_id, &super::dedup_ids(finding_ids)).await?;
     }
     let completed_before = recorded.job_ids();
+    // A call that sends no job list keeps the jobs the service completed.
+    let kept_jobs = if input.work_item_ids.is_some() {
+        listed_jobs
+    } else {
+        recorded.jobs.clone()
+    };
     let removal = recorded
-        .left_out_by(db, existing.id, &input, &listed_jobs)
+        .left_out_by(db, existing.id, &input, &kept_jobs)
         .await?;
     let choice = removal.choice(existing.id, ChoiceFor::Correction, input.completed_work)?;
 
@@ -1090,7 +1096,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     // link and only the jobs added bring one.
     let removed_recalls: Vec<i32> = removal.recalls.iter().map(|r| r.finding_id).collect();
     let bringing = if input.recall_finding_ids.is_some() {
-        &listed_jobs
+        &kept_jobs
     } else {
         &added
     };
@@ -1179,15 +1185,15 @@ impl RecordedWork {
     /// taken off the work that hangs off it (the incident and the recall it
     /// came from, and the parts fitted to its needs) unless a list the call
     /// sends names that work. An incident or a recall that a job in
-    /// `listed_jobs` came from is never taken off, because the service keeps
-    /// or gains that job, and neither is an incident the invoice of
-    /// `service_id` named.
+    /// `kept_jobs` came from is never taken off, and neither is an incident
+    /// the invoice of `service_id` named. `kept_jobs` are the jobs the service
+    /// keeps or gains.
     async fn left_out_by(
         mut self,
         db: &impl ConnectionTrait,
         service_id: i32,
         input: &UpdateServiceRecord,
-        listed_jobs: &[job::Model],
+        kept_jobs: &[job::Model],
     ) -> DomainResult<Self> {
         if let Some(list) = &input.work_item_ids {
             self.jobs.retain(|j| !list.contains(&j.id));
@@ -1196,7 +1202,7 @@ impl RecordedWork {
         }
         let job_ids = self.job_ids();
         let released = |id: Option<i32>, of: fn(&job::Model) -> Option<i32>| {
-            id.filter(|id| !listed_jobs.iter().any(|j| of(j) == Some(*id)))
+            id.filter(|id| !kept_jobs.iter().any(|j| of(j) == Some(*id)))
         };
         let incident_ids: Vec<i32> = self
             .jobs
@@ -5176,6 +5182,36 @@ mod tests {
             assert_eq!(job::get(&db, v, j).await.unwrap().status, JobStatus::Done);
             let performed: Vec<i32> = out.performed_recalls.iter().map(|r| r.finding_id).collect();
             assert_eq!(performed, vec![finding]);
+        }
+
+        #[tokio::test]
+        async fn an_empty_recall_list_without_a_job_list_keeps_the_recall_of_a_completed_job() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let finding = seed_recall(&db, v, "24V893").await;
+            let j = job_from_recall(&db, v, finding).await;
+            let svc = completing(&db, v, vec![j]).await;
+
+            // The service keeps the job, so its recall stays performed and the
+            // call needs no `completed_work`.
+            let out = update(
+                &db,
+                v,
+                svc,
+                UpdateServiceRecord {
+                    recall_finding_ids: Some(vec![]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(job::get(&db, v, j).await.unwrap().status, JobStatus::Done);
+            let performed: Vec<i32> = out.performed_recalls.iter().map(|r| r.finding_id).collect();
+            assert_eq!(performed, vec![finding]);
+            assert_eq!(
+                recall_status(&db, v).await,
+                vec![(recall::ShownRecallStatus::Done, Some(svc))]
+            );
         }
 
         #[tokio::test]
