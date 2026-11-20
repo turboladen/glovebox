@@ -367,7 +367,8 @@ A page is a view of the shared library, and a future page follows the same rules
 - **The work sheet** (`/vehicles/{vid}/appointments/{id}/print`, `work_sheet::for_appointment`)
   lists each planned job with the owner's parts (received or ordered, with the name, manufacturer
   and part number the linked part records, never a researched option's, and a kit's contents
-  beneath it, each with a tick box) and the shop's parts by the need's name.
+  beneath it, each with a tick box) and the shop's parts by the need's name. A job's notes print
+  under its title and a linked part's notes under its line.
   Undecided and to-order needs are left off and shown in an on-screen "Before you print" box,
   whose "Ask the shop" posts the existing supplier form without an approach, which leaves the
   stored approach alone. `docs/adr/0009-the-work-sheet-prints-plain.md`

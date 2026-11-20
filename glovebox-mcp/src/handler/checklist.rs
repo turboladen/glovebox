@@ -137,8 +137,11 @@ impl GloveboxMcp {
         description = "The work sheet to hand the mechanic for an appointment: each planned job, \
                        the parts the owner brings (`owner_supplies`, with `label`, the part's \
                        manufacturer and number such as \"Akebono ACT1633\", when the part records \
-                       a number) and the parts the shop should supply (`shop_supplies`, name \
-                       only). `unsettled` lists needs that are undecided or not yet ordered, \
+                       a number) and the parts the shop should supply (`shop_supplies`, by name, \
+                       with no `label` or `contents`; `part_id` is set only when a part is \
+                       linked). A job's `notes` and a linked part's `notes` are the owner's \
+                       instructions for the shop, such as a torque value, and are null when \
+                       blank. `unsettled` lists needs that are undecided or not yet ordered, \
                        which are not on the sheet. Tell the owner about those first and offer to \
                        settle them with the existing tools, or set `supplied_by` to `shop` with \
                        `update_need`. Present the sheet as a plain checklist: a checkbox per job, \

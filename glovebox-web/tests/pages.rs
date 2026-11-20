@@ -757,6 +757,112 @@ async fn print_sheet_lists_jobs_and_both_part_lists() {
 }
 
 #[tokio::test]
+async fn print_sheet_prints_job_and_part_notes_only_when_present() {
+    use glovebox_shared::{
+        inputs::{
+            part::{PartFilter, UpdatePart},
+            work_item::UpdateWorkItem,
+        },
+        services::{part, work_item},
+    };
+    let db = db().await;
+    let (v, a, brakes) = sheet_fixture(&db).await;
+
+    let (_, plain) = page(app(db.clone(), "test"), get(&sheet_path(v, a))).await;
+    assert!(!plain.contains(r#"class="ws-note""#), "{plain}");
+
+    work_item::update(
+        &db,
+        v,
+        brakes,
+        UpdateWorkItem {
+            notes: Some(Some("Don't re-use the <old> bolts.".into())),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let rotors = part::list(&db, v, PartFilter::default())
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|p| p.part.name == "Rotors")
+        .unwrap()
+        .part
+        .id;
+    part::update(
+        &db,
+        v,
+        rotors,
+        UpdatePart {
+            notes: Some(Some("Torque to 20 Nm.".into())),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let (status, body) = page(app(db, "test"), get(&sheet_path(v, a))).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body.contains(r#"<p class="ws-note">Don&#39;t re-use the &#60;old&#62; bolts.</p>"#),
+        "{body}"
+    );
+    assert!(
+        body.contains(r#"<span class="ws-note">Torque to 20 Nm.</span>"#),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn print_sheet_prints_a_linked_shop_parts_notes_under_please_supply() {
+    use glovebox_shared::{
+        entities::part::Supplier,
+        inputs::{need::NewNeed, part::NewPart},
+        services::{need, part},
+    };
+    let db = db().await;
+    let (v, a, brakes) = sheet_fixture(&db).await;
+    let seal = need::add(
+        &db,
+        v,
+        brakes,
+        NewNeed {
+            name: "Caliper seal".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    let bought = part::create(
+        &db,
+        v,
+        NewPart {
+            name: "Caliper seal".into(),
+            notes: Some("Use the red grease.".into()),
+            supplied_by: Some(Supplier::Shop),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    need::link_part(&db, v, seal, bought.id, None)
+        .await
+        .unwrap();
+
+    let (status, body) = page(app(db, "test"), get(&sheet_path(v, a))).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let please = body.split("Please supply").nth(1).expect("a shop list");
+    assert!(
+        please.contains(r#"Caliper seal<span class="ws-note">Use the red grease.</span></li>"#),
+        "{body}"
+    );
+}
+
+#[tokio::test]
 async fn print_sheet_boxes_each_owner_part_and_lists_a_kits_contents() {
     use glovebox_shared::{
         inputs::part::{NewPartContent, PartFilter, UpdatePart},

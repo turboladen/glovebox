@@ -13,7 +13,7 @@ use crate::{
         checklist::{self, NeedView},
         need::Stage,
         part::{self as part_svc, PartView},
-        vehicle,
+        trim_to_none, vehicle,
     },
 };
 
@@ -37,6 +37,8 @@ pub struct WorkSheet {
 pub struct SheetJob {
     pub job_id: i32,
     pub title: String,
+    /// The job's notes for the shop, or none when they are blank.
+    pub notes: Option<String>,
     pub owner_supplies: Vec<SheetLine>,
     pub shop_supplies: Vec<SheetLine>,
 }
@@ -45,7 +47,8 @@ pub struct SheetJob {
 #[derive(Debug, Serialize)]
 pub struct SheetLine {
     pub need_id: i32,
-    /// The bought part on an owner line. A shop line never carries one.
+    /// The linked part. An owner line always carries one, and a shop line
+    /// carries one only when a part is linked to the need.
     pub part_id: Option<i32>,
     /// The bought part's name on an owner line, and the need's on a shop line.
     pub name: String,
@@ -53,6 +56,8 @@ pub struct SheetLine {
     /// The manufacturer and part number together, such as `Mann HU 7020 z`,
     /// as [`part_svc::label`] writes them. A shop line never carries one.
     pub label: Option<String>,
+    /// The linked part's notes, or none when it has none or they are blank.
+    pub notes: Option<String>,
     /// The items inside an owner's kit, in print order. A shop line never
     /// carries any.
     pub contents: Vec<SheetContent>,
@@ -120,6 +125,7 @@ pub async fn for_appointment(
         let mut job = SheetJob {
             job_id: view.job.id,
             title: view.job.title.clone(),
+            notes: view.job.notes.as_deref().and_then(trim_to_none),
             owner_supplies: Vec::new(),
             shop_supplies: Vec::new(),
         };
@@ -139,6 +145,7 @@ pub async fn for_appointment(
                             part.manufacturer.as_deref(),
                             part.part_number.as_deref(),
                         ),
+                        notes: part.notes.as_deref().and_then(trim_to_none),
                         contents: contents.iter().map(SheetContent::from).collect(),
                     });
                 }
@@ -189,10 +196,15 @@ fn placement(view: &NeedView) -> Placement<'_> {
 fn line(view: &NeedView) -> SheetLine {
     SheetLine {
         need_id: view.need.id,
-        part_id: None,
+        part_id: view.part.as_ref().map(|p| p.part.id),
         name: view.need.name.clone(),
         quantity: view.need.quantity,
         label: None,
+        notes: view
+            .part
+            .as_ref()
+            .and_then(|p| p.part.notes.as_deref())
+            .and_then(trim_to_none),
         contents: Vec::new(),
     }
 }
@@ -208,8 +220,9 @@ mod tests {
             appointment::NewAppointment,
             need::{NewNeed, NewOption, OrderDetails, UpdateNeed},
             part::{NewPart, NewPartContent},
+            work_item::UpdateWorkItem,
         },
-        services::{appointment, checklist, need, need::Stage, part as part_svc},
+        services::{appointment, checklist, need, need::Stage, part as part_svc, work_item},
         test_support::{VehicleFixture, add_job, assert_empty, date, set_job_status, test_db},
     };
 
@@ -441,6 +454,105 @@ mod tests {
         let sheet = for_appointment(&db, v, a).await.unwrap();
 
         assert_empty(&only_job(&sheet).shop_supplies[0].contents);
+    }
+
+    #[tokio::test]
+    async fn a_jobs_notes_are_carried_and_blank_notes_are_none() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let a = appointment_on(&db, v).await;
+        let noted = add_job(&db, v, "Front brakes", Some(a)).await;
+        let blank = add_job(&db, v, "Cabin filter", Some(a)).await;
+        for (id, text) in [(noted, "Check the pad wear sensor."), (blank, "  \n ")] {
+            work_item::update(
+                &db,
+                v,
+                id,
+                UpdateWorkItem {
+                    notes: Some(Some(text.into())),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        let sheet = for_appointment(&db, v, a).await.unwrap();
+
+        assert_eq!(
+            sheet.jobs[0].notes.as_deref(),
+            Some("Check the pad wear sensor.")
+        );
+        assert_eq!(sheet.jobs[1].notes, None);
+    }
+
+    #[tokio::test]
+    async fn an_owner_parts_notes_are_carried_and_blank_notes_are_none() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let a = appointment_on(&db, v).await;
+        let job = add_job(&db, v, "Wheels", Some(a)).await;
+        let bolts = new_need(&db, v, job, "Wheel bolts", 1).await;
+        let paste = new_need(&db, v, job, "Paste", 1).await;
+        for (n, name, notes) in [
+            (bolts, "Wheel bolts", "Torque to 120 Nm."),
+            (paste, "Paste", "   "),
+        ] {
+            link_part(
+                &db,
+                v,
+                n,
+                NewPart {
+                    name: name.into(),
+                    notes: Some(notes.into()),
+                    supplied_by: Some(Supplier::Owner),
+                    ..Default::default()
+                },
+                Some("2026-11-10"),
+            )
+            .await;
+        }
+
+        let sheet = for_appointment(&db, v, a).await.unwrap();
+
+        let lines = &only_job(&sheet).owner_supplies;
+        assert_eq!(lines[0].notes.as_deref(), Some("Torque to 120 Nm."));
+        assert_eq!(lines[1].notes, None);
+    }
+
+    #[tokio::test]
+    async fn a_linked_shop_parts_notes_are_carried() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let a = appointment_on(&db, v).await;
+        let job = add_job(&db, v, "Haldex service", Some(a)).await;
+        let n = new_need(&db, v, job, "Haldex kit", 1).await;
+        let plain = new_need(&db, v, job, "Gasket", 1).await;
+        set_supplier(&db, v, plain, Supplier::Shop).await;
+        link_part(
+            &db,
+            v,
+            n,
+            NewPart {
+                name: "Haldex kit".into(),
+                notes: Some("Use the 5th-generation fluid.".into()),
+                supplied_by: Some(Supplier::Shop),
+                ..Default::default()
+            },
+            None,
+        )
+        .await;
+
+        let sheet = for_appointment(&db, v, a).await.unwrap();
+
+        let lines = &only_job(&sheet).shop_supplies;
+        assert_eq!(
+            lines[0].notes.as_deref(),
+            Some("Use the 5th-generation fluid.")
+        );
+        assert!(lines[0].part_id.is_some(), "{lines:?}");
+        assert_eq!(lines[1].notes, None);
+        assert_eq!(lines[1].part_id, None);
     }
 
     #[tokio::test]

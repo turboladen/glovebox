@@ -10,13 +10,15 @@ use crate::{
     inputs::{
         appointment::NewAppointment,
         need::{NewNeed, NewOption, OrderDetails, ReturnInput, UpdateOption},
-        part::NewPartContent,
+        part::{NewPartContent, UpdatePart},
         service_record::NewServiceRecord,
         todo::NewTodo,
         vehicle::NewVehicle,
         work_item::NewWorkItem,
     },
-    services::{self, appointment, model_template, need, service_record, todo, vehicle, work_item},
+    services::{
+        self, appointment, model_template, need, part, service_record, todo, vehicle, work_item,
+    },
 };
 
 /// How many rows of each kind [`demo`] created.
@@ -80,11 +82,22 @@ async fn job(
     appointment_id: Option<i32>,
     title: &str,
 ) -> DomainResult<i32> {
+    job_with_notes(db, vehicle_id, appointment_id, title, None).await
+}
+
+async fn job_with_notes(
+    db: &(impl ConnectionTrait + TransactionTrait),
+    vehicle_id: i32,
+    appointment_id: Option<i32>,
+    title: &str,
+    notes: Option<&str>,
+) -> DomainResult<i32> {
     let created = work_item::create(
         db,
         vehicle_id,
         NewWorkItem {
             title: title.into(),
+            notes: notes.map(Into::into),
             appointment_id,
             ..Default::default()
         },
@@ -127,7 +140,8 @@ async fn choose(
     Ok(added.id)
 }
 
-// Chooses `candidate`, orders it from FCP Euro and records its arrival.
+// Chooses `candidate`, orders it from FCP Euro and records its arrival. The
+// result is the id of the part the order created.
 async fn order_and_receive(
     db: &(impl ConnectionTrait + TransactionTrait),
     vehicle_id: i32,
@@ -135,7 +149,7 @@ async fn order_and_receive(
     candidate: NewOption,
     order_ref: &str,
     contents: Vec<NewPartContent>,
-) -> DomainResult<()> {
+) -> DomainResult<i32> {
     choose(
         db,
         vehicle_id,
@@ -145,8 +159,8 @@ async fn order_and_receive(
     )
     .await?;
     order(db, vehicle_id, need_id, order_ref, contents).await?;
-    need::mark_received(db, vehicle_id, need_id, None).await?;
-    Ok(())
+    let received = need::mark_received(db, vehicle_id, need_id, None).await?;
+    Ok(received.part.part.id)
 }
 
 async fn order(
@@ -290,7 +304,14 @@ async fn rear_rotors(
 async fn brakes(db: &(impl ConnectionTrait + TransactionTrait), at: &Visit) -> DomainResult<()> {
     let (v, a) = (at.vehicle, Some(at.appointment));
 
-    let brakes = job(db, v, a, "Brakes").await?;
+    let brakes = job_with_notes(
+        db,
+        v,
+        a,
+        "Brakes",
+        Some("Check the pad wear sensors while the wheels are off."),
+    )
+    .await?;
     rear_rotors(db, v, brakes).await?;
 
     let rear_pads = need::add(
@@ -328,7 +349,7 @@ async fn brakes(db: &(impl ConnectionTrait + TransactionTrait), at: &Visit) -> D
     let front_rotors = self_need(db, v, brakes, "Front rotors").await?;
     // The kit's number is the seller's, so the order lists what is in the box
     // with the numbers printed on each item, and the work sheet prints them.
-    order_and_receive(
+    let rotor_kit = order_and_receive(
         db,
         v,
         front_rotors,
@@ -353,6 +374,16 @@ async fn brakes(db: &(impl ConnectionTrait + TransactionTrait), at: &Visit) -> D
                 quantity: Some(2),
             },
         ],
+    )
+    .await?;
+    part::update(
+        db,
+        v,
+        rotor_kit,
+        UpdatePart {
+            notes: Some(Some("Torque the retaining screws to 4 Nm.".into())),
+            ..Default::default()
+        },
     )
     .await?;
 
@@ -637,6 +668,15 @@ mod tests {
                 .iter()
                 .flat_map(|j| &j.owner_supplies)
                 .any(|line| line.contents.len() == 2),
+            "{sheet:?}"
+        );
+        assert!(sheet.jobs.iter().any(|j| j.notes.is_some()), "{sheet:?}");
+        assert!(
+            sheet
+                .jobs
+                .iter()
+                .flat_map(|j| &j.owner_supplies)
+                .any(|line| line.notes.is_some()),
             "{sheet:?}"
         );
     }
