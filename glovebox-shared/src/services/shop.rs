@@ -140,15 +140,22 @@ async fn refuse_duplicate(
             (Some(a), Some(b)) => *a == text_key(b),
             _ => true,
         });
-    match same {
-        Some(s) => Err(DomainError::BadRequest(format!(
-            "Shop {} is already {}{}. Use that shop, or give this one a different address",
-            s.id,
-            s.name,
-            s.address.as_deref().map_or_default(|a| format!(" at {a}"))
-        ))),
-        None => Ok(()),
-    }
+    let Some(s) = same else {
+        return Ok(());
+    };
+    // A shop with no address matches every address, so only giving it one
+    // makes room for a second location.
+    Err(DomainError::BadRequest(match &s.address {
+        Some(a) => format!(
+            "Shop {} is already {} at {a}. Use that shop, or give this one a different address",
+            s.id, s.name
+        ),
+        None => format!(
+            "Shop {} is already {}, with no address. Use that shop, or give it its address \
+             first so this one can be told apart by a different address",
+            s.id, s.name
+        ),
+    }))
 }
 
 fn trimmed(value: Option<&str>) -> Option<String> {
@@ -389,7 +396,7 @@ fn fold_details(kept: &mut shop::Model, merged: &[shop::Model]) -> Vec<Discarded
         take("specialty", &mut kept.specialty, &other.specialty);
         if let Some(notes) = &other.notes {
             kept.notes = Some(match kept.notes.take() {
-                Some(current) if current.contains(notes.as_str()) => current,
+                Some(current) if text_key(&current) == text_key(notes) => current,
                 Some(current) => format!("{current}\n\n{notes}"),
                 None => notes.clone(),
             });
@@ -593,6 +600,16 @@ mod tests {
                 "{err}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_shop_with_no_address_must_get_one_before_a_second_location() {
+        let db = test_db().await;
+        create(&db, named("Kurata's", None)).await.unwrap();
+        let err = create(&db, named("Kurata's", Some("606 Divisadero St")))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("with no address"), "{err}");
     }
 
     #[tokio::test]
