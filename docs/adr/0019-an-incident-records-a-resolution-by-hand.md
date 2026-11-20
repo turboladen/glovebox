@@ -29,10 +29,12 @@ two columns, and one function writes both.
   job, so closing it again is the owner's word.
 - `resolved: true` on a resolved incident writes `ByHand` only when no service resolves it, so a
   read sent back marks nothing.
-- **A resolved incident that no service resolves is marked.** A write that takes the last
-  resolving service away and leaves the incident resolved marks it: work taken off a service as
-  `done_another_way`, and an edit of a completed job (set back to planned or dropped, or given
-  another incident).
+- A service whose work is taken off as `done_another_way` leaves the incident resolved. When no
+  other service resolves it, the owner's answer is what stands behind the flag, so the incident
+  is marked.
+- An edit of a completed job (set back to planned or dropped, or given another incident) says
+  nothing about the incident, so it leaves the incident resolved and unmarked. The reply names
+  it in `released_incident_id`, and the owner's `resolved: true` then marks it.
 - A service that resolves an incident (a `resolved` link, `mark_resolved` for a completed job)
   writes `ByService`, and only on an unresolved incident. On a resolved incident it changes
   nothing, so a marker survives a job completed later.
@@ -53,8 +55,7 @@ reopens it with `resolved: false`.
 `m20261120_000003_incident_resolved_by_hand` marks each resolved incident that no service resolves:
 no stored `resolved` link and no completed job filed from it. A resolved incident with a resolving
 service stays unmarked, so an incident resolved by hand before a job was completed, in records
-older than this migration, can still be reopened by `did_not_happen`. The marking matches the
-rule every write keeps, so running the migration again changes nothing.
+older than this migration, can still be reopened by `did_not_happen`.
 
 ## Alternatives considered
 
@@ -76,4 +77,6 @@ rule every write keeps, so running the migration again changes nothing.
   service reopens it.
 - A service whose only recorded work is an invoice-named incident that carries the marker is
   deleted without a `completed_work` question, and the incident stays resolved.
+- A marker stays when a service is named for the incident afterwards. To hand the resolution to
+  that service, the owner reopens the incident and names the service.
 - ADR-0016 lists the incident's resolution among the converted areas.

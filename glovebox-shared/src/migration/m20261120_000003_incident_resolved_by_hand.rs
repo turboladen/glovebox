@@ -1,11 +1,10 @@
-//! Adds `incidents.resolved_by_hand`, which says that the owner marked the
-//! incident resolved and no service did, and marks each resolved incident that
-//! no service resolves.
+//! Adds `incidents.resolved_by_hand`, which says that the owner's word is what
+//! resolved the incident, and marks each resolved incident that no service
+//! resolves.
 //!
 //! A service resolves an incident through a stored `resolved` link or through
 //! a completed job filed from it. A resolved incident with a resolving service
-//! stays unmarked. A CHECK keeps the marker on resolved incidents only. Every
-//! run marks the same kind of row, so running it again is safe.
+//! stays unmarked. A CHECK keeps the marker on resolved incidents only.
 
 use sea_orm_migration::prelude::*;
 
@@ -82,8 +81,9 @@ impl MigrationTrait for Migration {
             )
             .and_where(Expr::col((WorkItems::Table, WorkItems::CompletedServiceId)).is_not_null())
             .to_owned();
-        // Every write marks a resolved incident that it leaves with no
-        // resolving service, so a later run of this statement changes nothing.
+        // A second run happens only when the first one failed before it was
+        // recorded, and the database refuses to open for this build until
+        // the migration is recorded, so the rows are the ones the first run saw.
         manager
             .exec_stmt(
                 Query::update()

@@ -246,6 +246,9 @@ second service to patch the first.
   `did_not_happen` and then record that invoice with the same jobs, parts and schedule items. The
   parts are kept and listed in `kept_part_ids`: when you file the invoice again, attach the ones
   that read purchased with `part_ids`; otherwise delete them with `delete_part`.
+- An incident the owner resolved by hand (`resolved_by_hand`) stays resolved when a service's work
+  is undone, and is never named in the refusal. `done_another_way` marks an incident that way too.
+  The owner reopens one with `update_incident` and `resolved: false`.
 - A mistyped odometer reading is found with `list_mileage` and removed with `delete_mileage`. A
   reading that came from a service is fixed with `correct_service` instead.
 - `delete_vehicle` removes a car added by mistake. It refuses once the car has any history.

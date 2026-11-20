@@ -351,7 +351,8 @@ async fn require_links_owned(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Resolution {
     Open,
-    // The owner said so (`update` with `resolved: true`).
+    // The owner said so: `resolved: true`, or work taken off a service as
+    // done another way. Undoing a service's work leaves the incident resolved.
     ByHand,
     // A service resolved it, by an invoice link or a completed job.
     ByService,
@@ -744,42 +745,6 @@ pub(crate) async fn named_resolved_by(
         .into_iter()
         .map(|l| l.incident_id)
         .collect())
-}
-
-/// Marks each of `incident_ids` resolved by hand when it reads resolved and
-/// no service resolves it. The caller names the incidents a service stopped
-/// resolving without the owner saying the work did not happen.
-pub(crate) async fn rest_on_the_owners_word(
-    db: &impl ConnectionTrait,
-    incident_ids: &[i32],
-) -> DomainResult<()> {
-    let resolved_by_a_service: std::collections::HashSet<i32> =
-        resolvers_of_incidents(db, incident_ids)
-            .await?
-            .into_iter()
-            .map(|(incident_id, _)| incident_id)
-            .collect();
-    let alone: Vec<i32> = incident_ids
-        .iter()
-        .copied()
-        .filter(|id| !resolved_by_a_service.contains(id))
-        .collect();
-    if alone.is_empty() {
-        return Ok(());
-    }
-    let mut marked = incident::ActiveModel {
-        updated_at: Set(super::now()),
-        ..Default::default()
-    };
-    set_resolution(&mut marked, Resolution::ByHand);
-    incident::Entity::update_many()
-        .set(marked)
-        .filter(incident::Column::Id.is_in(alone))
-        .filter(incident::Column::Resolved.eq(true))
-        .filter(incident::Column::ResolvedByHand.eq(false))
-        .exec(db)
-        .await?;
-    Ok(())
 }
 
 /// Settles each incident in `resolved_here`, which `service_id` stops

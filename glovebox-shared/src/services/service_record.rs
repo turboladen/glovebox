@@ -5882,7 +5882,7 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn an_incident_left_resolved_with_no_service_rests_on_the_owners_word() {
+        async fn resolved_sent_by_the_owner_marks_an_incident_by_hand() {
             use crate::inputs::incident::UpdateIncident;
             let db = test_db().await;
             let v = seed_vehicle(&db).await;
@@ -5903,6 +5903,9 @@ mod tests {
             .await
             .unwrap();
             assert!(resolved(&db, v, incident).await);
+            assert!(!by_hand(&db, v, incident).await);
+            // The owner confirms it is fixed, and that word marks it.
+            resolve_by_hand(&db, v, incident).await;
             assert!(by_hand(&db, v, incident).await);
 
             // The owner reopens it and closes it again while a job's service

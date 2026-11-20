@@ -231,7 +231,7 @@ incident and stays when the job is taken off, so that incident stays resolved; `
 stores no link for a service only a job brings
 (`docs/adr/0018-a-jobs-incident-is-read-from-the-job.md`).
 An incident the owner marked resolved by hand carries `resolved_by_hand`, so `did_not_happen`
-leaves it resolved and the refusal never names it (`incident::Resolution` is the one writer;
+leaves it resolved and the refusal never names it (`incident::set_resolution` is the one writer, and `done_another_way` marks an incident too;
 `docs/adr/0019-an-incident-records-a-resolution-by-hand.md`).
 Every service read carries `lines_total_cents`, and a `note` when the total differs from it (the
 kinds are `maintenance`, `mod`, `repair`, `inspection`, `recall` and `fee`; payers are `self`,
