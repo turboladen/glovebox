@@ -28,8 +28,7 @@ two columns, and one function writes both.
   incident from unresolved to resolved. The check runs after the call's link changes, so
   `resolved: true` sent together with a `resolved_by_service_ids` that resolves the incident, or
   sent on an incident that is already resolved (a read sent back), writes no marker. When the same
-  call removes every resolver, a stored flag no longer rests on a service, so `resolved: true`
-  marks it.
+  call removes every resolver, no service stands behind the flag, so `resolved: true` marks it.
 - A service that resolves an incident (a `resolved` link, `mark_resolved` for a completed job)
   writes `ByService`, and only on an unresolved incident. On a resolved incident it changes
   nothing, so a marker survives a job completed later.
@@ -58,7 +57,8 @@ completed, in records older than this migration, can still be reopened by `did_n
   comparison fails for an incident resolved, reopened and resolved again.
 - **Marking nothing in existing rows.** The column would start empty, so every incident the owner
   resolved by hand before the upgrade could still be reopened by an undo. Marking the ones no
-  service resolves protects those at no cost, because no service's undo can reach them anyway.
+  service resolves protects them when a job filed from one is completed later, and only the owner
+  can have resolved them.
 
 ## Consequences
 

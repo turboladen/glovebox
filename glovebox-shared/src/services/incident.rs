@@ -586,7 +586,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     // An explicit `resolved` wins over the flag the links just set. It marks
     // the owner's word only when it is what resolves the incident: not when a
     // link of this call or an earlier one already did. With every resolver
-    // cleared, the stored flag no longer rests on a service.
+    // cleared, no service stands behind the flag, so the owner's word does.
     let inc = require_incident(&txn, vehicle_id, inc.id).await?;
     let resolution = match input.resolved {
         Some(false) => Some(Resolution::Open),
@@ -720,8 +720,8 @@ pub(crate) async fn named_resolved_by(
 }
 
 /// Marks each incident in `resolved_here` unresolved unless a service other
-/// than `service_id` also resolved it or the owner marked it resolved by hand. The caller names the incidents that
-/// `service_id` stops resolving.
+/// than `service_id` also resolved it or the owner marked it resolved by
+/// hand. The caller names the incidents that `service_id` stops resolving.
 pub(crate) async fn reopen_resolved(
     txn: &impl ConnectionTrait,
     service_id: i32,
