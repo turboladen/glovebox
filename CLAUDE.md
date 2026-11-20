@@ -42,6 +42,8 @@ cargo clippy --workspace --all-targets --locked -- -D warnings   # Rust lints, t
 
 # Merging PRs: gate on parsed `gh pr checks` output showing zero pending/failed —
 # `--watch` exits 0 when it races a run that hasn't registered yet
+# Run `gh pr merge <N> --squash --delete-branch` as its own command; from inside the branch's
+# worktree it leaves the local branch, so remove the worktree and `git branch -D` from the main checkout
 # Agent worktrees live in .claude/worktrees/ and stay locked while the agent's process lives:
 # `git worktree unlock <path>` before `git worktree remove --force <path>`
 # A branch stacked on a squash-merged PR: `git rebase --onto origin/main origin/<merged-branch>`
@@ -211,6 +213,10 @@ refer to itself. A `correct_*` or
 and `remove_contents`, is a plain `Option<Vec<T>>`, and `null` there changes nothing. Every input struct, nested ones included, carries
 `#[serde(deny_unknown_fields)]`, so an argument the tool does not define is a tool error that names
 it. Serde does not support it together with `#[serde(flatten)]`, so input structs never flatten.
+A reply list the client is told to ask the owner about (`open_incidents`) is an `Option<Vec<T>>`:
+`[]` when the call looked and found none, and absent when it did not look. A description or prompt
+that tells the client to add to a list an update REPLACES says to send every stored value plus the
+new one.
 
 **`record_service` is transactional.** One call writes the service, its lines, its parts and every
 link (schedule items, work items, recalls, incidents) in one transaction. One bad id fails the call
@@ -462,6 +468,8 @@ role per control style, and `YYYY-MM-DD` dates.
   entity and sets both stamps itself.
 - New domain logic gets service-level unit tests in `glovebox-shared` (via `test_support::test_db()`)
   and MCP coverage in `glovebox-mcp/tests`.
+- A test that compares an incident's date with a service's sets `occurred_at` explicitly; it
+  defaults to the current time, which a fixed `service_date` may fall before.
 - **Columns that describe one fact** (a part's status and its install, replace and return
   details; a need's choice, date and reason; an appointment's two ending dates) get one enum with
   data in its variants, in the owning service, and only the function that writes the enum back
@@ -629,6 +637,8 @@ bd close <id>         # Complete work
 - Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
 - Make every `bd` write, then run `bd export -o .beads/issues.jsonl`, before the `chore(beads):`
   commit; `bd dolt push` exports again and the commit misses the last change otherwise.
+- A `bd` write on `main` leaves `.beads/issues.jsonl` modified, and `git pull --rebase` refuses a
+  dirty tree: commit the export first, then pull, `bd dolt push` and `git push`.
 
 ## Session Completion
 
