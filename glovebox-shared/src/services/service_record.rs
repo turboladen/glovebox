@@ -1175,9 +1175,8 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     if let Some(named) = &removal.names_to_store {
         incident_svc::replace_named(&txn, vehicle_id, record.id, named).await?;
     }
-    // These are the incidents the correction took off, which no other job of
-    // this service, no link of its invoice and no other service still
-    // resolves.
+    // The names the call sent that the invoice does not store, which the
+    // reply lists in `incident_names_ignored`.
     let mut names_ignored: Vec<i32> = input
         .resolved_incident_ids
         .iter()
@@ -1187,6 +1186,9 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         .collect();
     names_ignored.sort_unstable();
     names_ignored.dedup();
+    // These are the incidents the correction took off, which no other job of
+    // this service, no link of its invoice and no other service still
+    // resolves.
     let incident_ids: Vec<i32> = removal.incidents.iter().map(|i| i.id).collect();
     incident_svc::release_resolved(&txn, incident_ids, choice).await?;
 
