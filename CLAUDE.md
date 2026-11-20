@@ -41,6 +41,10 @@ cargo clippy --workspace --all-targets --locked -- -D warnings   # Rust lints, t
 
 # Merging PRs: gate on parsed `gh pr checks` output showing zero pending/failed —
 # `--watch` exits 0 when it races a run that hasn't registered yet
+# Agent worktrees live in .claude/worktrees/ and stay locked while the agent's process lives:
+# `git worktree unlock <path>` before `git worktree remove --force <path>`
+# A branch stacked on a squash-merged PR: `git rebase --onto origin/main origin/<merged-branch>`
+# `/code-review <branch>` can leave that branch's worktree on a detached HEAD: check it out again
 ```
 
 ## Environment
@@ -364,7 +368,8 @@ A page is a view of the shared library, and a future page follows the same rules
 - **Tests** drive the router in process over an in-memory database with a fixed clock
   (`AppState::today`, `common::today()` = 2026-11-13); date fixtures by `common::today()`, not
   `services::today()`. Askama escapes only `{{ }}` values, so assert literal template text as
-  written (`I'm`) and rendered values escaped (`&#39;bogus&#39;`).
+  written (`I'm`) and rendered values escaped (`&#39;bogus&#39;`). Askama writes `<` and `>` as
+  `&#60;` and `&#62;`.
   Need-row and linked-part tests live in `tests/actions.rs`; its `need_summary` helper reads only
   the row's `<summary>`, so markup a test checks there must sit inside it.
 - **The home page leads with what is waiting.** Per vehicle it lists the maintenance that is
@@ -410,6 +415,9 @@ role per control style, and `YYYY-MM-DD` dates.
   `pub(crate)` when nothing outside the crate calls it.
   `glovebox-mcp/tests` call shared services directly as fixtures (`schedule_svc::create`), so
   search that directory before narrowing a `pub` service function to `pub(crate)`.
+- **A list an update REPLACES holds only stored values.** When a read lists derived values beside
+  stored ones (a service's `schedule_item_ids` includes its jobs' items), a caller will send the
+  read back, so the write ignores the derived ones (`schedule::drop_links_jobs_bring`).
 - **Error model**: services return `DomainResult<T>`. `Invalid` renders as `"{field}: {message}"`;
   `BadRequest` renders its message verbatim; `Db` and `Internal` are opaque to the client.
   A service's message reads correctly on both the web page and in a tool result, so it carries no
@@ -490,7 +498,9 @@ role per control style, and `YYYY-MM-DD` dates.
   `docs/adr/0004-typed-vocabularies.md` records why.
 - **Migrations**: new migrations go after `m20261120_000001_job_schedule_links`; the
   `new-migration` skill has the templates. Use `Expr::cust()` for expressions inside builder queries; raw
-  `execute_unprepared` only where no builder form exists (FTS5 DDL, cross-table copies).
+  `execute_unprepared` only where no builder form exists (FTS5 DDL, cross-table copies). A delete
+  by a correlated subquery has one: `Query::delete().cond_where(Expr::exists(subquery))`, as
+  `m20261120_000001_job_schedule_links` shows.
 - **Migrations are not transactional on SQLite** (sea-orm-migration only wraps Postgres), so write
   them rerun-safe: `IF NOT EXISTS` DDL, `INSERT OR IGNORE` or `NOT EXISTS`-gated DML,
   pragma-guarded ALTERs.
@@ -510,7 +520,9 @@ role per control style, and `YYYY-MM-DD` dates.
   (`source IS 'service'`), not `=`.
 - **Verify data-moving migrations against a populated copy of `data/glovebox.db`**, not just
   `test_db()`. To migrate a copy, run `GLOVEBOX_DB_PATH=<copy> target/release/glovebox-mcp < /dev/null`
-  (it migrates at start and exits at end of input; `glovebox backup` does not migrate). Compare
+  (it migrates at start and exits at end of input; `glovebox backup` does not migrate). The newest
+  `data/backups/glovebox-<date>-<time>.db` is a ready populated copy; copy it to a scratch
+  directory first, because opening it writes a `backups/` directory beside it. Compare
   `sqlite_schema` and `.dump` output from `main`'s build and the branch's on a pre-migration backup.
   The `sqlite3` CLI starts with foreign keys off: run `PRAGMA foreign_keys = ON` before testing a
   key's action on a copy.
@@ -521,6 +533,8 @@ role per control style, and `YYYY-MM-DD` dates.
 - **N+1 queries**: List functions that load related data must batch with `is_in()` queries, not
   query per record in a loop.
 - **Imports**: Use `sea_orm::*` glob imports. Explicit imports create unused-import churn.
+  The glob brings `ExprTrait::max` and `min` into scope, so `x.max(0)` on an integer is ambiguous
+  there: write `Ord::max(x, 0)`.
 
 ## Clippy
 

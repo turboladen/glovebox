@@ -17,3 +17,4 @@ data/
 docs/superpowers/
 # Screenshots the Playwright browser tool saves during a visual check.
 .playwright-mcp/
+.claude/worktrees/
