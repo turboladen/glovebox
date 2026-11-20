@@ -272,6 +272,8 @@ second service to patch the first.
 - An incident the owner resolved by hand (`resolved_by_hand`) stays resolved when a service's work
   is undone, and is never named in the refusal. `done_another_way` marks an incident that way too.
   The owner reopens one with `update_incident` and `resolved: false`.
+- An incident another service also resolves is never named in the refusal either, and stays
+  resolved when one of its services is corrected or deleted.
 - A mistyped odometer reading is found with `list_mileage` and removed with `delete_mileage`. A
   reading that came from a service is fixed with `correct_service` instead.
 - `delete_vehicle` removes a car added by mistake. It refuses once the car has any history.

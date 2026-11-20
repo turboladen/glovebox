@@ -703,17 +703,27 @@ pub async fn create_followup<C: ConnectionTrait + TransactionTrait>(
     Ok(out)
 }
 
-/// The incidents the service resolved that still read resolved, oldest first.
-/// An incident the owner marked resolved by hand is left out.
+/// The incidents only this service resolves that still read resolved, oldest
+/// first. An incident the owner marked resolved by hand is left out.
 pub(crate) async fn resolved_by_service(
     txn: &impl ConnectionTrait,
     service_id: i32,
 ) -> DomainResult<Vec<incident::Model>> {
-    let ids: Vec<i32> = resolvers_of_services(txn, &[service_id])
+    let mut ids: Vec<i32> = resolvers_of_services(txn, &[service_id])
         .await?
         .into_iter()
         .map(|(incident_id, _)| incident_id)
         .collect();
+    // Taking this service away changes neither an incident another service
+    // also resolves nor one resolved by hand, so the owner is not asked
+    // about either.
+    let resolved_elsewhere: Vec<i32> = resolvers_of_incidents(txn, &ids)
+        .await?
+        .into_iter()
+        .filter(|(_, by)| *by != service_id)
+        .map(|(incident_id, _)| incident_id)
+        .collect();
+    ids.retain(|id| !resolved_elsewhere.contains(id));
     if ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -768,28 +778,16 @@ pub(crate) async fn replace_named(
     Ok(())
 }
 
-/// Settles each incident in `resolved_here`, which `service_id` stops
-/// resolving, unless a service other than `service_id` also resolved it.
-/// When the work did not happen the incident reads unresolved, except one the
-/// owner marked resolved by hand. When the work was done another way the
-/// incident stays resolved on the owner's word and is marked resolved by hand.
+/// Settles each incident in `alone`, which a service stops resolving and no
+/// other service resolves, as [`resolved_by_service`] lists them. When the
+/// work did not happen the incident reads unresolved, except one the owner
+/// marked resolved by hand. When the work was done another way the incident
+/// stays resolved on the owner's word and is marked resolved by hand.
 pub(crate) async fn release_resolved(
     txn: &impl ConnectionTrait,
-    service_id: i32,
-    resolved_here: Vec<i32>,
+    alone: Vec<i32>,
     choice: CompletedWork,
 ) -> DomainResult<()> {
-    let resolved_elsewhere: std::collections::HashSet<i32> =
-        resolvers_of_incidents(txn, &resolved_here)
-            .await?
-            .into_iter()
-            .filter(|(_, by)| *by != service_id)
-            .map(|(incident_id, _)| incident_id)
-            .collect();
-    let alone: Vec<i32> = resolved_here
-        .into_iter()
-        .filter(|id| !resolved_elsewhere.contains(id))
-        .collect();
     if alone.is_empty() {
         return Ok(());
     }

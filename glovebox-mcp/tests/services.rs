@@ -1787,6 +1787,47 @@ async fn correct_service_leaves_an_incident_resolved_by_hand_resolved() {
 }
 
 #[tokio::test]
+async fn delete_service_asks_nothing_about_an_incident_another_service_resolves() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let incident = t
+        .call(
+            "log_incident",
+            json!({ "vehicle_id": v.id, "title": "Leak", "occurred_at": "2026-05-01" }),
+        )
+        .await;
+    let mut services = Vec::new();
+    for on in ["2026-06-01", "2026-07-01"] {
+        let recorded = t
+            .call(
+                "record_service",
+                json!({
+                    "vehicle_id": v.id,
+                    "service_date": on,
+                    "resolved_incident_ids": [incident["id"]]
+                }),
+            )
+            .await;
+        services.push(recorded["id"].clone());
+    }
+
+    t.call(
+        "delete_service",
+        json!({ "vehicle_id": v.id, "service_id": services[1] }),
+    )
+    .await;
+    let read = t
+        .call(
+            "get_incident",
+            json!({ "vehicle_id": v.id, "incident_id": incident["id"] }),
+        )
+        .await;
+    assert_eq!(read["resolved"], true, "got: {read}");
+    assert_eq!(read["resolved_by_hand"], false, "got: {read}");
+    assert_eq!(read["resolved_by"][0]["id"], services[0], "got: {read}");
+}
+
+#[tokio::test]
 async fn record_service_lists_the_incidents_still_open() {
     let t = connect().await;
     let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
