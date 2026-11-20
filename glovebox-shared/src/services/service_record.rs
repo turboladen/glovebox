@@ -5672,7 +5672,8 @@ mod tests {
             .id
         }
 
-        // The ids of the services that read as having resolved the incident.
+        // Returns the ids of the services that read as having resolved the
+        // incident.
         async fn resolvers(db: &DatabaseConnection, v: i32, incident: i32) -> Vec<i32> {
             let details = incident::get(db, v, incident).await.unwrap();
             details.resolved_by.iter().map(|s| s.id).collect()
@@ -5801,6 +5802,52 @@ mod tests {
                 .unwrap();
             assert_eq!(stored_incident_links(&db).await, 1);
             assert_eq!(resolvers(&db, v, incident).await, vec![svc, named]);
+        }
+
+        #[tokio::test]
+        async fn naming_a_jobs_service_as_resolver_marks_a_reopened_incident_resolved() {
+            use crate::inputs::incident::UpdateIncident;
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observation(&db, v, None).await;
+            let j = job_for(&db, v, incident).await;
+            let svc = completing(&db, v, vec![j]).await;
+            let reopened = UpdateIncident {
+                resolved: Some(false),
+                ..Default::default()
+            };
+            incident::update(&db, v, incident, reopened).await.unwrap();
+
+            let named = UpdateIncident {
+                resolved_by_service_ids: Some(vec![svc]),
+                ..Default::default()
+            };
+            let out = incident::update(&db, v, incident, named).await.unwrap();
+            assert!(out.incident.resolved);
+            assert_eq!(stored_incident_links(&db).await, 0);
+        }
+
+        #[tokio::test]
+        async fn giving_a_completed_job_an_incident_resolves_that_incident() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let j = planned(&db, v, "Replace N80 valve", None).await;
+            let svc = completing(&db, v, vec![j]).await;
+            let incident = observation(&db, v, None).await;
+
+            job::update(
+                &db,
+                v,
+                j,
+                crate::inputs::work_item::UpdateWorkItem {
+                    incident_id: Some(Some(incident)),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            assert!(resolved(&db, v, incident).await);
+            assert_eq!(resolvers(&db, v, incident).await, vec![svc]);
         }
 
         #[tokio::test]

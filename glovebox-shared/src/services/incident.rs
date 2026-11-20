@@ -549,6 +549,11 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
                 link_service(&txn, vehicle_id, inc.id, sid, LinkRole::Resolved).await?;
             }
         }
+        // A list that names a service says the incident is fixed, also when
+        // every service on it is one a job brings.
+        if !sids.is_empty() {
+            mark_resolved(&txn, vehicle_id, &[inc.id]).await?;
+        }
     }
 
     if let Some(noticed) = input.noticed_during_service_id {

@@ -127,7 +127,8 @@ impl GloveboxMcp {
                        reminder, incident and recall are linked; set `done` here only for work \
                        that left no paperwork. Setting `done` here does not close a recall or \
                        incident the item is linked to, and taking a job a service completed off \
-                       `done` does not reopen its incident: also call `set_recall_status` or \
+                       `done` does not reopen its incident (giving a job a service completed an \
+                       incident does resolve it): also call `set_recall_status` or \
                        `update_incident` for it. Use `delete_planned_work` only for an item added \
                        by mistake. Setting `planned` on an item whose appointment was closed by \
                        hand opens that appointment again, and the result names it in \

@@ -70,7 +70,7 @@ mod tests {
         schema::testing::{migrated_to, text},
     };
 
-    // The number of migrations that run before this one.
+    // Sixteen migrations run before this one.
     const BEFORE: u32 = 16;
 
     const STAMP: &str = "'2026-11-20T00:00:00+00:00'";

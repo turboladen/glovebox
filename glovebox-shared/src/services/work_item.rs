@@ -371,6 +371,30 @@ pub struct UpdatedWorkItem {
     pub released_from_service_id: Option<i32>,
 }
 
+/// Brings what a completed job's service satisfies and resolves in line with
+/// an edit of the job. `incident_before` is the job's incident before the
+/// edit. A job no service completes needs nothing.
+async fn settle_completed_edit(
+    db: &impl ConnectionTrait,
+    updated: &work_item::Model,
+    incident_before: Option<i32>,
+) -> DomainResult<()> {
+    let Some(service_id) = updated.completed_service_id else {
+        return Ok(());
+    };
+    // The edit may have given the job a schedule item its service also names.
+    super::schedule::drop_links_jobs_bring(db, &[service_id]).await?;
+    // A completed job that is given an incident names its service as the
+    // incident's resolver, so the incident reads resolved as it does when a
+    // service completes the job.
+    if let Some(incident_id) = updated.incident_id
+        && updated.incident_id != incident_before
+    {
+        super::incident::mark_resolved(db, updated.vehicle_id, &[incident_id]).await?;
+    }
+    Ok(())
+}
+
 /// Changes a work item. Setting a done or dropped item back to `planned`
 /// settles its appointment as `appointment::settle_reopened_jobs` describes,
 /// in the same transaction, and the result names the appointment it changed.
@@ -410,6 +434,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     }
 
     let satisfied_before = existing.completed_service_id.zip(existing.schedule_item_id);
+    let incident_before = existing.incident_id;
     let mut active: work_item::ActiveModel = existing.into();
 
     if let Some(v) = input.title {
@@ -458,11 +483,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
 
     active.updated_at = Set(super::now());
     let updated = active.update(db).await?;
-    // The edit may have given a completed job a schedule item its service
-    // also names.
-    if let Some(service_id) = updated.completed_service_id {
-        super::schedule::drop_links_jobs_bring(db, &[service_id]).await?;
-    }
+    settle_completed_edit(db, &updated, incident_before).await?;
     let mut released = None;
     if let Some(pair) = satisfied_before
         && !super::schedule::links_of_services(db, &[pair.0])

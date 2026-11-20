@@ -58,7 +58,15 @@ is stored, and reopening an incident the invoice names is a wrong record.
   schedule item.
 - Setting a completed job back to planned or dropped, or giving it another incident, with
   `update_planned_work` takes the service out of the incident's resolvers and leaves the
-  `resolved` flag alone. Only a correction of the service says whether the work happened.
+  `resolved` flag alone. Only a correction of the service says whether the work happened, and a
+  later correction or delete of that service does not reopen the incident, because the service
+  is not one of its resolvers. Giving a completed job an incident marks that incident resolved.
+- `update_incident` with a list that names a service marks the incident resolved, also when a
+  job brings every service on it.
+- Once a job brings a service, no call stores that the invoice also named the incident:
+  `update_incident` takes the service as a read sent back, and `correct_service` has no incident
+  list. This matters for the links the migration removes. An incident list on `correct_service`
+  is tracked as its own issue.
 - `m20261120_000002_job_incident_links` removes the stored `resolved` links that repeat a
   completed job's incident. Such a row cannot say whether the invoice named the incident, so it
   is taken as the job's: each incident reads resolved by the same services before and after, and
