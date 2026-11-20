@@ -137,6 +137,11 @@ pub struct ServiceRecordWithLinks {
     /// omitted from JSON when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub incidents_kept_resolved: Vec<i32>,
+    /// Ids sent in `resolved_incident_ids` that a correction did not store,
+    /// because the same call took the job filed from each one off the
+    /// service. Filled only by `update`; omitted from JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub incident_names_ignored: Vec<i32>,
 }
 
 /// A need on a completed job whose linked part is neither installed nor
@@ -346,6 +351,7 @@ impl ServiceRecordWithLinks {
             unassigned_job_ids: Vec::new(),
             released_schedule_item_ids: Vec::new(),
             incidents_kept_resolved: Vec::new(),
+            incident_names_ignored: Vec::new(),
         }
     }
 }
@@ -1088,6 +1094,15 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     }
     // These are the incidents the correction took off, which no other job of
     // this service and no link of its invoice still resolves.
+    let mut names_ignored: Vec<i32> = input
+        .resolved_incident_ids
+        .iter()
+        .flatten()
+        .copied()
+        .filter(|id| !removal.names_to_store.iter().flatten().any(|n| n == id))
+        .collect();
+    names_ignored.sort_unstable();
+    names_ignored.dedup();
     let incident_ids: Vec<i32> = removal.incidents.iter().map(|i| i.id).collect();
     incident_svc::release_resolved(&txn, record.id, incident_ids, choice).await?;
 
@@ -1159,6 +1174,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         .collect();
     released.sort_unstable();
     updated.released_schedule_item_ids = released;
+    updated.incident_names_ignored = names_ignored;
     updated.incidents_kept_resolved = updated
         .resolved_incidents
         .iter()
@@ -6429,6 +6445,7 @@ mod tests {
             assert_eq!(stored_incident_links(&db).await, 0);
             assert!(!resolved(&db, v, incident).await);
             crate::test_support::assert_empty(&out.incidents_kept_resolved);
+            assert_eq!(out.incident_names_ignored, vec![incident]);
         }
 
         #[tokio::test]

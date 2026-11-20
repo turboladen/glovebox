@@ -1862,7 +1862,10 @@ async fn correct_service_names_the_incidents_its_invoice_resolved() {
             }),
         )
         .await;
-    assert!(refused.contains("incident"), "got: {refused}");
+    assert!(
+        refused.contains(&format!("incident {}", incident["id"])) && refused.contains("Leak"),
+        "got: {refused}"
+    );
 
     // An id that is not an incident of the vehicle is refused by name.
     let missing = t
@@ -1876,4 +1879,58 @@ async fn correct_service_names_the_incidents_its_invoice_resolved() {
         )
         .await;
     assert!(missing.contains("99999"), "got: {missing}");
+}
+
+#[tokio::test]
+async fn correct_service_ignores_a_jobs_incident_sent_with_the_call_that_takes_the_job_off() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let incident = t
+        .call(
+            "log_incident",
+            json!({ "vehicle_id": v.id, "title": "Leak" }),
+        )
+        .await;
+    let job = t
+        .call(
+            "plan_work",
+            json!({ "vehicle_id": v.id, "title": "Fix leak", "incident_id": incident["id"] }),
+        )
+        .await;
+    let service = t
+        .call(
+            "record_service",
+            json!({
+                "vehicle_id": v.id,
+                "service_date": "2026-06-01",
+                "work_item_ids": [job["id"]]
+            }),
+        )
+        .await;
+
+    let out = t
+        .call(
+            "correct_service",
+            json!({
+                "vehicle_id": v.id,
+                "service_id": service["id"],
+                "work_item_ids": [],
+                "resolved_incident_ids": [incident["id"]],
+                "completed_work": "did_not_happen"
+            }),
+        )
+        .await;
+    assert_eq!(
+        out["incident_names_ignored"],
+        json!([incident["id"]]),
+        "got: {out}"
+    );
+    assert_eq!(out["resolved_incidents"], json!([]), "got: {out}");
+    let read = t
+        .call(
+            "get_incident",
+            json!({ "vehicle_id": v.id, "incident_id": incident["id"] }),
+        )
+        .await;
+    assert_eq!(read["resolved"], false, "got: {read}");
 }
