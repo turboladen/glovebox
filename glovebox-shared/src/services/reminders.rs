@@ -4,10 +4,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 
 use crate::{
-    entities::{
-        maintenance_schedule_item, mileage_log, model_template, service_record,
-        service_schedule_link, vehicle,
-    },
+    entities::{maintenance_schedule_item, mileage_log, model_template, service_record, vehicle},
     error::{DomainError, DomainResult},
     services::schedule::{DEFAULT_WARNING_DAYS, DEFAULT_WARNING_MILES, name_key},
 };
@@ -323,16 +320,12 @@ pub async fn calculate_reminders_on(
     // Batch-load all schedule links and service records for this vehicle (avoids N+1)
     let item_ids: Vec<i32> = effective_items.iter().map(|i| i.id).collect();
 
-    let all_links = if item_ids.is_empty() {
-        vec![]
-    } else {
-        service_schedule_link::Entity::find()
-            .filter(service_schedule_link::Column::ScheduleItemId.is_in(item_ids))
-            .all(db)
-            .await?
-    };
+    let all_links = super::schedule::links_to_items(db, vehicle_id, &item_ids).await?;
 
-    let linked_service_ids: Vec<i32> = all_links.iter().map(|l| l.service_record_id).collect();
+    let linked_service_ids: Vec<i32> = all_links
+        .iter()
+        .map(|(service_id, _)| *service_id)
+        .collect();
     let all_services = if linked_service_ids.is_empty() {
         vec![]
     } else {
@@ -358,8 +351,8 @@ pub async fn calculate_reminders_on(
         // Find the most recent service linked to this schedule item
         let item_service_ids: Vec<i32> = all_links
             .iter()
-            .filter(|l| l.schedule_item_id == item.id)
-            .map(|l| l.service_record_id)
+            .filter(|(_, item_id)| *item_id == item.id)
+            .map(|(service_id, _)| *service_id)
             .collect();
 
         let last_service = all_services
@@ -668,7 +661,10 @@ fn days_in_month(year: i32, month: u32) -> u32 {
 mod tests {
     use super::*;
 
-    use crate::test_support::{VehicleFixture, date, days_ago, test_db};
+    use crate::{
+        entities::service_schedule_link,
+        test_support::{VehicleFixture, date, days_ago, test_db},
+    };
 
     #[test]
     fn due_at_names_the_mileage_the_date_or_both() {

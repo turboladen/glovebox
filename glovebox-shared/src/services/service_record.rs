@@ -361,12 +361,10 @@ async fn load_service_links(
     db: &impl ConnectionTrait,
     record: service_record::Model,
 ) -> DomainResult<ServiceRecordWithLinks> {
-    let schedule_item_ids = service_schedule_link::Entity::find()
-        .filter(service_schedule_link::Column::ServiceRecordId.eq(record.id))
-        .all(db)
+    let schedule_item_ids = schedule::links_of_services(db, &[record.id])
         .await?
         .into_iter()
-        .map(|l| l.schedule_item_id)
+        .map(|(_, item_id)| item_id)
         .collect();
 
     let parts = part::Entity::find()
@@ -532,14 +530,7 @@ pub async fn list_between(
     // Batch-load all schedule links, parts, and line items for these records (avoids N+1)
     let record_ids: Vec<i32> = records.iter().map(|r| r.id).collect();
 
-    let all_links = if record_ids.is_empty() {
-        vec![]
-    } else {
-        service_schedule_link::Entity::find()
-            .filter(service_schedule_link::Column::ServiceRecordId.is_in(record_ids.clone()))
-            .all(db)
-            .await?
-    };
+    let all_links = schedule::links_of_services(db, &record_ids).await?;
 
     let all_parts = if record_ids.is_empty() {
         vec![]
@@ -578,8 +569,8 @@ pub async fn list_between(
         .map(|record| {
             let schedule_item_ids = all_links
                 .iter()
-                .filter(|l| l.service_record_id == record.id)
-                .map(|l| l.schedule_item_id)
+                .filter(|(service_id, _)| *service_id == record.id)
+                .map(|(_, item_id)| *item_id)
                 .collect();
             let parts = parts_by_service.remove(&record.id).unwrap_or_default();
             let line_items = all_line_items
@@ -1020,6 +1011,11 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
 
     // Jobs come first, with the work that hangs off each one; the lists the
     // call sends then apply as sent.
+    let released_items: Vec<i32> = removal
+        .jobs
+        .iter()
+        .filter_map(|j| j.schedule_item_id)
+        .collect();
     let settled = work_item::release_completed(&txn, &removal.job_ids(), choice).await?;
     let added = match &input.work_item_ids {
         Some(job_ids) => {
@@ -1037,7 +1033,11 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     let added_recalls = recall::recall_ids_among(&txn, &from_added).await?;
     release_incidents(&txn, record.id, &removal.incidents, choice).await?;
 
-    if let Some(item_ids) = input.schedule_item_ids {
+    if let Some(mut item_ids) = input.schedule_item_ids {
+        // A read lists a job's item beside the named ones, so a list sent
+        // with the call that takes the job off would store the item the job
+        // is taking with it.
+        item_ids.retain(|id| !released_items.contains(id));
         schedule::link_service(&txn, vehicle_id, record.id, &item_ids, LinkMode::Replace).await?;
     }
 
@@ -5208,12 +5208,11 @@ mod tests {
             );
         }
 
-        #[tokio::test]
-        async fn a_sent_schedule_list_wins_over_an_added_jobs_schedule_item() {
-            let db = test_db().await;
-            let v = seed_vehicle(&db).await;
+        // Files a job against a new "Brake fluid" schedule item and returns
+        // the item's id and the job's id.
+        async fn fluid_job(db: &DatabaseConnection, v: i32) -> (i32, i32) {
             let item = crate::services::schedule::create_for_vehicle(
-                &db,
+                db,
                 v,
                 crate::inputs::schedule::NewScheduleItem {
                     name: "Brake fluid".into(),
@@ -5225,7 +5224,7 @@ mod tests {
             .unwrap()
             .id;
             let j = job::create(
-                &db,
+                db,
                 v,
                 NewWorkItem {
                     title: "Flush brake fluid".into(),
@@ -5236,8 +5235,27 @@ mod tests {
             .await
             .unwrap()
             .id;
+            (item, j)
+        }
+
+        // Returns the service that the "Brake fluid" reminder counts from.
+        async fn fluid_baseline(db: &DatabaseConnection, v: i32) -> Option<i32> {
+            let reminders = crate::services::reminders::calculate_reminders(db, v)
+                .await
+                .unwrap()
+                .reminders;
+            reminders[0].last_service.as_ref().map(|s| s.id)
+        }
+
+        #[tokio::test]
+        async fn a_jobs_schedule_item_counts_while_the_service_completes_the_job() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let (item, j) = fluid_job(&db, v).await;
             let svc = completing(&db, v, vec![]).await;
 
+            // The list names the items the invoice itself satisfies, and the
+            // job brings its own item whatever the list holds.
             let out = update(
                 &db,
                 v,
@@ -5249,7 +5267,187 @@ mod tests {
             )
             .await
             .unwrap();
+            assert_eq!(out.schedule_item_ids, vec![item]);
+            assert_eq!(list(&db, v).await.unwrap()[0].schedule_item_ids, vec![item]);
+            assert_eq!(fluid_baseline(&db, v).await, Some(svc));
+            assert_eq!(row_count::<service_schedule_link::Entity>(&db).await, 0);
+        }
+
+        #[tokio::test]
+        async fn deleting_a_completed_job_keeps_its_schedule_items_baseline() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let (item, j) = fluid_job(&db, v).await;
+            let svc = completing(&db, v, vec![j]).await;
+
+            job::delete(&db, v, j).await.unwrap();
+
+            assert_eq!(
+                get(&db, v, svc).await.unwrap().schedule_item_ids,
+                vec![item]
+            );
+            assert_eq!(fluid_baseline(&db, v).await, Some(svc));
+        }
+
+        #[tokio::test]
+        async fn a_job_taken_off_takes_its_schedule_items_baseline_with_it() {
+            for choice in [CompletedWork::DidNotHappen, CompletedWork::DoneAnotherWay] {
+                let db = test_db().await;
+                let v = seed_vehicle(&db).await;
+                let (item, j) = fluid_job(&db, v).await;
+                let svc = completing(&db, v, vec![j]).await;
+                assert_eq!(
+                    get(&db, v, svc).await.unwrap().schedule_item_ids,
+                    vec![item]
+                );
+                assert_eq!(fluid_baseline(&db, v).await, Some(svc));
+
+                let out = update(&db, v, svc, jobs(vec![], Some(choice)))
+                    .await
+                    .unwrap();
+                crate::test_support::assert_empty(&out.schedule_item_ids);
+                assert_eq!(fluid_baseline(&db, v).await, None, "{choice:?}");
+            }
+        }
+
+        #[tokio::test]
+        async fn an_item_named_beside_its_job_goes_with_the_job() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let (item, j) = fluid_job(&db, v).await;
+            let svc = create(
+                &db,
+                v,
+                NewServiceRecord {
+                    service_date: date("2026-11-01"),
+                    work_item_ids: Some(vec![j]),
+                    schedule_item_ids: Some(vec![item]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(svc.schedule_item_ids, vec![item]);
+            assert_eq!(row_count::<service_schedule_link::Entity>(&db).await, 0);
+
+            let out = update(
+                &db,
+                v,
+                svc.record.id,
+                jobs(vec![], Some(CompletedWork::DidNotHappen)),
+            )
+            .await
+            .unwrap();
             crate::test_support::assert_empty(&out.schedule_item_ids);
+            assert_eq!(fluid_baseline(&db, v).await, None);
+        }
+
+        #[tokio::test]
+        async fn sending_back_the_list_a_read_gave_stores_no_link_for_a_jobs_item() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let (item, j) = fluid_job(&db, v).await;
+            let other = seed_schedule_item(&db, v, "Cabin filter").await;
+            let svc = completing(&db, v, vec![j]).await;
+
+            // The read lists the job's item, and the call sends it back with
+            // one more.
+            let read = get(&db, v, svc).await.unwrap().schedule_item_ids;
+            assert_eq!(read, vec![item]);
+            for mode in [LinkMode::Replace, LinkMode::Add] {
+                link_schedule_items(&db, v, svc, &[item, other], mode)
+                    .await
+                    .unwrap();
+            }
+
+            let out = update(&db, v, svc, jobs(vec![], Some(CompletedWork::DidNotHappen)))
+                .await
+                .unwrap();
+            assert_eq!(out.schedule_item_ids, vec![other]);
+        }
+
+        #[tokio::test]
+        async fn a_list_sent_with_the_call_that_takes_a_job_off_does_not_keep_its_item() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let (item, j) = fluid_job(&db, v).await;
+            let other = seed_schedule_item(&db, v, "Cabin filter").await;
+            let svc = completing(&db, v, vec![j]).await;
+
+            let out = update(
+                &db,
+                v,
+                svc,
+                UpdateServiceRecord {
+                    schedule_item_ids: Some(vec![item, other]),
+                    ..jobs(vec![], Some(CompletedWork::DidNotHappen))
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(out.schedule_item_ids, vec![other]);
+        }
+
+        #[tokio::test]
+        async fn a_job_added_for_an_item_the_service_names_takes_the_link_over() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let (item, j) = fluid_job(&db, v).await;
+            let svc = create(
+                &db,
+                v,
+                NewServiceRecord {
+                    service_date: date("2026-11-01"),
+                    schedule_item_ids: Some(vec![item]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .record
+            .id;
+            assert_eq!(row_count::<service_schedule_link::Entity>(&db).await, 1);
+
+            let out = update(&db, v, svc, jobs(vec![j], None)).await.unwrap();
+            assert_eq!(out.schedule_item_ids, vec![item]);
+            assert_eq!(row_count::<service_schedule_link::Entity>(&db).await, 0);
+        }
+
+        #[tokio::test]
+        async fn a_completed_job_moved_to_an_item_the_service_names_takes_the_link_over() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let (item, j) = fluid_job(&db, v).await;
+            let other = seed_schedule_item(&db, v, "Cabin filter").await;
+            let svc = create(
+                &db,
+                v,
+                NewServiceRecord {
+                    service_date: date("2026-11-01"),
+                    work_item_ids: Some(vec![j]),
+                    schedule_item_ids: Some(vec![other]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(svc.schedule_item_ids, vec![item, other]);
+
+            job::update(
+                &db,
+                v,
+                j,
+                crate::inputs::work_item::UpdateWorkItem {
+                    schedule_item_id: Some(Some(other)),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+            let read = get(&db, v, svc.record.id).await.unwrap();
+            assert_eq!(read.schedule_item_ids, vec![other]);
+            assert_eq!(row_count::<service_schedule_link::Entity>(&db).await, 0);
         }
 
         #[tokio::test]

@@ -323,7 +323,7 @@ pub struct CorrectServiceInput {
     pub performed_by: Option<Performer>,
     /// Who paid the invoice overall.
     pub paid_by: Option<Payer>,
-    /// REPLACES the schedule items this service satisfies with exactly this list (ids from `list_schedule`). Omit to leave the links alone.
+    /// REPLACES the schedule items this invoice names with exactly this list (ids from `list_schedule`). The schedule item of a job the service completes counts as well, is listed in a service read, and is never stored from this list; take the job off through `work_item_ids` to remove it, or change which item the job satisfies with `update_planned_work`. A call that takes a job off ignores that job's item in this list; when the invoice still covered the item, name it in a later call. Omit to leave the list alone.
     pub schedule_item_ids: Option<Vec<i32>>,
     /// REPLACES the existing parts installed by this service with exactly this list (ids from `list_parts`). A fitted part taken off the list needs `completed_work`. Omit to leave them alone.
     pub part_ids: Option<Vec<i32>>,
@@ -392,9 +392,9 @@ pub struct CorrectServiceInput {
     pub invoice_ref: Option<Option<String>>,
     /// REPLACES the recalls this service performed with exactly this list (`finding_id`s from `whats_coming` or `check_recalls`). A recall taken off the list needs `completed_work`. Send `[]` to remove them all; omit to leave them alone.
     pub recall_finding_ids: Option<Vec<i32>>,
-    /// REPLACES the planned jobs this service completed with exactly this list (ids from `list_planned_work`). A job added must be planned and becomes done, resolving its incident and performing its recall; a job taken off needs `completed_work` and takes its incident, recall and the parts fitted to its needs with it. Schedule links stay as they are, so send `schedule_item_ids` too when the reminders should change. Send `[]` to remove them all; omit to leave them alone.
+    /// REPLACES the planned jobs this service completed with exactly this list (ids from `list_planned_work`). A job added must be planned and becomes done, resolving its incident and performing its recall; a job taken off needs `completed_work` and takes its incident, recall, the parts fitted to its needs and the reminder baseline of its schedule item with it. Send `[]` to remove them all; omit to leave them alone.
     pub work_item_ids: Option<Vec<i32>>,
-    /// What happened to the work this call takes off the service (jobs left out of `work_item_ids`, fitted parts left out of `part_ids`, recalls left out of `recall_finding_ids`): `did_not_happen` undoes it, so jobs go back to planned, parts read purchased and recalls read open; `done_another_way` keeps it done and only unlinks it from this invoice. Needed only when the call takes such work off; ask the owner.
+    /// What happened to the work this call takes off the service (jobs left out of `work_item_ids`, fitted parts left out of `part_ids`, recalls left out of `recall_finding_ids`): `did_not_happen` undoes it, so jobs go back to planned, parts read purchased and recalls read open; `done_another_way` keeps it done and only unlinks it from this invoice. Either way a job taken off stops giving its schedule item a baseline from this service, so after `done_another_way` name the item in `schedule_item_ids` on the service that did the work when its reminder should stay cleared. Needed only when the call takes such work off; ask the owner.
     #[serde(default)]
     pub completed_work: Option<glovebox_shared::services::service_record::CompletedWork>,
     /// The appointment this invoice settles (from `list_appointments`). It must be open.

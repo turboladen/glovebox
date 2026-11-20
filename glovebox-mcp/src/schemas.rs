@@ -136,7 +136,8 @@ pub struct RecordServiceInput {
     pub part_ids: Option<Vec<i32>>,
     /// Ids of schedule items (from `whats_coming`) this work satisfies, every
     /// one of them and not only the one the owner mentioned. Linking clears
-    /// the reminder and restarts its interval.
+    /// the reminder and restarts its interval. A job in `work_item_ids`
+    /// brings its own schedule item, so that item need not be named here.
     pub schedule_item_ids: Option<Vec<i32>>,
     /// The number printed on the invoice or repair order (e.g. "RO-1182").
     /// Re-recording the SAME ref for this vehicle returns the existing record
@@ -762,7 +763,9 @@ pub struct LinkServiceToMaintenanceInput {
     /// satisfies — linking clears their reminders.
     pub schedule_item_ids: Vec<i32>,
     /// `add` (default) keeps the record's existing links and adds these;
-    /// `replace` overwrites them with exactly this list.
+    /// `replace` overwrites them with exactly this list. Either way the
+    /// schedule item of a job the service completed stays, and the reply
+    /// lists it.
     pub mode: Option<glovebox_shared::services::service_record::LinkMode>,
 }
 
