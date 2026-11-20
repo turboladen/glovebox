@@ -512,6 +512,94 @@ pub async fn create_followup<C: ConnectionTrait + TransactionTrait>(
     Ok(out)
 }
 
+/// The incidents the service resolved that still read resolved, oldest first.
+pub(crate) async fn resolved_by_service(
+    txn: &impl ConnectionTrait,
+    service_id: i32,
+) -> DomainResult<Vec<incident::Model>> {
+    let ids: Vec<i32> = incident_service_link::Entity::find()
+        .filter(incident_service_link::Column::ServiceRecordId.eq(service_id))
+        .filter(incident_service_link::Column::Role.eq(LinkRole::Resolved))
+        .all(txn)
+        .await?
+        .into_iter()
+        .map(|l| l.incident_id)
+        .collect();
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(incident::Entity::find()
+        .filter(incident::Column::Id.is_in(ids))
+        .filter(incident::Column::Resolved.eq(true))
+        .order_by_asc(incident::Column::Id)
+        .all(txn)
+        .await?)
+}
+
+/// Removes the `resolved` links between service `service_id` and `incidents`.
+/// After `did_not_happen` each incident reads unresolved again unless another
+/// service also resolved it.
+pub(crate) async fn release_from_service(
+    txn: &impl ConnectionTrait,
+    service_id: i32,
+    incidents: &[incident::Model],
+    choice: super::service_record::CompletedWork,
+) -> DomainResult<()> {
+    if incidents.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<i32> = incidents.iter().map(|i| i.id).collect();
+    incident_service_link::Entity::delete_many()
+        .filter(incident_service_link::Column::ServiceRecordId.eq(service_id))
+        .filter(incident_service_link::Column::Role.eq(LinkRole::Resolved))
+        .filter(incident_service_link::Column::IncidentId.is_in(ids.clone()))
+        .exec(txn)
+        .await?;
+    if choice == super::service_record::CompletedWork::DidNotHappen {
+        reopen_resolved(txn, service_id, ids).await?;
+    }
+    Ok(())
+}
+
+/// Marks each incident in `resolved_here` unresolved unless a service other
+/// than `service_id` also resolved it. The caller names the incidents that
+/// `service_id` stops resolving.
+pub(crate) async fn reopen_resolved(
+    txn: &impl ConnectionTrait,
+    service_id: i32,
+    resolved_here: Vec<i32>,
+) -> DomainResult<()> {
+    if resolved_here.is_empty() {
+        return Ok(());
+    }
+    let resolved_elsewhere: std::collections::HashSet<i32> = incident_service_link::Entity::find()
+        .filter(incident_service_link::Column::IncidentId.is_in(resolved_here.clone()))
+        .filter(incident_service_link::Column::Role.eq(LinkRole::Resolved))
+        .filter(incident_service_link::Column::ServiceRecordId.ne(service_id))
+        .all(txn)
+        .await?
+        .into_iter()
+        .map(|l| l.incident_id)
+        .collect();
+    let reopen: Vec<i32> = resolved_here
+        .into_iter()
+        .filter(|id| !resolved_elsewhere.contains(id))
+        .collect();
+    if reopen.is_empty() {
+        return Ok(());
+    }
+    incident::Entity::update_many()
+        .set(incident::ActiveModel {
+            resolved: Set(false),
+            updated_at: Set(super::now()),
+            ..Default::default()
+        })
+        .filter(incident::Column::Id.is_in(reopen))
+        .exec(txn)
+        .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

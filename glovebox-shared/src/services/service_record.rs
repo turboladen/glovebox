@@ -9,7 +9,6 @@ use crate::{
         incident_service_link::{self, LinkRole},
         job_need, mileage_log,
         part::{self, PartStatus},
-        service_recall_link,
         service_record::{self, Payer, Performer},
         service_record_line_item, service_schedule_link,
         work_item::{self as job, JobStatus},
@@ -1031,7 +1030,8 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     link_incidents(&txn, vehicle_id, record.id, Vec::new(), Vec::new(), &added).await?;
     let from_added: Vec<i32> = added.iter().filter_map(|w| w.research_finding_id).collect();
     let added_recalls = recall::recall_ids_among(&txn, &from_added).await?;
-    release_incidents(&txn, record.id, &removal.incidents, choice).await?;
+    // These are the incidents of the jobs the correction took off.
+    incident_svc::release_from_service(&txn, record.id, &removal.incidents, choice).await?;
 
     if let Some(mut item_ids) = input.schedule_item_ids {
         // A read lists a job's item beside the named ones, so a list sent
@@ -1058,16 +1058,12 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     // of the jobs taken off lose theirs.
     let removed_recalls: Vec<i32> = removal.recalls.iter().map(|r| r.finding_id).collect();
     let mut relink = added_recalls;
-    let unlink = service_recall_link::Entity::delete_many()
-        .filter(service_recall_link::Column::ServiceRecordId.eq(record.id));
-    if let Some(recall_ids) = input.recall_finding_ids {
-        relink.extend(recall_ids);
-        unlink.exec(&txn).await?;
-    } else if !removed_recalls.is_empty() {
-        unlink
-            .filter(service_recall_link::Column::ResearchFindingId.is_in(removed_recalls.clone()))
-            .exec(&txn)
-            .await?;
+    match input.recall_finding_ids {
+        Some(recall_ids) => {
+            relink.extend(recall_ids);
+            recall::unlink_from_service(&txn, record.id, None).await?;
+        }
+        None => recall::unlink_from_service(&txn, record.id, Some(&removed_recalls)).await?,
     }
     recall::link_service(&txn, vehicle_id, &relink, record.id).await?;
     recall::release_from_service(&txn, removed_recalls, choice).await?;
@@ -1125,7 +1121,7 @@ impl RecordedWork {
         Ok(Self {
             jobs,
             parts,
-            incidents: resolved_by(db, service_id).await?,
+            incidents: incident_svc::resolved_by_service(db, service_id).await?,
             recalls,
         })
     }
@@ -1349,7 +1345,7 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     let finding_ids = work.recalls.iter().map(|r| r.finding_id).collect();
     if choice == CompletedWork::DidNotHappen {
         let incident_ids: Vec<i32> = work.incidents.iter().map(|i| i.id).collect();
-        reopen_resolved_incidents(&txn, existing.id, incident_ids).await?;
+        incident_svc::reopen_resolved(&txn, existing.id, incident_ids).await?;
     }
     // The key clears these on delete too; the explicit write stamps them and
     // does not depend on the foreign_keys pragma.
@@ -1398,10 +1394,7 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         .exec(&txn)
         .await?;
 
-    service_recall_link::Entity::delete_many()
-        .filter(service_recall_link::Column::ServiceRecordId.eq(existing.id))
-        .exec(&txn)
-        .await?;
+    recall::unlink_from_service(&txn, existing.id, None).await?;
 
     // Incident links carry an ON DELETE CASCADE FK, but delete explicitly —
     // pragma-independent and inside the txn, mirroring incident::delete.
@@ -1468,93 +1461,6 @@ fn completed_work_needs_a_choice(
          work did not happen or was done another way. {nothing}",
         items.join(", ")
     ))
-}
-
-// The incidents the service resolved that still read resolved, oldest first.
-async fn resolved_by(
-    txn: &impl ConnectionTrait,
-    service_id: i32,
-) -> DomainResult<Vec<incident::Model>> {
-    let ids: Vec<i32> = incident_service_link::Entity::find()
-        .filter(incident_service_link::Column::ServiceRecordId.eq(service_id))
-        .filter(incident_service_link::Column::Role.eq(LinkRole::Resolved))
-        .all(txn)
-        .await?
-        .into_iter()
-        .map(|l| l.incident_id)
-        .collect();
-    if ids.is_empty() {
-        return Ok(Vec::new());
-    }
-    Ok(incident::Entity::find()
-        .filter(incident::Column::Id.is_in(ids))
-        .filter(incident::Column::Resolved.eq(true))
-        .order_by_asc(incident::Column::Id)
-        .all(txn)
-        .await?)
-}
-
-// Takes `incidents` off the incidents service `service_id` resolved, because
-// a correction took off the jobs they came from. After `did_not_happen` each
-// is unresolved again unless another service also resolved it.
-async fn release_incidents(
-    txn: &impl ConnectionTrait,
-    service_id: i32,
-    incidents: &[incident::Model],
-    choice: CompletedWork,
-) -> DomainResult<()> {
-    if incidents.is_empty() {
-        return Ok(());
-    }
-    let ids: Vec<i32> = incidents.iter().map(|i| i.id).collect();
-    incident_service_link::Entity::delete_many()
-        .filter(incident_service_link::Column::ServiceRecordId.eq(service_id))
-        .filter(incident_service_link::Column::Role.eq(LinkRole::Resolved))
-        .filter(incident_service_link::Column::IncidentId.is_in(ids.clone()))
-        .exec(txn)
-        .await?;
-    if choice == CompletedWork::DidNotHappen {
-        reopen_resolved_incidents(txn, service_id, ids).await?;
-    }
-    Ok(())
-}
-
-// Marks unresolved each of `resolved_here`, incidents service `service_id`
-// resolved and no longer does, unless another service also resolved it.
-async fn reopen_resolved_incidents(
-    txn: &impl ConnectionTrait,
-    service_id: i32,
-    resolved_here: Vec<i32>,
-) -> DomainResult<()> {
-    if resolved_here.is_empty() {
-        return Ok(());
-    }
-    let resolved_elsewhere: std::collections::HashSet<i32> = incident_service_link::Entity::find()
-        .filter(incident_service_link::Column::IncidentId.is_in(resolved_here.clone()))
-        .filter(incident_service_link::Column::Role.eq(LinkRole::Resolved))
-        .filter(incident_service_link::Column::ServiceRecordId.ne(service_id))
-        .all(txn)
-        .await?
-        .into_iter()
-        .map(|l| l.incident_id)
-        .collect();
-    let reopen: Vec<i32> = resolved_here
-        .into_iter()
-        .filter(|id| !resolved_elsewhere.contains(id))
-        .collect();
-    if reopen.is_empty() {
-        return Ok(());
-    }
-    incident::Entity::update_many()
-        .set(incident::ActiveModel {
-            resolved: Set(false),
-            updated_at: Set(super::now()),
-            ..Default::default()
-        })
-        .filter(incident::Column::Id.is_in(reopen))
-        .exec(txn)
-        .await?;
-    Ok(())
 }
 
 #[cfg(test)]

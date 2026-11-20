@@ -403,6 +403,26 @@ pub(crate) async fn link_service(
     Ok(())
 }
 
+/// Removes the links between a service and the recalls it performed: every
+/// link when `only` is `None`, otherwise the links to the named recalls.
+pub(crate) async fn unlink_from_service(
+    db: &impl ConnectionTrait,
+    service_record_id: i32,
+    only: Option<&[i32]>,
+) -> DomainResult<()> {
+    let mut unlink = service_recall_link::Entity::delete_many()
+        .filter(service_recall_link::Column::ServiceRecordId.eq(service_record_id));
+    if let Some(finding_ids) = only {
+        if finding_ids.is_empty() {
+            return Ok(());
+        }
+        unlink = unlink
+            .filter(service_recall_link::Column::ResearchFindingId.is_in(finding_ids.to_vec()));
+    }
+    unlink.exec(db).await?;
+    Ok(())
+}
+
 /// The recalls a deleted service performed, by what became of them.
 #[derive(Debug, Default)]
 pub(crate) struct ReleasedRecalls {
@@ -413,8 +433,9 @@ pub(crate) struct ReleasedRecalls {
 
 /// Applies the owner's choice to recalls a service no longer performs,
 /// because it was deleted or corrected, on the caller's transaction. Call it
-/// once those recall links are gone: a reopened recall that still reads
-/// `done` is one another service also performed.
+/// after [`unlink_from_service`] has removed the service's links to them (and
+/// after any relink): a reopened recall that still reads `done` is one
+/// another service, or this one again, performed.
 pub(crate) async fn release_from_service(
     db: &impl ConnectionTrait,
     finding_ids: Vec<i32>,
@@ -574,6 +595,40 @@ mod tests {
         )
         .await
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn unlinking_removes_every_link_or_only_the_named_ones() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let a = seed_recall(&db, v, "24V001").await;
+        let b = seed_recall(&db, v, "24V002").await;
+        let svc = record_service_with_recalls(&db, v, "2026-11-01", vec![a, b])
+            .await
+            .record
+            .id;
+        let linked = || async {
+            let mut ids: Vec<i32> = service_recall_link::Entity::find()
+                .filter(service_recall_link::Column::ServiceRecordId.eq(svc))
+                .all(&db)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|l| l.research_finding_id)
+                .collect();
+            ids.sort_unstable();
+            ids
+        };
+
+        // An empty list names no recall, so it removes nothing.
+        unlink_from_service(&db, svc, Some(&[])).await.unwrap();
+        assert_eq!(linked().await, vec![a, b]);
+
+        unlink_from_service(&db, svc, Some(&[a])).await.unwrap();
+        assert_eq!(linked().await, vec![b]);
+
+        unlink_from_service(&db, svc, None).await.unwrap();
+        crate::test_support::assert_empty(&linked().await);
     }
 
     async fn seed_recall(db: &DatabaseConnection, vehicle_id: i32, campaign: &str) -> i32 {
