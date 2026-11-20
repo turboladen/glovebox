@@ -182,6 +182,10 @@ need has a decision, every decision has a reason, and every part ordered has arr
     `status` set to `done`. Use `status` set to `cancelled` only for a trip that did not happen.
     Its still-planned jobs go back to "not scheduled" with their needs and research, and the result
     lists them in `unassigned_job_ids`; tell Steve which jobs those are.
+    When a `correct_service`, `delete_service` or `update_planned_work` result lists schedule items
+    that stopped counting from the service (`released_schedule_item_ids`,
+    `schedule_items_released`, `released_schedule_item_id`), tell Steve which reminders lost that
+    service as their baseline.
 
 ## Answering "what's coming"
 

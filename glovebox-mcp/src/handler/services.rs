@@ -154,10 +154,13 @@ impl GloveboxMcp {
                        read open, incidents are unresolved), or `done_another_way` when it was \
                        done but not on this invoice. The reply names any appointment that \
                        reopened (`reopened_appointment_ids`) and any job that left a cancelled \
-                       one (`unassigned_job_ids`). Use this when the invoice was already recorded \
-                       and something on it is wrong; do not record the work a second time with \
-                       `record_service`, which creates a duplicate. To close an incident, use \
-                       `record_service` for new work or `update_incident`."
+                       one (`unassigned_job_ids`). The schedule items that stopped counting from \
+                       this service are in `released_schedule_item_ids`; when the invoice did \
+                       cover one, `link_service_to_maintenance` names it on the service again. \
+                       Use this when the invoice was already recorded and something on it is \
+                       wrong; do not record the work a second time with `record_service`, which \
+                       creates a duplicate. To close an incident, use `record_service` for new \
+                       work or `update_incident`."
     )]
     async fn correct_service(
         &self,
@@ -197,8 +200,11 @@ impl GloveboxMcp {
                        re-filing the invoice, attach the ones that read purchased with \
                        `record_service`'s `part_ids` (never one that reads replaced); otherwise \
                        remove them with `delete_part`. Planned jobs whose quote came with the \
-                       service keep their quote but no longer name it (`quotes_unlinked`). To \
-                       change a record rather than remove it, use `correct_service`."
+                       service keep their quote but no longer name it (`quotes_unlinked`). \
+                       `schedule_items_released` lists the schedule items that stopped counting \
+                       from the service, after either answer; their reminders count from another \
+                       service or from none, so tell the owner. To change a record rather than \
+                       remove it, use `correct_service`."
     )]
     async fn delete_service(
         &self,
@@ -219,6 +225,7 @@ impl GloveboxMcp {
                         "appointments_reopened": out.reopened_appointment_ids,
                         "jobs_unassigned": out.unassigned_job_ids,
                         "quotes_unlinked": out.unlinked_quote_ids,
+                        "schedule_items_released": out.released_schedule_item_ids,
                     })
                 }),
         )

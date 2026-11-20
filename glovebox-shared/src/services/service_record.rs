@@ -125,6 +125,12 @@ pub struct ServiceRecordWithLinks {
     /// Filled only by `update`; omitted from JSON when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unassigned_job_ids: Vec<i32>,
+    /// Ids of the schedule items that stopped counting from this service
+    /// because a correction took the job that brought each one off it or
+    /// left the item out of `schedule_item_ids`, in ascending order. Filled
+    /// only by `update`; omitted from JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub released_schedule_item_ids: Vec<i32>,
 }
 
 /// A need on a completed job whose linked part is neither installed nor
@@ -309,6 +315,7 @@ impl ServiceRecordWithLinks {
             unfitted_needs: Vec::new(),
             reopened_appointment_ids: Vec::new(),
             unassigned_job_ids: Vec::new(),
+            released_schedule_item_ids: Vec::new(),
         }
     }
 }
@@ -1015,6 +1022,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         .iter()
         .filter_map(|j| j.schedule_item_id)
         .collect();
+    let satisfied_before = schedule::links_of_services(&txn, &[record.id]).await?;
     let settled = work_item::release_completed(&txn, &removal.job_ids(), choice).await?;
     let added = match &input.work_item_ids {
         Some(job_ids) => {
@@ -1090,6 +1098,13 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     updated.unfitted_needs = unfitted_needs(&txn, &updated.completed_work_items).await?;
     updated.reopened_appointment_ids = settled.reopened_appointment_ids;
     updated.unassigned_job_ids = settled.unassigned_job_ids;
+    let mut released: Vec<i32> = satisfied_before
+        .into_iter()
+        .map(|(_, item_id)| item_id)
+        .filter(|item_id| !updated.schedule_item_ids.contains(item_id))
+        .collect();
+    released.sort_unstable();
+    updated.released_schedule_item_ids = released;
 
     txn.commit().await?;
 
@@ -1329,6 +1344,9 @@ pub struct DeletedService {
     /// Ids of the planned jobs whose quote came with the service. They stay
     /// and keep who quoted them and when, but no longer name the service.
     pub unlinked_quote_ids: Vec<i32>,
+    /// Ids of the schedule items the service satisfied, in ascending order.
+    /// Their reminders count from another service or from none.
+    pub released_schedule_item_ids: Vec<i32>,
 }
 
 /// Deletes a service record and its owned rows.
@@ -1354,6 +1372,11 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     // The choice is checked before anything is written.
     let work = RecordedWork::read(&txn, existing.id).await?;
     let choice = work.choice(existing.id, ChoiceFor::Delete, completed)?;
+    let released_schedule_item_ids = schedule::links_of_services(&txn, &[existing.id])
+        .await?
+        .into_iter()
+        .map(|(_, item_id)| item_id)
+        .collect();
     let settled = work_item::release_completed(&txn, &work.job_ids(), choice).await?;
     let finding_ids = work.recalls.iter().map(|r| r.finding_id).collect();
     if choice == CompletedWork::DidNotHappen {
@@ -1386,6 +1409,7 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         kept_part_ids: work.parts.iter().map(|p| p.id).collect(),
         reopened_appointment_ids: settled.reopened_appointment_ids,
         unassigned_job_ids: settled.unassigned_job_ids,
+        released_schedule_item_ids,
         ..Default::default()
     };
     part_svc::release_from_service(&txn, work.parts, choice).await?;
@@ -5424,6 +5448,99 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(out.schedule_item_ids, vec![other]);
+        }
+
+        #[tokio::test]
+        async fn taking_a_job_off_names_the_schedule_item_that_stopped_counting() {
+            for choice in [CompletedWork::DidNotHappen, CompletedWork::DoneAnotherWay] {
+                let db = test_db().await;
+                let v = seed_vehicle(&db).await;
+                let (item, j) = fluid_job(&db, v).await;
+                let svc = completing(&db, v, vec![j]).await;
+
+                let out = update(&db, v, svc, jobs(vec![], Some(choice)))
+                    .await
+                    .unwrap();
+                assert_eq!(out.released_schedule_item_ids, vec![item], "{choice:?}");
+            }
+        }
+
+        #[tokio::test]
+        async fn a_correction_that_changes_no_item_names_none() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let (_, j) = fluid_job(&db, v).await;
+            let svc = completing(&db, v, vec![j]).await;
+
+            let out = update(
+                &db,
+                v,
+                svc,
+                UpdateServiceRecord {
+                    notes: Some(Some("Fine".into())),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            crate::test_support::assert_empty(&out.released_schedule_item_ids);
+        }
+
+        #[tokio::test]
+        async fn an_item_a_stored_link_or_another_kept_job_still_satisfies_is_not_named() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let (item, j) = fluid_job(&db, v).await;
+            let twin = job::create(
+                &db,
+                v,
+                NewWorkItem {
+                    title: "Flush again".into(),
+                    schedule_item_id: Some(item),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .id;
+            let svc = completing(&db, v, vec![j, twin]).await;
+            let out = update(
+                &db,
+                v,
+                svc,
+                jobs(vec![twin], Some(CompletedWork::DidNotHappen)),
+            )
+            .await
+            .unwrap();
+            crate::test_support::assert_empty(&out.released_schedule_item_ids);
+            assert_eq!(out.schedule_item_ids, vec![item]);
+
+            let other = seed_schedule_item(&db, v, "Cabin filter").await;
+            link_schedule_items(&db, v, svc, &[other], LinkMode::Add)
+                .await
+                .unwrap();
+            let out = update(&db, v, svc, jobs(vec![], Some(CompletedWork::DidNotHappen)))
+                .await
+                .unwrap();
+            assert_eq!(out.released_schedule_item_ids, vec![item]);
+            assert_eq!(out.schedule_item_ids, vec![other]);
+        }
+
+        #[tokio::test]
+        async fn deleting_a_service_names_its_stored_and_job_items() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let (item, j) = fluid_job(&db, v).await;
+            let other = seed_schedule_item(&db, v, "Cabin filter").await;
+            let svc = completing(&db, v, vec![j]).await;
+            link_schedule_items(&db, v, svc, &[other], LinkMode::Add)
+                .await
+                .unwrap();
+
+            let deleted = delete(&db, v, svc, UNDO).await.unwrap();
+            let mut expected = vec![item, other];
+            expected.sort_unstable();
+            assert_eq!(deleted.released_schedule_item_ids, expected);
         }
 
         #[tokio::test]

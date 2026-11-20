@@ -132,7 +132,11 @@ impl GloveboxMcp {
                        hand opens that appointment again, and the result names it in \
                        `reopened_appointment_id`. On a cancelled appointment the item comes off \
                        it and is unscheduled, and the result names the appointment in \
-                       `left_cancelled_appointment_id`. Tell the owner when either happens."
+                       `left_cancelled_appointment_id`. When the schedule item stopped counting \
+                       from the service, the result names both in `released_schedule_item_id` and \
+                       `released_from_service_id`; when the invoice did cover it, \
+                       `link_service_to_maintenance` names it on the service again. Tell the \
+                       owner when any of these happens."
     )]
     async fn update_planned_work(
         &self,
