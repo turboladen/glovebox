@@ -747,9 +747,9 @@ pub(crate) async fn named_resolved_by(
 }
 
 /// Replaces the incidents the invoice of `service_id` names as fixed with
-/// `incident_ids`. Each one listed is marked resolved unless it already
-/// reads resolved, and an incident taken off the list keeps its flag, which
-/// the caller settles. A wrong-vehicle id reads as nonexistent.
+/// `incident_ids`. Each one the list adds is marked resolved, one the
+/// invoice already names keeps its flag, and so does one taken off the list,
+/// which the caller settles. A wrong-vehicle id reads as nonexistent.
 pub(crate) async fn replace_named(
     db: &impl ConnectionTrait,
     vehicle_id: i32,

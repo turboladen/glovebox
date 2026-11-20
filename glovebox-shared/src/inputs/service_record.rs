@@ -95,9 +95,10 @@ pub struct UpdateServiceRecord {
     /// must be planned.
     pub work_item_ids: Option<Vec<i32>>,
     /// When present, replaces the same-vehicle incidents this service's
-    /// invoice names as fixed. Each one listed is marked resolved, and one
-    /// named beside the job filed from it stays resolved by this service
-    /// when that job is taken off.
+    /// invoice names as fixed. Each one the list adds is marked resolved,
+    /// and one named beside the job filed from it stays resolved by this
+    /// service when that job is taken off. The incident of a job the same
+    /// call takes off is ignored unless the invoice already names it.
     pub resolved_incident_ids: Option<Vec<i32>>,
     /// What happened to the work this update takes off the service: the
     /// jobs, fitted parts, recalls and incidents its lists leave out.
