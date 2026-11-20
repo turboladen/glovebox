@@ -172,7 +172,7 @@ pub(crate) async fn link_service(
 
     if role == LinkRole::Resolved && !inc.resolved {
         let mut active: incident::ActiveModel = inc.into();
-        active.resolved = Set(true);
+        set_resolution(&mut active, Resolution::ByService);
         active.updated_at = Set(super::now());
         active.update(db).await?;
     }
@@ -254,7 +254,7 @@ pub(crate) async fn mark_resolved(
         let inc = require_incident(db, vehicle_id, id).await?;
         if !inc.resolved {
             let mut active: incident::ActiveModel = inc.into();
-            active.resolved = Set(true);
+            set_resolution(&mut active, Resolution::ByService);
             active.updated_at = Set(super::now());
             active.update(db).await?;
         }
@@ -341,6 +341,23 @@ async fn require_links_owned(
         require_incident(db, vehicle_id, recurrence_of_id).await?;
     }
     Ok(())
+}
+
+/// How an incident came to read resolved. It is the only value behind the
+/// `resolved` and `resolved_by_hand` columns, which `set_resolution` writes
+/// together.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Resolution {
+    Open,
+    // The owner said so (`update` with `resolved: true`).
+    ByHand,
+    // A service resolved it, by an invoice link or a completed job.
+    ByService,
+}
+
+fn set_resolution(active: &mut incident::ActiveModel, resolution: Resolution) {
+    active.resolved = Set(resolution != Resolution::Open);
+    active.resolved_by_hand = Set(resolution == Resolution::ByHand);
 }
 
 pub async fn create<C: ConnectionTrait + TransactionTrait>(
@@ -566,15 +583,23 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         }
     }
 
-    // An explicit `resolved` wins over the flag the links just set.
-    let resolved_override = input.resolved.or(cleared_all_resolvers.then_some(false));
-    let inc = if let Some(resolved) = resolved_override {
-        let mut active: incident::ActiveModel =
-            require_incident(&txn, vehicle_id, inc.id).await?.into();
-        active.resolved = Set(resolved);
+    // An explicit `resolved` wins over the flag the links just set. It marks
+    // the owner's word only when it is what resolves the incident: not when a
+    // link of this call or an earlier one already did. With every resolver
+    // cleared, the stored flag no longer rests on a service.
+    let inc = require_incident(&txn, vehicle_id, inc.id).await?;
+    let resolution = match input.resolved {
+        Some(false) => Some(Resolution::Open),
+        Some(true) if !inc.resolved || cleared_all_resolvers => Some(Resolution::ByHand),
+        None if cleared_all_resolvers => Some(Resolution::Open),
+        Some(true) | None => None,
+    };
+    let inc = if let Some(resolution) = resolution {
+        let mut active: incident::ActiveModel = inc.into();
+        set_resolution(&mut active, resolution);
         active.update(&txn).await?
     } else {
-        require_incident(&txn, vehicle_id, inc.id).await?
+        inc
     };
     let mut updated = with_details(&txn, vec![inc]).await?;
     txn.commit().await?;
@@ -651,6 +676,7 @@ pub async fn create_followup<C: ConnectionTrait + TransactionTrait>(
 }
 
 /// The incidents the service resolved that still read resolved, oldest first.
+/// An incident the owner marked resolved by hand is left out.
 pub(crate) async fn resolved_by_service(
     txn: &impl ConnectionTrait,
     service_id: i32,
@@ -666,6 +692,7 @@ pub(crate) async fn resolved_by_service(
     Ok(incident::Entity::find()
         .filter(incident::Column::Id.is_in(ids))
         .filter(incident::Column::Resolved.eq(true))
+        .filter(incident::Column::ResolvedByHand.eq(false))
         .order_by_asc(incident::Column::Id)
         .all(txn)
         .await?)
@@ -693,7 +720,7 @@ pub(crate) async fn named_resolved_by(
 }
 
 /// Marks each incident in `resolved_here` unresolved unless a service other
-/// than `service_id` also resolved it. The caller names the incidents that
+/// than `service_id` also resolved it or the owner marked it resolved by hand. The caller names the incidents that
 /// `service_id` stops resolving.
 pub(crate) async fn reopen_resolved(
     txn: &impl ConnectionTrait,
@@ -707,19 +734,30 @@ pub(crate) async fn reopen_resolved(
             .filter(|(_, by)| *by != service_id)
             .map(|(incident_id, _)| incident_id)
             .collect();
+    let by_hand: std::collections::HashSet<i32> = incident::Entity::find()
+        .select_only()
+        .column(incident::Column::Id)
+        .filter(incident::Column::Id.is_in(resolved_here.clone()))
+        .filter(incident::Column::ResolvedByHand.eq(true))
+        .into_tuple()
+        .all(txn)
+        .await?
+        .into_iter()
+        .collect();
     let reopen: Vec<i32> = resolved_here
         .into_iter()
-        .filter(|id| !resolved_elsewhere.contains(id))
+        .filter(|id| !resolved_elsewhere.contains(id) && !by_hand.contains(id))
         .collect();
     if reopen.is_empty() {
         return Ok(());
     }
+    let mut reopened = incident::ActiveModel {
+        updated_at: Set(super::now()),
+        ..Default::default()
+    };
+    set_resolution(&mut reopened, Resolution::Open);
     incident::Entity::update_many()
-        .set(incident::ActiveModel {
-            resolved: Set(false),
-            updated_at: Set(super::now()),
-            ..Default::default()
-        })
+        .set(reopened)
         .filter(incident::Column::Id.is_in(reopen))
         .exec(txn)
         .await?;
@@ -1035,6 +1073,129 @@ mod tests {
             fetched.resolved_by.iter().map(|s| s.id).collect::<Vec<_>>(),
             vec![own_svc]
         );
+    }
+
+    async fn marker(db: &impl ConnectionTrait, vid: i32, id: i32) -> bool {
+        get(db, vid, id).await.unwrap().incident.resolved_by_hand
+    }
+
+    fn resolved_flag(resolved: bool) -> UpdateIncident {
+        UpdateIncident {
+            resolved: Some(resolved),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn resolving_by_hand_sets_the_marker_and_reopening_clears_it() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let inc = create(&db, vid, new_incident("t", IncidentCategory::General))
+            .await
+            .unwrap()
+            .incident
+            .id;
+        assert!(!marker(&db, vid, inc).await);
+
+        let out = update(&db, vid, inc, resolved_flag(true)).await.unwrap();
+        assert!(out.incident.resolved && out.incident.resolved_by_hand);
+
+        let out = update(&db, vid, inc, resolved_flag(false)).await.unwrap();
+        assert!(!out.incident.resolved && !out.incident.resolved_by_hand);
+    }
+
+    #[tokio::test]
+    async fn resolved_true_beside_a_service_or_on_a_resolved_incident_sets_no_marker() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let svc = seed_service(&db, vid).await;
+        let inc = create(&db, vid, new_incident("t", IncidentCategory::General))
+            .await
+            .unwrap()
+            .incident
+            .id;
+        let with_service = UpdateIncident {
+            resolved: Some(true),
+            resolved_by_service_ids: Some(vec![svc]),
+            ..Default::default()
+        };
+        let out = update(&db, vid, inc, with_service).await.unwrap();
+        assert!(out.incident.resolved && !out.incident.resolved_by_hand);
+
+        let out = update(&db, vid, inc, resolved_flag(true)).await.unwrap();
+        assert!(out.incident.resolved && !out.incident.resolved_by_hand);
+    }
+
+    #[tokio::test]
+    async fn a_service_link_leaves_a_hand_marker_alone() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let svc = seed_service(&db, vid).await;
+        let inc = create(&db, vid, new_incident("t", IncidentCategory::General))
+            .await
+            .unwrap()
+            .incident
+            .id;
+        update(&db, vid, inc, resolved_flag(true)).await.unwrap();
+        link_service(&db, vid, inc, svc, LinkRole::Resolved)
+            .await
+            .unwrap();
+        assert!(marker(&db, vid, inc).await);
+    }
+
+    #[tokio::test]
+    async fn clearing_every_resolver_clears_the_marker() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let svc = seed_service(&db, vid).await;
+        let inc = create(&db, vid, new_incident("t", IncidentCategory::General))
+            .await
+            .unwrap()
+            .incident
+            .id;
+        update(&db, vid, inc, resolved_flag(true)).await.unwrap();
+        let clear = UpdateIncident {
+            resolved_by_service_ids: Some(vec![]),
+            ..Default::default()
+        };
+        let out = update(&db, vid, inc, clear).await.unwrap();
+        assert!(!out.incident.resolved && !out.incident.resolved_by_hand);
+
+        // Resolved by a service, then the owner says so with every resolver cleared.
+        let named = UpdateIncident {
+            resolved_by_service_ids: Some(vec![svc]),
+            ..Default::default()
+        };
+        update(&db, vid, inc, named).await.unwrap();
+        let both = UpdateIncident {
+            resolved: Some(true),
+            resolved_by_service_ids: Some(vec![]),
+            ..Default::default()
+        };
+        let out = update(&db, vid, inc, both).await.unwrap();
+        assert!(out.incident.resolved && out.incident.resolved_by_hand);
+    }
+
+    #[tokio::test]
+    async fn a_created_incident_is_marked_by_hand_never() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let svc = seed_service(&db, vid).await;
+        let open = create(&db, vid, new_incident("a", IncidentCategory::General))
+            .await
+            .unwrap();
+        assert!(!open.incident.resolved && !open.incident.resolved_by_hand);
+        let fixed = create(
+            &db,
+            vid,
+            NewIncident {
+                resolved_by_service_ids: Some(vec![svc]),
+                ..new_incident("b", IncidentCategory::General)
+            },
+        )
+        .await
+        .unwrap();
+        assert!(fixed.incident.resolved && !fixed.incident.resolved_by_hand);
     }
 
     #[tokio::test]

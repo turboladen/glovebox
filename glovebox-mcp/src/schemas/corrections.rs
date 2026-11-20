@@ -659,7 +659,7 @@ pub struct UpdateIncidentInput {
     pub title: Option<String>,
     /// When it happened, `YYYY-MM-DD HH:MM:SS` or just `YYYY-MM-DD`.
     pub occurred_at: Option<String>,
-    /// Mark resolved or unresolved by hand, e.g. fixed with no invoice. Omit to leave the flag to the service links.
+    /// Mark resolved or unresolved by hand, e.g. fixed with no invoice. Resolving by hand is remembered (`resolved_by_hand`), and undoing a service's work later leaves such an incident resolved. Omit to leave the flag to the service links.
     pub resolved: Option<bool>,
     /// REPLACES the services that fixed it with exactly this list. A non-empty list marks the incident resolved; an empty list removes every fixing service and marks it unresolved. A service that completed a job filed from the incident stays whatever the list says, and naming it here changes nothing, so the list alone neither resolves nor reopens the incident while only such services are on it; send `resolved`, or take the job off with `correct_service`. A `resolved` sent in the same call wins. Omit to leave the links alone.
     pub resolved_by_service_ids: Option<Vec<i32>>,

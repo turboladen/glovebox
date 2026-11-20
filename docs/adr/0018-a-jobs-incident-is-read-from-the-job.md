@@ -79,6 +79,5 @@ is stored, and reopening an incident the invoice names is a wrong record.
   incident (the owner removed it, or the job was given the incident afterwards) reads as a
   resolver of that incident from the upgrade on, whatever the incident's `resolved` flag says.
   The flag is not changed. Clearing the job's incident takes the service off again.
-- One limit is accepted. `did_not_happen` reopens an incident that the owner marked resolved by
-  hand before the job was completed, when no other service resolved it. Nothing stored says the
-  flag was set before the job, and the refusal names the incident before the answer is given.
+- An incident the owner marked resolved by hand carries `resolved_by_hand`, and `did_not_happen`
+  leaves it resolved (ADR-0019).

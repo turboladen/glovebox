@@ -530,3 +530,24 @@ async fn an_incident_only_a_job_resolved_reopens_when_the_job_is_taken_off() {
     assert_eq!(read["resolved"], false, "got: {read}");
     assert_eq!(read["resolved_by"], json!([]));
 }
+
+#[tokio::test]
+async fn resolving_by_hand_shows_in_the_incident_and_reopening_clears_it() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let incident = t
+        .call(
+            "log_incident",
+            json!({ "vehicle_id": v.id, "title": "Leak" }),
+        )
+        .await;
+    assert_eq!(incident["resolved_by_hand"], false, "got: {incident}");
+
+    let args = |resolved: bool| json!({ "vehicle_id": v.id, "incident_id": incident["id"], "resolved": resolved });
+    let resolved = t.call("update_incident", args(true)).await;
+    assert_eq!(resolved["resolved"], true, "got: {resolved}");
+    assert_eq!(resolved["resolved_by_hand"], true, "got: {resolved}");
+
+    let reopened = t.call("update_incident", args(false)).await;
+    assert_eq!(reopened["resolved_by_hand"], false, "got: {reopened}");
+}

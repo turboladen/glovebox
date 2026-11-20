@@ -5985,6 +5985,91 @@ mod tests {
             assert_eq!(stored_incident_links(&db).await, 0);
         }
 
+        async fn resolve_by_hand(db: &DatabaseConnection, v: i32, incident: i32) {
+            incident::update(
+                db,
+                v,
+                incident,
+                crate::inputs::incident::UpdateIncident {
+                    resolved: Some(true),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        async fn by_hand(db: &DatabaseConnection, v: i32, incident: i32) -> bool {
+            incident::get(db, v, incident)
+                .await
+                .unwrap()
+                .incident
+                .resolved_by_hand
+        }
+
+        #[tokio::test]
+        async fn an_incident_resolved_by_hand_stays_resolved_when_a_correction_undoes_its_job() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observation(&db, v, None).await;
+            resolve_by_hand(&db, v, incident).await;
+            let j = job_for(&db, v, incident).await;
+            let svc = completing(&db, v, vec![j]).await;
+            assert!(by_hand(&db, v, incident).await);
+
+            // The job needs an answer, and the refusal names no incident.
+            let err = update(&db, v, svc, jobs(vec![], None)).await.unwrap_err();
+            assert!(!err.to_string().contains("incident"), "{err}");
+
+            update(&db, v, svc, jobs(vec![], Some(CompletedWork::DidNotHappen)))
+                .await
+                .unwrap();
+            assert_eq!(
+                job::get(&db, v, j).await.unwrap().status,
+                JobStatus::Planned
+            );
+            assert!(resolved(&db, v, incident).await);
+            assert!(by_hand(&db, v, incident).await);
+        }
+
+        #[tokio::test]
+        async fn an_incident_resolved_by_hand_stays_resolved_when_its_jobs_service_is_deleted() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observation(&db, v, None).await;
+            resolve_by_hand(&db, v, incident).await;
+            let j = job_for(&db, v, incident).await;
+            let svc = completing(&db, v, vec![j]).await;
+
+            let err = delete(&db, v, svc, None).await.unwrap_err();
+            assert!(!err.to_string().contains("incident"), "{err}");
+
+            delete(&db, v, svc, Some(CompletedWork::DidNotHappen))
+                .await
+                .unwrap();
+            assert!(resolved(&db, v, incident).await);
+            assert!(by_hand(&db, v, incident).await);
+        }
+
+        #[tokio::test]
+        async fn an_incident_a_job_resolved_still_reopens_and_carries_no_marker() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observation(&db, v, None).await;
+            let j = job_for(&db, v, incident).await;
+            let svc = completing(&db, v, vec![j]).await;
+            assert!(!by_hand(&db, v, incident).await);
+
+            // Sending `resolved: true` back changes nothing about who resolved it.
+            resolve_by_hand(&db, v, incident).await;
+            assert!(!by_hand(&db, v, incident).await);
+
+            update(&db, v, svc, jobs(vec![], Some(CompletedWork::DidNotHappen)))
+                .await
+                .unwrap();
+            assert!(!resolved(&db, v, incident).await);
+        }
+
         #[tokio::test]
         async fn deleting_one_of_two_jobs_from_an_incident_stores_no_link() {
             let db = test_db().await;
