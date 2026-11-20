@@ -69,6 +69,10 @@ async fn a_new_owner_can_set_up_file_an_invoice_and_ask_whats_coming() {
     assert_eq!(plugs["status"], "overdue", "got: {plugs}");
     let plugs_id = plugs["schedule_item"]["id"].clone();
 
+    // The shop goes in the directory before an invoice names it.
+    assert_eq!(t.call("list_shops", json!({})).await, json!([]));
+    let autohaus = t.call("add_shop", json!({ "name": "Autohaus" })).await;
+
     // 3. File the invoice in one call.
     let recorded = t
         .call(
@@ -102,6 +106,8 @@ async fn a_new_owner_can_set_up_file_an_invoice_and_ask_whats_coming() {
         "got: {recorded}"
     );
     let service_id = recorded["id"].as_i64().expect("service id");
+    assert_eq!(recorded["shop_id"], autohaus["id"]);
+    assert_eq!(recorded["shop_name"], "Autohaus");
 
     // 4. Capture the advisory the shop wrote on the invoice.
     let weeping = t
@@ -185,6 +191,8 @@ async fn a_new_owner_can_set_up_file_an_invoice_and_ask_whats_coming() {
             json!({ "vehicle_id": vehicle_id, "purpose": "Rear brakes", "shop_name": "Autohaus" }),
         )
         .await;
+    assert_eq!(appointment["shop_name"], "Autohaus");
+    assert_eq!(appointment["status"], "planning");
     let job = t
         .call(
             "plan_work",

@@ -43,7 +43,10 @@ you link.
    - `service_date` is the day the car went in, and `end_date` is the pick-up day for a multi-day
      job. Omit `end_date` for same-day work.
    - `performed_by` is `shop`, or `self` for work Steve did, such as an ECU flash. A `self` job
-     takes no `shop_name`.
+     names no shop.
+   - Name the shop by `shop_id` from `list_shops`, or by `shop_name` when it matches one listed
+     shop. A name that matches none is refused, so for a shop not yet listed, ask Steve whether it
+     is a listed shop under another name, and add it with `add_shop` only when it is new.
    - `mileage` is the odometer reading. It also logs a mileage entry.
    - `total_cost_cents` is the invoice's grand total across all lines, including lines someone else
      paid for. A covered line's `cost_cents` is the value the invoice shows for that work (zero or
@@ -142,7 +145,7 @@ app, lost track of what was decided and ordered two wrong parts. This section ex
 need has a decision, every decision has a reason, and every part ordered has arrived and fits.
 
 1. Start the trip with `plan_appointment`, using Steve's own words as the `purpose`. Leave the shop
-   and date out until he knows them. Put each job on it with `plan_work` and `appointment_id`; a
+   and date out until he knows them, and name the shop the way `record_service` does. Put each job on it with `plan_work` and `appointment_id`; a
    job can also wait with no appointment and collect needs first, and `update_planned_work` moves
    it later.
 2. Add each need as the research finds it with `add_need`: "Rear rotors", "Rear pads". A need
@@ -296,6 +299,24 @@ second service to patch the first.
 `list_incidents` list records, and `get_service` and `get_incident` read one in full.
 `search_records` searches everything, and `cost_summary` reports what the car has cost. `save_note`
 keeps a plain fact worth remembering.
+
+## The shop directory
+
+Each shop is one record, so its history stays together. `list_shops` lists them with how many
+services and appointments name each, and `get_shop` reads one shop's history across every car:
+its services with what each cost Steve, and its appointments. Answer "who did this" or "what has
+this shop cost me" from it.
+
+- Before adding a shop with `add_shop`, check `list_shops`. When a new name looks like a listed
+  shop (a dealer under its other name, the same shop with or without its address), ask Steve
+  whether it is the same shop. A second shop of the same name is refused unless both carry
+  different addresses, as two locations of one chain do.
+- When two listed shops are one, ask Steve which name to keep and fold them together with
+  `merge_shops`. Tell him about every value in its `discarded` list. Every service and appointment
+  of the merged shop then reads the kept shop's name, and `search_records` finds a service by its
+  shop's name or address.
+- `update_shop` corrects a shop's details. `delete_shop` removes only a shop nothing names; merge
+  a shop with history instead.
 
 ## Ground rules
 

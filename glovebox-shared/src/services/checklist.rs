@@ -203,7 +203,15 @@ pub async fn for_appointment(
     let job_statuses: Vec<JobStatus> = views.iter().map(|j| j.job.status).collect();
     let needs_open = views.iter().map(JobView::open_needs).sum();
     let todos_open = todos.iter().filter(|t| t.done_on.is_none()).count();
-    let summary = appointment::summarize(found, &job_statuses, needs_open, todos_open, today)?;
+    let shop_name = super::shop::name_of(db, found.shop_id).await?;
+    let summary = appointment::summarize(
+        found,
+        &job_statuses,
+        needs_open,
+        todos_open,
+        shop_name,
+        today,
+    )?;
     Ok(assemble(Some(summary), views, todos))
 }
 
@@ -754,7 +762,7 @@ fn home_appointment(s: AppointmentSummary) -> HomeAppointment {
     HomeAppointment {
         id: s.appointment.id,
         purpose: s.appointment.purpose,
-        shop_name: s.appointment.shop_name,
+        shop_name: s.shop_name,
         when: s
             .appointment
             .planned_date

@@ -1,5 +1,6 @@
 use sea_orm::{
     ActiveModelTrait, ConnectionTrait, DatabaseConnection, EntityTrait, PaginatorTrait, Set,
+    TransactionTrait,
 };
 
 use crate::entities::vehicle;
@@ -243,4 +244,18 @@ impl VehicleFixture {
     pub async fn insert_id(self, db: &impl ConnectionTrait) -> i32 {
         self.insert(db).await.id
     }
+}
+
+/// Adds a shop with no address to the directory and returns its id.
+pub async fn add_shop<C: ConnectionTrait + TransactionTrait>(db: &C, name: &str) -> i32 {
+    crate::services::shop::create(
+        db,
+        crate::inputs::shop::NewShop {
+            name: name.into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("insert test shop")
+    .id
 }

@@ -20,9 +20,10 @@ impl GloveboxMcp {
         name = "plan_appointment",
         description = "Start an appointment: one shop trip that groups jobs and to-dos, with a \
                        purpose in the owner's words (\"60k service + shore up loose ends\"). The \
-                       shop and date are optional until known. Put jobs on it with `plan_work` \
-                       (`appointment_id`) or `update_planned_work`, add what each job needs with \
-                       `add_need`, and read the whole picture with `get_checklist`."
+                       shop (`shop_id` from `list_shops`, or a `shop_name` that matches one \
+                       listed shop) and date are optional until known. Put jobs on it with \
+                       `plan_work` (`appointment_id`) or `update_planned_work`, add what each job \
+                       needs with `add_need`, and read the whole picture with `get_checklist`."
     )]
     async fn plan_appointment(
         &self,
@@ -30,7 +31,7 @@ impl GloveboxMcp {
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "plan_appointment");
         let (vehicle_id, input) = domain_input!(p.into_domain());
-        domain_result(appointment::create(&*self.db, vehicle_id, input).await)
+        domain_result(appointment::plan(&*self.db, vehicle_id, input, today()).await)
     }
 
     #[tool(

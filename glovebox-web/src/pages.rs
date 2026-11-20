@@ -465,7 +465,7 @@ async fn appointment_page(
         top_error,
         vehicle: car.name,
         purpose: summary.appointment.purpose.clone(),
-        shop: summary.appointment.shop_name.clone(),
+        shop: summary.shop_name.clone(),
         date: summary
             .appointment
             .planned_date

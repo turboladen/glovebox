@@ -19,7 +19,9 @@ impl GloveboxMcp {
         name = "record_service",
         description = "Record work that was done on a vehicle: one call per invoice or repair \
                        order. Give `service_date` (and `end_date` for multi-day jobs), \
-                       `performed_by` (`shop` or `self`), `mileage` (also logs an odometer \
+                       `performed_by` (`shop` or `self`), the shop as `shop_id` from `list_shops` \
+                       or a `shop_name` that matches one listed shop (an unknown name is refused: \
+                       add a new shop with `add_shop` first), `mileage` (also logs an odometer \
                        reading), and costs in integer cents: `total_cost_cents` is the invoice's \
                        grand total across all lines, including lines someone else paid for; a \
                        covered line's `cost_cents` is the value the invoice shows for that work \

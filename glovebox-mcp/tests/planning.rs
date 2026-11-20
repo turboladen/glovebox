@@ -391,6 +391,7 @@ async fn planning_tools_reject_unknown_arguments() {
 async fn a_quote_is_planned_work_with_its_source() {
     let t = connect().await;
     let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    t.call("add_shop", json!({ "name": "City VW" })).await;
     let service = t
         .call(
             "record_service",

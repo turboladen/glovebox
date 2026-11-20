@@ -127,7 +127,7 @@ async fn tools_list_advertises_the_remaining_verb_set() {
             "tool {name} input schema must inline every subschema; got: {}",
             tool["inputSchema"]
         );
-        if name == "list_vehicles" || name == "list_model_templates" {
+        if ["list_vehicles", "list_model_templates", "list_shops"].contains(&name) {
             continue; // deliberately take no arguments
         }
         let props = tool["inputSchema"]["properties"].as_object();

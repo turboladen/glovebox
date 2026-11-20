@@ -17,6 +17,7 @@ use crate::{
     inputs::{
         part::{Install, NewFitting, NewPart},
         service_record::{NewLineItem, NewServiceRecord, UpdateServiceRecord},
+        shop::ShopChoice,
     },
     services::{
         appointment,
@@ -29,12 +30,12 @@ use crate::{
 };
 
 /// Checks the date range runs forward and a self-performed job has no shop.
+/// `shop` is the argument that names the service's shop, when it has one.
 fn validate_who_and_when(
     service_date: chrono::NaiveDate,
     end_date: Option<chrono::NaiveDate>,
     performed_by: Performer,
-    shop_name: Option<&str>,
-    shop_id: Option<i32>,
+    shop: Option<&'static str>,
 ) -> DomainResult<()> {
     if end_date.is_some_and(|end| end < service_date) {
         return Err(DomainError::invalid(
@@ -42,18 +43,13 @@ fn validate_who_and_when(
             "must not be before service_date",
         ));
     }
-    if performed_by == Performer::Owner {
-        for (field, named) in [
-            ("shop_name", shop_name.is_some()),
-            ("shop_id", shop_id.is_some()),
-        ] {
-            if named {
-                return Err(DomainError::invalid(
-                    field,
-                    "a self-performed service has no shop",
-                ));
-            }
-        }
+    if performed_by == Performer::Owner
+        && let Some(field) = shop
+    {
+        return Err(DomainError::invalid(
+            field,
+            "a self-performed service has no shop",
+        ));
     }
     Ok(())
 }
@@ -68,6 +64,8 @@ pub fn effective_payer(line_paid_by: Option<Payer>, service_paid_by: Payer) -> P
 pub struct ServiceRecordWithLinks {
     #[serde(flatten)]
     pub record: service_record::Model,
+    /// The name of the shop `shop_id` names, read from the shop directory.
+    pub shop_name: Option<String>,
     pub schedule_item_ids: Vec<i32>,
     pub part_ids: Vec<i32>,
     /// The full rows behind `part_ids`, each with its kit contents.
@@ -409,6 +407,7 @@ impl ServiceRecordWithLinks {
             lines_total_cents,
             note,
             record,
+            shop_name: None,
             schedule_item_ids,
             part_ids: parts.iter().map(|p| p.part.id).collect(),
             parts,
@@ -514,6 +513,7 @@ async fn load_service_links(
 
     let mut jobs = work_item::load_by_service(db, &[record.id]).await?;
 
+    let shop_name = super::shop::name_of(db, record.shop_id).await?;
     let mut links = ServiceRecordWithLinks::assemble(
         record,
         schedule_item_ids,
@@ -525,6 +525,7 @@ async fn load_service_links(
     );
     links.completed_work_items = jobs.completed.remove(&links.record.id).unwrap_or_default();
     links.quoted_work_items = jobs.quoted.remove(&links.record.id).unwrap_or_default();
+    links.shop_name = shop_name;
     Ok(links)
 }
 
@@ -671,6 +672,7 @@ pub async fn list_between(
     let mut incident_links = load_incident_links(db, &record_ids).await?;
     let mut performed = recall::load_performed(db, &record_ids).await?;
     let mut jobs = work_item::load_by_service(db, &record_ids).await?;
+    let shop_names = super::shop::names(db, records.iter().filter_map(|r| r.shop_id)).await?;
 
     let all_line_items = if record_ids.is_empty() {
         vec![]
@@ -707,6 +709,7 @@ pub async fn list_between(
             let performed_recalls = performed.remove(&record.id).unwrap_or_default();
             let completed_work_items = jobs.completed.remove(&record.id).unwrap_or_default();
             let quoted_work_items = jobs.quoted.remove(&record.id).unwrap_or_default();
+            let shop_name = record.shop_id.and_then(|id| shop_names.get(&id).cloned());
             let mut links = ServiceRecordWithLinks::assemble(
                 record,
                 schedule_item_ids,
@@ -718,6 +721,7 @@ pub async fn list_between(
             );
             links.completed_work_items = completed_work_items;
             links.quoted_work_items = quoted_work_items;
+            links.shop_name = shop_name;
             links
         })
         .collect();
@@ -893,19 +897,23 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     }
 
     let performed_by = input.performed_by.unwrap_or(Performer::Shop);
-    let shop_name = input.shop_name.as_deref().and_then(super::trim_to_none);
+    // A self-performed service is refused before its shop is looked up, so
+    // the refusal names the real problem.
     validate_who_and_when(
         input.service_date,
         input.end_date,
         performed_by,
-        shop_name.as_deref(),
-        input.shop_id,
+        input
+            .shop
+            .as_ref()
+            .filter(|c| !c.is_blank())
+            .map(ShopChoice::field),
     )?;
+    let shop_id = super::shop::resolve(db, input.shop.as_ref()).await?;
     let line_items_input = input.line_items.unwrap_or_default();
     if let Some(appointment_id) = input.appointment_id {
         appointment::require_assignable(db, vehicle_id, appointment_id).await?;
     }
-    super::shop::require_if_named(db, input.shop_id).await?;
 
     // Resolved before the record is written so a bad schedule id is reported
     // ahead of any error the insert itself could raise.
@@ -929,8 +937,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
         labor_cost_currency: Set(input.labor_cost_currency),
         total_cost_cents: Set(input.total_cost_cents),
         total_cost_currency: Set(input.total_cost_currency),
-        shop_name: Set(shop_name),
-        shop_id: Set(input.shop_id),
+        shop_id: Set(shop_id),
         notes: Set(input.notes),
         paid_by: Set(input.paid_by.unwrap_or(Payer::Owner)),
         payer_note: Set(input.payer_note),
@@ -1056,17 +1063,18 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         .await?;
     let choice = removal.choice(existing.id, ChoiceFor::Correction, input.completed_work)?;
 
-    let shop_name = input
-        .shop_name
-        .as_ref()
-        .map(|v| v.as_deref().and_then(super::trim_to_none));
+    let named_shop = match &input.shop {
+        Some(Some(choice)) => (!choice.is_blank()).then(|| choice.field()),
+        Some(None) => None,
+        None => existing.shop_id.map(|_| "shop_id"),
+    };
     validate_who_and_when(
         input.service_date.unwrap_or(existing.service_date),
         input.end_date.unwrap_or(existing.end_date),
         input.performed_by.unwrap_or(existing.performed_by),
-        shop_name.as_ref().unwrap_or(&existing.shop_name).as_deref(),
-        input.shop_id.unwrap_or(existing.shop_id),
+        named_shop,
     )?;
+    let shop_id = super::shop::resolve_change(db, input.shop.as_ref()).await?;
     let invoice_ref = input
         .invoice_ref
         .map(|r| r.as_deref().and_then(super::trim_to_none));
@@ -1080,7 +1088,6 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     {
         appointment::require_assignable(db, vehicle_id, appointment_id).await?;
     }
-    super::shop::require_if_named(db, input.shop_id.flatten()).await?;
 
     let (date_before, mileage_before) = (existing.service_date, existing.mileage);
     let mut active: service_record::ActiveModel = existing.into();
@@ -1121,10 +1128,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     if let Some(v) = input.total_cost_currency {
         active.total_cost_currency = Set(v);
     }
-    if let Some(v) = shop_name {
-        active.shop_name = Set(v);
-    }
-    if let Some(v) = input.shop_id {
+    if let Some(v) = shop_id {
         active.shop_id = Set(v);
     }
     if let Some(v) = input.notes {
@@ -1771,8 +1775,7 @@ mod tests {
                 labor_cost_currency: None,
                 total_cost_cents: Some(6_000),
                 total_cost_currency: None,
-                shop_name: None,
-                shop_id: None,
+                shop: None,
                 notes: None,
                 paid_by: None,
                 payer_note: None,
@@ -1852,8 +1855,7 @@ mod tests {
                 labor_cost_currency: None,
                 total_cost_cents: None,
                 total_cost_currency: None,
-                shop_name: None,
-                shop_id: None,
+                shop: None,
                 notes: None,
                 paid_by: None,
                 payer_note: None,
@@ -1943,8 +1945,7 @@ mod tests {
                 labor_cost_currency: None,
                 total_cost_cents: None,
                 total_cost_currency: None,
-                shop_name: None,
-                shop_id: None,
+                shop: None,
                 notes: None,
                 paid_by: None,
                 payer_note: None,
@@ -2215,7 +2216,7 @@ mod tests {
             &db,
             vid,
             NewServiceRecord {
-                shop_id: Some(9999),
+                shop: Some(ShopChoice::Id(9999)),
                 ..minimal_record(None)
             },
         )
@@ -2230,7 +2231,7 @@ mod tests {
             vid,
             made.record.id,
             UpdateServiceRecord {
-                shop_id: Some(Some(9999)),
+                shop: Some(Some(ShopChoice::Id(9999))),
                 ..Default::default()
             },
         )
@@ -2250,8 +2251,7 @@ mod tests {
             labor_cost_currency: None,
             total_cost_cents: None,
             total_cost_currency: None,
-            shop_name: None,
-            shop_id: None,
+            shop: None,
             notes: None,
             paid_by: None,
             payer_note: None,
@@ -2877,83 +2877,54 @@ mod tests {
         assert_eq!(row_count::<service_record::Entity>(&db).await, 0);
     }
 
-    #[tokio::test]
-    async fn create_rejects_a_self_performed_service_with_a_shop_name() {
-        let db = test_db().await;
-        let vid = seed_vehicle(&db).await;
-        let err = create(
-            &db,
-            vid,
-            NewServiceRecord {
-                service_date: date("2025-03-24"),
-                performed_by: Some(Performer::Owner),
-                shop_name: Some("Example VW".into()),
+    async fn add_shop(db: &DatabaseConnection, name: &str, address: Option<&str>) -> i32 {
+        crate::services::shop::create(
+            db,
+            crate::inputs::shop::NewShop {
+                name: name.into(),
+                address: address.map(Into::into),
                 ..Default::default()
             },
         )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "shop_name"));
-    }
-
-    #[tokio::test]
-    async fn a_blank_shop_name_names_no_shop() {
-        let db = test_db().await;
-        let vid = seed_vehicle(&db).await;
-        let got = create(
-            &db,
-            vid,
-            NewServiceRecord {
-                service_date: date("2025-03-24"),
-                performed_by: Some(Performer::Owner),
-                shop_name: Some("  ".into()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(got.record.shop_name, None);
-        let blank = UpdateServiceRecord {
-            shop_name: Some(Some(String::new())),
-            ..Default::default()
-        };
-        let updated = update(&db, vid, got.record.id, blank).await.unwrap();
-        assert_eq!(updated.record.shop_name, None);
-    }
-
-    #[tokio::test]
-    async fn a_self_performed_service_names_no_shop_id() {
-        use crate::entities::shop;
-        let db = test_db().await;
-        let vid = seed_vehicle(&db).await;
-        let shop_id = shop::ActiveModel {
-            name: Set("Example VW".into()),
-            ..Default::default()
-        }
-        .insert(&db)
         .await
         .unwrap()
-        .id;
-        let err = create(
-            &db,
-            vid,
-            NewServiceRecord {
-                service_date: date("2025-03-24"),
-                performed_by: Some(Performer::Owner),
-                shop_id: Some(shop_id),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "shop_id"));
+        .id
+    }
+
+    #[tokio::test]
+    async fn a_self_performed_service_names_no_shop() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let shop_id = add_shop(&db, "Example VW", None).await;
+        // A name not in the directory gets the same answer, since a
+        // self-performed service names no shop at all.
+        for (choice, field) in [
+            (ShopChoice::Name("Example VW".into()), "shop_name"),
+            (ShopChoice::Name("My Garage".into()), "shop_name"),
+            (ShopChoice::Id(shop_id), "shop_id"),
+        ] {
+            let err = create(
+                &db,
+                vid,
+                NewServiceRecord {
+                    service_date: date("2025-03-24"),
+                    performed_by: Some(Performer::Owner),
+                    shop: Some(choice),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(err, DomainError::Invalid { .. }), "{err}");
+            assert!(err.to_string().starts_with(field), "{err}");
+        }
 
         let at_shop = create(
             &db,
             vid,
             NewServiceRecord {
                 service_date: date("2025-03-24"),
-                shop_id: Some(shop_id),
+                shop: Some(ShopChoice::Id(shop_id)),
                 ..Default::default()
             },
         )
@@ -2967,6 +2938,73 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "shop_id"));
+        let self_done_elsewhere = UpdateServiceRecord {
+            performed_by: Some(Performer::Owner),
+            shop: Some(None),
+            ..Default::default()
+        };
+        let got = update(&db, vid, at_shop.record.id, self_done_elsewhere)
+            .await
+            .unwrap();
+        assert_eq!((got.record.shop_id, got.shop_name), (None, None));
+    }
+
+    #[tokio::test]
+    async fn a_blank_shop_name_names_no_shop() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let got = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: date("2025-03-24"),
+                performed_by: Some(Performer::Owner),
+                shop: Some(ShopChoice::Name("  ".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(got.record.shop_id, None);
+        let blank = UpdateServiceRecord {
+            shop: Some(Some(ShopChoice::Name(String::new()))),
+            ..Default::default()
+        };
+        let updated = update(&db, vid, got.record.id, blank).await.unwrap();
+        assert_eq!(updated.record.shop_id, None);
+    }
+
+    #[tokio::test]
+    async fn a_shop_name_must_match_one_shop_in_the_directory() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let kw = add_shop(&db, "KW Automotive", None).await;
+        add_shop(&db, "America's Tire", Some("433 E Shaw Ave")).await;
+        add_shop(&db, "America's Tire", Some("833 E Shaw Ave")).await;
+        let at = |name: &str| NewServiceRecord {
+            service_date: date("2025-03-24"),
+            shop: Some(ShopChoice::Name(name.into())),
+            ..Default::default()
+        };
+
+        let got = create(&db, vid, at(" kw automotive ")).await.unwrap();
+        assert_eq!(got.record.shop_id, Some(kw));
+        assert_eq!(got.shop_name.as_deref(), Some("KW Automotive"));
+        assert_eq!(got.record.shop_name, None);
+        let listed = list_between(&db, vid, None, None).await.unwrap();
+        assert_eq!(listed[0].shop_name.as_deref(), Some("KW Automotive"));
+
+        let err = create(&db, vid, at("Clovis VW")).await.unwrap_err();
+        assert!(
+            matches!(err, DomainError::BadRequest(ref m) if m.starts_with("No shop")),
+            "{err}"
+        );
+        let err = create(&db, vid, at("america's tire")).await.unwrap_err();
+        assert!(
+            matches!(err, DomainError::BadRequest(ref m) if m.contains("433 E Shaw Ave") && m.contains("833 E Shaw Ave")),
+            "{err}"
+        );
+        assert_eq!(row_count::<service_record::Entity>(&db).await, 1);
     }
 
     #[tokio::test]

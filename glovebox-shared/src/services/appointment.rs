@@ -24,6 +24,8 @@ use crate::{
 pub struct AppointmentSummary {
     #[serde(flatten)]
     pub appointment: appointment::Model,
+    /// The name of the shop `shop_id` names, read from the shop directory.
+    pub shop_name: Option<String>,
     pub status: AppointmentStatus,
     /// Where the appointment stands, as [`phase`] reads it from the status,
     /// the planned date and today's date.
@@ -176,8 +178,9 @@ pub fn phase(
 /// Creates an appointment for a vehicle.
 ///
 /// # Errors
-/// `NotFound` for a vehicle or shop that does not exist; `Invalid` for a
-/// blank purpose.
+/// `NotFound` for a vehicle or shop id that does not exist; `BadRequest` for
+/// a shop name that matches no shop or several; `Invalid` for a blank
+/// purpose.
 pub async fn create<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -187,12 +190,11 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     let txn = super::begin_write(db).await?;
     let db = &txn;
     super::vehicle::require_in_garage(db, vehicle_id).await?;
-    super::shop::require_if_named(db, input.shop_id).await?;
+    let shop_id = super::shop::resolve(db, input.shop.as_ref()).await?;
     let model = appointment::ActiveModel {
         vehicle_id: Set(vehicle_id),
         purpose: Set(input.purpose),
-        shop_name: Set(input.shop_name),
-        shop_id: Set(input.shop_id),
+        shop_id: Set(shop_id),
         planned_date: Set(input.planned_date),
         notes: Set(input.notes),
         ..Default::default()
@@ -202,11 +204,31 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     Ok(out)
 }
 
+/// Creates an appointment as [`create`] does and reads it back as every
+/// appointment read summarizes it on `today`.
+///
+/// # Errors
+/// As for [`create`].
+pub async fn plan<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    input: NewAppointment,
+    today: chrono::NaiveDate,
+) -> DomainResult<AppointmentSummary> {
+    // The summary is read on the same transaction, so it is of the row the
+    // call created.
+    let txn = super::begin_write(db).await?;
+    let created = create(&txn, vehicle_id, input).await?;
+    let planned = summary(&txn, vehicle_id, created.id, today).await?;
+    txn.commit().await?;
+    Ok(planned)
+}
+
 /// Changes an appointment's purpose, shop, date or notes.
 ///
 /// # Errors
 /// `NotFound` for an appointment that is not the vehicle's or a missing shop;
-/// `Invalid` as for [`create`].
+/// `BadRequest` and `Invalid` as for [`create`].
 pub(crate) async fn update(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -217,15 +239,12 @@ pub(crate) async fn update(
     if let Some(purpose) = &input.purpose {
         super::validate_not_blank("purpose", purpose)?;
     }
-    super::shop::require_if_named(db, input.shop_id.flatten()).await?;
+    let shop_id = super::shop::resolve_change(db, input.shop.as_ref()).await?;
     let mut active: appointment::ActiveModel = existing.into();
     if let Some(v) = input.purpose {
         active.purpose = Set(v);
     }
-    if let Some(v) = input.shop_name {
-        active.shop_name = Set(v);
-    }
-    if let Some(v) = input.shop_id {
+    if let Some(v) = shop_id {
         active.shop_id = Set(v);
     }
     if let Some(v) = input.planned_date {
@@ -345,7 +364,7 @@ pub async fn list(
     today: chrono::NaiveDate,
 ) -> DomainResult<Vec<AppointmentSummary>> {
     super::vehicle::require(db, vehicle_id).await?;
-    let mut out = summaries(db, &[vehicle_id], None, today).await?;
+    let mut out = summaries(db, appointment::Column::VehicleId.eq(vehicle_id), today).await?;
     if !include_closed {
         out.retain(shows_as_open);
     }
@@ -360,7 +379,13 @@ pub(crate) async fn open_by_vehicle(
     today: chrono::NaiveDate,
 ) -> DomainResult<HashMap<i32, Vec<AppointmentSummary>>> {
     let mut grouped: HashMap<i32, Vec<AppointmentSummary>> = HashMap::new();
-    for summary in summaries(db, vehicle_ids, None, today).await? {
+    for summary in summaries(
+        db,
+        appointment::Column::VehicleId.is_in(vehicle_ids.iter().copied()),
+        today,
+    )
+    .await?
+    {
         if shows_as_open(&summary) {
             grouped
                 .entry(summary.appointment.vehicle_id)
@@ -378,6 +403,16 @@ fn shows_as_open(s: &AppointmentSummary) -> bool {
         || (s.status == AppointmentStatus::Done && s.accepts_work() && s.todos_open > 0)
 }
 
+/// Every appointment that names `shop_id`, across vehicles and whatever its
+/// status, in [`list`] order.
+pub(crate) async fn at_shop(
+    db: &impl ConnectionTrait,
+    shop_id: i32,
+    today: chrono::NaiveDate,
+) -> DomainResult<Vec<AppointmentSummary>> {
+    summaries(db, appointment::Column::ShopId.eq(shop_id), today).await
+}
+
 /// One appointment of the vehicle with its counts, whatever its status.
 ///
 /// # Errors
@@ -389,15 +424,15 @@ pub async fn summary(
     today: chrono::NaiveDate,
 ) -> DomainResult<AppointmentSummary> {
     require(db, vehicle_id, id).await?;
-    summaries(db, &[vehicle_id], Some(id), today)
+    summaries(db, appointment::Column::Id.eq(id), today)
         .await?
         .into_iter()
         .next()
         .ok_or_else(|| DomainError::NotFound(format!("Appointment {id} not found")))
 }
 
-/// The summary of `appointment` on `today` from the statuses of its jobs and
-/// its counts of open needs and open to-dos.
+/// The summary of `appointment` on `today` from the statuses of its jobs, its
+/// counts of open needs and open to-dos, and the name of its shop.
 ///
 /// # Errors
 /// `Internal` for an appointment that holds both a closed and a cancelled
@@ -407,11 +442,13 @@ pub(crate) fn summarize(
     job_statuses: &[JobStatus],
     needs_open: usize,
     todos_open: usize,
+    shop_name: Option<String>,
     today: chrono::NaiveDate,
 ) -> DomainResult<AppointmentSummary> {
     let ending = Ending::of(&appointment)?;
     let status = status(ending, job_statuses);
     Ok(AppointmentSummary {
+        shop_name,
         status,
         ending,
         phase: phase(status, appointment.planned_date, today),
@@ -422,20 +459,15 @@ pub(crate) fn summarize(
     })
 }
 
-// Builds the summaries for every appointment of the vehicles, or for the one
-// named by `only`, in list order, with every count loaded in batches.
+// Builds the summaries for every appointment `filter` matches, in list order,
+// with every count loaded in batches.
 async fn summaries(
     db: &impl ConnectionTrait,
-    vehicle_ids: &[i32],
-    only: Option<i32>,
+    filter: impl sea_orm::sea_query::IntoCondition,
     today: chrono::NaiveDate,
 ) -> DomainResult<Vec<AppointmentSummary>> {
-    let mut query = appointment::Entity::find()
-        .filter(appointment::Column::VehicleId.is_in(vehicle_ids.iter().copied()));
-    if let Some(id) = only {
-        query = query.filter(appointment::Column::Id.eq(id));
-    }
-    let appointments = query.all(db).await?;
+    let appointments = appointment::Entity::find().filter(filter).all(db).await?;
+    let shop_names = super::shop::names(db, appointments.iter().filter_map(|a| a.shop_id)).await?;
     let ids: Vec<i32> = appointments.iter().map(|a| a.id).collect();
     let jobs = work_item::Entity::find()
         .filter(work_item::Column::AppointmentId.is_in(ids.clone()))
@@ -492,7 +524,8 @@ async fn summaries(
             let job_statuses = statuses.get(&a.id).map_or(&[][..], Vec::as_slice);
             let needs = needs_open.get(&a.id).copied().unwrap_or(0);
             let todos = todos_open.get(&a.id).copied().unwrap_or(0);
-            summarize(a, job_statuses, needs, todos, today)
+            let shop_name = a.shop_id.and_then(|id| shop_names.get(&id).cloned());
+            summarize(a, job_statuses, needs, todos, shop_name, today)
         })
         .collect::<DomainResult<_>>()?;
     out.sort_by(|a, b| {
@@ -889,25 +922,28 @@ mod tests {
     async fn create_and_update_round_trip() {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
+        let shop_id = crate::test_support::add_shop(&db, "Example VW").await;
         let made = create(
             &db,
             v,
             NewAppointment {
                 purpose: "Brakes".into(),
-                shop_name: Some("Example VW".into()),
+                shop: Some(crate::inputs::shop::ShopChoice::Name("example vw".into())),
                 planned_date: Some(date("2026-12-01")),
                 ..Default::default()
             },
         )
         .await
         .unwrap();
-        assert_eq!(made.shop_name.as_deref(), Some("Example VW"));
+        assert_eq!(made.shop_id, Some(shop_id));
+        let read = summary(&db, v, made.id, date("2026-11-13")).await.unwrap();
+        assert_eq!(read.shop_name.as_deref(), Some("Example VW"));
         let missing_shop = create(
             &db,
             v,
             NewAppointment {
                 purpose: "x".into(),
-                shop_id: Some(9999),
+                shop: Some(crate::inputs::shop::ShopChoice::Id(9999)),
                 ..Default::default()
             },
         )
@@ -928,7 +964,7 @@ mod tests {
         .unwrap();
         assert_eq!(updated.purpose, "Brakes and rotors");
         assert_eq!(updated.planned_date, None);
-        assert_eq!(updated.shop_name.as_deref(), Some("Example VW"));
+        assert_eq!(updated.shop_id, Some(shop_id));
         let blank = update(
             &db,
             v,

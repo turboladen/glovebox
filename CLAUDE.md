@@ -114,7 +114,7 @@ command does. Tests use `test_db()` or a temporary directory.
 functions.
 
 **Services** (`services/`): One module per domain (`vehicle`, `service_record`, `part`, `incident`,
-`work_item`, `appointment`, `need`, `todo`, `schedule`, `recall`, `research`, ...) of free functions taking `db: &impl
+`work_item`, `appointment`, `need`, `todo`, `schedule`, `recall`, `research`, `shop`, ...) of free functions taking `db: &impl
 ConnectionTrait` first and returning `DomainResult<T>`. Composite reads: `upcoming` (the
 `whats_coming` answer: reminders, budget, planned work, recalls, open incidents), `reminders`,
 `budget`, `costs`, `activity`, `search`, `work_sheet` (an appointment's sheet for the mechanic), and `checklist` (the checklist for an appointment, an
@@ -159,7 +159,10 @@ link that repeats the schedule item of a job the same service completes, and
 `m20261120_000002_job_incident_links`, which does the same for a stored `resolved` incident link
 that repeats a completed job's incident, and `m20261120_000003_incident_resolved_by_hand`, which
 adds `incidents.resolved_by_hand`, marks each resolved incident that no service resolves and adds a
-CHECK that only a resolved incident carries it. They run on startup.
+CHECK that only a resolved incident carries it, and `m20261121_000001_shops_search`, which adds
+the FTS5 index `fts_shops`, and `m20261121_000002_shops_from_names`, which moves every stored
+`shop_name` into the shop directory (a trailing `(…)` holding a digit is the address), sets each row's `shop_id`
+and adds a CHECK that `shop_name` stays NULL on services and appointments. They run on startup.
 
 **Test harness** (`test_support.rs`): `test_db()` is an in-memory SQLite database with migrations
 applied. It is compiled under `#[cfg(any(test, feature = "test-support"))]`; `glovebox-mcp` uses it
@@ -197,6 +200,7 @@ named as things a person would say:
 - `recalls.rs`: `check_recalls`, `list_recalls`, `set_recall_status`, `file_research_finding`
 - `reads.rs`: `summarize_recent_activity`, `search_records`, `cost_summary`, `get_service`,
   `get_incident`
+- `shops.rs`: `list_shops`, `add_shop`, `get_shop`, `update_shop`, `merge_shops`, `delete_shop`
 
 A change to what a tool asks or refuses updates every copy of the rule: the tool `description`,
 the field docs in `src/schemas*`, `docs/claude-desktop/glovebox-project-prompt.md` (which restates
@@ -360,8 +364,16 @@ due-soon item when there are two or more, and a stored recall title is the NHTSA
 case.
 Platforms and model templates are written only by migrations; `model_template::list` and
 `list_with_platform` are the only template services
-(`docs/adr/0013-templates-come-from-migrations.md`). Shops have their table, `shop_id` and
-`shop::require_if_named`, but no write path yet; a self-performed service names no shop.
+(`docs/adr/0013-templates-come-from-migrations.md`). The shop directory (`shop::create`,
+`update`, `merge`, `delete`, `history`) holds one record per shop: a second shop of the same
+name (ASCII case and surrounding spaces aside) is refused unless both carry different
+addresses, `merge` moves every service and appointment to the kept shop and reports in
+`discarded` each detail it did not take, and `delete` refuses a shop any record names. A
+service or appointment names its shop only by `shop_id`: its `shop_name` column stays NULL (a
+CHECK holds it), and every read prints the shop's name from the directory under `shop_name`
+(`shop::names`). A write takes a `ShopChoice`, and `shop::resolve` turns a name into the one shop
+it matches or refuses it, so a new spelling never creates a shop; a self-performed service names
+no shop. `docs/adr/0021-a-shop-is-one-record.md` records why.
 
 **Resources**: `glovebox://vehicles`, `glovebox://vehicles/{id}` and `…/{id}/activity`.
 `list_resources` enumerates concrete URIs from the database and `read_resource` parses them.
@@ -372,7 +384,7 @@ become opaque JSON-RPC internal errors with the detail kept in tracing.
 
 **Tests** (`glovebox-mcp/tests/`): `common/mod.rs` is the harness (an in-process client over an
 in-memory duplex stream and an in-memory database). One file per handler area (`vehicles`,
-`services`, `parts`, `incidents`, `planning`, `checklist`, `schedule`, `recalls`, `reads`), plus
+`services`, `parts`, `incidents`, `planning`, `checklist`, `schedule`, `recalls`, `reads`, `shops`), plus
 `stdio.rs` (the binary's stdout) and `rehearsal.rs` (a new owner's whole first session through
 tool calls only). Add coverage for a new tool to its area's file.
 
@@ -465,7 +477,7 @@ role per control style, and `YYYY-MM-DD` dates.
   that follow see the committed state. A transaction from plain `begin` holds a snapshot from its
   first read, and when the other program commits before its first write, SQLite fails it with a
   busy-snapshot error at once. A no-op `UPDATE` as the first statement does not fix that on the
-  ten tables with an FTS5 trigger, which fail with "database is locked" without waiting out the
+  eleven tables with an FTS5 trigger, which fail with "database is locked" without waiting out the
   busy timeout. A race test opens several pools on one file (`test_support::race_pools`) and
   fails when the transaction opens with plain `begin`.
 - **Stamps are set by code, never by the database.** No stamp column has a default. An entity
@@ -536,7 +548,7 @@ role per control style, and `YYYY-MM-DD` dates.
   `research_finding::FindingStatus`, `service_record::CompletedWork`, `schedule::LinkMode` and `search::SearchScope`. A
   filter on a column never takes one of these.
   `docs/adr/0004-typed-vocabularies.md` records why.
-- **Migrations**: new migrations go after `m20261120_000003_incident_resolved_by_hand`; the
+- **Migrations**: new migrations go after `m20261121_000002_shops_from_names`; the
   `new-migration` skill has the templates. Use `Expr::cust()` for expressions inside builder queries; raw
   `execute_unprepared` only where no builder form exists (FTS5 DDL, cross-table copies). A delete
   by a correlated subquery has one: `Query::delete().cond_where(Expr::exists(subquery))`, as

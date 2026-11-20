@@ -58,7 +58,9 @@ impl World {
             vehicle,
             NewAppointment {
                 purpose: "60k service".into(),
-                shop_name: Some("Demo Auto Works".into()),
+                shop: Some(glovebox_shared::inputs::shop::ShopChoice::Id(
+                    glovebox_shared::test_support::add_shop(&db, "Demo Auto Works").await,
+                )),
                 planned_date: Some(date("2026-12-01")),
                 ..Default::default()
             },

@@ -14,12 +14,13 @@ use glovebox_shared::{
         service_record_line_item::WorkKind,
         vehicle,
     },
-    error::DomainResult,
+    error::{DomainError, DomainResult},
     inputs::{
         incident::NewIncident,
         mileage::NewMileageEntry,
         part::{Install, NewFitting, NewPart, NewPartContent},
         service_record::{NewLineItem, NewServiceRecord},
+        shop::ShopChoice,
         vehicle::VehicleSale,
         work_item::NewWorkItem,
     },
@@ -40,9 +41,48 @@ mod checklist;
 
 pub use checklist::*;
 
+#[allow(clippy::option_option)]
+mod shops;
+
+pub use shops::*;
+
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EmptyParams {}
+
+const BOTH_SHOP_FORMS: &str = "Name the shop by shop_id or by shop_name, not both";
+
+/// The shop a new record names, from its two arguments.
+pub(crate) fn shop_choice(
+    shop_id: Option<i32>,
+    shop_name: Option<String>,
+) -> DomainResult<Option<ShopChoice>> {
+    match (shop_id, shop_name) {
+        (Some(_), Some(_)) => Err(DomainError::BadRequest(BOTH_SHOP_FORMS.into())),
+        (Some(id), None) => Ok(Some(ShopChoice::Id(id))),
+        (None, name) => Ok(name.map(ShopChoice::Name)),
+    }
+}
+
+/// The change to a record's shop, from its two arguments: `null` clears it,
+/// and a value in one beside anything in the other is refused, unless both
+/// are `null`.
+#[expect(
+    clippy::option_option,
+    reason = "an absent change differs from clearing"
+)]
+pub(crate) fn shop_change(
+    shop_id: Option<Option<i32>>,
+    shop_name: Option<Option<String>>,
+) -> DomainResult<Option<Option<ShopChoice>>> {
+    match (shop_id, shop_name) {
+        (None, None) => Ok(None),
+        (Some(None), None | Some(None)) | (None, Some(None)) => Ok(Some(None)),
+        (Some(Some(id)), None) => Ok(Some(Some(ShopChoice::Id(id)))),
+        (None, Some(Some(name))) => Ok(Some(Some(ShopChoice::Name(name)))),
+        (Some(_), Some(_)) => Err(DomainError::BadRequest(BOTH_SHOP_FORMS.into())),
+    }
+}
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -96,7 +136,7 @@ pub struct RecordServiceInput {
     /// `service_date`. Omit for same-day work.
     pub end_date: Option<String>,
     /// Who did the work: `shop` (default) or `self` (the owner did it, e.g. a
-    /// DIY job or an ECU flash). A `self` job takes no `shop_name`.
+    /// DIY job or an ECU flash). A `self` job takes no `shop_id` or `shop_name`.
     pub performed_by: Option<Performer>,
     /// What was done, e.g. "Oil change + tire rotation".
     pub description: Option<String>,
@@ -112,7 +152,11 @@ pub struct RecordServiceInput {
     pub parts_cost_cents: Option<i32>,
     /// Labor subtotal, integer cents. Fill it only when the invoice prints one.
     pub labor_cost_cents: Option<i32>,
-    /// Shop that did the work (free text). Omit for DIY.
+    /// The shop that did the work, by its id from `list_shops`. Omit for DIY.
+    pub shop_id: Option<i32>,
+    /// The shop by name instead of `shop_id`. It must match one shop from
+    /// `list_shops` (case and surrounding spaces aside); a name that matches
+    /// none is refused, so add a new shop with `add_shop` first.
     pub shop_name: Option<String>,
     /// Free-form notes.
     pub notes: Option<String>,
@@ -233,8 +277,7 @@ impl RecordServiceInput {
                 labor_cost_currency: None,
                 total_cost_cents: self.total_cost_cents,
                 total_cost_currency: None,
-                shop_name: self.shop_name,
-                shop_id: None,
+                shop: shop_choice(self.shop_id, self.shop_name)?,
                 notes: self.notes,
                 paid_by: self.paid_by,
                 payer_note: self.payer_note,

@@ -32,8 +32,12 @@ pub struct PlanAppointmentInput {
     /// What the visit is for, in the owner's words, e.g. "60k service + shore
     /// up loose ends". Required.
     pub purpose: String,
-    /// The shop, named the way `record_service` names its shop. Leave it out
-    /// until the owner knows.
+    /// The shop, by its id from `list_shops`. Leave it out until the owner
+    /// knows.
+    pub shop_id: Option<i32>,
+    /// The shop by name instead of `shop_id`. It must match one shop from
+    /// `list_shops` (case and surrounding spaces aside); add a new shop with
+    /// `add_shop` first.
     pub shop_name: Option<String>,
     /// The planned date, `YYYY-MM-DD`. Leave it out until booked.
     pub planned_date: Option<String>,
@@ -47,8 +51,7 @@ impl PlanAppointmentInput {
             self.vehicle_id,
             NewAppointment {
                 purpose: self.purpose,
-                shop_name: self.shop_name,
-                shop_id: None,
+                shop: super::shop_choice(self.shop_id, self.shop_name)?,
                 planned_date: dates::parse_optional_date("planned_date", self.planned_date)?,
                 notes: self.notes,
             },
@@ -74,7 +77,13 @@ pub struct UpdateAppointmentInput {
     pub status: Option<AppointmentStatus>,
     /// New purpose.
     pub purpose: Option<String>,
-    /// The shop.
+    /// The shop, by its id from `list_shops`.
+    ///
+    /// Send `null` to clear it; omit the key to leave it unchanged.
+    #[serde(default, deserialize_with = "nullable")]
+    #[schemars(with = "Option<i32>")]
+    pub shop_id: Option<Option<i32>>,
+    /// The shop by name instead of `shop_id`. It must match one shop from `list_shops` (case and surrounding spaces aside); add a new shop with `add_shop` first.
     ///
     /// Send `null` to clear it; omit the key to leave it unchanged.
     #[serde(default, deserialize_with = "nullable")]
@@ -102,8 +111,7 @@ impl UpdateAppointmentInput {
             self.appointment_id,
             UpdateAppointment {
                 purpose: self.purpose,
-                shop_name: self.shop_name,
-                shop_id: None,
+                shop: super::shop_change(self.shop_id, self.shop_name)?,
                 planned_date: dates::parse_date_change("planned_date", self.planned_date)?,
                 notes: self.notes,
             },

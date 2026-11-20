@@ -3,7 +3,7 @@ use crate::{
         service_record::{Payer, Performer},
         service_record_line_item::WorkKind,
     },
-    inputs::part::NewPart,
+    inputs::{part::NewPart, shop::ShopChoice},
 };
 
 pub struct NewLineItem {
@@ -31,8 +31,8 @@ pub struct NewServiceRecord {
     pub labor_cost_currency: Option<String>,
     pub total_cost_cents: Option<i32>,
     pub total_cost_currency: Option<String>,
-    pub shop_name: Option<String>,
-    pub shop_id: Option<i32>,
+    /// The shop that did the work; a blank name names none.
+    pub shop: Option<ShopChoice>,
     pub notes: Option<String>,
     /// Defaults to the owner.
     pub paid_by: Option<Payer>,
@@ -78,8 +78,7 @@ pub struct UpdateServiceRecord {
     pub labor_cost_currency: Option<Option<String>>,
     pub total_cost_cents: Option<Option<i32>>,
     pub total_cost_currency: Option<Option<String>>,
-    pub shop_name: Option<Option<String>>,
-    pub shop_id: Option<Option<i32>>,
+    pub shop: Option<Option<ShopChoice>>,
     pub notes: Option<Option<String>>,
     /// Plain option: the column is non-nullable, so there is no "clear" case.
     pub paid_by: Option<Payer>,
