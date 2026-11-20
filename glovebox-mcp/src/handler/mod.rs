@@ -60,6 +60,7 @@ mod reads;
 mod recalls;
 mod schedule;
 mod services;
+mod shops;
 mod vehicles;
 
 pub const VEHICLES_URI: &str = "glovebox://vehicles";
@@ -85,6 +86,7 @@ impl GloveboxMcp {
             + Self::checklist_router()
             + Self::schedule_router()
             + Self::recalls_router()
+            + Self::shops_router()
             + Self::reads_router()
     }
 }
@@ -142,11 +144,14 @@ impl ServerHandler for GloveboxMcp {
                  `file_research_finding` for research worth keeping (read back with \
                  `search_records`), `search_records` and `cost_summary` to look things up, \
                  `check_recalls` (once per conversation; a failed lookup still lists the known \
-                 recalls) and `set_recall_status` for recalls. Services, parts, incidents and \
-                 planned work can each be listed, corrected and deleted; a correct or update tool \
-                 leaves absent fields alone and clears a field sent as null, and an argument a \
-                 tool does not define is an error. All money is integer cents; all dates are \
-                 YYYY-MM-DD, and a malformed date is an error naming the field.",
+                 recalls) and `set_recall_status` for recalls, and `list_shops`, `add_shop`, \
+                 `get_shop` (a shop's history), `update_shop`, `merge_shops` (after the owner \
+                 confirms two entries are one shop) and `delete_shop` for the shop directory. \
+                 Services, parts, incidents and planned work can each be listed, corrected and \
+                 deleted; a correct or update tool leaves absent fields alone and clears a field \
+                 sent as null, and an argument a tool does not define is an error. All money is \
+                 integer cents; all dates are YYYY-MM-DD, and a malformed date is an error naming \
+                 the field.",
             )
     }
 

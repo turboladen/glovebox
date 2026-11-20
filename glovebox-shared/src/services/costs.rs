@@ -180,6 +180,16 @@ fn out_of_pocket_per_service(
     out_of_pocket_by_service
 }
 
+/// Per service, the owner's share of its total, read as
+/// `out_of_pocket_per_service` reads it. A service with no total is left out.
+pub(crate) async fn out_of_pocket(
+    db: &impl ConnectionTrait,
+    services: &[service_record::Model],
+) -> DomainResult<HashMap<i32, i64>> {
+    let lines_by_service = load_lines(db, services).await?;
+    Ok(out_of_pocket_per_service(services, &lines_by_service))
+}
+
 /// The services with work someone else paid for, newest first, with the
 /// lines that were covered.
 async fn covered_work(

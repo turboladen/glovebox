@@ -297,6 +297,22 @@ second service to patch the first.
 `search_records` searches everything, and `cost_summary` reports what the car has cost. `save_note`
 keeps a plain fact worth remembering.
 
+## The shop directory
+
+Each shop is one record, so its history stays together. `list_shops` lists them with how many
+services and appointments name each, and `get_shop` reads one shop's history across every car:
+its services with what each cost Steve, and its appointments. Answer "who did this" or "what has
+this shop cost me" from it.
+
+- Before adding a shop with `add_shop`, check `list_shops`. When a new name looks like a listed
+  shop (a dealer under its other name, the same shop with or without its address), ask Steve
+  whether it is the same shop. A second shop of the same name is refused unless both carry
+  different addresses, as two locations of one chain do.
+- When two listed shops are one, ask Steve which name to keep and fold them together with
+  `merge_shops`. Tell him about every value in its `discarded` list.
+- `update_shop` corrects a shop's details. `delete_shop` removes only a shop nothing names; merge
+  a shop with history instead.
+
 ## Ground rules
 
 - Do not invent numbers. When a mileage, cost or date is not on the document, ask Steve or leave the

@@ -88,6 +88,12 @@ pub fn trim_to_none(value: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
+/// The form of a name that every name comparison uses: ASCII case and
+/// surrounding whitespace do not matter.
+pub(crate) fn name_key(name: &str) -> String {
+    name.trim().to_ascii_lowercase()
+}
+
 #[cfg(test)]
 mod date_label_tests {
     #[test]

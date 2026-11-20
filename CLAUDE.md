@@ -114,7 +114,7 @@ command does. Tests use `test_db()` or a temporary directory.
 functions.
 
 **Services** (`services/`): One module per domain (`vehicle`, `service_record`, `part`, `incident`,
-`work_item`, `appointment`, `need`, `todo`, `schedule`, `recall`, `research`, ...) of free functions taking `db: &impl
+`work_item`, `appointment`, `need`, `todo`, `schedule`, `recall`, `research`, `shop`, ...) of free functions taking `db: &impl
 ConnectionTrait` first and returning `DomainResult<T>`. Composite reads: `upcoming` (the
 `whats_coming` answer: reminders, budget, planned work, recalls, open incidents), `reminders`,
 `budget`, `costs`, `activity`, `search`, `work_sheet` (an appointment's sheet for the mechanic), and `checklist` (the checklist for an appointment, an
@@ -197,6 +197,7 @@ named as things a person would say:
 - `recalls.rs`: `check_recalls`, `list_recalls`, `set_recall_status`, `file_research_finding`
 - `reads.rs`: `summarize_recent_activity`, `search_records`, `cost_summary`, `get_service`,
   `get_incident`
+- `shops.rs`: `list_shops`, `add_shop`, `get_shop`, `update_shop`, `merge_shops`, `delete_shop`
 
 A change to what a tool asks or refuses updates every copy of the rule: the tool `description`,
 the field docs in `src/schemas*`, `docs/claude-desktop/glovebox-project-prompt.md` (which restates
@@ -360,8 +361,12 @@ due-soon item when there are two or more, and a stored recall title is the NHTSA
 case.
 Platforms and model templates are written only by migrations; `model_template::list` and
 `list_with_platform` are the only template services
-(`docs/adr/0013-templates-come-from-migrations.md`). Shops have their table, `shop_id` and
-`shop::require_if_named`, but no write path yet; a self-performed service names no shop.
+(`docs/adr/0013-templates-come-from-migrations.md`). The shop directory (`shop::create`,
+`update`, `merge`, `delete`, `history`) holds one record per shop: a second shop of the same
+`name_key` is refused unless both carry different addresses, `merge` moves every service and
+appointment to the kept shop and reports in `discarded` each detail it did not take, and `delete`
+refuses a shop any record names. No tool sets a service's or appointment's `shop_id` yet; a
+self-performed service names no shop.
 
 **Resources**: `glovebox://vehicles`, `glovebox://vehicles/{id}` and `…/{id}/activity`.
 `list_resources` enumerates concrete URIs from the database and `read_resource` parses them.
@@ -372,7 +377,7 @@ become opaque JSON-RPC internal errors with the detail kept in tracing.
 
 **Tests** (`glovebox-mcp/tests/`): `common/mod.rs` is the harness (an in-process client over an
 in-memory duplex stream and an in-memory database). One file per handler area (`vehicles`,
-`services`, `parts`, `incidents`, `planning`, `checklist`, `schedule`, `recalls`, `reads`), plus
+`services`, `parts`, `incidents`, `planning`, `checklist`, `schedule`, `recalls`, `reads`, `shops`), plus
 `stdio.rs` (the binary's stdout) and `rehearsal.rs` (a new owner's whole first session through
 tool calls only). Add coverage for a new tool to its area's file.
 

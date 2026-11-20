@@ -14,6 +14,7 @@ pub mod need;
 pub mod part;
 pub mod schedule;
 pub mod service_record;
+pub mod shop;
 pub mod todo;
 pub mod vehicle;
 pub mod work_item;

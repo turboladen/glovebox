@@ -40,6 +40,11 @@ mod checklist;
 
 pub use checklist::*;
 
+#[allow(clippy::option_option)]
+mod shops;
+
+pub use shops::*;
+
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EmptyParams {}
