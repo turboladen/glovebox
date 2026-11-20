@@ -16,6 +16,7 @@ mod m20261119_000002_need_decision_checks;
 mod m20261119_000003_appointment_ending_check;
 mod m20261119_000004_single_row_checks;
 mod m20261120_000001_job_schedule_links;
+mod m20261120_000002_job_incident_links;
 mod schema;
 
 pub struct Migrator;
@@ -40,6 +41,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261119_000003_appointment_ending_check::Migration),
             Box::new(m20261119_000004_single_row_checks::Migration),
             Box::new(m20261120_000001_job_schedule_links::Migration),
+            Box::new(m20261120_000002_job_incident_links::Migration),
         ]
     }
 }

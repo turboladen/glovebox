@@ -149,8 +149,10 @@ pub struct RecordServiceInput {
     /// completes. Each is marked done, and its schedule item, if any, is
     /// linked so the reminder clears.
     pub work_item_ids: Option<Vec<i32>>,
-    /// Ids of incidents (from `log_incident`) this service fixed. Each is
-    /// marked resolved and linked to this service.
+    /// Ids of incidents (from `log_incident`) the invoice says this service
+    /// fixed. Each is marked resolved and linked to this service, and stays
+    /// so if a job filed from it is later taken off the service. A job in
+    /// `work_item_ids` resolves its incident without being named here.
     pub resolved_incident_ids: Option<Vec<i32>>,
     /// Ids of incidents first noticed during this service, e.g. a shop
     /// observation logged beforehand. An incident is noticed during one

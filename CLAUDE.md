@@ -151,7 +151,9 @@ appointment is both closed and cancelled and then adds that rule as a CHECK, and
 `m20261119_000004_single_row_checks`, which does the same for a job's completing service, a
 service's dates and shop, a service reading's source, a schedule item's override and a research
 finding's status, and `m20261120_000001_job_schedule_links`, which removes each stored schedule
-link that repeats the schedule item of a job the same service completes. They run on startup.
+link that repeats the schedule item of a job the same service completes, and
+`m20261120_000002_job_incident_links`, which does the same for a stored `resolved` incident link
+that repeats a completed job's incident. They run on startup.
 
 **Test harness** (`test_support.rs`): `test_db()` is an in-memory SQLite database with migrations
 applied. It is compiled under `#[cfg(any(test, feature = "test-support"))]`; `glovebox-mcp` uses it
@@ -219,6 +221,11 @@ stored as a link. Every reader goes through `schedule::links_of_services` or
 job's schedule item ends with `schedule::drop_links_jobs_bring`, so an item named beside its job
 follows the job; deleting a completed job keeps the item as a stored link
 (`docs/adr/0017-a-jobs-schedule-item-is-read-from-the-job.md`).
+A job's incident is read from the job the same way (`incident::resolvers_of_services`,
+`incident::resolvers_of_incidents`), but a stored `resolved` link means the invoice named the
+incident and stays when the job is taken off, so that incident stays resolved; `update_incident`
+stores no link for a service only a job brings
+(`docs/adr/0018-a-jobs-incident-is-read-from-the-job.md`).
 Every service read carries `lines_total_cents`, and a `note` when the total differs from it (the
 kinds are `maintenance`, `mod`, `repair`, `inspection`, `recall` and `fee`; payers are `self`,
 `insurance`, `third_party` and `manufacturer`). A line may carry its own `paid_by`
@@ -497,7 +504,7 @@ role per control style, and `YYYY-MM-DD` dates.
   `research_finding::FindingStatus`, `service_record::CompletedWork`, `schedule::LinkMode` and `search::SearchScope`. A
   filter on a column never takes one of these.
   `docs/adr/0004-typed-vocabularies.md` records why.
-- **Migrations**: new migrations go after `m20261120_000001_job_schedule_links`; the
+- **Migrations**: new migrations go after `m20261120_000002_job_incident_links`; the
   `new-migration` skill has the templates. Use `Expr::cust()` for expressions inside builder queries; raw
   `execute_unprepared` only where no builder form exists (FTS5 DDL, cross-table copies). A delete
   by a correlated subquery has one: `Query::delete().cond_where(Expr::exists(subquery))`, as

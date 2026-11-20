@@ -9,7 +9,7 @@ use serde::Serialize;
 use crate::{
     entities::{
         incident, incident_followup, incident_service_link, incident_service_link::LinkRole,
-        service_record,
+        service_record, work_item,
     },
     error::{DomainError, DomainResult},
     inputs::incident::{NewFollowup, NewIncident, UpdateIncident},
@@ -59,8 +59,9 @@ pub struct IncidentWithDetails {
     pub resolved_by: Vec<ServiceRef>,
 }
 
-/// Builds the detail shape for each incident with three batched queries
-/// (followups, links, services) regardless of how many incidents there are.
+/// Builds the detail shape for each incident with five batched queries
+/// (followups, noticing links, resolving links, resolving jobs, services)
+/// regardless of how many incidents there are.
 async fn with_details(
     db: &impl ConnectionTrait,
     incidents: Vec<incident::Model>,
@@ -75,11 +76,17 @@ async fn with_details(
         .order_by_asc(incident_followup::Column::OccurredAt)
         .all(db)
         .await?;
-    let links = incident_service_link::Entity::find()
-        .filter(incident_service_link::Column::IncidentId.is_in(incident_ids))
+    let noticed = incident_service_link::Entity::find()
+        .filter(incident_service_link::Column::IncidentId.is_in(incident_ids.clone()))
+        .filter(incident_service_link::Column::Role.eq(LinkRole::Noticed))
         .all(db)
         .await?;
-    let service_ids: Vec<i32> = links.iter().map(|l| l.service_record_id).collect();
+    let resolvers = resolvers_of_incidents(db, &incident_ids).await?;
+    let service_ids: Vec<i32> = noticed
+        .iter()
+        .map(|l| l.service_record_id)
+        .chain(resolvers.iter().map(|(_, service_id)| *service_id))
+        .collect();
     let services: std::collections::HashMap<i32, service_record::Model> = if service_ids.is_empty()
     {
         std::collections::HashMap::new()
@@ -96,17 +103,16 @@ async fn with_details(
     Ok(incidents
         .into_iter()
         .map(|inc| {
-            let service_for = |role: LinkRole| {
-                links
-                    .iter()
-                    .filter(|l| l.incident_id == inc.id && l.role == role)
-                    .filter_map(|l| services.get(&l.service_record_id))
-                    .cloned()
-                    .map(ServiceRef::from)
-                    .collect::<Vec<_>>()
-            };
-            let noticed_during = service_for(LinkRole::Noticed).into_iter().next();
-            let mut resolved_by = service_for(LinkRole::Resolved);
+            let service = |id: &i32| services.get(id).cloned().map(ServiceRef::from);
+            let noticed_during = noticed
+                .iter()
+                .filter(|l| l.incident_id == inc.id)
+                .find_map(|l| service(&l.service_record_id));
+            let mut resolved_by: Vec<ServiceRef> = resolvers
+                .iter()
+                .filter(|(incident_id, _)| *incident_id == inc.id)
+                .filter_map(|(_, service_id)| service(service_id))
+                .collect();
             resolved_by.sort_by(|a, b| (&a.service_date, a.id).cmp(&(&b.service_date, b.id)));
             IncidentWithDetails {
                 followups: followups
@@ -169,6 +175,113 @@ pub(crate) async fn link_service(
         active.resolved = Set(true);
         active.updated_at = Set(super::now());
         active.update(db).await?;
+    }
+    Ok(())
+}
+
+/// Each `(incident_id, service_id)` pair in which the service resolved one of
+/// `incident_ids`: the stored `resolved` links and the jobs filed from the
+/// incident that a service completes. The pairs are sorted and each appears once.
+pub(crate) async fn resolvers_of_incidents(
+    db: &impl ConnectionTrait,
+    incident_ids: &[i32],
+) -> DomainResult<Vec<(i32, i32)>> {
+    if incident_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let stored = incident_service_link::Entity::find()
+        .filter(incident_service_link::Column::IncidentId.is_in(incident_ids.to_vec()));
+    let jobs = work_item::Entity::find()
+        .filter(work_item::Column::IncidentId.is_in(incident_ids.to_vec()));
+    resolvers(db, stored, jobs).await
+}
+
+/// Each `(incident_id, service_id)` pair in which one of `service_ids`
+/// resolved an incident: the stored `resolved` links and the incidents of the
+/// jobs the service completes. The pairs are sorted and each appears once.
+pub(crate) async fn resolvers_of_services(
+    db: &impl ConnectionTrait,
+    service_ids: &[i32],
+) -> DomainResult<Vec<(i32, i32)>> {
+    if service_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let stored = incident_service_link::Entity::find()
+        .filter(incident_service_link::Column::ServiceRecordId.is_in(service_ids.to_vec()));
+    let jobs = work_item::Entity::find()
+        .filter(work_item::Column::CompletedServiceId.is_in(service_ids.to_vec()));
+    resolvers(db, stored, jobs).await
+}
+
+// A job's incident is read from the job and never stored as a link, so a
+// stored `resolved` link always means the invoice named the incident, and
+// taking the job off the service leaves that link alone.
+async fn resolvers(
+    db: &impl ConnectionTrait,
+    stored: Select<incident_service_link::Entity>,
+    jobs: Select<work_item::Entity>,
+) -> DomainResult<Vec<(i32, i32)>> {
+    let mut pairs: Vec<(i32, i32)> = stored
+        .filter(incident_service_link::Column::Role.eq(LinkRole::Resolved))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|l| (l.incident_id, l.service_record_id))
+        .collect();
+    let from_jobs: Vec<(i32, i32)> = jobs
+        .select_only()
+        .column(work_item::Column::IncidentId)
+        .column(work_item::Column::CompletedServiceId)
+        .filter(work_item::Column::IncidentId.is_not_null())
+        .filter(work_item::Column::CompletedServiceId.is_not_null())
+        .into_tuple()
+        .all(db)
+        .await?;
+    pairs.extend(from_jobs);
+    pairs.sort_unstable();
+    pairs.dedup();
+    Ok(pairs)
+}
+
+/// Marks each of the vehicle's incidents in `incident_ids` resolved and
+/// stores no link. A wrong-vehicle id reads as nonexistent.
+pub(crate) async fn mark_resolved(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    incident_ids: &[i32],
+) -> DomainResult<()> {
+    for &id in incident_ids {
+        let inc = require_incident(db, vehicle_id, id).await?;
+        if !inc.resolved {
+            let mut active: incident::ActiveModel = inc.into();
+            active.resolved = Set(true);
+            active.updated_at = Set(super::now());
+            active.update(db).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Stores a `resolved` link between the incident and the service unless one
+/// is stored already. The incident's `resolved` flag is left as it is.
+pub(crate) async fn keep_resolver(
+    db: &impl ConnectionTrait,
+    incident_id: i32,
+    service_id: i32,
+) -> DomainResult<()> {
+    let key = (incident_id, service_id, LinkRole::Resolved);
+    if incident_service_link::Entity::find_by_id(key)
+        .one(db)
+        .await?
+        .is_none()
+    {
+        incident_service_link::ActiveModel {
+            incident_id: Set(incident_id),
+            service_record_id: Set(service_id),
+            role: Set(LinkRole::Resolved),
+        }
+        .insert(db)
+        .await?;
     }
     Ok(())
 }
@@ -401,19 +514,44 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     let inc = active.update(&txn).await?;
 
     // Replacing the resolving services with none leaves nothing that resolved
-    // the incident, so it reads as unresolved unless the caller says otherwise.
-    let cleared_all_resolvers = input
-        .resolved_by_service_ids
-        .as_ref()
-        .is_some_and(Vec::is_empty);
+    // the incident, so it reads as unresolved unless the caller says otherwise
+    // or a completed job still resolves it.
+    let mut cleared_all_resolvers = false;
     if let Some(sids) = input.resolved_by_service_ids {
-        incident_service_link::Entity::delete_many()
+        let from_jobs: Vec<i32> = work_item::Entity::find()
+            .select_only()
+            .column(work_item::Column::CompletedServiceId)
+            .filter(work_item::Column::IncidentId.eq(inc.id))
+            .filter(work_item::Column::CompletedServiceId.is_not_null())
+            .into_tuple()
+            .all(&txn)
+            .await?;
+        cleared_all_resolvers = sids.is_empty() && from_jobs.is_empty();
+        // The list cannot take off a service a job brings, so that service's
+        // links stay as they are: a stored one keeps saying the invoice named
+        // the incident, and none is stored for a list sent back from a read,
+        // which names the service because the job does.
+        let replaced: Vec<i32> = incident_service_link::Entity::find()
             .filter(incident_service_link::Column::IncidentId.eq(inc.id))
             .filter(incident_service_link::Column::Role.eq(LinkRole::Resolved))
-            .exec(&txn)
-            .await?;
+            .all(&txn)
+            .await?
+            .into_iter()
+            .map(|l| l.service_record_id)
+            .filter(|sid| !from_jobs.contains(sid))
+            .collect();
+        if !replaced.is_empty() {
+            incident_service_link::Entity::delete_many()
+                .filter(incident_service_link::Column::IncidentId.eq(inc.id))
+                .filter(incident_service_link::Column::Role.eq(LinkRole::Resolved))
+                .filter(incident_service_link::Column::ServiceRecordId.is_in(replaced))
+                .exec(&txn)
+                .await?;
+        }
         for sid in super::dedup_ids(&sids) {
-            link_service(&txn, vehicle_id, inc.id, sid, LinkRole::Resolved).await?;
+            if !from_jobs.contains(&sid) {
+                link_service(&txn, vehicle_id, inc.id, sid, LinkRole::Resolved).await?;
+            }
         }
     }
 
@@ -517,13 +655,10 @@ pub(crate) async fn resolved_by_service(
     txn: &impl ConnectionTrait,
     service_id: i32,
 ) -> DomainResult<Vec<incident::Model>> {
-    let ids: Vec<i32> = incident_service_link::Entity::find()
-        .filter(incident_service_link::Column::ServiceRecordId.eq(service_id))
-        .filter(incident_service_link::Column::Role.eq(LinkRole::Resolved))
-        .all(txn)
+    let ids: Vec<i32> = resolvers_of_services(txn, &[service_id])
         .await?
         .into_iter()
-        .map(|l| l.incident_id)
+        .map(|(incident_id, _)| incident_id)
         .collect();
     if ids.is_empty() {
         return Ok(Vec::new());
@@ -536,29 +671,25 @@ pub(crate) async fn resolved_by_service(
         .await?)
 }
 
-/// Removes the `resolved` links between service `service_id` and `incidents`.
-/// After `did_not_happen` each incident reads unresolved again unless another
-/// service also resolved it.
-pub(crate) async fn release_from_service(
-    txn: &impl ConnectionTrait,
+/// Those of `incident_ids` that the service holds a stored `resolved` link
+/// to, which is to say the ones its invoice named.
+pub(crate) async fn named_resolved_by(
+    db: &impl ConnectionTrait,
     service_id: i32,
-    incidents: &[incident::Model],
-    choice: super::service_record::CompletedWork,
-) -> DomainResult<()> {
-    if incidents.is_empty() {
-        return Ok(());
+    incident_ids: &[i32],
+) -> DomainResult<Vec<i32>> {
+    if incident_ids.is_empty() {
+        return Ok(Vec::new());
     }
-    let ids: Vec<i32> = incidents.iter().map(|i| i.id).collect();
-    incident_service_link::Entity::delete_many()
+    Ok(incident_service_link::Entity::find()
         .filter(incident_service_link::Column::ServiceRecordId.eq(service_id))
         .filter(incident_service_link::Column::Role.eq(LinkRole::Resolved))
-        .filter(incident_service_link::Column::IncidentId.is_in(ids.clone()))
-        .exec(txn)
-        .await?;
-    if choice == super::service_record::CompletedWork::DidNotHappen {
-        reopen_resolved(txn, service_id, ids).await?;
-    }
-    Ok(())
+        .filter(incident_service_link::Column::IncidentId.is_in(incident_ids.to_vec()))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|l| l.incident_id)
+        .collect())
 }
 
 /// Marks each incident in `resolved_here` unresolved unless a service other
@@ -569,18 +700,13 @@ pub(crate) async fn reopen_resolved(
     service_id: i32,
     resolved_here: Vec<i32>,
 ) -> DomainResult<()> {
-    if resolved_here.is_empty() {
-        return Ok(());
-    }
-    let resolved_elsewhere: std::collections::HashSet<i32> = incident_service_link::Entity::find()
-        .filter(incident_service_link::Column::IncidentId.is_in(resolved_here.clone()))
-        .filter(incident_service_link::Column::Role.eq(LinkRole::Resolved))
-        .filter(incident_service_link::Column::ServiceRecordId.ne(service_id))
-        .all(txn)
-        .await?
-        .into_iter()
-        .map(|l| l.incident_id)
-        .collect();
+    let resolved_elsewhere: std::collections::HashSet<i32> =
+        resolvers_of_incidents(txn, &resolved_here)
+            .await?
+            .into_iter()
+            .filter(|(_, by)| *by != service_id)
+            .map(|(incident_id, _)| incident_id)
+            .collect();
     let reopen: Vec<i32> = resolved_here
         .into_iter()
         .filter(|id| !resolved_elsewhere.contains(id))

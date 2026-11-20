@@ -180,7 +180,7 @@ struct IncidentLinks {
     resolved: std::collections::HashMap<i32, Vec<IncidentRef>>,
 }
 
-/// Loads the noticed and resolved incidents of each record with four batched
+/// Loads the noticed and resolved incidents of each record with eight batched
 /// queries however many records there are.
 async fn load_incident_links(
     db: &impl ConnectionTrait,
@@ -190,18 +190,32 @@ async fn load_incident_links(
     if record_ids.is_empty() {
         return Ok(out);
     }
-    let mine = incident_service_link::Entity::find()
+    // A resolving link is stored or read from a job the service completes,
+    // so both kinds are gathered as link rows.
+    let resolved = |(incident_id, service_record_id)| incident_service_link::Model {
+        incident_id,
+        service_record_id,
+        role: LinkRole::Resolved,
+    };
+    let noticed = incident_service_link::Entity::find()
+        .filter(incident_service_link::Column::Role.eq(LinkRole::Noticed));
+    let mut mine = noticed
+        .clone()
         .filter(incident_service_link::Column::ServiceRecordId.is_in(record_ids.to_vec()))
         .all(db)
         .await?;
+    let resolving = incident_svc::resolvers_of_services(db, record_ids).await?;
+    mine.extend(resolving.into_iter().map(resolved));
     if mine.is_empty() {
         return Ok(out);
     }
     let incident_ids: Vec<i32> = mine.iter().map(|l| l.incident_id).collect();
-    let all_links = incident_service_link::Entity::find()
+    let mut all_links = noticed
         .filter(incident_service_link::Column::IncidentId.is_in(incident_ids.clone()))
         .all(db)
         .await?;
+    let resolving = incident_svc::resolvers_of_incidents(db, &incident_ids).await?;
+    all_links.extend(resolving.into_iter().map(resolved));
     let incidents: std::collections::HashMap<i32, incident::Model> = incident::Entity::find()
         .filter(incident::Column::Id.is_in(incident_ids))
         .all(db)
@@ -698,17 +712,21 @@ async fn same_day_peers(
         .collect())
 }
 
-/// Links the record to the incidents it fixed and the ones it noticed. A
-/// completed to-do that came from an incident fixes that incident too.
+/// Links the record to the incidents its invoice says it fixed and the ones
+/// it noticed. A completed job that came from an incident fixes that incident
+/// too, so the incident is marked resolved.
 async fn link_incidents(
     txn: &impl ConnectionTrait,
     vehicle_id: i32,
     record_id: i32,
-    mut resolved_ids: Vec<i32>,
+    resolved_ids: Vec<i32>,
     noticed_ids: Vec<i32>,
     completed: &[crate::entities::work_item::Model],
 ) -> DomainResult<()> {
-    resolved_ids.extend(completed.iter().filter_map(|w| w.incident_id));
+    // No link is stored for a job's incident, because the job names the
+    // service, and a stored link then always means the invoice named it.
+    let from_jobs: Vec<i32> = completed.iter().filter_map(|w| w.incident_id).collect();
+    incident_svc::mark_resolved(txn, vehicle_id, &super::dedup_ids(&from_jobs)).await?;
     for (ids, role) in [
         (resolved_ids, LinkRole::Resolved),
         (noticed_ids, LinkRole::Noticed),
@@ -921,7 +939,9 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         recall::require_recalls(db, vehicle_id, &super::dedup_ids(finding_ids)).await?;
     }
     let completed_before = recorded.job_ids();
-    let removal = recorded.left_out_by(db, &input, &listed_jobs).await?;
+    let removal = recorded
+        .left_out_by(db, existing.id, &input, &listed_jobs)
+        .await?;
     let choice = removal.choice(existing.id, ChoiceFor::Correction, input.completed_work)?;
 
     let shop_name = input
@@ -1036,8 +1056,12 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         None => Vec::new(),
     };
     link_incidents(&txn, vehicle_id, record.id, Vec::new(), Vec::new(), &added).await?;
-    // These are the incidents of the jobs the correction took off.
-    incident_svc::release_from_service(&txn, record.id, &removal.incidents, choice).await?;
+    // These are the incidents of the jobs the correction took off, which no
+    // other job of this service and no link of its invoice still resolves.
+    if choice == CompletedWork::DidNotHappen {
+        let incident_ids: Vec<i32> = removal.incidents.iter().map(|i| i.id).collect();
+        incident_svc::reopen_resolved(&txn, record.id, incident_ids).await?;
+    }
 
     if let Some(mut item_ids) = input.schedule_item_ids {
         // A read lists a job's item beside the named ones, so a list sent
@@ -1156,10 +1180,12 @@ impl RecordedWork {
     /// came from, and the parts fitted to its needs) unless a list the call
     /// sends names that work. An incident or a recall that a job in
     /// `listed_jobs` came from is never taken off, because the service keeps
-    /// or gains that job.
+    /// or gains that job, and neither is an incident the invoice of
+    /// `service_id` named.
     async fn left_out_by(
         mut self,
         db: &impl ConnectionTrait,
+        service_id: i32,
         input: &UpdateServiceRecord,
         listed_jobs: &[job::Model],
     ) -> DomainResult<Self> {
@@ -1182,7 +1208,11 @@ impl RecordedWork {
             .iter()
             .filter_map(|j| released(j.research_finding_id, |l| l.research_finding_id))
             .collect();
-        self.incidents.retain(|i| incident_ids.contains(&i.id));
+        // An incident the invoice named stays resolved by this service
+        // whatever happens to the job filed from it.
+        let named = incident_svc::named_resolved_by(db, service_id, &incident_ids).await?;
+        self.incidents
+            .retain(|i| incident_ids.contains(&i.id) && !named.contains(&i.id));
         match &input.recall_finding_ids {
             Some(list) => self.recalls.retain(|r| {
                 released(Some(r.finding_id), |l| l.research_finding_id).is_some()
@@ -5626,6 +5656,306 @@ mod tests {
             assert!(resolved(&db, v, incident).await);
             let performed: Vec<i32> = out.performed_recalls.iter().map(|r| r.finding_id).collect();
             assert_eq!(performed, vec![finding]);
+        }
+
+        async fn job_for(db: &DatabaseConnection, v: i32, incident: i32) -> i32 {
+            job::create(
+                db,
+                v,
+                NewWorkItem {
+                    title: "Replace N80 valve".into(),
+                    incident_id: Some(incident),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .id
+        }
+
+        // Returns the ids of the services that read as having resolved the
+        // incident.
+        async fn resolvers(db: &DatabaseConnection, v: i32, incident: i32) -> Vec<i32> {
+            let details = incident::get(db, v, incident).await.unwrap();
+            details.resolved_by.iter().map(|s| s.id).collect()
+        }
+
+        async fn stored_incident_links(db: &DatabaseConnection) -> u64 {
+            crate::test_support::row_count::<incident_service_link::Entity>(db).await
+        }
+
+        #[tokio::test]
+        async fn a_jobs_incident_is_read_from_the_job_and_reopens_with_it() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observation(&db, v, None).await;
+            let j = job_for(&db, v, incident).await;
+            let svc = completing(&db, v, vec![j]).await;
+
+            assert_eq!(stored_incident_links(&db).await, 0);
+            assert!(resolved(&db, v, incident).await);
+            assert_eq!(resolvers(&db, v, incident).await, vec![svc]);
+            let read = get(&db, v, svc).await.unwrap();
+            let fixed: Vec<i32> = read.resolved_incidents.iter().map(|i| i.id).collect();
+            assert_eq!(fixed, vec![incident]);
+
+            update(&db, v, svc, jobs(vec![], Some(CompletedWork::DidNotHappen)))
+                .await
+                .unwrap();
+            assert!(!resolved(&db, v, incident).await);
+            crate::test_support::assert_empty(&resolvers(&db, v, incident).await);
+        }
+
+        #[tokio::test]
+        async fn an_incident_the_invoice_named_stays_resolved_when_its_job_is_taken_off() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observation(&db, v, None).await;
+            let j = job_for(&db, v, incident).await;
+            let svc = create(
+                &db,
+                v,
+                NewServiceRecord {
+                    service_date: date("2026-11-01"),
+                    work_item_ids: Some(vec![j]),
+                    resolved_incident_ids: Some(vec![incident]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .record
+            .id;
+            assert_eq!(resolvers(&db, v, incident).await, vec![svc]);
+
+            // The job still needs an answer, and the refusal names no incident.
+            let err = update(&db, v, svc, jobs(vec![], None)).await.unwrap_err();
+            assert!(!err.to_string().contains("incident"), "{err}");
+
+            let out = update(&db, v, svc, jobs(vec![], Some(CompletedWork::DidNotHappen)))
+                .await
+                .unwrap();
+            assert_eq!(
+                job::get(&db, v, j).await.unwrap().status,
+                JobStatus::Planned
+            );
+            assert!(resolved(&db, v, incident).await);
+            assert_eq!(resolvers(&db, v, incident).await, vec![svc]);
+            let fixed: Vec<i32> = out.resolved_incidents.iter().map(|i| i.id).collect();
+            assert_eq!(fixed, vec![incident]);
+        }
+
+        #[tokio::test]
+        async fn a_job_done_another_way_leaves_its_incident_resolved_by_no_service() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observation(&db, v, None).await;
+            let j = job_for(&db, v, incident).await;
+            let svc = completing(&db, v, vec![j]).await;
+
+            update(
+                &db,
+                v,
+                svc,
+                jobs(vec![], Some(CompletedWork::DoneAnotherWay)),
+            )
+            .await
+            .unwrap();
+            assert!(resolved(&db, v, incident).await);
+            crate::test_support::assert_empty(&resolvers(&db, v, incident).await);
+        }
+
+        #[tokio::test]
+        async fn a_resolver_list_sent_back_stores_nothing_for_a_jobs_service() {
+            use crate::inputs::incident::UpdateIncident;
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observation(&db, v, None).await;
+            let j = job_for(&db, v, incident).await;
+            let svc = completing(&db, v, vec![j]).await;
+            let resolved_by = |ids: Vec<i32>| UpdateIncident {
+                resolved_by_service_ids: Some(ids),
+                ..Default::default()
+            };
+
+            let echoed = incident::update(&db, v, incident, resolved_by(vec![svc]))
+                .await
+                .unwrap();
+            assert_eq!(stored_incident_links(&db).await, 0);
+            assert_eq!(echoed.resolved_by.len(), 1);
+
+            // An empty list cannot take off the service a job brings, so the
+            // incident stays resolved.
+            let cleared = incident::update(&db, v, incident, resolved_by(vec![]))
+                .await
+                .unwrap();
+            assert!(cleared.incident.resolved);
+            assert_eq!(resolvers(&db, v, incident).await, vec![svc]);
+
+            // A service the invoice named keeps its stored link when the
+            // list is sent back.
+            let named = service_dated(&db, v, "2026-11-02").await;
+            incident::update(&db, v, incident, resolved_by(vec![svc, named]))
+                .await
+                .unwrap();
+            incident::update(&db, v, incident, resolved_by(vec![svc, named]))
+                .await
+                .unwrap();
+            assert_eq!(stored_incident_links(&db).await, 1);
+            assert_eq!(resolvers(&db, v, incident).await, vec![svc, named]);
+        }
+
+        #[tokio::test]
+        async fn a_resolver_list_leaves_the_invoices_link_of_a_jobs_service_alone() {
+            use crate::inputs::incident::UpdateIncident;
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observation(&db, v, None).await;
+            let j = job_for(&db, v, incident).await;
+            let svc = create(
+                &db,
+                v,
+                NewServiceRecord {
+                    service_date: date("2026-11-01"),
+                    work_item_ids: Some(vec![j]),
+                    resolved_incident_ids: Some(vec![incident]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .record
+            .id;
+
+            // The list leaves the job's service out and cannot remove it.
+            let other = service_dated(&db, v, "2026-11-02").await;
+            let only_other = UpdateIncident {
+                resolved_by_service_ids: Some(vec![other]),
+                ..Default::default()
+            };
+            incident::update(&db, v, incident, only_other)
+                .await
+                .unwrap();
+            assert_eq!(resolvers(&db, v, incident).await, vec![svc, other]);
+
+            // The invoice's naming holds when the job is taken off.
+            update(&db, v, svc, jobs(vec![], Some(CompletedWork::DidNotHappen)))
+                .await
+                .unwrap();
+            assert_eq!(resolvers(&db, v, incident).await, vec![svc, other]);
+        }
+
+        #[tokio::test]
+        async fn a_resolver_list_sent_back_leaves_a_reopened_incident_unresolved() {
+            use crate::inputs::incident::UpdateIncident;
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observation(&db, v, None).await;
+            let j = job_for(&db, v, incident).await;
+            let svc = completing(&db, v, vec![j]).await;
+            let reopened = UpdateIncident {
+                resolved: Some(false),
+                ..Default::default()
+            };
+            incident::update(&db, v, incident, reopened).await.unwrap();
+
+            let echoed = UpdateIncident {
+                resolved_by_service_ids: Some(vec![svc]),
+                ..Default::default()
+            };
+            let out = incident::update(&db, v, incident, echoed).await.unwrap();
+            assert!(!out.incident.resolved);
+            assert_eq!(stored_incident_links(&db).await, 0);
+        }
+
+        #[tokio::test]
+        async fn deleting_one_of_two_jobs_from_an_incident_stores_no_link() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observation(&db, v, None).await;
+            let a = job_for(&db, v, incident).await;
+            let b = job_for(&db, v, incident).await;
+            let svc = completing(&db, v, vec![a, b]).await;
+
+            job::delete(&db, v, a).await.unwrap();
+            assert_eq!(stored_incident_links(&db).await, 0);
+            assert_eq!(resolvers(&db, v, incident).await, vec![svc]);
+        }
+
+        #[tokio::test]
+        async fn giving_a_completed_job_an_incident_resolves_that_incident() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let j = planned(&db, v, "Replace N80 valve", None).await;
+            let svc = completing(&db, v, vec![j]).await;
+            let incident = observation(&db, v, None).await;
+
+            job::update(
+                &db,
+                v,
+                j,
+                crate::inputs::work_item::UpdateWorkItem {
+                    incident_id: Some(Some(incident)),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            assert!(resolved(&db, v, incident).await);
+            assert_eq!(resolvers(&db, v, incident).await, vec![svc]);
+        }
+
+        #[tokio::test]
+        async fn deleting_a_completed_job_keeps_its_service_as_the_incidents_resolver() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observation(&db, v, None).await;
+            let j = job_for(&db, v, incident).await;
+            let svc = completing(&db, v, vec![j]).await;
+
+            job::delete(&db, v, j).await.unwrap();
+            assert!(resolved(&db, v, incident).await);
+            assert_eq!(resolvers(&db, v, incident).await, vec![svc]);
+        }
+
+        #[tokio::test]
+        async fn a_done_job_set_back_to_planned_stops_naming_its_service_as_resolver() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observation(&db, v, None).await;
+            let j = job_for(&db, v, incident).await;
+            let svc = completing(&db, v, vec![j]).await;
+
+            let back = job::update(
+                &db,
+                v,
+                j,
+                crate::inputs::work_item::UpdateWorkItem {
+                    status: Some(JobStatus::Planned),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            // Only a correction of the service says whether the work happened.
+            assert_eq!(back.released_incident_id, Some(incident));
+            assert_eq!(back.released_from_service_id, Some(svc));
+            assert!(resolved(&db, v, incident).await);
+            crate::test_support::assert_empty(&resolvers(&db, v, incident).await);
+        }
+
+        #[tokio::test]
+        async fn deleting_a_service_reopens_the_incident_only_its_job_resolved() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observation(&db, v, None).await;
+            let j = job_for(&db, v, incident).await;
+            let svc = completing(&db, v, vec![j]).await;
+
+            delete(&db, v, svc, Some(CompletedWork::DidNotHappen))
+                .await
+                .unwrap();
+            assert!(!resolved(&db, v, incident).await);
         }
 
         #[tokio::test]

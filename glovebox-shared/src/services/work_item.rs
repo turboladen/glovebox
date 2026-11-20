@@ -366,9 +366,89 @@ pub struct UpdatedWorkItem {
     /// names it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub released_schedule_item_id: Option<i32>,
-    /// The service `released_schedule_item_id` stopped counting from.
+    /// The incident that the service that completed the item stopped
+    /// resolving, because the item is no longer done or no longer names it.
+    /// The incident's `resolved` flag is left as it is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub released_incident_id: Option<i32>,
+    /// The service that `released_schedule_item_id` stopped counting from and
+    /// that stopped resolving `released_incident_id`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub released_from_service_id: Option<i32>,
+}
+
+/// What a job gives the service that completes it: the schedule item the
+/// service satisfies and the incident it resolved through the job.
+#[derive(Default)]
+struct CompletedLinks {
+    service_id: Option<i32>,
+    schedule_item_id: Option<i32>,
+    incident_id: Option<i32>,
+}
+
+impl CompletedLinks {
+    /// The links of `job`, which are empty when no service completes it.
+    fn of(job: &work_item::Model) -> Self {
+        let Some(service_id) = job.completed_service_id else {
+            return Self::default();
+        };
+        Self {
+            service_id: Some(service_id),
+            schedule_item_id: job.schedule_item_id,
+            incident_id: job.incident_id,
+        }
+    }
+
+    /// Those of these links, read before an edit of the job, that the
+    /// service holds no more. `service_id` is set when either one is.
+    async fn released(self, db: &impl ConnectionTrait) -> DomainResult<Self> {
+        let mut released = Self::default();
+        let Some(service_id) = self.service_id else {
+            return Ok(released);
+        };
+        if let Some(item_id) = self.schedule_item_id
+            && !super::schedule::links_of_services(db, &[service_id])
+                .await?
+                .contains(&(service_id, item_id))
+        {
+            released.schedule_item_id = Some(item_id);
+        }
+        if let Some(incident_id) = self.incident_id
+            && !super::incident::resolvers_of_incidents(db, &[incident_id])
+                .await?
+                .contains(&(incident_id, service_id))
+        {
+            released.incident_id = Some(incident_id);
+        }
+        if released.schedule_item_id.is_some() || released.incident_id.is_some() {
+            released.service_id = Some(service_id);
+        }
+        Ok(released)
+    }
+}
+
+/// Brings what a completed job's service satisfies and resolves in line with
+/// an edit of the job. `incident_before` is the job's incident before the
+/// edit. A job no service completes needs nothing.
+async fn settle_completed_edit(
+    db: &impl ConnectionTrait,
+    updated: &work_item::Model,
+    incident_before: Option<i32>,
+) -> DomainResult<()> {
+    let Some(service_id) = updated.completed_service_id else {
+        return Ok(());
+    };
+    // The edit may have given the job a schedule item its service also names.
+    super::schedule::drop_links_jobs_bring(db, &[service_id]).await?;
+    // A completed job that is given an incident names its service as the
+    // incident's resolver, so the incident reads resolved as it does when a
+    // service completes the job.
+    if let Some(incident_id) = updated.incident_id
+        && updated.incident_id != incident_before
+    {
+        super::incident::mark_resolved(db, updated.vehicle_id, &[incident_id]).await?;
+    }
+    Ok(())
 }
 
 /// Changes a work item. Setting a done or dropped item back to `planned`
@@ -409,7 +489,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         crate::services::appointment::require_assignable(db, vehicle_id, id).await?;
     }
 
-    let satisfied_before = existing.completed_service_id.zip(existing.schedule_item_id);
+    let before = CompletedLinks::of(&existing);
     let mut active: work_item::ActiveModel = existing.into();
 
     if let Some(v) = input.title {
@@ -458,24 +538,14 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
 
     active.updated_at = Set(super::now());
     let updated = active.update(db).await?;
-    // The edit may have given a completed job a schedule item its service
-    // also names.
-    if let Some(service_id) = updated.completed_service_id {
-        super::schedule::drop_links_jobs_bring(db, &[service_id]).await?;
-    }
-    let mut released = None;
-    if let Some(pair) = satisfied_before
-        && !super::schedule::links_of_services(db, &[pair.0])
-            .await?
-            .contains(&pair)
-    {
-        released = Some(pair);
-    }
+    settle_completed_edit(db, &updated, before.incident_id).await?;
+    let released = before.released(db).await?;
     let mut out = UpdatedWorkItem {
         reopened_appointment_id: None,
         left_cancelled_appointment_id: None,
-        released_schedule_item_id: released.map(|(_, item_id)| item_id),
-        released_from_service_id: released.map(|(service_id, _)| service_id),
+        released_schedule_item_id: released.schedule_item_id,
+        released_incident_id: released.incident_id,
+        released_from_service_id: released.service_id,
         work_item: updated,
     };
     if reopens {
@@ -501,10 +571,20 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     let db = &txn;
     let existing = get(db, vehicle_id, id).await?;
     let satisfied = existing.completed_service_id.zip(existing.schedule_item_id);
+    let resolved = existing.completed_service_id.zip(existing.incident_id);
     existing.delete(db).await?;
     // The service did the work whether or not the job's record is kept, so
-    // the schedule item the job brought is stored as a link of the service
-    // and its reminder keeps counting from there.
+    // the incident the job resolved keeps the service as a stored link, and
+    // so does the schedule item, whose reminder keeps counting from there.
+    // Another job of the service that came from the same incident already
+    // names the service, and a stored link would say the invoice did.
+    if let Some((service_id, incident_id)) = resolved
+        && !super::incident::resolvers_of_incidents(db, &[incident_id])
+            .await?
+            .contains(&(incident_id, service_id))
+    {
+        super::incident::keep_resolver(db, incident_id, service_id).await?;
+    }
     if let Some((service_id, item_id)) = satisfied {
         super::schedule::insert_service_links(
             db,

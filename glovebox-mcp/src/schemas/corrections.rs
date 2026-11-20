@@ -392,7 +392,7 @@ pub struct CorrectServiceInput {
     pub invoice_ref: Option<Option<String>>,
     /// REPLACES the recalls this service performed with exactly this list (`finding_id`s from `whats_coming` or `check_recalls`). A recall taken off the list needs `completed_work`. A recall that a job in `work_item_ids` came from stays performed whether or not this list names it; take the job off to take that recall off. Send `[]` to remove them all; omit to leave them alone.
     pub recall_finding_ids: Option<Vec<i32>>,
-    /// REPLACES the planned jobs this service completed with exactly this list (ids from `list_planned_work`). A job added must be planned and becomes done, resolving its incident and performing its recall; a job taken off needs `completed_work` and takes its incident, recall, the parts fitted to its needs and the reminder baseline of its schedule item with it. Send `[]` to remove them all; omit to leave them alone.
+    /// REPLACES the planned jobs this service completed with exactly this list (ids from `list_planned_work`). A job added must be planned and becomes done, resolving its incident and performing its recall; a job taken off needs `completed_work` and takes its incident (unless the invoice named that incident), recall, the parts fitted to its needs and the reminder baseline of its schedule item with it. Send `[]` to remove them all; omit to leave them alone.
     pub work_item_ids: Option<Vec<i32>>,
     /// What happened to the work this call takes off the service (jobs left out of `work_item_ids`, fitted parts left out of `part_ids`, recalls left out of `recall_finding_ids`): `did_not_happen` undoes it, so jobs go back to planned, parts read purchased and recalls read open; `done_another_way` keeps it done and only unlinks it from this invoice. Either way a job taken off stops giving its schedule item a baseline from this service, so after `done_another_way` name the item in `schedule_item_ids` on the service that did the work when its reminder should stay cleared. Needed only when the call takes such work off; ask the owner.
     #[serde(default)]
@@ -661,7 +661,7 @@ pub struct UpdateIncidentInput {
     pub occurred_at: Option<String>,
     /// Mark resolved or unresolved by hand, e.g. fixed with no invoice. Omit to leave the flag to the service links.
     pub resolved: Option<bool>,
-    /// REPLACES the services that fixed it with exactly this list. A non-empty list marks the incident resolved; an empty list removes every fixing service and marks it unresolved. A `resolved` sent in the same call wins. Omit to leave the links alone.
+    /// REPLACES the services that fixed it with exactly this list. A non-empty list marks the incident resolved; an empty list removes every fixing service and marks it unresolved. A service that completed a job filed from the incident stays whatever the list says, and naming it here changes nothing, so the list alone neither resolves nor reopens the incident while only such services are on it; send `resolved`, or take the job off with `correct_service`. A `resolved` sent in the same call wins. Omit to leave the links alone.
     pub resolved_by_service_ids: Option<Vec<i32>>,
     /// Longer description.
     ///

@@ -73,9 +73,11 @@ impl GloveboxMcp {
                        hand (e.g. fixed without an invoice) or reopen it. \
                        `resolved_by_service_ids` REPLACES the services that fixed it: a non-empty \
                        list marks it resolved and an empty list marks it unresolved (unless \
-                       `resolved` is sent too). For a fix that has paperwork, prefer \
-                       `record_service` with `resolved_incident_ids`. To note a phone call or \
-                       email about it, use `add_incident_followup`."
+                       `resolved` is sent too). The list cannot remove a service that completed a \
+                       job filed from the incident, and naming such a service changes nothing: \
+                       send `resolved`, or take the job off with `correct_service`. For a fix \
+                       that has paperwork, prefer `record_service` with `resolved_incident_ids`. \
+                       To note a phone call or email about it, use `add_incident_followup`."
     )]
     async fn update_incident(
         &self,
