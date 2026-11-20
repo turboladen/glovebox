@@ -50,24 +50,13 @@ pub fn revisit_status(
     if item.revisit_by_date.is_none() && item.revisit_by_miles.is_none() {
         return None;
     }
-    // Only a negative remainder is overdue here; reminders count zero as
-    // overdue too.
-    let judge = |remaining: i64, warning: i64| {
-        if remaining < 0 {
-            DueStatus::Overdue
-        } else if remaining <= warning {
-            DueStatus::DueSoon
-        } else {
-            DueStatus::NotDue
-        }
-    };
     let by_date = item
         .revisit_by_date
-        .map(|due| judge((due - today).num_days(), i64::from(DUE_SOON_DAYS)));
+        .map(|due| DueStatus::judge((due - today).num_days(), i64::from(DUE_SOON_DAYS)));
     let by_miles = item
         .revisit_by_miles
         .zip(estimated_mileage)
-        .map(|(due, est)| judge(i64::from(due - est), i64::from(DUE_SOON_MILES)));
+        .map(|(due, est)| DueStatus::judge(i64::from(due - est), i64::from(DUE_SOON_MILES)));
     Some(DueStatus::most_urgent(by_date.into_iter().chain(by_miles)))
 }
 
