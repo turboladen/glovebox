@@ -88,10 +88,51 @@ async fn taking_a_job_off_a_service_as_not_done_brings_its_reminder_back() {
         )
         .await;
     assert_eq!(fixed["schedule_item_ids"], json!([]));
+    assert_eq!(fixed["released_schedule_item_ids"], json!([item.id]));
     assert_eq!(
         reminder_status(&t, v.id, "Brake fluid flush").await,
         "overdue"
     );
+
+    let again = t
+        .call(
+            "correct_service",
+            json!({ "vehicle_id": v.id, "service_id": service["id"], "notes": "Checked" }),
+        )
+        .await;
+    assert!(again.get("released_schedule_item_ids").is_none(), "{again}");
+}
+
+#[tokio::test]
+async fn deleting_a_service_lists_the_schedule_items_that_stopped_counting() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let item = schedule_svc::create(
+        &t.db,
+        schedule_item_every_12_months(v.id, "Brake fluid flush"),
+    )
+    .await
+    .unwrap();
+    let job = t
+        .call(
+            "plan_work",
+            json!({ "vehicle_id": v.id, "title": "Flush brake fluid", "schedule_item_id": item.id }),
+        )
+        .await;
+    let service = t
+        .call(
+            "record_service",
+            json!({ "vehicle_id": v.id, "service_date": days_ago(0), "work_item_ids": [job["id"]] }),
+        )
+        .await;
+
+    let deleted = t
+        .call(
+            "delete_service",
+            json!({ "vehicle_id": v.id, "service_id": service["id"], "completed_work": "did_not_happen" }),
+        )
+        .await;
+    assert_eq!(deleted["schedule_items_released"], json!([item.id]));
 }
 
 #[tokio::test]

@@ -361,6 +361,11 @@ pub struct UpdatedWorkItem {
     /// The cancelled appointment the item came off.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub left_cancelled_appointment_id: Option<i32>,
+    /// The schedule item that stopped counting from the service that
+    /// completed the item, because the item is no longer done or no longer
+    /// names it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub released_schedule_item_id: Option<i32>,
 }
 
 /// Changes a work item. Setting a done or dropped item back to `planned`
@@ -401,6 +406,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         crate::services::appointment::require_assignable(db, vehicle_id, id).await?;
     }
 
+    let satisfied_before = existing.completed_service_id.zip(existing.schedule_item_id);
     let mut active: work_item::ActiveModel = existing.into();
 
     if let Some(v) = input.title {
@@ -454,9 +460,18 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     if let Some(service_id) = updated.completed_service_id {
         super::schedule::drop_links_jobs_bring(db, &[service_id]).await?;
     }
+    let mut released_schedule_item_id = None;
+    if let Some((service_id, item_id)) = satisfied_before
+        && !super::schedule::links_of_services(db, &[service_id])
+            .await?
+            .contains(&(service_id, item_id))
+    {
+        released_schedule_item_id = Some(item_id);
+    }
     let mut out = UpdatedWorkItem {
         reopened_appointment_id: None,
         left_cancelled_appointment_id: None,
+        released_schedule_item_id,
         work_item: updated,
     };
     if reopens {
@@ -1076,6 +1091,146 @@ mod tests {
             DomainError::NotFound(_)
         ));
         assert_eq!(get(&db, owner, created.id).await.unwrap().incident_id, None);
+    }
+
+    // Files a job against a schedule item and has a new service complete it.
+    async fn done_job_with_item(db: &DatabaseConnection, v: i32) -> (i32, i32) {
+        let sched = seed_schedule_item(db, v).await;
+        let job = create(
+            db,
+            v,
+            NewWorkItem {
+                title: "Oil".into(),
+                schedule_item_id: Some(sched),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+        service_svc::create(
+            db,
+            v,
+            NewServiceRecord {
+                service_date: date("2026-11-01"),
+                work_item_ids: Some(vec![job]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        (job, sched)
+    }
+
+    #[tokio::test]
+    async fn setting_a_done_job_back_to_planned_names_the_item_that_stopped_counting() {
+        for status in [JobStatus::Planned, JobStatus::Dropped] {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let (job, sched) = done_job_with_item(&db, v).await;
+
+            let out = update(
+                &db,
+                v,
+                job,
+                UpdateWorkItem {
+                    status: Some(status),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(out.released_schedule_item_id, Some(sched), "{status:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn changing_or_clearing_a_done_jobs_item_names_the_old_item() {
+        for new_item in [true, false] {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let (job, sched) = done_job_with_item(&db, v).await;
+            let replacement = if new_item {
+                Some(
+                    maintenance_schedule_item::ActiveModel {
+                        vehicle_id: Set(Some(v)),
+                        name: Set("Other".into()),
+                        enabled: Set(true),
+                        ..Default::default()
+                    }
+                    .insert(&db)
+                    .await
+                    .unwrap()
+                    .id,
+                )
+            } else {
+                None
+            };
+
+            let out = update(
+                &db,
+                v,
+                job,
+                UpdateWorkItem {
+                    schedule_item_id: Some(replacement),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(out.released_schedule_item_id, Some(sched), "{new_item}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_edit_that_keeps_status_and_item_releases_nothing() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let (job, _) = done_job_with_item(&db, v).await;
+        let out = update(
+            &db,
+            v,
+            job,
+            UpdateWorkItem {
+                notes: Some(Some("Done well".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.released_schedule_item_id, None);
+    }
+
+    #[tokio::test]
+    async fn a_job_with_no_completing_service_releases_nothing() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let sched = seed_schedule_item(&db, v).await;
+        let job = create(
+            &db,
+            v,
+            NewWorkItem {
+                title: "Oil".into(),
+                schedule_item_id: Some(sched),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+        let out = update(
+            &db,
+            v,
+            job,
+            UpdateWorkItem {
+                schedule_item_id: Some(None),
+                status: Some(JobStatus::Dropped),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.released_schedule_item_id, None);
     }
 
     #[tokio::test]

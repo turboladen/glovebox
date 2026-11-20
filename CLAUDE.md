@@ -247,7 +247,7 @@ appointment therefore never holds a planned job: when a job on one returns to `p
 service is deleted, or its status is set back), a hand-closed appointment opens again and a
 cancelled one lets the job go to the unscheduled pool (`appointment::settle_reopened_jobs`).
 The `delete_service`, `correct_service` and `update_planned_work` replies name the appointment that
-reopened and the jobs that left a cancelled one. A quote for work not done is a planned job with
+reopened, the jobs that left a cancelled one and the schedule items that stopped counting from the service. A quote for work not done is a planned job with
 `quote_service_id` naming the invoice it came with, which lists it in `quoted_work_items`;
 `delete_service` keeps such a quote and names it in `quotes_unlinked`
 (`docs/adr/0012-a-quote-is-planned-work.md`). Re-recording the service does not close the appointment again.

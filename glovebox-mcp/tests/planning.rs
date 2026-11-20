@@ -431,3 +431,46 @@ async fn a_quote_is_planned_work_with_its_source() {
         .await;
     assert!(err.contains("quoted_on"), "got: {err}");
 }
+
+#[tokio::test]
+async fn update_planned_work_names_the_schedule_item_that_stopped_counting() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let item = schedule_svc::create(
+        &t.db,
+        schedule_item_every_12_months(v.id, "Brake fluid flush"),
+    )
+    .await
+    .unwrap();
+    let job = t
+        .call(
+            "plan_work",
+            json!({ "vehicle_id": v.id, "title": "Flush", "schedule_item_id": item.id }),
+        )
+        .await["id"]
+        .clone();
+    t.call(
+        "record_service",
+        json!({ "vehicle_id": v.id, "service_date": "2026-06-01", "work_item_ids": [job] }),
+    )
+    .await;
+
+    let edited = t
+        .call(
+            "update_planned_work",
+            json!({ "vehicle_id": v.id, "work_item_id": job, "title": "Flush fluid" }),
+        )
+        .await;
+    assert!(
+        edited.get("released_schedule_item_id").is_none(),
+        "{edited}"
+    );
+
+    let back = t
+        .call(
+            "update_planned_work",
+            json!({ "vehicle_id": v.id, "work_item_id": job, "status": "planned" }),
+        )
+        .await;
+    assert_eq!(back["released_schedule_item_id"], item.id);
+}
