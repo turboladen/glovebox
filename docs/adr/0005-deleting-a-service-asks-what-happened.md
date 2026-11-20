@@ -74,6 +74,11 @@ performed. A correction that removes none of that work needs no answer.
   to done by hand. A recall it came from therefore reads done.
 - Jobs, parts and recalls each have one release function that takes the answer
   (`work_item::release_completed`, `part::release_from_service`, `recall::release_from_service`),
-  which `delete_service` and `correct_service` both call.
+  which `delete_service` and `correct_service` both call. Incidents have two:
+  `correct_service` calls `incident::release_from_service` for the incidents of the jobs it takes
+  off, and `delete_service` calls `incident::reopen_resolved` and removes all of the service's
+  incident links. Each sits in the module of the apply it undoes, and
+  `recall::unlink_from_service` removes a service's recall links before
+  `recall::release_from_service` reads them.
 - A job taken off a service takes the reminder baseline of its schedule item with it, and the
   schedule items the invoice named stay. ADR-0017 records how.
