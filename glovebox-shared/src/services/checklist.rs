@@ -203,10 +203,7 @@ pub async fn for_appointment(
     let job_statuses: Vec<JobStatus> = views.iter().map(|j| j.job.status).collect();
     let needs_open = views.iter().map(JobView::open_needs).sum();
     let todos_open = todos.iter().filter(|t| t.done_on.is_none()).count();
-    let shop_name = super::shop::names(db, found.shop_id)
-        .await?
-        .into_values()
-        .next();
+    let shop_name = super::shop::name_of(db, found.shop_id).await?;
     let summary = appointment::summarize(
         found,
         &job_statuses,

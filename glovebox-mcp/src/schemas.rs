@@ -66,7 +66,10 @@ pub(crate) fn shop_choice(
 
 /// The change to a record's shop, from its two arguments: `null` in either
 /// clears it.
-#[allow(clippy::option_option)]
+#[expect(
+    clippy::option_option,
+    reason = "an absent change differs from clearing"
+)]
 pub(crate) fn shop_change(
     shop_id: Option<Option<i32>>,
     shop_name: Option<Option<String>>,

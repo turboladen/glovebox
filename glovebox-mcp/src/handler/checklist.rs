@@ -31,7 +31,7 @@ impl GloveboxMcp {
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "plan_appointment");
         let (vehicle_id, input) = domain_input!(p.into_domain());
-        domain_result(appointment::create(&*self.db, vehicle_id, input).await)
+        domain_result(appointment::plan(&*self.db, vehicle_id, input, today()).await)
     }
 
     #[tool(

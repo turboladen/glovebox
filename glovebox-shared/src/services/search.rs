@@ -505,20 +505,12 @@ mod tests {
     async fn a_shops_name_finds_the_services_it_did() {
         let db = test_db().await;
         let vid = seed_vehicle(&db, "Golf R").await;
-        let shop = crate::services::shop::create(
-            &db,
-            crate::inputs::shop::NewShop {
-                name: "Clovis Volkswagen".into(),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
+        let shop_id = crate::test_support::add_shop(&db, "Clovis Volkswagen").await;
         let sid = seed_service(&db, vid, "oil change").await;
         entities::service_record::Entity::update_many()
             .col_expr(
                 entities::service_record::Column::ShopId,
-                sea_orm::sea_query::Expr::value(shop.id),
+                sea_orm::sea_query::Expr::value(shop_id),
             )
             .exec(&db)
             .await

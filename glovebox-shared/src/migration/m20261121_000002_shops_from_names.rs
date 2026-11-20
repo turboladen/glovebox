@@ -39,12 +39,12 @@ pub struct Migration;
 /// A stored name split into the shop's name and, from a trailing `(…)`, its
 /// address.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ShopText {
-    pub name: String,
-    pub address: Option<String>,
+struct ShopText {
+    name: String,
+    address: Option<String>,
 }
 
-pub(super) fn split_name_and_address(text: &str) -> Option<ShopText> {
+fn split_name_and_address(text: &str) -> Option<ShopText> {
     let text = text.trim();
     if text.is_empty() {
         return None;
@@ -69,6 +69,9 @@ pub(super) fn split_name_and_address(text: &str) -> Option<ShopText> {
     })
 }
 
+// The comparison `shop::text_key` makes, written out here so that this
+// migration keeps doing what it did when it ran, whatever the service's rule
+// becomes.
 fn key(text: &str) -> String {
     text.trim().to_ascii_lowercase()
 }
@@ -77,7 +80,7 @@ fn key(text: &str) -> String {
 /// Names that share a key share a shop, which takes the first spelling and
 /// the group's address, unless the group holds two addresses: then each
 /// address is its own shop and the entries with none share one more.
-pub(super) fn plan_shops(texts: &[ShopText]) -> Vec<ShopText> {
+fn plan_shops(texts: &[ShopText]) -> Vec<ShopText> {
     let mut addresses: HashMap<String, Vec<String>> = HashMap::new();
     let mut spelling: HashMap<String, String> = HashMap::new();
     for text in texts {
@@ -141,9 +144,15 @@ async fn named_rows(db: &impl ConnectionTrait) -> Result<Vec<Named>, DbErr> {
     Ok(out)
 }
 
-// The id of a stored shop with this name and address, compared by key, or a
-// new shop's.
-async fn shop_for(db: &impl ConnectionTrait, shop: &ShopText, stamp: &Value) -> Result<i32, DbErr> {
+// The stored shops by the key of their name and address.
+type Directory = HashMap<(String, Option<String>), i32>;
+
+fn directory_key(shop: &ShopText) -> (String, Option<String>) {
+    (key(&shop.name), shop.address.as_deref().map(key))
+}
+
+async fn stored_shops(db: &impl ConnectionTrait) -> Result<Directory, DbErr> {
+    let mut out = Directory::new();
     for row in db
         .query_all_raw(Statement::from_string(
             DatabaseBackend::Sqlite,
@@ -151,13 +160,26 @@ async fn shop_for(db: &impl ConnectionTrait, shop: &ShopText, stamp: &Value) -> 
         ))
         .await?
     {
-        let name: String = row.try_get_by_index(1)?;
-        let address: Option<String> = row.try_get_by_index(2)?;
-        if key(&name) == key(&shop.name)
-            && address.as_deref().map(key) == shop.address.as_deref().map(key)
-        {
-            return row.try_get_by_index(0);
-        }
+        let shop = ShopText {
+            name: row.try_get_by_index(1)?,
+            address: row.try_get_by_index(2)?,
+        };
+        out.entry(directory_key(&shop))
+            .or_insert(row.try_get_by_index(0)?);
+    }
+    Ok(out)
+}
+
+// The id of the stored shop with this name and address, compared by key, or
+// of a new one, which `directory` then holds.
+async fn shop_for(
+    db: &impl ConnectionTrait,
+    directory: &mut Directory,
+    shop: &ShopText,
+    stamp: &Value,
+) -> Result<i32, DbErr> {
+    if let Some(id) = directory.get(&directory_key(shop)) {
+        return Ok(*id);
     }
     let insert = Query::insert()
         .into_table(Alias::new("shops"))
@@ -174,7 +196,9 @@ async fn shop_for(db: &impl ConnectionTrait, shop: &ShopText, stamp: &Value) -> 
         .query_one(&insert)
         .await?
         .ok_or_else(|| DbErr::Migration("inserting a shop returned no id".into()))?;
-    row.try_get_by_index(0)
+    let id = row.try_get_by_index(0)?;
+    directory.insert(directory_key(shop), id);
+    Ok(id)
 }
 
 #[async_trait::async_trait]
@@ -200,11 +224,12 @@ impl MigrationTrait for Migration {
             .collect();
         let texts: Vec<ShopText> = rows.iter().filter_map(|(_, t)| t.clone()).collect();
         let mut planned = plan_shops(&texts).into_iter();
+        let mut directory = stored_shops(&txn).await?;
         for (row, text) in &rows {
             let shop_id = match text {
                 Some(_) => {
                     let shop = planned.next().expect("a planned shop for each name");
-                    Some(shop_for(&txn, &shop, &stamp).await?)
+                    Some(shop_for(&txn, &mut directory, &shop, &stamp).await?)
                 }
                 None => row.shop_id,
             };

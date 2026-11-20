@@ -513,6 +513,7 @@ async fn load_service_links(
 
     let mut jobs = work_item::load_by_service(db, &[record.id]).await?;
 
+    let shop_name = super::shop::name_of(db, record.shop_id).await?;
     let mut links = ServiceRecordWithLinks::assemble(
         record,
         schedule_item_ids,
@@ -524,10 +525,7 @@ async fn load_service_links(
     );
     links.completed_work_items = jobs.completed.remove(&links.record.id).unwrap_or_default();
     links.quoted_work_items = jobs.quoted.remove(&links.record.id).unwrap_or_default();
-    links.shop_name = super::shop::names(db, links.record.shop_id)
-        .await?
-        .into_values()
-        .next();
+    links.shop_name = shop_name;
     Ok(links)
 }
 
@@ -711,6 +709,7 @@ pub async fn list_between(
             let performed_recalls = performed.remove(&record.id).unwrap_or_default();
             let completed_work_items = jobs.completed.remove(&record.id).unwrap_or_default();
             let quoted_work_items = jobs.quoted.remove(&record.id).unwrap_or_default();
+            let shop_name = record.shop_id.and_then(|id| shop_names.get(&id).cloned());
             let mut links = ServiceRecordWithLinks::assemble(
                 record,
                 schedule_item_ids,
@@ -722,10 +721,7 @@ pub async fn list_between(
             );
             links.completed_work_items = completed_work_items;
             links.quoted_work_items = quoted_work_items;
-            links.shop_name = links
-                .record
-                .shop_id
-                .and_then(|id| shop_names.get(&id).cloned());
+            links.shop_name = shop_name;
             links
         })
         .collect();
@@ -901,10 +897,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     }
 
     let performed_by = input.performed_by.unwrap_or(Performer::Shop);
-    let shop_id = match &input.shop {
-        Some(choice) => super::shop::resolve(db, choice).await?,
-        None => None,
-    };
+    let shop_id = super::shop::resolve(db, input.shop.as_ref()).await?;
     validate_who_and_when(
         input.service_date,
         input.end_date,
@@ -1064,20 +1057,18 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         .await?;
     let choice = removal.choice(existing.id, ChoiceFor::Correction, input.completed_work)?;
 
-    let shop_id = match &input.shop {
-        Some(Some(choice)) => Some(super::shop::resolve(db, choice).await?),
-        Some(None) => Some(None),
-        None => None,
-    };
-    let shop_field = match &input.shop {
-        Some(Some(choice)) => choice.field(),
-        _ => "shop_id",
-    };
+    let shop_id = super::shop::resolve_change(db, input.shop.as_ref()).await?;
     validate_who_and_when(
         input.service_date.unwrap_or(existing.service_date),
         input.end_date.unwrap_or(existing.end_date),
         input.performed_by.unwrap_or(existing.performed_by),
-        shop_id.unwrap_or(existing.shop_id).and(Some(shop_field)),
+        shop_id.unwrap_or(existing.shop_id).map(|_| {
+            input
+                .shop
+                .as_ref()
+                .and_then(Option::as_ref)
+                .map_or("shop_id", ShopChoice::field)
+        }),
     )?;
     let invoice_ref = input
         .invoice_ref

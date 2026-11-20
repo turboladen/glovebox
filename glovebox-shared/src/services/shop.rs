@@ -107,33 +107,26 @@ pub async fn get(db: &impl ConnectionTrait, id: i32) -> DomainResult<shop::Model
         .ok_or_else(|| not_found(id))
 }
 
-/// The id of the shop `choice` names, or `None` for a blank name. An id must
-/// name a shop, and a name must match exactly one shop's name, ignoring ASCII
-/// case and surrounding spaces.
+/// The id of the shop `choice` names, or `None` for no choice or a blank
+/// name. An id must name a shop, and a name must match exactly one shop's
+/// name, ignoring ASCII case and surrounding spaces.
 ///
 /// # Errors
 /// `NotFound` for an id that names no shop; `BadRequest` for a name that
 /// matches no shop or several.
 pub(crate) async fn resolve(
     db: &impl ConnectionTrait,
-    choice: &ShopChoice,
+    choice: Option<&ShopChoice>,
 ) -> DomainResult<Option<i32>> {
     let name = match choice {
-        ShopChoice::Id(id) => return Ok(Some(get(db, *id).await?.id)),
-        ShopChoice::Name(name) => name.trim(),
+        None => return Ok(None),
+        Some(ShopChoice::Id(id)) => return Ok(Some(get(db, *id).await?.id)),
+        Some(ShopChoice::Name(name)) => name.trim(),
     };
     if name.is_empty() {
         return Ok(None);
     }
-    let key = text_key(name);
-    let matches: Vec<shop::Model> = shop::Entity::find()
-        .order_by_asc(shop::Column::Id)
-        .all(db)
-        .await?
-        .into_iter()
-        .filter(|s| text_key(&s.name) == key)
-        .collect();
-    match matches.as_slice() {
+    match same_name(db, name, None).await?.as_slice() {
         [only] => Ok(Some(only.id)),
         [] => Err(DomainError::BadRequest(format!(
             "No shop in the directory is named {name}. Add the shop to the directory first, or \
@@ -151,6 +144,43 @@ pub(crate) async fn resolve(
                 .join(", ")
         ))),
     }
+}
+
+/// [`resolve`] for an update: `None` leaves the shop alone and `Some(None)`
+/// clears it.
+pub(crate) async fn resolve_change(
+    db: &impl ConnectionTrait,
+    change: Option<&Option<ShopChoice>>,
+) -> DomainResult<Option<Option<i32>>> {
+    match change {
+        Some(choice) => Ok(Some(resolve(db, choice.as_ref()).await?)),
+        None => Ok(None),
+    }
+}
+
+// The shops whose name matches `name` by `text_key`, in id order, leaving out
+// `except_id`.
+async fn same_name(
+    db: &impl ConnectionTrait,
+    name: &str,
+    except_id: Option<i32>,
+) -> DomainResult<Vec<shop::Model>> {
+    let key = text_key(name);
+    Ok(shop::Entity::find()
+        .order_by_asc(shop::Column::Id)
+        .all(db)
+        .await?
+        .into_iter()
+        .filter(|s| Some(s.id) != except_id && text_key(&s.name) == key)
+        .collect())
+}
+
+/// The name of the shop `shop_id` names, for a read that prints one record.
+pub(crate) async fn name_of(
+    db: &impl ConnectionTrait,
+    shop_id: Option<i32>,
+) -> DomainResult<Option<String>> {
+    Ok(names(db, shop_id).await?.into_values().next())
 }
 
 /// The names of the shops `ids` name, for a read that prints a record's shop.
@@ -183,17 +213,13 @@ async fn refuse_duplicate(
     address: Option<&str>,
     except_id: Option<i32>,
 ) -> DomainResult<()> {
-    let key = text_key(name);
     let address_key = address.map(text_key);
-    let same = shop::Entity::find()
-        .all(db)
-        .await?
-        .into_iter()
-        .filter(|s| Some(s.id) != except_id && text_key(&s.name) == key)
-        .find(|s| match (&address_key, &s.address) {
+    let same = same_name(db, name, except_id).await?.into_iter().find(|s| {
+        match (&address_key, &s.address) {
             (Some(a), Some(b)) => *a == text_key(b),
             _ => true,
-        });
+        }
+    });
     let Some(s) = same else {
         return Ok(());
     };

@@ -190,10 +190,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     let txn = super::begin_write(db).await?;
     let db = &txn;
     super::vehicle::require_in_garage(db, vehicle_id).await?;
-    let shop_id = match &input.shop {
-        Some(choice) => super::shop::resolve(db, choice).await?,
-        None => None,
-    };
+    let shop_id = super::shop::resolve(db, input.shop.as_ref()).await?;
     let model = appointment::ActiveModel {
         vehicle_id: Set(vehicle_id),
         purpose: Set(input.purpose),
@@ -205,6 +202,21 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     let out = model.insert(db).await?;
     txn.commit().await?;
     Ok(out)
+}
+
+/// Creates an appointment as [`create`] does and reads it back as every
+/// appointment read summarizes it on `today`.
+///
+/// # Errors
+/// As for [`create`].
+pub async fn plan<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    input: NewAppointment,
+    today: chrono::NaiveDate,
+) -> DomainResult<AppointmentSummary> {
+    let created = create(db, vehicle_id, input).await?;
+    summary(db, vehicle_id, created.id, today).await
 }
 
 /// Changes an appointment's purpose, shop, date or notes.
@@ -222,11 +234,7 @@ pub(crate) async fn update(
     if let Some(purpose) = &input.purpose {
         super::validate_not_blank("purpose", purpose)?;
     }
-    let shop_id = match &input.shop {
-        Some(Some(choice)) => Some(super::shop::resolve(db, choice).await?),
-        Some(None) => Some(None),
-        None => None,
-    };
+    let shop_id = super::shop::resolve_change(db, input.shop.as_ref()).await?;
     let mut active: appointment::ActiveModel = existing.into();
     if let Some(v) = input.purpose {
         active.purpose = Set(v);
@@ -909,16 +917,7 @@ mod tests {
     async fn create_and_update_round_trip() {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;
-        let shop_id = super::super::shop::create(
-            &db,
-            crate::inputs::shop::NewShop {
-                name: "Example VW".into(),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap()
-        .id;
+        let shop_id = crate::test_support::add_shop(&db, "Example VW").await;
         let made = create(
             &db,
             v,

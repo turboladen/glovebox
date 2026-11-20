@@ -191,6 +191,8 @@ async fn a_new_owner_can_set_up_file_an_invoice_and_ask_whats_coming() {
             json!({ "vehicle_id": vehicle_id, "purpose": "Rear brakes", "shop_name": "Autohaus" }),
         )
         .await;
+    assert_eq!(appointment["shop_name"], "Autohaus");
+    assert_eq!(appointment["status"], "planning");
     let job = t
         .call(
             "plan_work",
