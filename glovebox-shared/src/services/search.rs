@@ -599,7 +599,7 @@ mod tests {
             category: Set("common_issue".into()),
             title: Set("Water pump failure".into()),
             description: Set(Some("plastic impeller cracks".into())),
-            status: Set("open".into()),
+            status: Set(entities::research_finding::FindingStatus::New),
             ..Default::default()
         }
         .insert(&db)

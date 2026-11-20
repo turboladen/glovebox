@@ -35,6 +35,7 @@ fn validate_who_and_when(
     end_date: Option<chrono::NaiveDate>,
     performed_by: Performer,
     shop_name: Option<&str>,
+    shop_id: Option<i32>,
 ) -> DomainResult<()> {
     if end_date.is_some_and(|end| end < service_date) {
         return Err(DomainError::invalid(
@@ -42,11 +43,18 @@ fn validate_who_and_when(
             "must not be before service_date",
         ));
     }
-    if performed_by == Performer::Owner && shop_name.is_some() {
-        return Err(DomainError::invalid(
-            "shop_name",
-            "a self-performed service has no shop",
-        ));
+    if performed_by == Performer::Owner {
+        for (field, named) in [
+            ("shop_name", shop_name.is_some()),
+            ("shop_id", shop_id.is_some()),
+        ] {
+            if named {
+                return Err(DomainError::invalid(
+                    field,
+                    "a self-performed service has no shop",
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -445,7 +453,7 @@ async fn insert_auto_mileage_log(
         vehicle_id: Set(vehicle_id),
         mileage: Set(miles),
         recorded_at: Set(record.service_date.into()),
-        source: Set(Some("service".to_string())),
+        source: Set(Some(mileage_log::SERVICE_SOURCE.to_owned())),
         notes: Set(None),
         service_record_id: Set(Some(record.id)),
         ..Default::default()
@@ -772,11 +780,13 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     }
 
     let performed_by = input.performed_by.unwrap_or(Performer::Shop);
+    let shop_name = input.shop_name.as_deref().and_then(super::trim_to_none);
     validate_who_and_when(
         input.service_date,
         input.end_date,
         performed_by,
-        input.shop_name.as_deref(),
+        shop_name.as_deref(),
+        input.shop_id,
     )?;
     let line_items_input = input.line_items.unwrap_or_default();
     if let Some(appointment_id) = input.appointment_id {
@@ -806,7 +816,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
         labor_cost_currency: Set(input.labor_cost_currency),
         total_cost_cents: Set(input.total_cost_cents),
         total_cost_currency: Set(input.total_cost_currency),
-        shop_name: Set(input.shop_name),
+        shop_name: Set(shop_name),
         shop_id: Set(input.shop_id),
         notes: Set(input.notes),
         paid_by: Set(input.paid_by.unwrap_or(Payer::Owner)),
@@ -917,15 +927,16 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     let removal = recorded.left_out_by(db, &input, &listed_jobs).await?;
     let choice = removal.choice(existing.id, ChoiceFor::Correction, input.completed_work)?;
 
+    let shop_name = input
+        .shop_name
+        .as_ref()
+        .map(|v| v.as_deref().and_then(super::trim_to_none));
     validate_who_and_when(
         input.service_date.unwrap_or(existing.service_date),
         input.end_date.unwrap_or(existing.end_date),
         input.performed_by.unwrap_or(existing.performed_by),
-        input
-            .shop_name
-            .as_ref()
-            .unwrap_or(&existing.shop_name)
-            .as_deref(),
+        shop_name.as_ref().unwrap_or(&existing.shop_name).as_deref(),
+        input.shop_id.unwrap_or(existing.shop_id),
     )?;
     let invoice_ref = input
         .invoice_ref
@@ -981,7 +992,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     if let Some(v) = input.total_cost_currency {
         active.total_cost_currency = Set(v);
     }
-    if let Some(v) = input.shop_name {
+    if let Some(v) = shop_name {
         active.shop_name = Set(v);
     }
     if let Some(v) = input.shop_id {
@@ -2730,6 +2741,79 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "shop_name"));
+    }
+
+    #[tokio::test]
+    async fn a_blank_shop_name_names_no_shop() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let got = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: date("2025-03-24"),
+                performed_by: Some(Performer::Owner),
+                shop_name: Some("  ".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(got.record.shop_name, None);
+        let blank = UpdateServiceRecord {
+            shop_name: Some(Some(String::new())),
+            ..Default::default()
+        };
+        let updated = update(&db, vid, got.record.id, blank).await.unwrap();
+        assert_eq!(updated.record.shop_name, None);
+    }
+
+    #[tokio::test]
+    async fn a_self_performed_service_names_no_shop_id() {
+        use crate::entities::shop;
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let shop_id = shop::ActiveModel {
+            name: Set("Example VW".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap()
+        .id;
+        let err = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: date("2025-03-24"),
+                performed_by: Some(Performer::Owner),
+                shop_id: Some(shop_id),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "shop_id"));
+
+        let at_shop = create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: date("2025-03-24"),
+                shop_id: Some(shop_id),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let self_done = UpdateServiceRecord {
+            performed_by: Some(Performer::Owner),
+            ..Default::default()
+        };
+        let err = update(&db, vid, at_shop.record.id, self_done)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, DomainError::Invalid { ref field, .. } if field == "shop_id"));
     }
 
     #[tokio::test]

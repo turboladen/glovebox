@@ -14,12 +14,12 @@ use serde::Serialize;
 
 use crate::{
     entities::{
-        research_finding, research_report, service_recall_link, service_record,
+        research_finding::{self, FindingStatus},
+        research_report, service_recall_link, service_record,
         work_item::{self, JobStatus},
     },
     error::{DomainError, DomainResult},
     services::incident::ServiceRef,
-    vocab::Vocabulary,
 };
 
 crate::vocab::vocabulary! {
@@ -37,22 +37,22 @@ crate::vocab::vocabulary! {
 impl RecallStatus {
     /// The stored finding status that makes a recall with no service read as
     /// this status.
-    fn stored(self) -> &'static str {
+    fn stored(self) -> FindingStatus {
         match self {
-            RecallStatus::Open => "new",
-            RecallStatus::Done => "completed",
-            RecallStatus::NotApplicable => "dismissed",
+            RecallStatus::Open => FindingStatus::New,
+            RecallStatus::Done => FindingStatus::Completed,
+            RecallStatus::NotApplicable => FindingStatus::Dismissed,
         }
     }
 
     /// The status a recall with no service reads from a stored finding
-    /// status. Any text `stored` does not give reads as open.
-    fn from_stored(text: &str) -> Self {
-        Self::ALL
-            .iter()
-            .copied()
-            .find(|status| status.stored() == text)
-            .unwrap_or(RecallStatus::Open)
+    /// status.
+    fn from_stored(status: FindingStatus) -> Self {
+        match status {
+            FindingStatus::New => RecallStatus::Open,
+            FindingStatus::Completed => RecallStatus::Done,
+            FindingStatus::Dismissed => RecallStatus::NotApplicable,
+        }
     }
 }
 
@@ -246,7 +246,7 @@ async fn with_status(
             // an open recall unless another job from it is planned.
             let done_job_only = planned_work_item_id.is_none() && completed.contains_key(&f.id);
             let (settled, held) = settle(
-                RecallStatus::from_stored(&f.status),
+                RecallStatus::from_stored(f.status),
                 done_service.is_some(),
                 done_job_only,
             );
@@ -324,7 +324,7 @@ pub async fn set_status<C: ConnectionTrait + TransactionTrait>(
     // The requested status goes through the derivation every list uses, so
     // the refusal and the lists cannot disagree.
     let mut proposed = finding.clone();
-    status.stored().clone_into(&mut proposed.status);
+    proposed.status = status.stored();
     let shown = with_status(&txn, vec![proposed]).await?.remove(0);
     if shown.settled != status {
         return Err(match shown.held {
@@ -345,7 +345,7 @@ pub async fn set_status<C: ConnectionTrait + TransactionTrait>(
     }
 
     let mut active: research_finding::ActiveModel = finding.into();
-    active.status = Set(status.stored().to_owned());
+    active.status = Set(status.stored());
     active.updated_at = Set(super::now());
     let updated = active.update(&txn).await?;
     let read = with_status(&txn, vec![updated]).await?.remove(0);
@@ -430,7 +430,7 @@ pub(crate) async fn release_from_service(
     };
     research_finding::Entity::update_many()
         .set(research_finding::ActiveModel {
-            status: Set(shown.stored().to_owned()),
+            status: Set(shown.stored()),
             updated_at: Set(super::now()),
             ..Default::default()
         })
@@ -512,6 +512,7 @@ mod tests {
             work_item as work_item_svc,
         },
         test_support::{VehicleFixture, set_job_status, test_db},
+        vocab::Vocabulary,
     };
 
     fn recall_info(campaign: &str, subject: &str) -> RecallInfo {
@@ -977,11 +978,6 @@ mod tests {
         for status in RecallStatus::ALL.iter().copied() {
             assert_eq!(RecallStatus::from_stored(status.stored()), status);
         }
-        // A finding status that no recall status writes reads as open.
-        assert_eq!(
-            RecallStatus::from_stored("acknowledged"),
-            RecallStatus::Open
-        );
     }
 
     #[test]

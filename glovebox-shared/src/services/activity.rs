@@ -43,13 +43,8 @@ pub struct ActivityItem {
 /// The `limit` most recent services + incidents + mileage logs for a
 /// vehicle, merged and sorted newest-first by their own dates.
 ///
-/// Mileage logs auto-created by service records are excluded: the service
-/// item already carries that odometer reading, and showing both would
-/// double-report every service. Exclusion keys on the real linkage
-/// (`service_record_id`, maintained by the service-record create/update/
-/// delete paths), not the free-text `source` label — so a manual log a
-/// client happens to label `source: "service"` stays visible, and deleted
-/// services take their auto-log with them instead of leaving a hidden ghost.
+/// The reading a service logs is left out, because the service's own item
+/// already carries that odometer reading.
 pub async fn recent(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -77,6 +72,8 @@ pub async fn recent(
 
     let mileage_logs = mileage_log::Entity::find()
         .filter(mileage_log::Column::VehicleId.eq(vehicle_id))
+        // The link the service paths keep, not the `source` text, decides,
+        // so a deleted service takes its reading with it.
         .filter(mileage_log::Column::ServiceRecordId.is_null())
         .order_by_desc(mileage_log::Column::RecordedAt)
         .order_by_desc(mileage_log::Column::Id)
@@ -279,32 +276,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manual_log_labeled_service_is_still_visible() {
+    async fn a_manual_log_cannot_claim_a_service_as_its_source() {
         let db = test_db().await;
         let vid = seed_vehicle(&db).await;
-        // A client may label a manual log `source: "service"`. Exclusion keys
-        // on the real FK, so this log must still appear in the feed.
-        mileage_svc::create(
+        let err = mileage_svc::create(
             &db,
             vid,
             NewMileageEntry {
                 mileage: 60_000,
                 recorded_at: Some(date("2026-04-01 10:00:00")),
-                source: Some("service".into()),
+                source: Some(" Service".into()),
                 notes: None,
             },
         )
         .await
-        .unwrap();
-
-        let items = recent(&db, vid, DEFAULT_LIMIT).await.unwrap();
+        .unwrap_err();
         assert_eq!(
-            items.len(),
-            1,
-            "manual 'service' log must be visible: {items:?}"
+            err.to_string(),
+            "source: a reading from a service is recorded with the service"
         );
-        assert_eq!(items[0].kind, "mileage");
-        assert_eq!(items[0].mileage, Some(60_000));
+        crate::test_support::assert_empty(&recent(&db, vid, DEFAULT_LIMIT).await.unwrap());
     }
 
     #[tokio::test]

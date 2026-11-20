@@ -9,8 +9,9 @@ use sea_orm_migration::prelude::*;
 
 use super::schema::{Check, add_checks};
 
-// The rule as it was written for this migration. It stays as it is, because a
-// later migration that rewrites the rows depends on it.
+// The rule as this migration adds it. A rule changes only through a new
+// migration, because `has_check` finds a constraint by its name and a fresh
+// database must end up with what a migrated one has.
 const CHECKS: &[Check] = &[Check {
     table: "appointments",
     name: "appointments_one_ending",

@@ -274,7 +274,7 @@ pub async fn seed_recall(db: &DatabaseConnection, vehicle_id: i32, campaign: &st
         source_url: Set(Some(format!(
             "https://www.nhtsa.gov/recalls?nhtsaId={campaign}"
         ))),
-        status: Set("new".into()),
+        status: Set(research_finding::FindingStatus::New),
         ..Default::default()
     }
     .insert(db)
