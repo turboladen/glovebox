@@ -449,11 +449,12 @@ async fn update_planned_work_names_the_schedule_item_that_stopped_counting() {
         )
         .await["id"]
         .clone();
-    t.call(
-        "record_service",
-        json!({ "vehicle_id": v.id, "service_date": "2026-06-01", "work_item_ids": [job] }),
-    )
-    .await;
+    let service = t
+        .call(
+            "record_service",
+            json!({ "vehicle_id": v.id, "service_date": "2026-06-01", "work_item_ids": [job] }),
+        )
+        .await;
 
     let edited = t
         .call(
@@ -473,4 +474,5 @@ async fn update_planned_work_names_the_schedule_item_that_stopped_counting() {
         )
         .await;
     assert_eq!(back["released_schedule_item_id"], item.id);
+    assert_eq!(back["released_from_service_id"], service["id"]);
 }

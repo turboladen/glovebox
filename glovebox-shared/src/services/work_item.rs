@@ -366,6 +366,9 @@ pub struct UpdatedWorkItem {
     /// names it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub released_schedule_item_id: Option<i32>,
+    /// The service `released_schedule_item_id` stopped counting from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub released_from_service_id: Option<i32>,
 }
 
 /// Changes a work item. Setting a done or dropped item back to `planned`
@@ -460,18 +463,19 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     if let Some(service_id) = updated.completed_service_id {
         super::schedule::drop_links_jobs_bring(db, &[service_id]).await?;
     }
-    let mut released_schedule_item_id = None;
-    if let Some((service_id, item_id)) = satisfied_before
-        && !super::schedule::links_of_services(db, &[service_id])
+    let mut released = None;
+    if let Some(pair) = satisfied_before
+        && !super::schedule::links_of_services(db, &[pair.0])
             .await?
-            .contains(&(service_id, item_id))
+            .contains(&pair)
     {
-        released_schedule_item_id = Some(item_id);
+        released = Some(pair);
     }
     let mut out = UpdatedWorkItem {
         reopened_appointment_id: None,
         left_cancelled_appointment_id: None,
-        released_schedule_item_id,
+        released_schedule_item_id: released.map(|(_, item_id)| item_id),
+        released_from_service_id: released.map(|(service_id, _)| service_id),
         work_item: updated,
     };
     if reopens {

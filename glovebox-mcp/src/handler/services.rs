@@ -202,8 +202,9 @@ impl GloveboxMcp {
                        remove them with `delete_part`. Planned jobs whose quote came with the \
                        service keep their quote but no longer name it (`quotes_unlinked`). \
                        `schedule_items_released` lists the schedule items that stopped counting \
-                       from the service; their reminders fall back to an earlier service. To \
-                       change a record rather than remove it, use `correct_service`."
+                       from the service, after either answer; their reminders count from another \
+                       service or from none, so tell the owner. To change a record rather than \
+                       remove it, use `correct_service`."
     )]
     async fn delete_service(
         &self,
