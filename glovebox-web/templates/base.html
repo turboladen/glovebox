@@ -304,6 +304,8 @@
   .ws-job h2 { font-size: var(--s-data); margin-left: 1.5rem; }
   .ws-job ul { margin-left: 2.5rem; list-style: disc; }
   .ws-job .pn { margin-left: 1rem; }
+  .ws-note { display: block; white-space: pre-line; color: var(--label); }
+  .ws-job > .ws-note { margin-left: 1.5rem; }
   /* The owner ticks each part, and each item in a kit, while gathering them. */
   .ws-job ul.ws-get, .ws-get ul { list-style: none; }
   .ws-job ul.ws-get { margin-left: 1.5rem; }
@@ -315,6 +317,7 @@
     body:has(.ws) :is(.chrome, .hint), .noprint { display: none; }
     body:has(.ws) { background: #fff; color: #000; }
     .ws { padding: 0; }
+    .ws-note { color: #000; }
   }
 </style>
 </head>

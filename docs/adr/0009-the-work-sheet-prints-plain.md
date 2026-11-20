@@ -18,7 +18,8 @@ from the appointment page. `work_sheet::for_appointment` builds it. The page lis
 job with a box to tick. Under each job, "I'm supplying" lists the owner's parts with the
 manufacturer and part number, and "Please supply" lists the shop's parts by name. Either list
 shows a quantity above one. A kit the owner brings lists its contents under it, and ADR 0014
-records why.
+records why. A job's notes print under its title, and a part's notes print under its line,
+whichever list it is on. A note that is blank prints nothing.
 
 **On paper the sheet is black on white.** It departs from ADR 0008's ledger look: it has no
 panels, pills or tints, and the site header is hidden. Every other page prints as it shows. A job does not split across pages unless it

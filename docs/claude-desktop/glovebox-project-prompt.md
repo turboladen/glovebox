@@ -165,7 +165,8 @@ need has a decision, every decision has a reason, and every part ordered has arr
 11. When Steve wants a list to hand the mechanic, call `get_work_sheet` for the appointment. Raise
     each `unsettled` need first and offer to settle it, or to set `supplied_by` to `shop` with
     `update_need`. Then show each job with a checkbox, the parts he brings with their
-    `part_number`, and the parts the shop supplies by name. The web page prints the same sheet
+    `part_number`, and the parts the shop supplies by name, with each job's and part's `notes`
+    beneath it, because those notes print for the shop to read. The web page prints the same sheet
     from the appointment's "Print sheet" link.
 12. When the trip happens, file the invoice with `record_service`, passing `appointment_id`,
     `work_item_ids` for the jobs it finished and `part_ids` for the parts the shop fitted (see

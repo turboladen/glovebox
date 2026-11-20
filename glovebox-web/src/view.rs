@@ -939,6 +939,8 @@ pub fn steps(list: &Checklist, jobs: &[JobCard], ctx: &CardContext<'_>) -> Steps
 /// One job on the work sheet.
 pub struct SheetJobCard {
     pub title: String,
+    /// The job's notes for the shop.
+    pub notes: Option<String>,
     pub owner: Vec<SheetLineCard>,
     pub shop: Vec<SheetLineCard>,
 }
@@ -949,6 +951,8 @@ pub struct SheetLineCard {
     pub text: String,
     /// The manufacturer and part number, printed apart from the name.
     pub label: Option<String>,
+    /// The part's notes, such as install instructions.
+    pub notes: Option<String>,
     /// The items inside a kit the owner brings.
     pub contents: Vec<KitItemCard>,
 }
@@ -1018,6 +1022,7 @@ pub fn sheet_jobs(sheet: &WorkSheet) -> Vec<SheetJobCard> {
     let card = |line: &SheetLine| SheetLineCard {
         text: count_text(&line.name, line.quantity),
         label: line.label.clone(),
+        notes: line.notes.clone(),
         contents: line
             .contents
             .iter()
@@ -1029,6 +1034,7 @@ pub fn sheet_jobs(sheet: &WorkSheet) -> Vec<SheetJobCard> {
         .iter()
         .map(|job| SheetJobCard {
             title: job.title.clone(),
+            notes: job.notes.clone(),
             owner: job.owner_supplies.iter().map(card).collect(),
             shop: job.shop_supplies.iter().map(card).collect(),
         })

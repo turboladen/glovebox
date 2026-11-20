@@ -383,7 +383,7 @@ pub struct InlinePartInput {
     pub supplied_by: Option<Supplier>,
     /// Where it goes on the car (free text), e.g. "Front brakes".
     pub location: Option<String>,
-    /// Free-form notes.
+    /// Free-form notes. Printed on the appointment's work sheet for the shop, so keep it to what the shop may read.
     pub notes: Option<String>,
     /// Part warranty expiry date, `YYYY-MM-DD`.
     pub warranty_expires_on: Option<String>,
@@ -462,7 +462,7 @@ pub struct RecordPartInput {
     pub installed_service_id: Option<i32>,
     /// Product/listing URL for the part.
     pub retailer_url: Option<String>,
-    /// Free-form notes.
+    /// Free-form notes. Printed on the appointment's work sheet for the shop, so keep it to what the shop may read.
     pub notes: Option<String>,
     /// Part warranty expiry date, `YYYY-MM-DD` (if the part carries one).
     pub warranty_expires_on: Option<String>,
@@ -559,7 +559,7 @@ pub struct PlanWorkInput {
     pub title: String,
     /// Estimated cost, integer cents (feeds the budget forecast).
     pub est_cost_cents: Option<i32>,
-    /// Free-form notes.
+    /// Free-form notes. Printed on the appointment's work sheet for the shop, so keep it to what the shop may read.
     pub notes: Option<String>,
     /// The overdue/due schedule item this satisfies (from
     /// `whats_coming`) — completing the work then clears the

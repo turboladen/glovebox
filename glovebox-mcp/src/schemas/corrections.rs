@@ -545,7 +545,7 @@ pub struct CorrectPartInput {
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<i32>")]
     pub replaced_odometer: Option<Option<i32>>,
-    /// Free-form notes.
+    /// Free-form notes. Printed on the appointment's work sheet for the shop, so keep it to what the shop may read.
     ///
     /// Send `null` to clear it; omit the key to leave it unchanged.
     #[serde(default, deserialize_with = "nullable")]
@@ -863,7 +863,7 @@ pub struct UpdatePlannedWorkInput {
     pub title: Option<String>,
     /// `planned`, `done` or `dropped`. Use `done` only for work that left no paperwork (otherwise `record_service` with `work_item_ids`), `dropped` for work the owner has decided against, and `planned` to reopen an item.
     pub status: Option<JobStatus>,
-    /// Free-form notes.
+    /// Free-form notes. Printed on the appointment's work sheet for the shop, so keep it to what the shop may read.
     ///
     /// Send `null` to clear it; omit the key to leave it unchanged.
     #[serde(default, deserialize_with = "nullable")]

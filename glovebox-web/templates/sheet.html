@@ -34,11 +34,12 @@
   {% for j in jobs %}
   <section class="ws-job">
     <p class="ws-title"><span class="ws-box"></span>{{ j.title }}</p>
+    {% if let Some(n) = j.notes %}<p class="ws-note">{{ n }}</p>{% endif %}
     {% if !j.owner.is_empty() %}
     <h2>I'm supplying</h2>
     <ul class="ws-get">
       {% for l in j.owner %}
-      <li><span class="ws-box"></span><span>{{ l.text }}{% if let Some(pn) = l.label %}<span class="pn">{{ pn }}</span>{% endif %}</span>
+      <li><span class="ws-box"></span><span>{{ l.text }}{% if let Some(pn) = l.label %}<span class="pn">{{ pn }}</span>{% endif %}{% if let Some(n) = l.notes %}<span class="ws-note">{{ n }}</span>{% endif %}</span>
         {% if !l.contents.is_empty() %}
         <ul>{% for c in l.contents %}<li><span class="ws-box"></span><span>{{ c.text }}{% if let Some(pn) = c.label %}<span class="pn">{{ pn }}</span>{% endif %}</span></li>{% endfor %}</ul>
         {% endif %}
@@ -48,7 +49,7 @@
     {% endif %}
     {% if !j.shop.is_empty() %}
     <h2>Please supply</h2>
-    <ul>{% for l in j.shop %}<li>{{ l.text }}</li>{% endfor %}</ul>
+    <ul>{% for l in j.shop %}<li>{{ l.text }}{% if let Some(n) = l.notes %}<span class="ws-note">{{ n }}</span>{% endif %}</li>{% endfor %}</ul>
     {% endif %}
   </section>
   {% endfor %}

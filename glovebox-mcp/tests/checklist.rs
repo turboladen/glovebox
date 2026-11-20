@@ -1570,6 +1570,42 @@ async fn work_sheet_groups_parts_by_supplier() {
 }
 
 #[tokio::test]
+async fn work_sheet_carries_job_and_part_notes() {
+    let t = connect().await;
+    let (v, appt) = work_sheet_fixture(&t).await;
+    let parts = t.call("list_parts", json!({ "vehicle_id": v })).await;
+    t.call(
+        "correct_part",
+        json!({ "vehicle_id": v, "part_id": parts[0]["id"], "notes": "Torque to 20 Nm." }),
+    )
+    .await;
+    let sheet = t
+        .call(
+            "get_work_sheet",
+            json!({ "vehicle_id": v, "appointment_id": appt }),
+        )
+        .await;
+    let job_id = sheet["jobs"][0]["job_id"].clone();
+    t.call(
+        "update_planned_work",
+        json!({ "vehicle_id": v, "work_item_id": job_id, "notes": "Ask about the sensor." }),
+    )
+    .await;
+
+    let sheet = t
+        .call(
+            "get_work_sheet",
+            json!({ "vehicle_id": v, "appointment_id": appt }),
+        )
+        .await;
+
+    let job = &sheet["jobs"][0];
+    assert_eq!(job["notes"], "Ask about the sensor.", "got: {sheet}");
+    assert_eq!(job["owner_supplies"][0]["notes"], "Torque to 20 Nm.");
+    assert_eq!(job["shop_supplies"][0]["notes"], Value::Null);
+}
+
+#[tokio::test]
 async fn work_sheet_lists_a_kits_contents() {
     let t = connect().await;
     let (v, appt) = work_sheet_fixture(&t).await;
