@@ -131,6 +131,17 @@ pub struct ServiceRecordWithLinks {
     /// only by `update`; omitted from JSON when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub released_schedule_item_ids: Vec<i32>,
+    /// Ids of the incidents that stay resolved by this service although a
+    /// correction took the job filed from each one off it, because the
+    /// invoice names them, in ascending order. Filled only by `update`;
+    /// omitted from JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub incidents_kept_resolved: Vec<i32>,
+    /// Ids sent in `resolved_incident_ids` that a correction did not store,
+    /// because the same call took the job filed from each one off the
+    /// service. Filled only by `update`; omitted from JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub incident_names_ignored: Vec<i32>,
 }
 
 /// A need on a completed job whose linked part is neither installed nor
@@ -171,6 +182,12 @@ pub struct IncidentRef {
     /// The service on the other end of the incident's link; see the field it
     /// appears under on `ServiceRecordWithLinks`.
     pub other_service: Option<ServiceRef>,
+    /// Under `resolved_incidents`, whether the service holds a stored link
+    /// to the incident, which is how an invoice's naming of it is kept. When
+    /// false, the service resolves it only through a job filed from it. Left
+    /// out under `noticed_incidents`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub named_by_invoice: Option<bool>,
 }
 
 /// The incident links of a batch of service records, keyed by record id.
@@ -180,7 +197,7 @@ struct IncidentLinks {
     resolved: std::collections::HashMap<i32, Vec<IncidentRef>>,
 }
 
-/// Loads the noticed and resolved incidents of each record with eight batched
+/// Loads the noticed and resolved incidents of each record with nine batched
 /// queries however many records there are.
 async fn load_incident_links(
     db: &impl ConnectionTrait,
@@ -209,6 +226,7 @@ async fn load_incident_links(
     if mine.is_empty() {
         return Ok(out);
     }
+    let named = incident_svc::named_resolved_by(db, record_ids).await?;
     let incident_ids: Vec<i32> = mine.iter().map(|l| l.incident_id).collect();
     let mut all_links = noticed
         .filter(incident_service_link::Column::IncidentId.is_in(incident_ids.clone()))
@@ -262,6 +280,8 @@ async fn load_incident_links(
                 category: inc.category,
                 resolved: inc.resolved,
                 other_service: other_for(inc.id, other_role),
+                named_by_invoice: (link.role == LinkRole::Resolved)
+                    .then(|| named.contains(&(link.incident_id, link.service_record_id))),
             });
     }
     for refs in out.noticed.values_mut().chain(out.resolved.values_mut()) {
@@ -330,6 +350,8 @@ impl ServiceRecordWithLinks {
             reopened_appointment_ids: Vec::new(),
             unassigned_job_ids: Vec::new(),
             released_schedule_item_ids: Vec::new(),
+            incidents_kept_resolved: Vec::new(),
+            incident_names_ignored: Vec::new(),
         }
     }
 }
@@ -921,6 +943,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     let recorded = if input.work_item_ids.is_some()
         || input.part_ids.is_some()
         || input.recall_finding_ids.is_some()
+        || input.resolved_incident_ids.is_some()
     {
         RecordedWork::read(db, existing.id).await?
     } else {
@@ -937,6 +960,9 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     }
     if let Some(finding_ids) = &input.recall_finding_ids {
         recall::require_recalls(db, vehicle_id, &super::dedup_ids(finding_ids)).await?;
+    }
+    for &incident_id in input.resolved_incident_ids.iter().flatten() {
+        incident_svc::require_incident(db, vehicle_id, incident_id).await?;
     }
     let completed_before = recorded.job_ids();
     let recalls_before: Vec<i32> = recorded.recalls.iter().map(|r| r.finding_id).collect();
@@ -1063,8 +1089,20 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         None => Vec::new(),
     };
     link_incidents(&txn, vehicle_id, record.id, Vec::new(), Vec::new(), &added).await?;
-    // These are the incidents of the jobs the correction took off, which no
-    // other job of this service and no link of its invoice still resolves.
+    if let Some(named) = &removal.names_to_store {
+        incident_svc::replace_named(&txn, vehicle_id, record.id, named).await?;
+    }
+    // These are the incidents the correction took off, which no other job of
+    // this service and no link of its invoice still resolves.
+    let mut names_ignored: Vec<i32> = input
+        .resolved_incident_ids
+        .iter()
+        .flatten()
+        .copied()
+        .filter(|id| !removal.names_to_store.iter().flatten().any(|n| n == id))
+        .collect();
+    names_ignored.sort_unstable();
+    names_ignored.dedup();
     let incident_ids: Vec<i32> = removal.incidents.iter().map(|i| i.id).collect();
     incident_svc::release_resolved(&txn, record.id, incident_ids, choice).await?;
 
@@ -1136,6 +1174,13 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         .collect();
     released.sort_unstable();
     updated.released_schedule_item_ids = released;
+    updated.incident_names_ignored = names_ignored;
+    updated.incidents_kept_resolved = updated
+        .resolved_incidents
+        .iter()
+        .filter(|i| i.resolved && removal.incidents_kept.contains(&i.id))
+        .map(|i| i.id)
+        .collect();
 
     txn.commit().await?;
 
@@ -1152,6 +1197,13 @@ struct RecordedWork {
     parts: Vec<part::Model>,
     incidents: Vec<incident::Model>,
     recalls: Vec<RecallRef>,
+    /// Filled by `left_out_by`: the incidents of the jobs taken off that
+    /// the invoice still names.
+    incidents_kept: Vec<i32>,
+    /// Filled by `left_out_by` when the call sends `resolved_incident_ids`:
+    /// the names to store, which leave out the incident of a job the same
+    /// call takes off unless the invoice already names it.
+    names_to_store: Option<Vec<i32>>,
 }
 
 impl RecordedWork {
@@ -1178,6 +1230,8 @@ impl RecordedWork {
             parts,
             incidents: incident_svc::resolved_by_service(db, service_id).await?,
             recalls,
+            incidents_kept: Vec::new(),
+            names_to_store: None,
         })
     }
 
@@ -1185,10 +1239,11 @@ impl RecordedWork {
     /// parts and recalls its replacement lists leave out, and with each job
     /// taken off the work that hangs off it (the incident and the recall it
     /// came from, and the parts fitted to its needs) unless a list the call
-    /// sends names that work. An incident or a recall that a job in
-    /// `kept_jobs` came from is never taken off, and neither is an incident
-    /// the invoice of `service_id` named. `kept_jobs` are the jobs the service
-    /// keeps or gains.
+    /// sends names that work, and each incident the call's
+    /// `resolved_incident_ids` stops naming. An incident or a recall that a
+    /// job in `kept_jobs` came from is never taken off, and neither is an
+    /// incident the invoice of `service_id` names once the call is applied.
+    /// `kept_jobs` are the jobs the service keeps or gains.
     async fn left_out_by(
         mut self,
         db: &impl ConnectionTrait,
@@ -1215,11 +1270,40 @@ impl RecordedWork {
             .iter()
             .filter_map(|j| released(j.research_finding_id, |l| l.research_finding_id))
             .collect();
-        // An incident the invoice named stays resolved by this service
-        // whatever happens to the job filed from it.
-        let named = incident_svc::named_resolved_by(db, service_id, &incident_ids).await?;
-        self.incidents
-            .retain(|i| incident_ids.contains(&i.id) && !named.contains(&i.id));
+        // An incident the invoice names stays resolved by this service
+        // whatever happens to the job filed from it. The names are the ones
+        // the call sends, or the stored ones when it sends none, and a name
+        // the call takes off releases the incident like a job taken off does.
+        let stored: Vec<i32> = incident_svc::named_resolved_by(db, &[service_id])
+            .await?
+            .into_iter()
+            .map(|(incident_id, _)| incident_id)
+            .collect();
+        // A read lists a job's incident beside the named ones, so a list
+        // sent with the call that takes the job off would name the incident
+        // the job is taking with it. Such an id is ignored.
+        let named: Vec<i32> = match &input.resolved_incident_ids {
+            Some(sent) => sent
+                .iter()
+                .copied()
+                .filter(|id| stored.contains(id) || !incident_ids.contains(id))
+                .collect(),
+            None => stored.clone(),
+        };
+        self.names_to_store = input.resolved_incident_ids.is_some().then(|| named.clone());
+        let from_names_taken_off: Vec<i32> = stored
+            .iter()
+            .filter_map(|id| released(Some(*id), |l| l.incident_id))
+            .collect();
+        self.incidents_kept = incident_ids
+            .iter()
+            .copied()
+            .filter(|id| named.contains(id))
+            .collect();
+        self.incidents.retain(|i| {
+            let taken_off = incident_ids.contains(&i.id) || from_names_taken_off.contains(&i.id);
+            taken_off && !named.contains(&i.id)
+        });
         match &input.recall_finding_ids {
             Some(list) => self.recalls.retain(|r| {
                 released(Some(r.finding_id), |l| l.research_finding_id).is_some()
@@ -6229,6 +6313,234 @@ mod tests {
                 .await
                 .unwrap_err();
             assert!(matches!(err, DomainError::NotFound(_)), "{err:?}");
+        }
+
+        fn naming(ids: Vec<i32>, completed: Option<CompletedWork>) -> UpdateServiceRecord {
+            UpdateServiceRecord {
+                resolved_incident_ids: Some(ids),
+                completed_work: completed,
+                ..Default::default()
+            }
+        }
+
+        // Each resolved incident of the service with whether its invoice
+        // names it.
+        async fn named(db: &DatabaseConnection, v: i32, svc: i32) -> Vec<(i32, Option<bool>)> {
+            let read = get(db, v, svc).await.unwrap();
+            read.resolved_incidents
+                .iter()
+                .map(|i| (i.id, i.named_by_invoice))
+                .collect()
+        }
+
+        #[tokio::test]
+        async fn naming_a_jobs_incident_keeps_it_resolved_when_the_job_is_taken_off() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observation(&db, v, None).await;
+            let j = job_for(&db, v, incident).await;
+            let svc = completing(&db, v, vec![j]).await;
+            assert_eq!(named(&db, v, svc).await, vec![(incident, Some(false))]);
+
+            // The service keeps the job, so the name needs no answer.
+            update(&db, v, svc, naming(vec![incident], None))
+                .await
+                .unwrap();
+            assert_eq!(stored_incident_links(&db).await, 1);
+            assert_eq!(named(&db, v, svc).await, vec![(incident, Some(true))]);
+
+            let out = update(&db, v, svc, jobs(vec![], Some(CompletedWork::DidNotHappen)))
+                .await
+                .unwrap();
+            assert_eq!(out.incidents_kept_resolved, vec![incident]);
+            assert!(resolved(&db, v, incident).await);
+            assert_eq!(resolvers(&db, v, incident).await, vec![svc]);
+        }
+
+        #[tokio::test]
+        async fn naming_an_open_incident_resolves_it() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observation(&db, v, None).await;
+            let svc = completing(&db, v, vec![]).await;
+
+            let out = update(&db, v, svc, naming(vec![incident], None))
+                .await
+                .unwrap();
+            assert!(resolved(&db, v, incident).await);
+            assert!(!by_hand(&db, v, incident).await);
+            let fixed: Vec<i32> = out.resolved_incidents.iter().map(|i| i.id).collect();
+            assert_eq!(fixed, vec![incident]);
+            crate::test_support::assert_empty(&out.incidents_kept_resolved);
+        }
+
+        #[tokio::test]
+        async fn a_name_taken_off_asks_for_an_answer_unless_a_job_still_brings_the_incident() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observation(&db, v, None).await;
+            let svc = completing(&db, v, vec![]).await;
+            update(&db, v, svc, naming(vec![incident], None))
+                .await
+                .unwrap();
+
+            // No job of the service brings the incident, so taking the name
+            // off takes the incident off.
+            let err = update(&db, v, svc, naming(vec![], None)).await.unwrap_err();
+            let DomainError::BadRequest(message) = err else {
+                panic!("{err:?}");
+            };
+            assert!(
+                message.contains(&format!("incident {incident}")),
+                "{message}"
+            );
+            assert_eq!(stored_incident_links(&db).await, 1);
+
+            update(
+                &db,
+                v,
+                svc,
+                naming(vec![], Some(CompletedWork::DidNotHappen)),
+            )
+            .await
+            .unwrap();
+            assert!(!resolved(&db, v, incident).await);
+            assert_eq!(stored_incident_links(&db).await, 0);
+
+            // With a job filed from the incident on the service, the name
+            // comes off without an answer and the job still resolves it.
+            let j = job_for(&db, v, incident).await;
+            update(&db, v, svc, jobs(vec![j], None)).await.unwrap();
+            update(&db, v, svc, naming(vec![incident], None))
+                .await
+                .unwrap();
+            update(&db, v, svc, naming(vec![], None)).await.unwrap();
+            assert_eq!(stored_incident_links(&db).await, 0);
+            assert!(resolved(&db, v, incident).await);
+            assert_eq!(named(&db, v, svc).await, vec![(incident, Some(false))]);
+        }
+
+        #[tokio::test]
+        async fn a_jobs_incident_sent_back_with_the_call_that_takes_the_job_off_is_not_named() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observation(&db, v, None).await;
+            let j = job_for(&db, v, incident).await;
+            let svc = completing(&db, v, vec![j]).await;
+
+            // The list repeats what a read of the service shows.
+            let out = update(
+                &db,
+                v,
+                svc,
+                UpdateServiceRecord {
+                    work_item_ids: Some(vec![]),
+                    resolved_incident_ids: Some(vec![incident]),
+                    completed_work: Some(CompletedWork::DidNotHappen),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(stored_incident_links(&db).await, 0);
+            assert!(!resolved(&db, v, incident).await);
+            crate::test_support::assert_empty(&out.incidents_kept_resolved);
+            assert_eq!(out.incident_names_ignored, vec![incident]);
+        }
+
+        #[tokio::test]
+        async fn a_name_and_its_job_taken_off_together_release_the_incident() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observation(&db, v, None).await;
+            let j = job_for(&db, v, incident).await;
+            let svc = completing(&db, v, vec![j]).await;
+            update(&db, v, svc, naming(vec![incident], None))
+                .await
+                .unwrap();
+
+            let both = |completed_work| UpdateServiceRecord {
+                work_item_ids: Some(vec![]),
+                resolved_incident_ids: Some(vec![]),
+                completed_work,
+                ..Default::default()
+            };
+            let err = update(&db, v, svc, both(None)).await.unwrap_err();
+            assert!(
+                err.to_string().contains(&format!("incident {incident}")),
+                "{err}"
+            );
+
+            let out = update(&db, v, svc, both(Some(CompletedWork::DidNotHappen)))
+                .await
+                .unwrap();
+            crate::test_support::assert_empty(&out.incidents_kept_resolved);
+            assert!(!resolved(&db, v, incident).await);
+            crate::test_support::assert_empty(&resolvers(&db, v, incident).await);
+        }
+
+        #[tokio::test]
+        async fn a_name_taken_off_as_done_another_way_leaves_the_incident_resolved_by_hand() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observation(&db, v, None).await;
+            let svc = completing(&db, v, vec![]).await;
+            update(&db, v, svc, naming(vec![incident], None))
+                .await
+                .unwrap();
+
+            update(
+                &db,
+                v,
+                svc,
+                naming(vec![], Some(CompletedWork::DoneAnotherWay)),
+            )
+            .await
+            .unwrap();
+            assert!(resolved(&db, v, incident).await);
+            assert!(by_hand(&db, v, incident).await);
+            crate::test_support::assert_empty(&resolvers(&db, v, incident).await);
+        }
+
+        #[tokio::test]
+        async fn a_name_taken_off_an_incident_resolved_by_hand_asks_nothing() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observation(&db, v, None).await;
+            resolve_by_hand(&db, v, incident).await;
+            let svc = completing(&db, v, vec![]).await;
+            update(&db, v, svc, naming(vec![incident], None))
+                .await
+                .unwrap();
+
+            update(&db, v, svc, naming(vec![], None)).await.unwrap();
+            assert!(resolved(&db, v, incident).await);
+            assert!(by_hand(&db, v, incident).await);
+        }
+
+        #[tokio::test]
+        async fn naming_another_vehicles_incident_is_not_found_and_stores_nothing() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let other = seed_vehicle(&db).await;
+            let theirs = observation(&db, other, None).await;
+            let svc = completing(&db, v, vec![]).await;
+
+            let wrong = update(&db, v, svc, naming(vec![theirs], None))
+                .await
+                .unwrap_err();
+            let missing = update(&db, v, svc, naming(vec![theirs + 1000], None))
+                .await
+                .unwrap_err();
+            assert!(matches!(wrong, DomainError::NotFound(_)), "{wrong:?}");
+            assert_eq!(
+                wrong.to_string().replace(&theirs.to_string(), "N"),
+                missing
+                    .to_string()
+                    .replace(&(theirs + 1000).to_string(), "N")
+            );
+            assert_eq!(stored_incident_links(&db).await, 0);
+            assert!(!resolved(&db, other, theirs).await);
         }
     }
 }

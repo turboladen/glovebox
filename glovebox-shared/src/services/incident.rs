@@ -726,25 +726,46 @@ pub(crate) async fn resolved_by_service(
         .await?)
 }
 
-/// Those of `incident_ids` that the service holds a stored `resolved` link
-/// to, which is to say the ones its invoice named.
+/// Each `(incident_id, service_id)` pair in which the invoice of one of
+/// `service_ids` named the incident as fixed, which is to say each stored
+/// `resolved` link of those services.
 pub(crate) async fn named_resolved_by(
     db: &impl ConnectionTrait,
-    service_id: i32,
-    incident_ids: &[i32],
-) -> DomainResult<Vec<i32>> {
-    if incident_ids.is_empty() {
+    service_ids: &[i32],
+) -> DomainResult<Vec<(i32, i32)>> {
+    if service_ids.is_empty() {
         return Ok(Vec::new());
     }
     Ok(incident_service_link::Entity::find()
-        .filter(incident_service_link::Column::ServiceRecordId.eq(service_id))
+        .filter(incident_service_link::Column::ServiceRecordId.is_in(service_ids.to_vec()))
         .filter(incident_service_link::Column::Role.eq(LinkRole::Resolved))
-        .filter(incident_service_link::Column::IncidentId.is_in(incident_ids.to_vec()))
         .all(db)
         .await?
         .into_iter()
-        .map(|l| l.incident_id)
+        .map(|l| (l.incident_id, l.service_record_id))
         .collect())
+}
+
+/// Replaces the incidents the invoice of `service_id` names as fixed with
+/// `incident_ids`. Each one the list adds is marked resolved, one the
+/// invoice already names keeps its flag, and so does one taken off the list,
+/// which the caller settles. A wrong-vehicle id reads as nonexistent.
+pub(crate) async fn replace_named(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    service_id: i32,
+    incident_ids: &[i32],
+) -> DomainResult<()> {
+    incident_service_link::Entity::delete_many()
+        .filter(incident_service_link::Column::ServiceRecordId.eq(service_id))
+        .filter(incident_service_link::Column::Role.eq(LinkRole::Resolved))
+        .filter(incident_service_link::Column::IncidentId.is_not_in(incident_ids.to_vec()))
+        .exec(db)
+        .await?;
+    for id in super::dedup_ids(incident_ids) {
+        link_service(db, vehicle_id, id, service_id, LinkRole::Resolved).await?;
+    }
+    Ok(())
 }
 
 /// Settles each incident in `resolved_here`, which `service_id` stops

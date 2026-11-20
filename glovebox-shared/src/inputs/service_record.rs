@@ -94,9 +94,15 @@ pub struct UpdateServiceRecord {
     /// When present, replaces the jobs this service completed. A job added
     /// must be planned.
     pub work_item_ids: Option<Vec<i32>>,
+    /// When present, replaces the same-vehicle incidents this service's
+    /// invoice names as fixed. Each one the list adds is marked resolved,
+    /// and one named beside the job filed from it stays resolved by this
+    /// service when that job is taken off. The incident of a job the same
+    /// call takes off is ignored unless the invoice already names it.
+    pub resolved_incident_ids: Option<Vec<i32>>,
     /// What happened to the work this update takes off the service: the
-    /// jobs, fitted parts and recalls its lists leave out. Required when it
-    /// takes any off, and ignored otherwise.
+    /// jobs, fitted parts, recalls and incidents its lists leave out.
+    /// Required when it takes any off, and ignored otherwise.
     pub completed_work: Option<crate::services::service_record::CompletedWork>,
     /// Set, change or clear the appointment this invoice settles. The same
     /// rules as `NewServiceRecord::appointment_id` apply to a new value.

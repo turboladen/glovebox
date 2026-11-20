@@ -246,6 +246,10 @@ second service to patch the first.
   `did_not_happen` and then record that invoice with the same jobs, parts and schedule items. The
   parts are kept and listed in `kept_part_ids`: when you file the invoice again, attach the ones
   that read purchased with `part_ids`; otherwise delete them with `delete_part`.
+- `correct_service` with `resolved_incident_ids` replaces the incidents the invoice itself names as
+  fixed. A service read marks those with `named_by_invoice: true`; an incident marked `false` is
+  listed only because a job filed from it was completed, so leave it out of the list unless the
+  invoice names it. A named incident stays resolved when its job is taken off the service.
 - An incident the owner resolved by hand (`resolved_by_hand`) stays resolved when a service's work
   is undone, and is never named in the refusal. `done_another_way` marks an incident that way too.
   The owner reopens one with `update_incident` and `resolved: false`.
