@@ -357,6 +357,16 @@ enum Resolution {
     ByService,
 }
 
+impl Resolution {
+    fn of(incident: &incident::Model) -> Self {
+        match (incident.resolved, incident.resolved_by_hand) {
+            (false, _) => Self::Open,
+            (true, true) => Self::ByHand,
+            (true, false) => Self::ByService,
+        }
+    }
+}
+
 fn set_resolution(active: &mut incident::ActiveModel, resolution: Resolution) {
     active.resolved = Set(resolution != Resolution::Open);
     active.resolved_by_hand = Set(resolution == Resolution::ByHand);
@@ -533,8 +543,13 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     let inc = active.update(&txn).await?;
 
     // Replacing the resolving services with none leaves nothing that resolved
-    // the incident, so it reads as unresolved unless the caller says otherwise
-    // or a completed job still resolves it.
+    // the incident, so it reads as unresolved unless the caller says
+    // otherwise, a completed job still resolves it or the owner resolved it
+    // by hand.
+    let names_a_service = input
+        .resolved_by_service_ids
+        .as_ref()
+        .is_some_and(|sids| !sids.is_empty());
     let mut cleared_all_resolvers = false;
     if let Some(sids) = input.resolved_by_service_ids {
         let from_jobs: Vec<i32> = work_item::Entity::find()
@@ -585,20 +600,26 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         }
     }
 
-    // An explicit `resolved` wins over the flag the links just set. The
-    // owner's word is what resolves the incident only while no service
-    // resolves it, so `resolved: true` beside a resolving service, or sent
-    // back from a read of an incident a service resolved, marks nothing.
+    // An explicit `resolved` wins over the flag the links just set. Closing
+    // an open incident is the owner's word unless the call names the service
+    // that fixed it, even while a completed job still names a service, since
+    // the owner reopened the incident after that job. On a resolved incident
+    // it is the owner's word only when no service resolves it, so a read
+    // sent back marks nothing.
     let inc = require_incident(&txn, vehicle_id, inc.id).await?;
-    let unresolved_by_services = resolvers_of_incidents(&txn, &[inc.id]).await?.is_empty();
-    let resolution = match input.resolved {
-        Some(false) => Some(Resolution::Open),
-        Some(true) if unresolved_by_services => Some(Resolution::ByHand),
-        Some(true) if !inc.resolved => Some(Resolution::ByService),
+    let resolution = match (input.resolved, Resolution::of(&inc)) {
+        (Some(false), _) => Some(Resolution::Open),
+        (Some(true), Resolution::Open) if names_a_service => Some(Resolution::ByService),
+        (Some(true), Resolution::Open) => Some(Resolution::ByHand),
+        (Some(true), Resolution::ByService)
+            if resolvers_of_incidents(&txn, &[inc.id]).await?.is_empty() =>
+        {
+            Some(Resolution::ByHand)
+        }
         // Clearing the list takes the services away, and the owner's word
         // still stands.
-        None if cleared_all_resolvers && !inc.resolved_by_hand => Some(Resolution::Open),
-        Some(true) | None => None,
+        (None, Resolution::ByService) if cleared_all_resolvers => Some(Resolution::Open),
+        _ => None,
     };
     let inc = if let Some(resolution) = resolution {
         let mut active: incident::ActiveModel = inc.into();
@@ -723,6 +744,42 @@ pub(crate) async fn named_resolved_by(
         .into_iter()
         .map(|l| l.incident_id)
         .collect())
+}
+
+/// Marks each of `incident_ids` resolved by hand when it reads resolved and
+/// no service resolves it. The caller names the incidents a service stopped
+/// resolving without the owner saying the work did not happen.
+pub(crate) async fn rest_on_the_owners_word(
+    db: &impl ConnectionTrait,
+    incident_ids: &[i32],
+) -> DomainResult<()> {
+    let resolved_by_a_service: std::collections::HashSet<i32> =
+        resolvers_of_incidents(db, incident_ids)
+            .await?
+            .into_iter()
+            .map(|(incident_id, _)| incident_id)
+            .collect();
+    let alone: Vec<i32> = incident_ids
+        .iter()
+        .copied()
+        .filter(|id| !resolved_by_a_service.contains(id))
+        .collect();
+    if alone.is_empty() {
+        return Ok(());
+    }
+    let mut marked = incident::ActiveModel {
+        updated_at: Set(super::now()),
+        ..Default::default()
+    };
+    set_resolution(&mut marked, Resolution::ByHand);
+    incident::Entity::update_many()
+        .set(marked)
+        .filter(incident::Column::Id.is_in(alone))
+        .filter(incident::Column::Resolved.eq(true))
+        .filter(incident::Column::ResolvedByHand.eq(false))
+        .exec(db)
+        .await?;
+    Ok(())
 }
 
 /// Settles each incident in `resolved_here`, which `service_id` stops

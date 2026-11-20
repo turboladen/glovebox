@@ -540,6 +540,11 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     let updated = active.update(db).await?;
     settle_completed_edit(db, &updated, before.incident_id).await?;
     let released = before.released(db).await?;
+    // The edit leaves the incident resolved, and with no service behind it
+    // the owner's edit is what it rests on.
+    if let Some(incident_id) = released.incident_id {
+        super::incident::rest_on_the_owners_word(db, &[incident_id]).await?;
+    }
     let mut out = UpdatedWorkItem {
         reopened_appointment_id: None,
         left_cancelled_appointment_id: None,

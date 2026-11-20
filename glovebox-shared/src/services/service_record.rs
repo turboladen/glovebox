@@ -5882,7 +5882,7 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn resolved_sent_for_an_incident_no_service_resolves_marks_it_by_hand() {
+        async fn an_incident_left_resolved_with_no_service_rests_on_the_owners_word() {
             use crate::inputs::incident::UpdateIncident;
             let db = test_db().await;
             let v = seed_vehicle(&db).await;
@@ -5903,14 +5903,25 @@ mod tests {
             .await
             .unwrap();
             assert!(resolved(&db, v, incident).await);
-            assert!(!by_hand(&db, v, incident).await);
+            assert!(by_hand(&db, v, incident).await);
 
-            resolve_by_hand(&db, v, incident).await;
+            // The owner reopens it and closes it again while a job's service
+            // resolves it, and that word marks it too.
+            let svc = completing(&db, v, vec![j]).await;
+            let flag = |resolved| UpdateIncident {
+                resolved: Some(resolved),
+                ..Default::default()
+            };
+            incident::update(&db, v, incident, flag(false))
+                .await
+                .unwrap();
+            incident::update(&db, v, incident, flag(true))
+                .await
+                .unwrap();
             assert!(by_hand(&db, v, incident).await);
 
             // Sent beside the service a job brings, the same word resolves an
             // open incident through that service.
-            let svc = completing(&db, v, vec![j]).await;
             let sent = |resolved| UpdateIncident {
                 resolved: Some(resolved),
                 resolved_by_service_ids: Some(vec![svc]),

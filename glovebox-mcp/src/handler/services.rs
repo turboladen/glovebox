@@ -154,7 +154,8 @@ impl GloveboxMcp {
                        was not done (jobs go back to planned, parts read `purchased` and a \
                        shop-supplied one leaves its need, recalls read open, incidents are \
                        unresolved unless the owner marked them resolved by hand), or \
-                       `done_another_way` when it was done but not on this invoice. The reply \
+                       `done_another_way` when it was done but not on this invoice (an incident \
+                       then stays resolved on the owner's word, `resolved_by_hand`). The reply \
                        names any appointment that reopened (`reopened_appointment_ids`) and any \
                        job that left a cancelled one (`unassigned_job_ids`). The schedule items \
                        that stopped counting from this service are in \

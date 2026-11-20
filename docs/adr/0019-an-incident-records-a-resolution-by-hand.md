@@ -23,14 +23,16 @@ two columns, and one function writes both.
 
 **When the marker is written.**
 
-- `update_incident` with `resolved: true` writes `ByHand` when no service resolves the incident
-  once the call's link changes are applied. That covers an open incident, and a resolved one whose
-  last resolving service has gone. Sent while a service resolves the incident, it resolves an
-  open incident as `ByService` and leaves a resolved one as it is, so a read sent back marks
-  nothing.
-- A service whose work is taken off as `done_another_way` leaves the incident resolved. When no
-  other service resolves it, the owner's answer is what stands behind the flag, so the incident
-  is marked.
+- `update_incident` with `resolved: true` on an open incident writes `ByHand`, unless the same
+  call names a service in `resolved_by_service_ids`, which writes `ByService`. A completed job
+  that still names a service does not change this: the owner reopened the incident after that
+  job, so closing it again is the owner's word.
+- `resolved: true` on a resolved incident writes `ByHand` only when no service resolves it, so a
+  read sent back marks nothing.
+- **A resolved incident that no service resolves is marked.** A write that takes the last
+  resolving service away and leaves the incident resolved marks it: work taken off a service as
+  `done_another_way`, and an edit of a completed job (set back to planned or dropped, or given
+  another incident).
 - A service that resolves an incident (a `resolved` link, `mark_resolved` for a completed job)
   writes `ByService`, and only on an unresolved incident. On a resolved incident it changes
   nothing, so a marker survives a job completed later.
@@ -51,8 +53,8 @@ reopens it with `resolved: false`.
 `m20261120_000003_incident_resolved_by_hand` marks each resolved incident that no service resolves:
 no stored `resolved` link and no completed job filed from it. A resolved incident with a resolving
 service stays unmarked, so an incident resolved by hand before a job was completed, in records
-older than this migration, can still be reopened by `did_not_happen`. The marking runs only in
-the run that adds the column.
+older than this migration, can still be reopened by `did_not_happen`. The marking matches the
+rule every write keeps, so running the migration again changes nothing.
 
 ## Alternatives considered
 
@@ -72,4 +74,6 @@ the run that adds the column.
   `resolved: false`.
 - Setting `resolved: true` on an incident a service resolves leaves it unmarked, so undoing that
   service reopens it.
+- A service whose only recorded work is an invoice-named incident that carries the marker is
+  deleted without a `completed_work` question, and the incident stays resolved.
 - ADR-0016 lists the incident's resolution among the converted areas.
