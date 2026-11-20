@@ -1,5 +1,6 @@
 //! Full-text search across vehicle, event, planning and part text — one
-//! domain operation over the FTS5 indexes.
+//! domain operation over the FTS5 indexes, plus a spacing-free comparison of
+//! part numbers.
 //!
 //! Each FTS5 table is external-content (index only), so every subquery joins
 //! back to its content table to produce domain-shaped hits: `vehicle_id` is
@@ -8,6 +9,8 @@
 //! platform/template/vehicle, kit item → part), and line-item and kit-item
 //! hits fold into their parent record so callers think in domain records, not
 //! rows.
+
+use std::collections::HashSet;
 
 use sea_orm::*;
 
@@ -39,11 +42,163 @@ pub struct SearchHit {
     pub id: i32,
     pub vehicle_id: Option<i32>,
     pub title: String,
+    /// The matching text. A hit found by a number carries the stored number.
     pub snippet: String,
-    /// bm25 relevance — lower (more negative) is a better match. Scores are
+    /// Relevance — lower (more negative) is a better match. Scores are bm25
     /// per-FTS-table statistics, so ranks are only strictly comparable within a
-    /// `kind`; cross-kind ordering in `all`-scope results is heuristic.
+    /// `kind`; cross-kind ordering in `all`-scope results is heuristic. A part
+    /// found by its number ranks ahead of every text match.
     pub rank: f64,
+}
+
+// A part found by its number leads the results: the owner who types a number
+// wants that part first, and bm25 scores are small negatives that cannot compete.
+const NUMBER_MATCH_RANK: f64 = -1_000_000.0;
+
+/// A run of words is read as a part number only when its key has at least this
+/// many characters, which admits numbers such as `G 13` but not `N9`.
+const MIN_NUMBER_KEY_LEN: usize = 3;
+
+// A query of n words has n(n+1)/2 runs. Capping a run's length keeps the work
+// linear in n, because a part number never spans more than a few words.
+const MAX_NUMBER_RUN_WORDS: usize = 6;
+
+/// The text's letters and digits, upper-cased. Stored numbers and queries
+/// reduce through this one rule, so spacing and punctuation never matter.
+fn number_key(text: &str) -> String {
+    text.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_uppercase)
+        .collect()
+}
+
+/// The keys of every run of consecutive query words that is long enough and
+/// holds a digit, so `oil filter 06K 115 562 LM` yields `06K115562LM`.
+fn query_number_keys(query: &str) -> HashSet<String> {
+    let words: Vec<&str> = query.split_whitespace().collect();
+    let mut keys = HashSet::new();
+    for start in 0..words.len() {
+        let mut key = String::new();
+        for word in words[start..].iter().take(MAX_NUMBER_RUN_WORDS) {
+            key.push_str(&number_key(word));
+            if key.chars().count() >= MIN_NUMBER_KEY_LEN && key.chars().any(char::is_numeric) {
+                keys.insert(key.clone());
+            }
+        }
+    }
+    keys
+}
+
+/// UNION ALL arms for the parts whose number equals one of the query's keys.
+async fn number_arms(
+    db: &impl ConnectionTrait,
+    query: &str,
+    vehicle_id: Option<i32>,
+) -> DomainResult<Vec<String>> {
+    use crate::entities::{part, part_content};
+
+    // The FTS tokenizer splits a number at its spaces and punctuation, so
+    // `06K 115 562 LM` and `06K115562LM` share no token. The parts tables are
+    // small, so the stored numbers are compared in Rust instead.
+    let keys = query_number_keys(query);
+    if keys.is_empty() {
+        return Ok(Vec::new());
+    }
+    let matches = |number: &Option<String>| {
+        number
+            .as_deref()
+            .is_some_and(|n| keys.contains(&number_key(n)))
+    };
+
+    let mut parts = part::Entity::find()
+        .select_only()
+        .columns([
+            part::Column::Id,
+            part::Column::PartNumber,
+            part::Column::OePartNumberReplaced,
+        ])
+        .filter(
+            Condition::any()
+                .add(part::Column::PartNumber.is_not_null())
+                .add(part::Column::OePartNumberReplaced.is_not_null()),
+        );
+    let mut contents = part_content::Entity::find()
+        .select_only()
+        .columns([part_content::Column::Id, part_content::Column::PartNumber])
+        .filter(part_content::Column::PartNumber.is_not_null());
+    if let Some(v) = vehicle_id {
+        parts = parts.filter(part::Column::VehicleId.eq(v));
+        contents = contents
+            .join(JoinType::InnerJoin, part_content::Relation::Part.def())
+            .filter(part::Column::VehicleId.eq(v));
+    }
+
+    let (mut by_number, mut by_oe, mut by_item) = (Vec::new(), Vec::new(), Vec::new());
+    for (id, number, oe) in parts
+        .into_tuple::<(i32, Option<String>, Option<String>)>()
+        .all(db)
+        .await?
+    {
+        if matches(&number) {
+            by_number.push(id);
+        } else if matches(&oe) {
+            by_oe.push(id);
+        }
+    }
+    for (id, number) in contents
+        .into_tuple::<(i32, Option<String>)>()
+        .all(db)
+        .await?
+    {
+        if matches(&number) {
+            by_item.push(id);
+        }
+    }
+
+    // The ids were read from the database above, already limited to the
+    // vehicle, and are integers, so formatting them into the SQL is safe. The
+    // ranks differ so that a part found several ways shows its own number
+    // before its replaced number before a kit item's number.
+    let arm = |snippet: &str, from: &str, id_col: &str, ids: &[i32], rank: f64| {
+        let list = ids
+            .iter()
+            .map(i32::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "SELECT 'part' AS kind, p.id AS id, p.vehicle_id AS vehicle_id, p.name AS title, \
+             {snippet} AS snippet, {rank:.1} AS rank FROM {from} WHERE {id_col} IN ({list})"
+        )
+    };
+    let mut arms = Vec::new();
+    if !by_number.is_empty() {
+        arms.push(arm(
+            "p.part_number",
+            "parts p",
+            "p.id",
+            &by_number,
+            NUMBER_MATCH_RANK,
+        ));
+    }
+    if !by_oe.is_empty() {
+        arms.push(arm(
+            "p.oe_part_number_replaced",
+            "parts p",
+            "p.id",
+            &by_oe,
+            NUMBER_MATCH_RANK + 1.0,
+        ));
+    }
+    if !by_item.is_empty() {
+        arms.push(arm(
+            "pc.part_number",
+            "part_contents pc JOIN parts p ON p.id = pc.part_id",
+            "pc.id",
+            &by_item,
+            NUMBER_MATCH_RANK + 2.0,
+        ));
+    }
+    Ok(arms)
 }
 
 /// Sanitize free text into an FTS5 MATCH expression.
@@ -94,7 +249,11 @@ fn subquery(
 ///
 /// `vehicle_id: Some(v)` verifies the vehicle exists (`NotFound` otherwise) and
 /// restricts hits to it. Empty/whitespace-only queries are a `BadRequest`;
-/// queries with no searchable terms (pure punctuation) return no hits.
+/// queries with no searchable terms (pure punctuation) return no hits. When
+/// parts are in scope (`parts` or `all`), a run of query words that equals a
+/// part's number, its replaced OE number or a kit item's number, ignoring case,
+/// spacing and punctuation, also finds that part, and such a hit ranks ahead of
+/// every text match.
 #[allow(clippy::too_many_lines)]
 pub async fn search(
     db: &impl ConnectionTrait,
@@ -238,6 +397,7 @@ pub async fn search(
             "p.name",
             filt,
         ));
+        subs.extend(number_arms(db, query, vehicle_id).await?);
     }
 
     // Dedupe by (kind, id, vehicle_id) in SQL, before the LIMIT: a service
@@ -806,6 +966,8 @@ mod tests {
             "col:brake",
             "brake*",
             "-brake +pads",
+            "\"06K 115\" 562 OR LM*",
+            "NOT 06K-115 (562)",
         ] {
             let result = search(&db, query, SearchScope::All, None).await;
             assert!(result.is_ok(), "query {query:?} must not error: {result:?}");
@@ -968,6 +1130,252 @@ mod tests {
         assert_empty(&search(&db, "kit", SearchScope::Parts, None).await.unwrap());
         assert_empty(
             &search(&db, "N0138157", SearchScope::Parts, None)
+                .await
+                .unwrap(),
+        );
+    }
+
+    #[test]
+    fn number_key_keeps_only_upper_case_letters_and_digits() {
+        assert_eq!(number_key("06k 115-562.lm"), "06K115562LM");
+        assert_eq!(number_key("5Q0\u{a0}129\u{2013}620 (b)#"), "5Q0129620B");
+        assert_eq!(number_key("- . /"), "");
+        // A letter with a diacritic is a different letter.
+        assert_ne!(number_key("\u{d6}123"), number_key("123"));
+        assert_eq!(number_key("\u{f6}123"), "\u{d6}123");
+    }
+
+    #[test]
+    fn query_number_keys_covers_every_run_of_words_that_has_a_digit() {
+        let keys = query_number_keys("oil filter 06K 115 562 LM");
+        assert!(keys.contains("06K115562LM"), "{keys:?}");
+        assert!(keys.contains("115562"), "{keys:?}");
+        assert!(!keys.contains("OILFILTER"), "{keys:?}");
+
+        assert_eq!(query_number_keys("G 13"), HashSet::from(["G13".to_owned()]));
+        // Two characters, or no digit: nothing is compared as a number.
+        assert!(query_number_keys("N9").is_empty());
+        assert!(query_number_keys("brake pads").is_empty());
+        assert!(query_number_keys("- . /").is_empty());
+
+        // A number after many other words is still read.
+        let late = format!("{} 06K 115562LM", vec!["oil"; 20].join(" "));
+        assert!(query_number_keys(&late).contains("06K115562LM"));
+
+        // A run is at most MAX_NUMBER_RUN_WORDS words long.
+        let spread = ["1"; MAX_NUMBER_RUN_WORDS + 2].join(" ");
+        let longest = query_number_keys(&spread)
+            .iter()
+            .map(String::len)
+            .max()
+            .unwrap();
+        assert_eq!(longest, MAX_NUMBER_RUN_WORDS);
+    }
+
+    async fn seed_part(
+        db: &DatabaseConnection,
+        vehicle_id: i32,
+        name: &str,
+        number: &str,
+        oe_number: Option<&str>,
+    ) -> i32 {
+        part::record(
+            db,
+            vehicle_id,
+            NewPart {
+                name: name.into(),
+                part_number: Some(number.into()),
+                oe_part_number_replaced: oe_number.map(Into::into),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .part
+        .id
+    }
+
+    #[tokio::test]
+    async fn a_part_number_matches_however_it_is_spaced() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db, "Daily").await;
+        let packed = seed_part(&db, v, "Oil filter", "06K115562LM", None).await;
+        let spaced = seed_part(&db, v, "Air filter", "5Q0 129 620 B", None).await;
+        let dotted = seed_part(&db, v, "Pads", "13.0460-2788.2", None).await;
+
+        let ids = |hits: &[SearchHit]| hits.iter().map(|h| h.id).collect::<Vec<_>>();
+        for (query, want) in [
+            ("06K 115 562 LM", packed),
+            ("06k-115-562-lm", packed),
+            ("5Q0129620B", spaced),
+            ("5q0.129.620.b", spaced),
+            ("13046027882", dotted),
+            ("13.0460 2788.2", dotted),
+            ("\"06K115562LM\"", packed),
+        ] {
+            let hits = search(&db, query, SearchScope::Parts, None).await.unwrap();
+            assert_eq!(ids(&hits), vec![want], "query {query:?}: {hits:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_replaced_oe_number_and_a_kit_item_match_however_spaced() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db, "Daily").await;
+        let oe = seed_part(&db, v, "Aftermarket pads", "BP1234", Some("1K0 698 151 A")).await;
+        let kit = seed_kit(&db, v, "Oil change kit", "HU 7020 z").await;
+
+        let by_oe = search(&db, "1K0698151A", SearchScope::Parts, None)
+            .await
+            .unwrap();
+        assert_eq!(by_oe.len(), 1, "{by_oe:?}");
+        assert_eq!(by_oe[0].id, oe);
+
+        let by_item = search(&db, "HU7020z", SearchScope::Parts, None)
+            .await
+            .unwrap();
+        assert_eq!(by_item.len(), 1, "{by_item:?}");
+        assert_eq!(
+            (by_item[0].id, by_item[0].title.as_str()),
+            (kit, "Oil change kit")
+        );
+        assert_eq!(by_item[0].vehicle_id, Some(v));
+    }
+
+    #[tokio::test]
+    async fn a_number_hit_leads_and_a_part_found_twice_is_one_hit() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db, "Daily").await;
+        let kit = seed_kit(&db, v, "Oil change kit", "HU 7020 z").await;
+
+        // The exact text matches through FTS and through the number arm.
+        let hits = search(&db, "06K115562LM", SearchScope::All, None)
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].id, kit);
+        assert_eq!(hits[0].rank, NUMBER_MATCH_RANK);
+    }
+
+    #[tokio::test]
+    async fn a_kit_found_by_its_own_number_and_an_item_shows_its_own_number() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db, "Daily").await;
+        // The kit's number and its first item's number are the same part number.
+        let kit = seed_kit(&db, v, "Oil change kit", "06K 115 562 LM").await;
+
+        let hits = search(&db, "06K115562LM", SearchScope::Parts, None)
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].id, kit);
+        assert_eq!(hits[0].snippet, "06K115562LM");
+    }
+
+    #[tokio::test]
+    async fn a_part_found_by_number_leads_even_when_other_words_match_nothing() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db, "Daily").await;
+        seed_kit(&db, v, "Oil change kit", "HU 7020 z").await;
+        let coolant = seed_part(&db, v, "Coolant", "G 13", None).await;
+
+        let hits = search(&db, "drain plug G 13", SearchScope::All, None)
+            .await
+            .unwrap();
+        assert_eq!(hits[0].id, coolant, "{hits:?}");
+        assert_eq!(hits[0].snippet, "G 13");
+    }
+
+    #[tokio::test]
+    async fn a_number_query_respects_the_vehicle_filter_and_scope() {
+        let db = test_db().await;
+        let mine = seed_vehicle(&db, "Daily").await;
+        let other = seed_vehicle(&db, "Other").await;
+        let own = seed_part(&db, mine, "Oil filter", "06K115562LM", None).await;
+        seed_part(&db, other, "Oil filter", "06K115562LM", None).await;
+        seed_service(&db, mine, "fitted 06K 115 562 LM").await;
+
+        let filtered = search(&db, "06K 115 562 LM", SearchScope::Parts, Some(mine))
+            .await
+            .unwrap();
+        assert_eq!(filtered.len(), 1, "{filtered:?}");
+        assert_eq!((filtered[0].id, filtered[0].vehicle_id), (own, Some(mine)));
+
+        let both = search(&db, "06K 115 562 LM", SearchScope::Parts, None)
+            .await
+            .unwrap();
+        assert_eq!(both.len(), 2, "{both:?}");
+
+        let services = search(&db, "06K115562LM", SearchScope::Services, None)
+            .await
+            .unwrap();
+        assert!(services.iter().all(|h| h.kind != "part"), "{services:?}");
+    }
+
+    #[tokio::test]
+    async fn stored_numbers_with_any_separator_are_found_by_the_packed_form() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db, "Daily").await;
+        let nbsp = seed_part(&db, v, "Air filter", "5Q0\u{a0}129\u{a0}620\u{a0}B", None).await;
+        let dash = seed_part(&db, v, "Pads", "1K0\u{2013}698\u{2013}151 (A)", None).await;
+        let short = seed_part(&db, v, "Coolant", "G 13", None).await;
+
+        for (query, want) in [("5Q0129620B", nbsp), ("1K0698151A", dash), ("G13", short)] {
+            let hits = search(&db, query, SearchScope::Parts, None).await.unwrap();
+            assert_eq!(hits.len(), 1, "query {query:?}: {hits:?}");
+            assert_eq!(hits[0].id, want);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_number_inside_a_longer_query_finds_the_part_or_kit() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db, "Daily").await;
+        let part = seed_part(&db, v, "Oil filter", "06K115562LM", None).await;
+        let kit = seed_kit(&db, v, "Oil change kit", "HU 7020 z").await;
+
+        let by_part = search(&db, "oil filter 06K 115 562 LM", SearchScope::Parts, None)
+            .await
+            .unwrap();
+        assert!(by_part.iter().any(|h| h.id == part), "{by_part:?}");
+        let by_item = search(&db, "Mann HU7020z", SearchScope::Parts, None)
+            .await
+            .unwrap();
+        assert_eq!(by_item.len(), 1, "{by_item:?}");
+        assert_eq!(by_item[0].id, kit);
+    }
+
+    #[tokio::test]
+    async fn a_kit_item_number_respects_the_vehicle_filter() {
+        let db = test_db().await;
+        let mine = seed_vehicle(&db, "Daily").await;
+        let other = seed_vehicle(&db, "Other").await;
+        let kit = seed_kit(&db, mine, "Oil change kit", "HU 7020 z").await;
+        seed_kit(&db, other, "Oil change kit", "HU 7020 z").await;
+
+        let hits = search(&db, "HU7020z", SearchScope::Parts, Some(mine))
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!((hits[0].id, hits[0].vehicle_id), (kit, Some(mine)));
+    }
+
+    #[tokio::test]
+    async fn a_short_or_digitless_query_does_not_match_by_number() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db, "Daily").await;
+        seed_part(&db, v, "Oil filter", "ABC123", None).await;
+        seed_part(&db, v, "Wipers", "WIPER", None).await;
+
+        // "A1 2 3" keys to A123, which is not ABC123.
+        assert_empty(
+            &search(&db, "A1 2 3", SearchScope::Parts, None)
+                .await
+                .unwrap(),
+        );
+        // No digit, so "wi per" is not read as the number WIPER.
+        assert_empty(
+            &search(&db, "wi per", SearchScope::Parts, None)
                 .await
                 .unwrap(),
         );
