@@ -30,6 +30,7 @@ just ci                   # Everything CI runs: nightly fmt-check, layering, typ
                           # (often over 2 minutes: give the Bash call a 600000 ms timeout)
                           # the docs step denies warnings: a public doc linking to a private item fails it
 just fmt                  # cargo +nightly fmt — rustfmt.toml uses nightly-only options (it also rewraps `///` text, so run it after editing docs); plain `cargo fmt` passes locally but CI's format job will fail
+                          # it rewraps long string literals too (`format_strings`): re-read a tool `description` before editing it again
 just check-layering       # Layering gate only (scripts/check-layering.sh)
 just backup               # Copy the current environment's database to data/backups/ now (glovebox backup)
 just reset-env test       # Delete the named non-live environment's database files (glovebox reset --env test)
@@ -45,6 +46,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings   # Rust lints, t
 # `git worktree unlock <path>` before `git worktree remove --force <path>`
 # A branch stacked on a squash-merged PR: `git rebase --onto origin/main origin/<merged-branch>`
 # `/code-review <branch>` can leave that branch's worktree on a detached HEAD: check it out again
+# A forked `/code-review` that answers `(none)` found nothing
 ```
 
 ## Environment
@@ -534,6 +536,9 @@ role per control style, and `YYYY-MM-DD` dates.
   `sqlite_schema` and `.dump` output from `main`'s build and the branch's on a pre-migration backup.
   The `sqlite3` CLI starts with foreign keys off: run `PRAGMA foreign_keys = ON` before testing a
   key's action on a copy.
+- **When a read starts deriving a value from existing rows**, query a backup copy for the rows
+  the new derivation counts that the stored data did not (a completed job with an incident and
+  no `resolved` link), and state in the ADR how those records read after the upgrade.
 - **`tokio::fs::File` buffers**: always `.flush().await` before the handle drops, or a pending write
   can be silently lost under load.
 - **Entity field order**: must match physical DB column order. ALTER TABLE appends columns to the
@@ -561,6 +566,8 @@ warnings; it lints test code too. Add a per-function `#[expect(..., reason = "..
 unavoidable cases, such as a test that tells one long story. A test checks a list is empty with
 `test_support::assert_empty`, which prints the list when it is not, in preference to a bare
 `assert!(… .is_empty())`.
+Pedantic caps a function at 100 lines (`too_many_lines`), and `work_item::update` and
+`service_record::update` sit near it: move a new step into a helper.
 
 ## Non-Interactive Shell Commands
 
