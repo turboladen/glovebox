@@ -98,6 +98,9 @@ async fn add_and_update_schedule_items_round_trip() {
         common::reminder_status(&t, v.id, "Smog check").await,
         "overdue"
     );
+    let due = t.call("whats_coming", json!({ "vehicle_id": v.id })).await;
+    // The item has only a time interval, so time is its trigger.
+    assert_eq!(reminder(&due, "Smog check")["trigger"], "time");
     let listed = t.call("list_schedule", json!({ "vehicle_id": v.id })).await;
     assert_eq!(listed[0]["effective_item"]["name"], "Smog check");
 
@@ -119,7 +122,7 @@ async fn add_and_update_schedule_items_round_trip() {
     assert!(cleared["notes"].is_null(), "null clears notes: {cleared}");
     assert_eq!(cleared["est_cost_cents"], 5800, "absent keys stay put");
 
-    // An interval of zero would read as overdue from the day it was serviced.
+    // An interval of zero would read as due from the day it was serviced.
     for (tool, args) in [
         (
             "add_schedule_item",

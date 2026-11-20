@@ -16,7 +16,8 @@ crate::vocab::vocabulary! {
     /// How close a schedule item or a planned job is to due.
     // A reminder is due soon inside its schedule item's warning miles or
     // days, and a planned job inside the fixed 30 days or 1000 miles that
-    // `work_item::revisit_status` uses. No column stores these texts.
+    // `work_item::revisit_status` uses. Both judge through `DueStatus::judge`.
+    // No column stores these texts.
     pub enum DueStatus {
         Overdue => "overdue",
         DueSoon => "due_soon",
@@ -25,6 +26,18 @@ crate::vocab::vocabulary! {
 }
 
 impl DueStatus {
+    /// Judges one reading: a negative `remaining` is overdue, one within
+    /// `warning` (zero always included) is due soon, and any other is ok.
+    pub(crate) fn judge(remaining: i64, warning: i64) -> Self {
+        if remaining < 0 {
+            Self::Overdue
+        } else if remaining <= Ord::max(warning, 0) {
+            Self::DueSoon
+        } else {
+            Self::NotDue
+        }
+    }
+
     /// Returns 0 for overdue, 1 for due soon and 2 for ok, so an ascending
     /// sort puts the most urgent first.
     #[must_use]
@@ -48,6 +61,32 @@ impl DueStatus {
     #[must_use]
     pub const fn is_due(self) -> bool {
         !matches!(self, Self::NotDue)
+    }
+}
+
+crate::vocab::vocabulary! {
+    /// Which reading of a reminder drives its status.
+    // No column stores these texts.
+    pub enum Trigger {
+        Both => "both",
+        Mileage => "mileage",
+        Time => "time",
+    }
+}
+
+impl Trigger {
+    /// Names the reading whose status equals the more urgent of the two, or
+    /// both when they match. An item that is not due has no trigger.
+    pub(crate) fn of(miles: Option<DueStatus>, time: Option<DueStatus>) -> Option<Self> {
+        let overall = DueStatus::most_urgent(miles.into_iter().chain(time));
+        if !overall.is_due() {
+            return None;
+        }
+        match (miles == Some(overall), time == Some(overall)) {
+            (true, true) => Some(Self::Both),
+            (true, false) => Some(Self::Mileage),
+            _ => Some(Self::Time),
+        }
     }
 }
 
@@ -79,7 +118,9 @@ pub struct ReminderStatus {
     pub due_at_date: Option<NaiveDate>,
     pub miles_remaining: Option<i32>,
     pub days_remaining: Option<i64>,
-    pub trigger: Option<String>,
+    /// The reading that makes the item due: the one whose status equals
+    /// `status`, or both when the two match. It is `None` when the item is ok.
+    pub trigger: Option<Trigger>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -353,28 +394,14 @@ pub async fn calculate_reminders_on(
         let warning_miles = item.warning_miles.unwrap_or(DEFAULT_WARNING_MILES);
         let warning_days = item.warning_days.unwrap_or(DEFAULT_WARNING_DAYS);
 
-        let judge = |remaining: i64, warning: i64| {
-            if remaining <= 0 {
-                DueStatus::Overdue
-            } else if remaining <= warning {
-                DueStatus::DueSoon
-            } else {
-                DueStatus::NotDue
-            }
-        };
-        let miles_status = miles_remaining.map(|r| judge(i64::from(r), i64::from(warning_miles)));
-        let time_status = days_remaining.map(|r| judge(r, i64::from(warning_days)));
+        let miles_status =
+            miles_remaining.map(|r| DueStatus::judge(i64::from(r), i64::from(warning_miles)));
+        let time_status = days_remaining.map(|r| DueStatus::judge(r, i64::from(warning_days)));
 
         // Use the more urgent status
         let status = DueStatus::most_urgent(miles_status.into_iter().chain(time_status));
 
-        let trigger = match (miles_status, time_status) {
-            (Some(m), Some(t)) if m == t => Some("both"),
-            (Some(m), Some(_)) if !m.is_due() => Some("time"),
-            (Some(_), _) => Some("mileage"),
-            (None, Some(_)) => Some("time"),
-            (None, None) => None,
-        };
+        let trigger = Trigger::of(miles_status, time_status);
 
         reminders.push(ReminderStatus {
             schedule_item: ScheduleItemSummary {
@@ -396,7 +423,7 @@ pub async fn calculate_reminders_on(
             due_at_date,
             miles_remaining,
             days_remaining,
-            trigger: trigger.map(std::string::ToString::to_string),
+            trigger,
         });
     }
 
@@ -823,7 +850,52 @@ mod tests {
 
         let resp = calculate_reminders(&db, vid).await.unwrap();
         assert_eq!(resp.reminders[0].status, DueStatus::DueSoon);
-        assert_eq!(resp.reminders[0].trigger.as_deref(), Some("time"));
+        assert_eq!(resp.reminders[0].trigger, Some(Trigger::Time));
+    }
+
+    #[test]
+    fn zero_remaining_is_due_soon_and_only_a_negative_remainder_is_overdue() {
+        assert_eq!(DueStatus::judge(0, 1000), DueStatus::DueSoon);
+        assert_eq!(DueStatus::judge(0, 0), DueStatus::DueSoon);
+        assert_eq!(DueStatus::judge(0, -1), DueStatus::DueSoon);
+        assert_eq!(DueStatus::judge(-1, 1000), DueStatus::Overdue);
+        assert_eq!(DueStatus::judge(1000, 1000), DueStatus::DueSoon);
+        assert_eq!(DueStatus::judge(1001, 1000), DueStatus::NotDue);
+    }
+
+    #[test]
+    fn a_trigger_names_the_reading_with_the_overall_status() {
+        use DueStatus::{DueSoon, NotDue, Overdue};
+        // Mileage is due soon and time is overdue, so time drives the status.
+        assert_eq!(
+            Trigger::of(Some(DueSoon), Some(Overdue)),
+            Some(Trigger::Time)
+        );
+        assert_eq!(
+            Trigger::of(Some(Overdue), Some(DueSoon)),
+            Some(Trigger::Mileage)
+        );
+        assert_eq!(
+            Trigger::of(Some(DueSoon), Some(DueSoon)),
+            Some(Trigger::Both)
+        );
+        assert_eq!(
+            Trigger::of(Some(Overdue), Some(Overdue)),
+            Some(Trigger::Both)
+        );
+        assert_eq!(
+            Trigger::of(Some(NotDue), Some(DueSoon)),
+            Some(Trigger::Time)
+        );
+        assert_eq!(
+            Trigger::of(Some(DueSoon), Some(NotDue)),
+            Some(Trigger::Mileage)
+        );
+        assert_eq!(Trigger::of(Some(NotDue), Some(NotDue)), None);
+        assert_eq!(Trigger::of(Some(DueSoon), None), Some(Trigger::Mileage));
+        assert_eq!(Trigger::of(None, Some(Overdue)), Some(Trigger::Time));
+        assert_eq!(Trigger::of(None, Some(NotDue)), None);
+        assert_eq!(Trigger::of(None, None), None);
     }
 
     fn day(s: &str) -> NaiveDate {
@@ -990,6 +1062,47 @@ mod tests {
         assert!(resp.avg_daily_miles > 10.0, "rate {}", resp.avg_daily_miles);
         assert_eq!(resp.reminders[0].status, DueStatus::DueSoon);
         assert_eq!(resp.reminders[0].miles_remaining, Some(500));
+    }
+
+    #[tokio::test]
+    async fn an_item_exactly_at_its_due_mileage_is_due_soon() {
+        let db = test_db().await;
+        let vid = vehicle_bought_2017(&db).await;
+        log_reading(&db, vid, 2, 64_000).await;
+        log_reading(&db, vid, 0, 64_000).await;
+        let item = maintenance_schedule_item::ActiveModel {
+            vehicle_id: Set(Some(vid)),
+            name: Set("Oil".into()),
+            interval_miles: Set(Some(10_000)),
+            enabled: Set(true),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        // The last service was at 54,000, so the item is due at 64,000, which
+        // is today's reading.
+        let svc = service_record::ActiveModel {
+            vehicle_id: Set(vid),
+            service_date: Set(days_ago(300)),
+            mileage: Set(Some(54_000)),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        service_schedule_link::ActiveModel {
+            service_record_id: Set(svc.id),
+            schedule_item_id: Set(item.id),
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        let resp = calculate_reminders(&db, vid).await.unwrap();
+        assert_eq!(resp.reminders[0].miles_remaining, Some(0));
+        assert_eq!(resp.reminders[0].status, DueStatus::DueSoon);
+        assert_eq!(resp.reminders[0].trigger, Some(Trigger::Mileage));
     }
 
     #[tokio::test]

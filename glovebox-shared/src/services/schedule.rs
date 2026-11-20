@@ -52,7 +52,7 @@ async fn get(db: &impl ConnectionTrait, id: i32) -> DomainResult<maintenance_sch
 }
 
 /// Refuses an interval of zero or less. A reminder adds the interval to the
-/// last service, so such an item would read as overdue the moment it was
+/// last service, so such an item would read as due from the day it was
 /// serviced.
 fn validate_intervals(miles: Option<i32>, months: Option<i32>) -> DomainResult<()> {
     for (field, value) in [("interval_miles", miles), ("interval_months", months)] {

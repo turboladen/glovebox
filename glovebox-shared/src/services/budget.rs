@@ -19,7 +19,7 @@ use crate::{
         work_item::{self, JobStatus},
     },
     error::DomainResult,
-    services::reminders::{DueStatus, RemindersResponse},
+    services::reminders::RemindersResponse,
 };
 
 /// Forecast horizon: days `0..HORIZON_DAYS` from today (an occurrence
@@ -152,8 +152,11 @@ pub async fn forecast_from(
             continue;
         };
 
-        // Days until the first occurrence; overdue counts as one now.
-        let first_due: Option<i64> = if r.status == DueStatus::Overdue {
+        // Days until the first occurrence; an item at or past its due point
+        // counts as one now, whatever the mileage rate.
+        let at_due_point =
+            r.miles_remaining.is_some_and(|m| m <= 0) || r.days_remaining.is_some_and(|d| d <= 0);
+        let first_due: Option<i64> = if at_due_point {
             Some(0)
         } else {
             [r.days_remaining, r.miles_remaining.and_then(miles_to_days)]
@@ -527,6 +530,34 @@ mod tests {
             est_cost_cents,
             ..Default::default()
         }
+    }
+
+    #[tokio::test]
+    async fn an_item_at_its_due_mileage_is_forecast_without_a_mileage_rate() {
+        let db = test_db().await;
+        let vid = VehicleFixture::new().insert_id(&db).await;
+        // One reading and no purchase data give a rate of zero, and the item
+        // is due at exactly that reading.
+        mileage_log::ActiveModel {
+            vehicle_id: Set(vid),
+            mileage: Set(5_000),
+            recorded_at: Set(days_ago(0).into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        seed_item(&db, vid, "Oil", Some(5_000), None, Some(2_000)).await;
+        seed_item(&db, vid, "Unpriced oil", Some(5_000), None, None).await;
+
+        let rems = reminders::calculate_reminders(&db, vid).await.unwrap();
+        assert_eq!(rems.reminders[0].miles_remaining, Some(0));
+        let f = forecast_from(&db, vid, &rems, crate::services::today())
+            .await
+            .unwrap();
+        assert_eq!(f.projected_maintenance_cents, 2_000);
+        assert_eq!(f.lines.len(), 1);
+        assert_eq!(f.unestimated_item_count, 1);
     }
 
     #[tokio::test]
