@@ -28,6 +28,7 @@ cargo test -p glovebox-mcp --test rehearsal       # One MCP integration test fil
 
 just ci                   # Everything CI runs: nightly fmt-check, layering, typos, clippy, docs, build, test
                           # (often over 2 minutes: give the Bash call a 600000 ms timeout)
+                          # the docs step denies warnings: a public doc linking to a private item fails it
 just fmt                  # cargo +nightly fmt — rustfmt.toml uses nightly-only options (it also rewraps `///` text, so run it after editing docs); plain `cargo fmt` passes locally but CI's format job will fail
 just check-layering       # Layering gate only (scripts/check-layering.sh)
 just backup               # Copy the current environment's database to data/backups/ now (glovebox backup)
@@ -494,10 +495,16 @@ role per control style, and `YYYY-MM-DD` dates.
   build the index and its triggers with `schema::create_fts` (and `drop_fts` in `down`), then fill
   it from stored rows with `INSERT INTO fts_x(fts_x) VALUES ('rebuild')`; aggregating over `bm25()`
   arms needs a `MATERIALIZED` CTE because query flattening breaks `bm25`.
+- **To add a CHECK**, list `schema::Check { table, name, holds }` and call `schema::add_checks` on a
+  `begin_write` transaction (`m20261119_000004_single_row_checks` is the template); it refuses
+  breaking rows first. A CHECK passes on NULL, so compare a nullable column with `IS`
+  (`source IS 'service'`), not `=`.
 - **Verify data-moving migrations against a populated copy of `data/glovebox.db`**, not just
   `test_db()`. To migrate a copy, run `GLOVEBOX_DB_PATH=<copy> target/release/glovebox-mcp < /dev/null`
   (it migrates at start and exits at end of input; `glovebox backup` does not migrate). Compare
   `sqlite_schema` and `.dump` output from `main`'s build and the branch's on a pre-migration backup.
+  The `sqlite3` CLI starts with foreign keys off: run `PRAGMA foreign_keys = ON` before testing a
+  key's action on a copy.
 - **`tokio::fs::File` buffers**: always `.flush().await` before the handle drops, or a pending write
   can be silently lost under load.
 - **Entity field order**: must match physical DB column order. ALTER TABLE appends columns to the
