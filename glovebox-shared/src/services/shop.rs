@@ -12,7 +12,13 @@ use crate::{
     inputs::shop::{NewShop, UpdateShop},
 };
 
-use super::{name_key, trim_to_none};
+use super::{appointment::AppointmentSummary, trim_to_none};
+
+/// The form of a shop's name or address that the directory compares: ASCII
+/// case and surrounding whitespace do not matter.
+fn text_key(text: &str) -> String {
+    text.trim().to_ascii_lowercase()
+}
 
 /// A shop with how much of the records names it.
 #[derive(Debug, Serialize)]
@@ -32,8 +38,8 @@ pub struct ShopHistory {
     pub shop: shop::Model,
     /// The shop's services, newest first.
     pub services: Vec<ShopService>,
-    /// The shop's appointments, newest planned date first, then those with no
-    /// date.
+    /// The shop's appointments, soonest planned date first, then those with
+    /// no date.
     pub appointments: Vec<ShopAppointment>,
     /// The sum of the services' `total_cost_cents`.
     pub total_cost_cents: i64,
@@ -54,16 +60,13 @@ pub struct ShopService {
     pub out_of_pocket_cents: Option<i64>,
 }
 
-/// One appointment in a shop's history.
+/// One appointment in a shop's history, as every appointment read summarizes
+/// it, with its vehicle's name.
 #[derive(Debug, Serialize)]
 pub struct ShopAppointment {
-    pub id: i32,
-    pub vehicle_id: i32,
+    #[serde(flatten)]
+    pub summary: AppointmentSummary,
     pub vehicle_name: String,
-    pub purpose: String,
-    pub planned_date: Option<chrono::NaiveDate>,
-    pub closed_on: Option<chrono::NaiveDate>,
-    pub cancelled_on: Option<chrono::NaiveDate>,
 }
 
 /// The result of merging shops into one.
@@ -117,7 +120,7 @@ pub(crate) async fn require_if_named(
     Ok(())
 }
 
-// Two shops are the same when their names match by `name_key` and their
+// Two shops are the same when their names match by `text_key` and their
 // addresses match the same way or either has none. Two locations of one
 // chain, each with its address, are two shops.
 async fn refuse_duplicate(
@@ -126,15 +129,15 @@ async fn refuse_duplicate(
     address: Option<&str>,
     except_id: Option<i32>,
 ) -> DomainResult<()> {
-    let key = name_key(name);
-    let address_key = address.map(name_key);
+    let key = text_key(name);
+    let address_key = address.map(text_key);
     let same = shop::Entity::find()
         .all(db)
         .await?
         .into_iter()
-        .filter(|s| Some(s.id) != except_id && name_key(&s.name) == key)
+        .filter(|s| Some(s.id) != except_id && text_key(&s.name) == key)
         .find(|s| match (&address_key, &s.address) {
-            (Some(a), Some(b)) => *a == name_key(b),
+            (Some(a), Some(b)) => *a == text_key(b),
             _ => true,
         });
     match same {
@@ -152,6 +155,10 @@ fn trimmed(value: Option<&str>) -> Option<String> {
     value.and_then(trim_to_none)
 }
 
+fn required_name(name: &str) -> DomainResult<String> {
+    trim_to_none(name).ok_or_else(|| DomainError::invalid("name", "must not be blank"))
+}
+
 /// Adds a shop to the directory. Blank optional fields are stored as absent.
 ///
 /// # Errors
@@ -162,8 +169,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     input: NewShop,
 ) -> DomainResult<shop::Model> {
-    let name = trim_to_none(&input.name)
-        .ok_or_else(|| DomainError::invalid("name", "must not be blank"))?;
+    let name = required_name(&input.name)?;
     let address = trimmed(input.address.as_deref());
     let txn = super::begin_write(db).await?;
     refuse_duplicate(&txn, &name, address.as_deref(), None).await?;
@@ -193,21 +199,17 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     id: i32,
     input: UpdateShop,
 ) -> DomainResult<shop::Model> {
-    let name = match input.name {
-        Some(name) => Some(
-            trim_to_none(&name).ok_or_else(|| DomainError::invalid("name", "must not be blank"))?,
-        ),
-        None => None,
-    };
+    let name = input.name.as_deref().map(required_name).transpose()?;
     let address = input.address.map(|a| trimmed(a.as_deref()));
     let txn = super::begin_write(db).await?;
     let existing = get(&txn, id).await?;
-    let new_name = name.as_deref().unwrap_or(&existing.name);
-    let new_address = match &address {
-        Some(a) => a.as_deref(),
-        None => existing.address.as_deref(),
-    };
-    refuse_duplicate(&txn, new_name, new_address, Some(id)).await?;
+    if name.is_some() || address.is_some() {
+        let new_name = name.as_deref().unwrap_or(&existing.name);
+        let new_address = address
+            .as_ref()
+            .map_or(existing.address.as_deref(), Option::as_deref);
+        refuse_duplicate(&txn, new_name, new_address, Some(id)).await?;
+    }
     let mut active: shop::ActiveModel = existing.into();
     if let Some(v) = name {
         active.name = Set(v);
@@ -241,33 +243,29 @@ pub async fn list(db: &impl ConnectionTrait) -> DomainResult<Vec<ShopListing>> {
         .order_by_asc(shop::Column::Id)
         .all(db)
         .await?;
-    let services: Vec<(Option<i32>, i64, Option<chrono::NaiveDate>)> =
-        service_record::Entity::find()
-            .select_only()
-            .column(service_record::Column::ShopId)
-            .column_as(service_record::Column::Id.count(), "count")
-            .column_as(service_record::Column::ServiceDate.max(), "last")
-            .filter(service_record::Column::ShopId.is_not_null())
-            .group_by(service_record::Column::ShopId)
-            .into_tuple()
-            .all(db)
-            .await?;
-    let services: HashMap<i32, (i64, Option<chrono::NaiveDate>)> = services
+    let services: HashMap<i32, (i64, Option<chrono::NaiveDate>)> = service_record::Entity::find()
+        .select_only()
+        .column(service_record::Column::ShopId)
+        .column_as(service_record::Column::Id.count(), "count")
+        .column_as(service_record::Column::ServiceDate.max(), "last")
+        .filter(service_record::Column::ShopId.is_not_null())
+        .group_by(service_record::Column::ShopId)
+        .into_tuple::<(i32, i64, Option<chrono::NaiveDate>)>()
+        .all(db)
+        .await?
         .into_iter()
-        .filter_map(|(id, count, last)| Some((id?, (count, last))))
+        .map(|(id, count, last)| (id, (count, last)))
         .collect();
-    let appointments: Vec<(Option<i32>, i64)> = appointment::Entity::find()
+    let appointments: HashMap<i32, i64> = appointment::Entity::find()
         .select_only()
         .column(appointment::Column::ShopId)
         .column_as(appointment::Column::Id.count(), "count")
         .filter(appointment::Column::ShopId.is_not_null())
         .group_by(appointment::Column::ShopId)
-        .into_tuple()
+        .into_tuple::<(i32, i64)>()
         .all(db)
-        .await?;
-    let appointments: HashMap<i32, i64> = appointments
+        .await?
         .into_iter()
-        .filter_map(|(id, count)| Some((id?, count)))
         .collect();
     Ok(shops
         .into_iter()
@@ -292,21 +290,30 @@ async fn vehicle_names(
     db: &impl ConnectionTrait,
     ids: impl IntoIterator<Item = i32>,
 ) -> DomainResult<HashMap<i32, String>> {
+    let ids: std::collections::BTreeSet<i32> = ids.into_iter().collect();
     Ok(vehicle::Entity::find()
+        .select_only()
+        .column(vehicle::Column::Id)
+        .column(vehicle::Column::Name)
         .filter(vehicle::Column::Id.is_in(ids))
+        .into_tuple::<(i32, String)>()
         .all(db)
         .await?
         .into_iter()
-        .map(|v| (v.id, v.name))
         .collect())
 }
 
 /// A shop with every service and appointment that names it, across all
-/// vehicles, and what those services cost.
+/// vehicles, and what those services cost. `today` sets each appointment's
+/// phase.
 ///
 /// # Errors
 /// `NotFound` for a shop that does not exist.
-pub async fn history(db: &impl ConnectionTrait, id: i32) -> DomainResult<ShopHistory> {
+pub async fn history(
+    db: &impl ConnectionTrait,
+    id: i32,
+    today: chrono::NaiveDate,
+) -> DomainResult<ShopHistory> {
     let shop = get(db, id).await?;
     let services = service_record::Entity::find()
         .filter(service_record::Column::ShopId.eq(id))
@@ -314,19 +321,13 @@ pub async fn history(db: &impl ConnectionTrait, id: i32) -> DomainResult<ShopHis
         .order_by_desc(service_record::Column::Id)
         .all(db)
         .await?;
-    let appointments = appointment::Entity::find()
-        .filter(appointment::Column::ShopId.eq(id))
-        .order_by_desc(Expr::cust("planned_date IS NOT NULL"))
-        .order_by_desc(appointment::Column::PlannedDate)
-        .order_by_desc(appointment::Column::Id)
-        .all(db)
-        .await?;
+    let appointments = super::appointment::at_shop(db, id, today).await?;
     let names = vehicle_names(
         db,
         services
             .iter()
             .map(|s| s.vehicle_id)
-            .chain(appointments.iter().map(|a| a.vehicle_id)),
+            .chain(appointments.iter().map(|a| a.appointment.vehicle_id)),
     )
     .await?;
     let name_of = |vehicle_id: i32| names.get(&vehicle_id).cloned().unwrap_or_default();
@@ -354,32 +355,13 @@ pub async fn history(db: &impl ConnectionTrait, id: i32) -> DomainResult<ShopHis
             .collect(),
         appointments: appointments
             .into_iter()
-            .map(|a| ShopAppointment {
-                vehicle_name: name_of(a.vehicle_id),
-                id: a.id,
-                vehicle_id: a.vehicle_id,
-                purpose: a.purpose,
-                planned_date: a.planned_date,
-                closed_on: a.closed_on,
-                cancelled_on: a.cancelled_on,
+            .map(|summary| ShopAppointment {
+                vehicle_name: name_of(summary.appointment.vehicle_id),
+                summary,
             })
             .collect(),
     })
 }
-
-// The optional fields a merge carries over, read and written by name.
-type Field = (
-    &'static str,
-    fn(&shop::Model) -> &Option<String>,
-    fn(&mut shop::Model) -> &mut Option<String>,
-);
-
-const MERGED_FIELDS: [Field; 4] = [
-    ("address", |s| &s.address, |s| &mut s.address),
-    ("phone", |s| &s.phone, |s| &mut s.phone),
-    ("website", |s| &s.website, |s| &mut s.website),
-    ("specialty", |s| &s.specialty, |s| &mut s.specialty),
-];
 
 // Folds the merged shops' details into the kept one: an empty field takes
 // the first merged value, notes are joined, and every other value that
@@ -387,20 +369,24 @@ const MERGED_FIELDS: [Field; 4] = [
 fn fold_details(kept: &mut shop::Model, merged: &[shop::Model]) -> Vec<DiscardedValue> {
     let mut discarded = Vec::new();
     for other in merged {
-        for (field, read, write) in MERGED_FIELDS {
-            let Some(value) = read(other).clone() else {
-                continue;
+        let mut take = |field: &'static str, slot: &mut Option<String>, value: &Option<String>| {
+            let Some(value) = value.clone() else {
+                return;
             };
-            match write(kept) {
-                slot @ None => *slot = Some(value),
-                Some(current) if name_key(current) == name_key(&value) => {}
+            match slot {
+                None => *slot = Some(value),
+                Some(current) if text_key(current) == text_key(&value) => {}
                 Some(_) => discarded.push(DiscardedValue {
                     shop_id: other.id,
                     field,
                     value,
                 }),
             }
-        }
+        };
+        take("address", &mut kept.address, &other.address);
+        take("phone", &mut kept.phone, &other.phone);
+        take("website", &mut kept.website, &other.website);
+        take("specialty", &mut kept.specialty, &other.specialty);
         if let Some(notes) = &other.notes {
             kept.notes = Some(match kept.notes.take() {
                 Some(current) if current.contains(notes.as_str()) => current,
@@ -442,24 +428,34 @@ pub async fn merge<C: ConnectionTrait + TransactionTrait>(
     for id in &merge_ids {
         merged.push(get(&txn, *id).await?);
     }
-    let moved_service_ids = repoint_services(&txn, keep_id, &merge_ids).await?;
-    let moved_appointment_ids = repoint_appointments(&txn, keep_id, &merge_ids).await?;
+    let now = super::now();
+    let mut moved_service_ids: Vec<i32> = service_record::Entity::update_many()
+        .col_expr(service_record::Column::ShopId, Expr::value(keep_id))
+        .col_expr(service_record::Column::UpdatedAt, Expr::value(now))
+        .filter(service_record::Column::ShopId.is_in(merge_ids.iter().copied()))
+        .exec_with_returning(&txn)
+        .await?
+        .into_iter()
+        .map(|s| s.id)
+        .collect();
+    moved_service_ids.sort_unstable();
+    let mut moved_appointment_ids: Vec<i32> = appointment::Entity::update_many()
+        .col_expr(appointment::Column::ShopId, Expr::value(keep_id))
+        .col_expr(appointment::Column::UpdatedAt, Expr::value(now))
+        .filter(appointment::Column::ShopId.is_in(merge_ids.iter().copied()))
+        .exec_with_returning(&txn)
+        .await?
+        .into_iter()
+        .map(|a| a.id)
+        .collect();
+    moved_appointment_ids.sort_unstable();
     let discarded = fold_details(&mut kept, &merged);
     shop::Entity::delete_many()
         .filter(shop::Column::Id.is_in(merge_ids.iter().copied()))
         .exec(&txn)
         .await?;
-    let mut active: shop::ActiveModel = kept.into();
-    for column in [
-        shop::Column::Address,
-        shop::Column::Phone,
-        shop::Column::Website,
-        shop::Column::Specialty,
-        shop::Column::Notes,
-    ] {
-        active.reset(column);
-    }
-    active.updated_at = Set(super::now());
+    let mut active = shop::ActiveModel::from(kept).reset_all();
+    active.updated_at = Set(now);
     let shop = active.update(&txn).await?;
     txn.commit().await?;
     Ok(MergedShops {
@@ -469,50 +465,6 @@ pub async fn merge<C: ConnectionTrait + TransactionTrait>(
         moved_appointment_ids,
         discarded,
     })
-}
-
-async fn repoint_services(
-    db: &impl ConnectionTrait,
-    keep_id: i32,
-    merge_ids: &[i32],
-) -> DomainResult<Vec<i32>> {
-    let ids: Vec<i32> = service_record::Entity::find()
-        .select_only()
-        .column(service_record::Column::Id)
-        .filter(service_record::Column::ShopId.is_in(merge_ids.iter().copied()))
-        .order_by_asc(service_record::Column::Id)
-        .into_tuple()
-        .all(db)
-        .await?;
-    service_record::Entity::update_many()
-        .col_expr(service_record::Column::ShopId, Expr::value(keep_id))
-        .col_expr(service_record::Column::UpdatedAt, Expr::value(super::now()))
-        .filter(service_record::Column::Id.is_in(ids.iter().copied()))
-        .exec(db)
-        .await?;
-    Ok(ids)
-}
-
-async fn repoint_appointments(
-    db: &impl ConnectionTrait,
-    keep_id: i32,
-    merge_ids: &[i32],
-) -> DomainResult<Vec<i32>> {
-    let ids: Vec<i32> = appointment::Entity::find()
-        .select_only()
-        .column(appointment::Column::Id)
-        .filter(appointment::Column::ShopId.is_in(merge_ids.iter().copied()))
-        .order_by_asc(appointment::Column::Id)
-        .into_tuple()
-        .all(db)
-        .await?;
-    appointment::Entity::update_many()
-        .col_expr(appointment::Column::ShopId, Expr::value(keep_id))
-        .col_expr(appointment::Column::UpdatedAt, Expr::value(super::now()))
-        .filter(appointment::Column::Id.is_in(ids.iter().copied()))
-        .exec(db)
-        .await?;
-    Ok(ids)
 }
 
 /// Deletes a shop that no service or appointment names.
@@ -548,7 +500,7 @@ mod tests {
     use super::*;
     use crate::{
         entities::{service_record::Payer, service_record_line_item},
-        test_support::{VehicleFixture, date, race, race_pools, test_db},
+        test_support::{VehicleFixture, date, race, race_pools, row_count, test_db},
     };
 
     fn named(name: &str, address: Option<&str>) -> NewShop {
@@ -700,7 +652,7 @@ mod tests {
         })
         .await;
         assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
-        assert_eq!(shop::Entity::find().count(&pools[0]).await.unwrap(), 1);
+        assert_eq!(row_count::<shop::Entity>(&pools[0]).await, 1);
     }
 
     #[tokio::test]
@@ -755,7 +707,7 @@ mod tests {
         service_at(&db, golf, elsewhere.id, "2025-03-01", Some(99)).await;
         let visit = appointment_at(&db, golf, shop.id).await;
 
-        let got = history(&db, shop.id).await.unwrap();
+        let got = history(&db, shop.id, date("2026-11-13")).await.unwrap();
         assert_eq!(
             got.services
                 .iter()
@@ -769,11 +721,14 @@ mod tests {
         assert_eq!(got.total_cost_cents, 40_000);
         assert_eq!(got.out_of_pocket_cents, 20_000);
         assert_eq!(
-            got.appointments.iter().map(|a| a.id).collect::<Vec<_>>(),
+            got.appointments
+                .iter()
+                .map(|a| a.summary.appointment.id)
+                .collect::<Vec<_>>(),
             [visit.id]
         );
         assert!(matches!(
-            history(&db, 999).await.unwrap_err(),
+            history(&db, 999, date("2026-11-13")).await.unwrap_err(),
             DomainError::NotFound(_)
         ));
     }
@@ -833,7 +788,7 @@ mod tests {
             get(&db, dup.id).await.unwrap_err(),
             DomainError::NotFound(_)
         ));
-        let history = history(&db, kept.id).await.unwrap();
+        let history = history(&db, kept.id, date("2026-11-13")).await.unwrap();
         assert_eq!(
             history.services.iter().map(|s| s.id).collect::<Vec<_>>(),
             [stays.id, moved.id]
@@ -856,7 +811,14 @@ mod tests {
         }
         let err = merge(&db, kept.id, &[dup.id, 999]).await.unwrap_err();
         assert_eq!(err.to_string(), "Shop 999 not found");
-        assert_eq!(history(&db, dup.id).await.unwrap().services.len(), 1);
+        assert_eq!(
+            history(&db, dup.id, date("2026-11-13"))
+                .await
+                .unwrap()
+                .services
+                .len(),
+            1
+        );
         assert!(matches!(
             merge(&db, 999, &[dup.id]).await.unwrap_err(),
             DomainError::NotFound(_)

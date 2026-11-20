@@ -345,7 +345,7 @@ pub async fn list(
     today: chrono::NaiveDate,
 ) -> DomainResult<Vec<AppointmentSummary>> {
     super::vehicle::require(db, vehicle_id).await?;
-    let mut out = summaries(db, &[vehicle_id], None, today).await?;
+    let mut out = summaries(db, appointment::Column::VehicleId.eq(vehicle_id), today).await?;
     if !include_closed {
         out.retain(shows_as_open);
     }
@@ -360,7 +360,13 @@ pub(crate) async fn open_by_vehicle(
     today: chrono::NaiveDate,
 ) -> DomainResult<HashMap<i32, Vec<AppointmentSummary>>> {
     let mut grouped: HashMap<i32, Vec<AppointmentSummary>> = HashMap::new();
-    for summary in summaries(db, vehicle_ids, None, today).await? {
+    for summary in summaries(
+        db,
+        appointment::Column::VehicleId.is_in(vehicle_ids.iter().copied()),
+        today,
+    )
+    .await?
+    {
         if shows_as_open(&summary) {
             grouped
                 .entry(summary.appointment.vehicle_id)
@@ -378,6 +384,16 @@ fn shows_as_open(s: &AppointmentSummary) -> bool {
         || (s.status == AppointmentStatus::Done && s.accepts_work() && s.todos_open > 0)
 }
 
+/// Every appointment that names `shop_id`, across vehicles and whatever its
+/// status, in [`list`] order.
+pub(crate) async fn at_shop(
+    db: &impl ConnectionTrait,
+    shop_id: i32,
+    today: chrono::NaiveDate,
+) -> DomainResult<Vec<AppointmentSummary>> {
+    summaries(db, appointment::Column::ShopId.eq(shop_id), today).await
+}
+
 /// One appointment of the vehicle with its counts, whatever its status.
 ///
 /// # Errors
@@ -389,7 +405,7 @@ pub async fn summary(
     today: chrono::NaiveDate,
 ) -> DomainResult<AppointmentSummary> {
     require(db, vehicle_id, id).await?;
-    summaries(db, &[vehicle_id], Some(id), today)
+    summaries(db, appointment::Column::Id.eq(id), today)
         .await?
         .into_iter()
         .next()
@@ -422,20 +438,14 @@ pub(crate) fn summarize(
     })
 }
 
-// Builds the summaries for every appointment of the vehicles, or for the one
-// named by `only`, in list order, with every count loaded in batches.
+// Builds the summaries for every appointment `filter` matches, in list order,
+// with every count loaded in batches.
 async fn summaries(
     db: &impl ConnectionTrait,
-    vehicle_ids: &[i32],
-    only: Option<i32>,
+    filter: impl sea_orm::sea_query::IntoCondition,
     today: chrono::NaiveDate,
 ) -> DomainResult<Vec<AppointmentSummary>> {
-    let mut query = appointment::Entity::find()
-        .filter(appointment::Column::VehicleId.is_in(vehicle_ids.iter().copied()));
-    if let Some(id) = only {
-        query = query.filter(appointment::Column::Id.eq(id));
-    }
-    let appointments = query.all(db).await?;
+    let appointments = appointment::Entity::find().filter(filter).all(db).await?;
     let ids: Vec<i32> = appointments.iter().map(|a| a.id).collect();
     let jobs = work_item::Entity::find()
         .filter(work_item::Column::AppointmentId.is_in(ids.clone()))

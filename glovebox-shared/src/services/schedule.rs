@@ -12,17 +12,20 @@ use crate::{
     inputs::schedule::{NewScheduleItem, UpdateScheduleItem},
 };
 
-// Two schedule item names with the same `name_key` are the same job, so a
-// vehicle's own item shadows an inherited one of that name whatever its
-// spelling.
-use super::name_key;
-
 /// Miles before an item's due point at which it reads as due soon, when the
 /// item sets no warning of its own.
 pub const DEFAULT_WARNING_MILES: i32 = 1000;
 /// Days before an item's due date at which it reads as due soon, when the item
 /// sets no warning of its own.
 pub const DEFAULT_WARNING_DAYS: i32 = 30;
+
+/// The form of a schedule item name that every name comparison uses: ASCII
+/// case and surrounding whitespace do not matter. Two names with the same key
+/// are the same job, so a vehicle's own item shadows an inherited one of that
+/// name whatever its spelling.
+pub(crate) fn name_key(name: &str) -> String {
+    name.trim().to_ascii_lowercase()
+}
 
 #[derive(Serialize)]
 pub struct ResolvedScheduleItem {

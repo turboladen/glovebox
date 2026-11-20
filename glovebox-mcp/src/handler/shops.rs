@@ -3,7 +3,7 @@
 use rmcp::{ErrorData as McpError, model::CallToolResult, tool, tool_router};
 
 use super::{GloveboxMcp, Parameters, deleted_result, domain_result};
-use glovebox_shared::services::shop;
+use glovebox_shared::services::{shop, today};
 
 use crate::schemas::{AddShopInput, EmptyParams, MergeShopsInput, ShopIdInput, UpdateShopInput};
 
@@ -46,7 +46,7 @@ impl GloveboxMcp {
     )]
     async fn get_shop(&self, params: Parameters<ShopIdInput>) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "get_shop");
-        domain_result(shop::history(&*self.db, p.shop_id).await)
+        domain_result(shop::history(&*self.db, p.shop_id, today()).await)
     }
 
     #[tool(

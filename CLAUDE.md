@@ -363,9 +363,9 @@ Platforms and model templates are written only by migrations; `model_template::l
 `list_with_platform` are the only template services
 (`docs/adr/0013-templates-come-from-migrations.md`). The shop directory (`shop::create`,
 `update`, `merge`, `delete`, `history`) holds one record per shop: a second shop of the same
-`name_key` is refused unless both carry different addresses, `merge` moves every service and
-appointment to the kept shop and reports in `discarded` each detail it did not take, and `delete`
-refuses a shop any record names. No tool sets a service's or appointment's `shop_id` yet; a
+name (ASCII case and surrounding spaces aside) is refused unless both carry different
+addresses, `merge` moves every service and appointment to the kept shop and reports in
+`discarded` each detail it did not take, and `delete` refuses a shop any record names. No tool sets a service's or appointment's `shop_id` yet; a
 self-performed service names no shop.
 
 **Resources**: `glovebox://vehicles`, `glovebox://vehicles/{id}` and `…/{id}/activity`.
