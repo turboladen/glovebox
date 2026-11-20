@@ -66,6 +66,35 @@ async fn search_records_finds_a_kit_by_an_items_number() {
 }
 
 #[tokio::test]
+async fn search_records_finds_a_part_number_however_it_is_spaced() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let packed = t
+        .call(
+            "record_part",
+            json!({ "vehicle_id": v.id, "name": "Oil filter", "part_number": "06K115562LM" }),
+        )
+        .await;
+    let spaced = t
+        .call(
+            "record_part",
+            json!({ "vehicle_id": v.id, "name": "Air filter", "part_number": "5Q0 129 620 B" }),
+        )
+        .await;
+
+    for (query, want) in [("06K 115 562 LM", &packed), ("5Q0129620B", &spaced)] {
+        let hits = t
+            .call(
+                "search_records",
+                json!({ "query": query, "scope": "parts" }),
+            )
+            .await;
+        assert_eq!(hits.as_array().unwrap().len(), 1, "query {query}: {hits}");
+        assert_eq!(hits[0]["id"], want["id"]);
+    }
+}
+
+#[tokio::test]
 async fn cost_summary_reports_integer_cents() {
     let t = connect().await;
     let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();

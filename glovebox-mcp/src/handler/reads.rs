@@ -36,8 +36,12 @@ impl GloveboxMcp {
                        (and their followups), research findings, maintenance schedule items, \
                        planned work, and parts. A part is found by its own name and numbers or by \
                        an item inside it when it is a kit, such as a filter's number in an oil \
-                       change kit; the hit is the part. Returns ranked hits with snippets. Narrow \
-                       with `scope` and/or `vehicle_id`."
+                       change kit; the hit is the part. A part number in the query finds the part \
+                       or kit that carries it however the number is spaced or punctuated, and is \
+                       listed first even when the query's other words do not match it; the whole \
+                       stored number must match, and a number written in a note or an invoice \
+                       line matches as typed. Returns ranked hits with snippets. Narrow with \
+                       `scope` and/or `vehicle_id`."
     )]
     async fn search_records(
         &self,
