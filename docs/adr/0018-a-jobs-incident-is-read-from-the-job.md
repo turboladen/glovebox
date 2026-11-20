@@ -67,10 +67,14 @@ is stored, and reopening an incident the invoice names is a wrong record.
   `resolved`. `update_planned_work` names the incident and the service in
   `released_incident_id` and `released_from_service_id` when a job edit takes the service out of
   the incident's resolvers.
-- Once a job brings a service, no call stores that the invoice also named the incident:
-  `update_incident` takes the service as a read sent back, and `correct_service` has no incident
-  list. This matters for the links the migration removes. An incident list on `correct_service`
-  is tracked as its own issue.
+- `correct_service` stores that the invoice named an incident. Its `resolved_incident_ids`
+  REPLACES the service's stored `resolved` links, and a service read flags each resolved incident
+  with `named_by_invoice`, because the list a read shows also holds the incidents only a job
+  brings. A list sent back whole would store those as named, so the argument's description says
+  to send only the flagged ones, and a name stored by mistake comes off with another call.
+  Taking a name off releases the incident as taking its job off does, unless a job of the service
+  still brings it. `update_incident` still takes a service a job brings as a read sent back.
+  This is how the links the migration removes are stored again.
 - `m20261120_000002_job_incident_links` removes the stored `resolved` links that repeat a
   completed job's incident. Such a row cannot say whether the invoice named the incident, so it
   is taken as the job's: each incident reads resolved by the same services before and after, and

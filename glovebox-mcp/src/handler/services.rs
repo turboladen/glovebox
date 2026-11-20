@@ -141,24 +141,26 @@ impl GloveboxMcp {
                        the recalls it performed, the planned jobs it completed (`work_item_ids`), \
                        or the appointment it settles (`appointment_id`). Send only the fields to \
                        change; null clears a field, and a field left out is untouched. \
-                       `line_items`, `schedule_item_ids`, `part_ids`, `recall_finding_ids` and \
-                       `work_item_ids` REPLACE the existing lists with exactly what is sent. A \
-                       job taken off takes its incident, its recall, the parts fitted to its \
-                       needs and the reminder baseline of its schedule item with it, and a job \
-                       added resolves its incident and performs its recall, as `record_service` \
-                       does. An incident the invoice named in `resolved_incident_ids` stays \
-                       resolved by this service when its job is taken off. When the call takes \
-                       recorded work off the service (a job, a fitted part, a recall or an \
-                       incident), it refuses and names each item until you pass `completed_work`. \
-                       Ask the owner and never choose on your own: `did_not_happen` when the work \
-                       was not done (jobs go back to planned, parts read `purchased` and a \
-                       shop-supplied one leaves its need, recalls read open, incidents are \
-                       unresolved unless the owner marked them resolved by hand), or \
-                       `done_another_way` when it was done but not on this invoice (an incident \
-                       then stays resolved on the owner's word, `resolved_by_hand`). The reply \
-                       names any appointment that reopened (`reopened_appointment_ids`) and any \
-                       job that left a cancelled one (`unassigned_job_ids`). The schedule items \
-                       that stopped counting from this service are in \
+                       `line_items`, `schedule_item_ids`, `part_ids`, `recall_finding_ids`, \
+                       `resolved_incident_ids` and `work_item_ids` REPLACE the existing lists \
+                       with exactly what is sent. A job taken off takes its incident, its recall, \
+                       the parts fitted to its needs and the reminder baseline of its schedule \
+                       item with it, and a job added resolves its incident and performs its \
+                       recall, as `record_service` does. `resolved_incident_ids` holds the \
+                       incidents the invoice itself names as fixed (`named_by_invoice` in a \
+                       service read): one named there stays resolved by this service when its job \
+                       is taken off, and the reply lists it in `incidents_kept_resolved`. When \
+                       the call takes recorded work off the service (a job, a fitted part, a \
+                       recall or an incident), it refuses and names each item until you pass \
+                       `completed_work`. Ask the owner and never choose on your own: \
+                       `did_not_happen` when the work was not done (jobs go back to planned, \
+                       parts read `purchased` and a shop-supplied one leaves its need, recalls \
+                       read open, incidents are unresolved unless the owner marked them resolved \
+                       by hand), or `done_another_way` when it was done but not on this invoice \
+                       (an incident then stays resolved on the owner's word, `resolved_by_hand`). \
+                       The reply names any appointment that reopened (`reopened_appointment_ids`) \
+                       and any job that left a cancelled one (`unassigned_job_ids`). The schedule \
+                       items that stopped counting from this service are in \
                        `released_schedule_item_ids`; when the invoice did cover one, \
                        `link_service_to_maintenance` names it on the service again. Use this when \
                        the invoice was already recorded and something on it is wrong; do not \

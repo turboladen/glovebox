@@ -228,7 +228,8 @@ follows the job; deleting a completed job keeps the item as a stored link
 A job's incident is read from the job the same way (`incident::resolvers_of_services`,
 `incident::resolvers_of_incidents`), but a stored `resolved` link means the invoice named the
 incident and stays when the job is taken off, so that incident stays resolved; `update_incident`
-stores no link for a service only a job brings
+stores no link for a service only a job brings, and `correct_service` stores the invoice's naming
+through `resolved_incident_ids`, with `named_by_invoice` on each resolved incident of a service read
 (`docs/adr/0018-a-jobs-incident-is-read-from-the-job.md`).
 An incident the owner marked resolved by hand carries `resolved_by_hand`, so `did_not_happen`
 leaves it resolved and the refusal never names it (`incident::set_resolution` is the one writer, and `done_another_way` marks an incident too;
