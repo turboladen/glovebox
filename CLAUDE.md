@@ -240,6 +240,8 @@ through `resolved_incident_ids`, with `named_by_invoice` on each resolved incide
 An incident the owner marked resolved by hand carries `resolved_by_hand`, so `did_not_happen`
 leaves it resolved and the refusal never names it (`incident::set_resolution` is the one writer, and `done_another_way` marks an incident too;
 `docs/adr/0019-an-incident-records-a-resolution-by-hand.md`).
+The refusal also leaves out an incident another service still resolves, since neither answer
+changes it (`incident::resolved_by_service` drops both kinds).
 Every service read carries `lines_total_cents`, and a `note` when the total differs from it (the
 kinds are `maintenance`, `mod`, `repair`, `inspection`, `recall` and `fee`; payers are `self`,
 `insurance`, `third_party` and `manufacturer`). A line may carry its own `paid_by`

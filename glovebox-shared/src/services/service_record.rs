@@ -1187,7 +1187,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     names_ignored.sort_unstable();
     names_ignored.dedup();
     let incident_ids: Vec<i32> = removal.incidents.iter().map(|i| i.id).collect();
-    incident_svc::release_resolved(&txn, record.id, incident_ids, choice).await?;
+    incident_svc::release_resolved(&txn, incident_ids, choice).await?;
 
     if let Some(item_ids) = input.schedule_item_ids {
         // A read lists a job's item beside the named ones, so a list sent
@@ -1275,8 +1275,8 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
 }
 
 /// The work a service records as done: the jobs it completed that still read
-/// done, the parts it installed, the incidents it resolved and the recalls it
-/// performed. Deleting the service releases all of it, and a correction
+/// done, the parts it installed, the incidents only it resolves (leaving out
+/// one resolved by hand) and the recalls it performed. Deleting the service releases all of it, and a correction
 /// releases what its replacement lists leave out.
 #[derive(Default)]
 struct RecordedWork {
@@ -1560,7 +1560,7 @@ pub struct DeletedService {
 /// Deletes a service record and its owned rows.
 ///
 /// A service that recorded work as done (jobs it completed, parts it
-/// installed, incidents it resolved or recalls it performed) needs
+/// installed, incidents only it resolves or recalls it performed) needs
 /// `completed`: with `None` nothing is written and the call returns
 /// `BadRequest` naming each item. `did_not_happen` undoes that work unless
 /// another service also covers it, and `done_another_way` keeps it and
@@ -1588,7 +1588,7 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     let settled = work_item::release_completed(&txn, &work.job_ids(), choice).await?;
     let finding_ids = work.recalls.iter().map(|r| r.finding_id).collect();
     let incident_ids: Vec<i32> = work.incidents.iter().map(|i| i.id).collect();
-    incident_svc::release_resolved(&txn, existing.id, incident_ids, choice).await?;
+    incident_svc::release_resolved(&txn, incident_ids, choice).await?;
     // The key clears these on delete too; the explicit write stamps them and
     // does not depend on the foreign_keys pragma.
     let unlinked_quote_ids: Vec<i32> = job::Entity::find()
@@ -6756,6 +6756,77 @@ mod tests {
             update(&db, v, svc, naming(vec![], None)).await.unwrap();
             assert!(resolved(&db, v, incident).await);
             assert!(by_hand(&db, v, incident).await);
+        }
+
+        // The incident still reads resolved, by `by` alone and not on the
+        // owner's word.
+        async fn assert_resolved_only_by(db: &DatabaseConnection, v: i32, incident: i32, by: i32) {
+            assert!(resolved(db, v, incident).await);
+            assert!(!by_hand(db, v, incident).await);
+            assert_eq!(resolvers(db, v, incident).await, vec![by]);
+        }
+
+        #[tokio::test]
+        async fn a_name_taken_off_an_incident_another_service_resolves_asks_nothing() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observation(&db, v, None).await;
+            let j = job_for(&db, v, incident).await;
+            let first = completing(&db, v, vec![j]).await;
+            let second = completing(&db, v, vec![]).await;
+            update(&db, v, second, naming(vec![incident], None))
+                .await
+                .unwrap();
+
+            update(&db, v, second, naming(vec![], None)).await.unwrap();
+            assert_resolved_only_by(&db, v, incident, first).await;
+        }
+
+        #[tokio::test]
+        async fn a_job_taken_off_whose_incident_another_service_resolves_asks_only_about_the_job() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observation(&db, v, None).await;
+            let kept = job_for(&db, v, incident).await;
+            let first = completing(&db, v, vec![kept]).await;
+            let taken_off = job_for(&db, v, incident).await;
+            let second = completing(&db, v, vec![taken_off]).await;
+
+            let err = update(&db, v, second, jobs(vec![], None))
+                .await
+                .unwrap_err();
+            let message = err.to_string();
+            assert!(message.contains(&format!("job {taken_off}")), "{message}");
+            assert!(
+                !message.contains(&format!("incident {incident}")),
+                "{message}"
+            );
+
+            update(
+                &db,
+                v,
+                second,
+                jobs(vec![], Some(CompletedWork::DidNotHappen)),
+            )
+            .await
+            .unwrap();
+            assert_resolved_only_by(&db, v, incident, first).await;
+        }
+
+        #[tokio::test]
+        async fn deleting_a_service_that_names_an_incident_another_service_resolves_asks_nothing() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observation(&db, v, None).await;
+            let j = job_for(&db, v, incident).await;
+            let first = completing(&db, v, vec![j]).await;
+            let second = completing(&db, v, vec![]).await;
+            update(&db, v, second, naming(vec![incident], None))
+                .await
+                .unwrap();
+
+            delete(&db, v, second, None).await.unwrap();
+            assert_resolved_only_by(&db, v, incident, first).await;
         }
 
         #[tokio::test]

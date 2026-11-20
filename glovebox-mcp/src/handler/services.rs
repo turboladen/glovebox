@@ -161,19 +161,19 @@ impl GloveboxMcp {
                        service read): one named there stays resolved by this service when its job \
                        is taken off, and the reply lists it in `incidents_kept_resolved`. When \
                        the call takes recorded work off the service (a job, a fitted part, a \
-                       recall or an incident), it refuses and names each item until you pass \
-                       `completed_work`. Ask the owner and never choose on your own: \
-                       `did_not_happen` when the work was not done (jobs go back to planned, \
-                       parts read `purchased` and a shop-supplied one leaves its need, recalls \
-                       read open, incidents are unresolved unless the owner marked them resolved \
-                       by hand), or `done_another_way` when it was done but not on this invoice \
-                       (an incident then stays resolved on the owner's word, `resolved_by_hand`). \
-                       The reply names any appointment that reopened (`reopened_appointment_ids`) \
-                       and any job that left a cancelled one (`unassigned_job_ids`). The schedule \
-                       items that stopped counting from this service are in \
-                       `released_schedule_item_ids`; when the invoice did cover one, \
-                       `link_service_to_maintenance` names it on the service again. Use this when \
-                       the invoice was already recorded and something on it is wrong; do not \
+                       recall, or an incident no other service also fixed), it refuses and names \
+                       each item until you pass `completed_work`. Ask the owner and never choose \
+                       on your own: `did_not_happen` when the work was not done (jobs go back to \
+                       planned, parts read `purchased` and a shop-supplied one leaves its need, \
+                       recalls read open, incidents are unresolved unless the owner marked them \
+                       resolved by hand), or `done_another_way` when it was done but not on this \
+                       invoice (an incident then stays resolved on the owner's word, \
+                       `resolved_by_hand`). The reply names any appointment that reopened \
+                       (`reopened_appointment_ids`) and any job that left a cancelled one \
+                       (`unassigned_job_ids`). The schedule items that stopped counting from this \
+                       service are in `released_schedule_item_ids`; when the invoice did cover \
+                       one, `link_service_to_maintenance` names it on the service again. Use this \
+                       when the invoice was already recorded and something on it is wrong; do not \
                        record the work a second time with `record_service`, which creates a \
                        duplicate. A call that sends `work_item_ids` or `resolved_incident_ids` \
                        returns `open_incidents` as `record_service` does (the key is absent from \
@@ -196,37 +196,38 @@ impl GloveboxMcp {
         description = "Permanently delete a service record, for one that was filed by mistake or \
                        against the wrong car. When the service recorded work as done (jobs it \
                        completed, parts it installed, incidents it resolved other than ones the \
-                       owner resolved by hand, recalls it performed), this tool refuses and names \
-                       each item until you pass `completed_work`. Ask the owner what happened and \
-                       never choose on your own: `did_not_happen` when the work was never done on \
-                       this invoice, or `done_another_way` when it was done but has no invoice to \
-                       file, which leaves an incident resolved on the owner's word, \
-                       `resolved_by_hand` (the owner did it, or the paperwork is lost). When the \
-                       owner has the invoice that did the work, choose `did_not_happen` and then \
-                       record that invoice with the same jobs, parts and schedule items, since \
-                       only a recorded service keeps a reminder's baseline. After \
-                       `did_not_happen`, the jobs return to planned, the incidents go back to \
-                       unresolved unless another service also fixed them or the owner marked them \
-                       resolved by hand, the recalls read open (`recalls_reopened`, or \
-                       `recalls_still_done_elsewhere` when another service performed them too), \
-                       and installed parts go back to purchased with their install details \
-                       cleared; a part a later service replaced stays replaced. A hand-closed \
-                       appointment of a reopened job opens again (`appointments_reopened`; \
-                       re-filing does not close it, so offer `update_appointment` with `status: \
-                       \"done\"` afterwards), and a job on a cancelled appointment goes back to \
-                       the unscheduled jobs (`jobs_unassigned`). After `done_another_way` that \
-                       work stays done (`recalls_kept_done`) and only the invoice goes. Either \
-                       way the service's schedule links, line items and odometer reading are \
-                       removed, so its schedule items fall back to an earlier service for their \
-                       reminders, and its parts are kept and listed in `kept_part_ids`: when \
-                       re-filing the invoice, attach the ones that read purchased with \
-                       `record_service`'s `part_ids` (never one that reads replaced); otherwise \
-                       remove them with `delete_part`. Planned jobs whose quote came with the \
-                       service keep their quote but no longer name it (`quotes_unlinked`). \
-                       `schedule_items_released` lists the schedule items that stopped counting \
-                       from the service, after either answer; their reminders count from another \
-                       service or from none, so tell the owner. To change a record rather than \
-                       remove it, use `correct_service`."
+                       owner resolved by hand or another service also fixed, recalls it \
+                       performed), this tool refuses and names each item until you pass \
+                       `completed_work`. Ask the owner what happened and never choose on your \
+                       own: `did_not_happen` when the work was never done on this invoice, or \
+                       `done_another_way` when it was done but has no invoice to file, which \
+                       leaves an incident resolved on the owner's word, `resolved_by_hand` (the \
+                       owner did it, or the paperwork is lost). When the owner has the invoice \
+                       that did the work, choose `did_not_happen` and then record that invoice \
+                       with the same jobs, parts and schedule items, since only a recorded \
+                       service keeps a reminder's baseline. After `did_not_happen`, the jobs \
+                       return to planned, the incidents go back to unresolved unless another \
+                       service also fixed them or the owner marked them resolved by hand, the \
+                       recalls read open (`recalls_reopened`, or `recalls_still_done_elsewhere` \
+                       when another service performed them too), and installed parts go back to \
+                       purchased with their install details cleared; a part a later service \
+                       replaced stays replaced. A hand-closed appointment of a reopened job opens \
+                       again (`appointments_reopened`; re-filing does not close it, so offer \
+                       `update_appointment` with `status: \"done\"` afterwards), and a job on a \
+                       cancelled appointment goes back to the unscheduled jobs \
+                       (`jobs_unassigned`). After `done_another_way` that work stays done \
+                       (`recalls_kept_done`) and only the invoice goes. Either way the service's \
+                       schedule links, line items and odometer reading are removed, so its \
+                       schedule items fall back to an earlier service for their reminders, and \
+                       its parts are kept and listed in `kept_part_ids`: when re-filing the \
+                       invoice, attach the ones that read purchased with `record_service`'s \
+                       `part_ids` (never one that reads replaced); otherwise remove them with \
+                       `delete_part`. Planned jobs whose quote came with the service keep their \
+                       quote but no longer name it (`quotes_unlinked`). `schedule_items_released` \
+                       lists the schedule items that stopped counting from the service, after \
+                       either answer; their reminders count from another service or from none, so \
+                       tell the owner. To change a record rather than remove it, use \
+                       `correct_service`."
     )]
     async fn delete_service(
         &self,
