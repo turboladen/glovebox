@@ -537,3 +537,29 @@ async fn giving_a_completed_job_an_incident_resolves_it_and_deleting_the_job_kee
     assert_eq!(kept["resolved"], true, "got: {kept}");
     assert_eq!(kept["resolved_by"][0]["id"], service);
 }
+
+#[tokio::test]
+async fn update_planned_work_names_the_incident_its_service_stopped_resolving() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let (job, service, incident) = completed_job_and_an_incident(&t, v.id).await;
+    let linked = t
+        .call(
+            "update_planned_work",
+            json!({ "vehicle_id": v.id, "work_item_id": job, "incident_id": incident }),
+        )
+        .await;
+    assert!(
+        linked.get("released_incident_id").is_none(),
+        "got: {linked}"
+    );
+
+    let back = t
+        .call(
+            "update_planned_work",
+            json!({ "vehicle_id": v.id, "work_item_id": job, "status": "planned" }),
+        )
+        .await;
+    assert_eq!(back["released_incident_id"], incident);
+    assert_eq!(back["released_from_service_id"], service);
+}

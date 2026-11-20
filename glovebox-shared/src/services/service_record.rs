@@ -5846,7 +5846,7 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn naming_a_jobs_service_as_resolver_marks_a_reopened_incident_resolved() {
+        async fn a_resolver_list_sent_back_leaves_a_reopened_incident_unresolved() {
             use crate::inputs::incident::UpdateIncident;
             let db = test_db().await;
             let v = seed_vehicle(&db).await;
@@ -5859,13 +5859,27 @@ mod tests {
             };
             incident::update(&db, v, incident, reopened).await.unwrap();
 
-            let named = UpdateIncident {
+            let echoed = UpdateIncident {
                 resolved_by_service_ids: Some(vec![svc]),
                 ..Default::default()
             };
-            let out = incident::update(&db, v, incident, named).await.unwrap();
-            assert!(out.incident.resolved);
+            let out = incident::update(&db, v, incident, echoed).await.unwrap();
+            assert!(!out.incident.resolved);
             assert_eq!(stored_incident_links(&db).await, 0);
+        }
+
+        #[tokio::test]
+        async fn deleting_one_of_two_jobs_from_an_incident_stores_no_link() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observation(&db, v, None).await;
+            let a = job_for(&db, v, incident).await;
+            let b = job_for(&db, v, incident).await;
+            let svc = completing(&db, v, vec![a, b]).await;
+
+            job::delete(&db, v, a).await.unwrap();
+            assert_eq!(stored_incident_links(&db).await, 0);
+            assert_eq!(resolvers(&db, v, incident).await, vec![svc]);
         }
 
         #[tokio::test]
@@ -5910,9 +5924,9 @@ mod tests {
             let v = seed_vehicle(&db).await;
             let incident = observation(&db, v, None).await;
             let j = job_for(&db, v, incident).await;
-            completing(&db, v, vec![j]).await;
+            let svc = completing(&db, v, vec![j]).await;
 
-            job::update(
+            let back = job::update(
                 &db,
                 v,
                 j,
@@ -5924,6 +5938,8 @@ mod tests {
             .await
             .unwrap();
             // Only a correction of the service says whether the work happened.
+            assert_eq!(back.released_incident_id, Some(incident));
+            assert_eq!(back.released_from_service_id, Some(svc));
             assert!(resolved(&db, v, incident).await);
             crate::test_support::assert_empty(&resolvers(&db, v, incident).await);
         }

@@ -128,17 +128,18 @@ impl GloveboxMcp {
                        that left no paperwork. Setting `done` here does not close a recall or \
                        incident the item is linked to, and taking a job a service completed off \
                        `done` does not reopen its incident (giving a job a service completed an \
-                       incident does resolve it): also call `set_recall_status` or \
-                       `update_incident` for it. Use `delete_planned_work` only for an item added \
-                       by mistake. Setting `planned` on an item whose appointment was closed by \
-                       hand opens that appointment again, and the result names it in \
-                       `reopened_appointment_id`. On a cancelled appointment the item comes off \
-                       it and is unscheduled, and the result names the appointment in \
-                       `left_cancelled_appointment_id`. When the schedule item stopped counting \
-                       from the service, the result names both in `released_schedule_item_id` and \
-                       `released_from_service_id`; when the invoice did cover it, \
-                       `link_service_to_maintenance` names it on the service again. Tell the \
-                       owner when any of these happens."
+                       incident does resolve it). When that service stops resolving the incident, \
+                       the result names it in `released_incident_id`; ask the owner whether it is \
+                       still fixed. Also call `set_recall_status` or `update_incident` for it. \
+                       Use `delete_planned_work` only for an item added by mistake. Setting \
+                       `planned` on an item whose appointment was closed by hand opens that \
+                       appointment again, and the result names it in `reopened_appointment_id`. \
+                       On a cancelled appointment the item comes off it and is unscheduled, and \
+                       the result names the appointment in `left_cancelled_appointment_id`. When \
+                       the schedule item stopped counting from the service, the result names both \
+                       in `released_schedule_item_id` and `released_from_service_id`; when the \
+                       invoice did cover it, `link_service_to_maintenance` names it on the \
+                       service again. Tell the owner when any of these happens."
     )]
     async fn update_planned_work(
         &self,

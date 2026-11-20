@@ -181,7 +181,7 @@ pub(crate) async fn link_service(
 
 /// Each `(incident_id, service_id)` pair in which the service resolved one of
 /// `incident_ids`: the stored `resolved` links and the jobs filed from the
-/// incident that a service completes. Sorted, with no pair twice.
+/// incident that a service completes. The pairs are sorted and each appears once.
 pub(crate) async fn resolvers_of_incidents(
     db: &impl ConnectionTrait,
     incident_ids: &[i32],
@@ -198,7 +198,7 @@ pub(crate) async fn resolvers_of_incidents(
 
 /// Each `(incident_id, service_id)` pair in which one of `service_ids`
 /// resolved an incident: the stored `resolved` links and the incidents of the
-/// jobs the service completes. Sorted, with no pair twice.
+/// jobs the service completes. The pairs are sorted and each appears once.
 pub(crate) async fn resolvers_of_services(
     db: &impl ConnectionTrait,
     service_ids: &[i32],
@@ -552,11 +552,6 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
             if !from_jobs.contains(&sid) {
                 link_service(&txn, vehicle_id, inc.id, sid, LinkRole::Resolved).await?;
             }
-        }
-        // A list that names a service says the incident is fixed, also when
-        // every service on it is one a job brings.
-        if !sids.is_empty() {
-            mark_resolved(&txn, vehicle_id, &[inc.id]).await?;
         }
     }
 
