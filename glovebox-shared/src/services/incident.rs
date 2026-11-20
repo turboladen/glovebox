@@ -704,9 +704,7 @@ pub async fn create_followup<C: ConnectionTrait + TransactionTrait>(
 }
 
 /// The incidents only this service resolves that still read resolved, oldest
-/// first. An incident the owner marked resolved by hand is left out, and so is
-/// one another service also resolves: taking the service away changes
-/// neither.
+/// first. An incident the owner marked resolved by hand is left out.
 pub(crate) async fn resolved_by_service(
     txn: &impl ConnectionTrait,
     service_id: i32,
@@ -716,6 +714,9 @@ pub(crate) async fn resolved_by_service(
         .into_iter()
         .map(|(incident_id, _)| incident_id)
         .collect();
+    // Taking this service away changes neither an incident another service
+    // also resolves nor one resolved by hand, so the owner is not asked
+    // about either.
     let resolved_elsewhere: Vec<i32> = resolvers_of_incidents(txn, &ids)
         .await?
         .into_iter()
