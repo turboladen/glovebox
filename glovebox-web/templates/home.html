@@ -103,7 +103,7 @@
         <span class="key"><a href="/vehicles/{{ v.vehicle.id }}/appointments/{{ a.id }}">{{ a.purpose }}</a></span>
         <span data-l="Status"><span class="pill pill--{{ a.status.kind }}">{{ a.status.text }}</span></span>
         <span data-l="Date">{% if a.dated %}{{ a.when }}{% else %}<span class="empty cap">{{ a.when }}</span>{% endif %}</span>
-        <span data-l="Shop">{% if let Some(shop) = a.shop_name %}{{ shop }}{% endif %}</span>
+        <span data-l="Shop">{% if let Some(shop) = a.shop %}<a href="{{ shop.href }}">{{ shop.name }}</a>{% endif %}</span>
         <span class="num" data-l="Jobs"><span class="vh">Jobs </span>{{ a.jobs }}</span>
         <span class="num" data-l="Needs open"><span class="vh">Needs open </span><span class="n{% if a.needs_open > 0 %} n--todo{% endif %}">{{ a.needs_open }}</span></span>
         <span class="num" data-l="To-dos open"><span class="vh">To-dos open </span><span class="n{% if a.todos_open > 0 %} n--todo{% endif %}">{{ a.todos_open }}</span></span>

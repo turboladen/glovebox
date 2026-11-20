@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Shops - Glovebox{% endblock %}
+{% block content %}
+<section class="appt page">
+  <h1>Shops</h1>
+</section>
+<section class="section page">
+  <section class="sheet">
+    <div class="sheet-head"><h3>Directory</h3><span class="n">{{ shops.len() }}</span></div>
+    {% if shops.is_empty() %}
+    <p class="empty lone">No shops yet. Ask Claude to add one.</p>
+    {% else %}
+    <div class="cols cols--shops" aria-hidden="true"><span>Shop</span><span class="num">Services</span><span class="num">Appointments</span><span>Last visit</span></div>
+    <ul class="needs">
+      {% for s in shops %}
+      <li class="row row--shops">
+        <span class="key"><a href="{{ s.link.href }}">{{ s.link.name }}</a>{% if let Some(a) = s.address %}<span class="l">{{ a }}</span>{% endif %}</span>
+        <span class="num" data-l="Services"><span class="vh">Services </span>{{ s.services }}</span>
+        <span class="num" data-l="Appointments"><span class="vh">Appointments </span>{{ s.appointments }}</span>
+        <span data-l="Last visit">{% if let Some(d) = s.last_visit %}{{ d }}{% else %}<span class="empty">No services</span>{% endif %}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </section>
+</section>
+{% endblock %}

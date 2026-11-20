@@ -23,6 +23,8 @@ pub struct WorkSheet {
     pub appointment_id: i32,
     /// The vehicle's name.
     pub vehicle: String,
+    pub shop_id: Option<i32>,
+    /// The shop's name.
     pub shop: Option<String>,
     pub date: Option<NaiveDate>,
     /// The appointment's planned jobs, in checklist order.
@@ -165,6 +167,7 @@ pub async fn for_appointment(
     Ok(WorkSheet {
         appointment_id,
         vehicle: car.name,
+        shop_id: appointment.shop_id,
         shop: super::shop::name_of(db, appointment.shop_id).await?,
         date: appointment.planned_date,
         jobs,
@@ -799,6 +802,7 @@ mod tests {
 
         assert_eq!(sheet.appointment_id, a);
         assert_eq!(sheet.vehicle, "Golf GTI");
+        assert_eq!(sheet.shop_id, Some(shop_id));
         assert_eq!(sheet.shop.as_deref(), Some("Smith Auto"));
         assert_eq!(sheet.date, Some(date("2026-11-20")));
     }

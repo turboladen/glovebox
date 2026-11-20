@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}{{ v.details.name }} - Glovebox{% endblock %}
+{% block content %}
+{% let d = v.details %}
+<section class="appt page" aria-labelledby="shop-title">
+  <p><a href="/shops">All shops</a></p>
+  <h1 id="shop-title">{{ d.name }}</h1>
+  <div class="summary">
+    {% if let Some(a) = d.address %}<div><span class="l">Address</span>{{ a }}</div>{% endif %}
+    {% if let Some(p) = d.phone %}<div><span class="l">Phone</span>{{ p }}</div>{% endif %}
+    {% if let Some(w) = d.website_href %}<div><span class="l">Website</span><a href="{{ w }}">{{ w }}</a></div>{% endif %}
+    {% if let Some(w) = d.website_text %}<div><span class="l">Website</span>{{ w }}</div>{% endif %}
+    {% if let Some(s) = d.specialty %}<div><span class="l">Specialty</span>{{ s }}</div>{% endif %}
+    <div><span class="l">Total spent</span><span class="price">{{ v.total }}</span></div>
+    <div><span class="l">You paid</span><span class="price">{{ v.paid }}</span></div>
+  </div>
+  {% if let Some(n) = d.notes %}<p class="shop-notes"><span class="l">Notes </span>{{ n }}</p>{% endif %}
+</section>
+
+<section class="section page">
+  <section class="sheet" aria-labelledby="shop-services">
+    <div class="sheet-head"><h3 id="shop-services">Services</h3><span class="n">{{ v.services.len() }}</span></div>
+    {% if v.services.is_empty() %}
+    <p class="empty lone">No services at this shop.</p>
+    {% else %}
+    <div class="cols cols--visits" aria-hidden="true"><span>Date</span><span>Vehicle</span><span>Description</span><span class="num">Total</span><span class="num">You paid</span></div>
+    <ul class="needs">
+      {% for s in v.services %}
+      <li class="row row--visits">
+        <span class="key">{{ s.date }}</span>
+        <span data-l="Vehicle">{{ s.vehicle }}</span>
+        <span data-l="Description">{% if let Some(t) = s.description %}{{ t }}{% endif %}</span>
+        <span class="num price" data-l="Total">{% if let Some(t) = s.total %}{{ t }}{% else %}<span class="empty">No total</span>{% endif %}</span>
+        <span class="num price" data-l="You paid">{% if let Some(p) = s.paid %}{{ p }}{% endif %}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </section>
+
+  <section class="sheet" aria-labelledby="shop-appointments">
+    <div class="sheet-head"><h3 id="shop-appointments">Appointments</h3><span class="n">{{ v.appointments.len() }}</span></div>
+    {% if v.appointments.is_empty() %}
+    <p class="empty lone">No appointments at this shop.</p>
+    {% else %}
+    <div class="cols cols--appts" aria-hidden="true"><span>Appointment</span><span>Vehicle</span><span>Date</span><span>Status</span></div>
+    <ul class="needs">
+      {% for a in v.appointments %}
+      <li class="row row--appts">
+        <span class="key"><a href="{{ a.href }}">{{ a.purpose }}</a></span>
+        <span data-l="Vehicle">{{ a.vehicle }}</span>
+        <span data-l="Date">{% if let Some(t) = a.date %}{{ t }}{% else %}<span class="empty">Not booked</span>{% endif %}</span>
+        <span data-l="Status"><span class="pill pill--{{ a.status.kind }}">{{ a.status.text }}</span></span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </section>
+</section>
+{% endblock %}

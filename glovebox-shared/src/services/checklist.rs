@@ -706,6 +706,7 @@ pub struct VehicleHome {
 pub struct HomeAppointment {
     pub id: i32,
     pub purpose: String,
+    pub shop_id: Option<i32>,
     pub shop_name: Option<String>,
     /// Holds the planned date, or `not booked` when there is none.
     pub when: String,
@@ -762,6 +763,7 @@ fn home_appointment(s: AppointmentSummary) -> HomeAppointment {
     HomeAppointment {
         id: s.appointment.id,
         purpose: s.appointment.purpose,
+        shop_id: s.appointment.shop_id,
         shop_name: s.shop_name,
         when: s
             .appointment
@@ -1889,12 +1891,14 @@ mod tests {
             .await
             .unwrap();
 
+        let shop = crate::test_support::add_shop(&db, "Smith Auto").await;
         let booked = appointment::create(
             &db,
             golf,
             NewAppointment {
                 purpose: "60k service".into(),
                 planned_date: Some(date("2026-12-01")),
+                shop: Some(crate::inputs::shop::ShopChoice::Id(shop)),
                 ..Default::default()
             },
         )
@@ -1971,6 +1975,12 @@ mod tests {
                 (unbooked, "Tire swap", "not booked", false, 0, 0),
             ]
         );
+        let shops: Vec<_> = g
+            .appointments
+            .iter()
+            .map(|a| (a.shop_id, a.shop_name.as_deref()))
+            .collect();
+        assert_eq!(shops, [(Some(shop), Some("Smith Auto")), (None, None)]);
         let state: Vec<_> = g.appointments.iter().map(|a| (a.phase, a.jobs)).collect();
         assert_eq!(
             state,

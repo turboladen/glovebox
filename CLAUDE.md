@@ -75,7 +75,7 @@ MCP server, and its `--open` flag opens the browser.
   `reset --env <name>` and `seed --env <name>`, with `run` callable in process from tests. The
   last two refuse `live` and build the file name themselves.
 - **`glovebox-web/`** (lib crate `glovebox_web` plus the `glovebox-web` binary) — an axum and askama
-  server that renders the checklist. `src/pages.rs` holds the four page handlers (home, appointment, job and work sheet), `src/actions.rs`
+  server that renders the checklist. `src/pages.rs` holds the six page handlers (home, appointment, job, work sheet, the shops list and a shop's page), `src/actions.rs`
   the form posts, `src/view.rs` the view structs, `src/guard.rs` the request guard and the content
   security policy, and `templates/` the askama templates.
 - `scripts/check-layering.sh` (run by CI and `just ci`) keeps axum and rmcp out of `glovebox-shared`
@@ -436,6 +436,9 @@ A page is a view of the shared library, and a future page follows the same rules
   whose "Ask the shop" posts the existing supplier form without an approach, which leaves the
   stored approach alone. `docs/adr/0009-the-work-sheet-prints-plain.md`
   records why.
+- **The shop pages are read-only** (`/shops` from `shop::list`, `/shops/{id}` from
+  `shop::history`). The directory changes only through Claude Desktop, and every shop name a page
+  prints links to the shop's page.
 - **Marking a need ordered has no undo**, because it creates a purchase record. A to-do tick, a
   received date and a deleted to-do show a banner with an undo form. The undo of a delete puts
   the row back through `todo::restore` and lasts until the next delete or a restart of the server.
