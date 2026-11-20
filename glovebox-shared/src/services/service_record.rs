@@ -1028,13 +1028,6 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         None => Vec::new(),
     };
     link_incidents(&txn, vehicle_id, record.id, Vec::new(), Vec::new(), &added).await?;
-    // Every job the call lists is done by this service afterward, so the
-    // recalls those jobs came from stay linked when a sent list omits them.
-    let from_listed: Vec<i32> = listed_jobs
-        .iter()
-        .filter_map(|w| w.research_finding_id)
-        .collect();
-    let listed_recalls = recall::recall_ids_among(&txn, &from_listed).await?;
     // These are the incidents of the jobs the correction took off.
     incident_svc::release_from_service(&txn, record.id, &removal.incidents, choice).await?;
 
@@ -1059,10 +1052,21 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         part_svc::follow_service(&txn, &record).await?;
     }
 
-    // A sent list replaces every recall link; without one, only the recalls
-    // of the jobs taken off lose theirs.
+    // A sent list replaces every recall link, and the service still performs
+    // the recall of each job the call lists, whether or not the list names
+    // it. Without a list only the recalls of the jobs taken off lose their
+    // link and only the jobs added bring one.
     let removed_recalls: Vec<i32> = removal.recalls.iter().map(|r| r.finding_id).collect();
-    let mut relink = listed_recalls;
+    let bringing = if input.recall_finding_ids.is_some() {
+        &listed_jobs
+    } else {
+        &added
+    };
+    let from_jobs: Vec<i32> = bringing
+        .iter()
+        .filter_map(|w| w.research_finding_id)
+        .collect();
+    let mut relink = recall::recall_ids_among(&txn, &from_jobs).await?;
     match input.recall_finding_ids {
         Some(recall_ids) => {
             relink.extend(recall_ids);
@@ -1135,8 +1139,9 @@ impl RecordedWork {
     /// parts and recalls its replacement lists leave out, and with each job
     /// taken off the work that hangs off it (the incident and the recall it
     /// came from, and the parts fitted to its needs) unless a list the call
-    /// sends names that work or a job in `listed_jobs`, which the service
-    /// keeps or gains, came from the same incident or recall.
+    /// sends names that work. An incident or a recall that a job in
+    /// `listed_jobs` came from is never taken off, because the service keeps
+    /// or gains that job.
     async fn left_out_by(
         mut self,
         db: &impl ConnectionTrait,
@@ -5117,6 +5122,19 @@ mod tests {
             assert_eq!(job::get(&db, v, j).await.unwrap().status, JobStatus::Done);
             let performed: Vec<i32> = out.performed_recalls.iter().map(|r| r.finding_id).collect();
             assert_eq!(performed, vec![finding]);
+        }
+
+        #[tokio::test]
+        async fn listing_a_kept_job_without_a_recall_list_adds_no_recall_link() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let finding = seed_recall(&db, v, "24V892").await;
+            let j = job_from_recall(&db, v, finding).await;
+            let svc = completing(&db, v, vec![j]).await;
+            recall::unlink_from_service(&db, svc, None).await.unwrap();
+
+            let out = update(&db, v, svc, jobs(vec![j], None)).await.unwrap();
+            crate::test_support::assert_empty(&out.performed_recalls);
         }
 
         #[tokio::test]
