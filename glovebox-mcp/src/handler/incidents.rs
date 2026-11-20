@@ -70,10 +70,12 @@ impl GloveboxMcp {
                        payout, recurrence link, and `noticed_during_service_id` (the service \
                        during which it was noticed). Send only the fields to change; null clears \
                        a field, and a field left out is untouched. Set `resolved` to close it by \
-                       hand (e.g. fixed without an invoice) or reopen it. \
-                       `resolved_by_service_ids` REPLACES the services that fixed it: a non-empty \
-                       list marks it resolved and an empty list marks it unresolved (unless \
-                       `resolved` is sent too). The list cannot remove a service that completed a \
+                       hand (e.g. fixed without an invoice), which is remembered in \
+                       `resolved_by_hand`, or reopen it. Undoing a service's work later leaves an \
+                       incident resolved by hand resolved. `resolved_by_service_ids` REPLACES the \
+                       services that fixed it: a non-empty list marks it resolved and an empty \
+                       list marks it unresolved (unless `resolved` is sent too or the owner \
+                       resolved it by hand). The list cannot remove a service that completed a \
                        job filed from the incident, and naming such a service changes nothing: \
                        send `resolved`, or take the job off with `correct_service`. For a fix \
                        that has paperwork, prefer `record_service` with `resolved_incident_ids`. \

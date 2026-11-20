@@ -53,6 +53,10 @@ pub struct Model {
     pub recurrence_of_id: Option<i32>,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
+    /// True when the owner's word is what resolved the incident, whether or
+    /// not a service resolved it afterwards. Undoing a service's work leaves
+    /// such an incident resolved.
+    pub resolved_by_hand: bool,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

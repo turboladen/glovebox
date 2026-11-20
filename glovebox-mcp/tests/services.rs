@@ -1725,3 +1725,63 @@ async fn an_inline_kit_on_an_invoice_records_its_contents() {
         "a refused invoice records nothing"
     );
 }
+
+#[tokio::test]
+async fn correct_service_leaves_an_incident_resolved_by_hand_resolved() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let incident = t
+        .call(
+            "log_incident",
+            json!({ "vehicle_id": v.id, "title": "Leak" }),
+        )
+        .await;
+    t.call(
+        "update_incident",
+        json!({ "vehicle_id": v.id, "incident_id": incident["id"], "resolved": true }),
+    )
+    .await;
+    let job = t
+        .call(
+            "plan_work",
+            json!({ "vehicle_id": v.id, "title": "Fix leak", "incident_id": incident["id"] }),
+        )
+        .await;
+    let service = t
+        .call(
+            "record_service",
+            json!({
+                "vehicle_id": v.id,
+                "service_date": "2026-06-01",
+                "work_item_ids": [job["id"]]
+            }),
+        )
+        .await;
+
+    let refused = t
+        .call_err(
+            "correct_service",
+            json!({ "vehicle_id": v.id, "service_id": service["id"], "work_item_ids": [] }),
+        )
+        .await;
+    assert!(!refused.contains("incident"), "got: {refused}");
+
+    t.call(
+        "correct_service",
+        json!({
+            "vehicle_id": v.id,
+            "service_id": service["id"],
+            "work_item_ids": [],
+            "completed_work": "did_not_happen"
+        }),
+    )
+    .await;
+    let read = t
+        .call(
+            "get_incident",
+            json!({ "vehicle_id": v.id, "incident_id": incident["id"] }),
+        )
+        .await;
+    assert_eq!(read["resolved"], true, "got: {read}");
+    assert_eq!(read["resolved_by_hand"], true, "got: {read}");
+}

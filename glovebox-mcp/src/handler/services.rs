@@ -153,13 +153,15 @@ impl GloveboxMcp {
                        Ask the owner and never choose on your own: `did_not_happen` when the work \
                        was not done (jobs go back to planned, parts read `purchased` and a \
                        shop-supplied one leaves its need, recalls read open, incidents are \
-                       unresolved), or `done_another_way` when it was done but not on this \
-                       invoice. The reply names any appointment that reopened \
-                       (`reopened_appointment_ids`) and any job that left a cancelled one \
-                       (`unassigned_job_ids`). The schedule items that stopped counting from this \
-                       service are in `released_schedule_item_ids`; when the invoice did cover \
-                       one, `link_service_to_maintenance` names it on the service again. Use this \
-                       when the invoice was already recorded and something on it is wrong; do not \
+                       unresolved unless the owner marked them resolved by hand), or \
+                       `done_another_way` when it was done but not on this invoice (an incident \
+                       then stays resolved on the owner's word, `resolved_by_hand`). The reply \
+                       names any appointment that reopened (`reopened_appointment_ids`) and any \
+                       job that left a cancelled one (`unassigned_job_ids`). The schedule items \
+                       that stopped counting from this service are in \
+                       `released_schedule_item_ids`; when the invoice did cover one, \
+                       `link_service_to_maintenance` names it on the service again. Use this when \
+                       the invoice was already recorded and something on it is wrong; do not \
                        record the work a second time with `record_service`, which creates a \
                        duplicate. To close an incident, use `record_service` for new work or \
                        `update_incident`."
@@ -177,17 +179,19 @@ impl GloveboxMcp {
         name = "delete_service",
         description = "Permanently delete a service record, for one that was filed by mistake or \
                        against the wrong car. When the service recorded work as done (jobs it \
-                       completed, parts it installed, incidents it resolved, recalls it \
-                       performed), this tool refuses and names each item until you pass \
-                       `completed_work`. Ask the owner what happened and never choose on your \
-                       own: `did_not_happen` when the work was never done on this invoice, or \
-                       `done_another_way` when it was done but has no invoice to file (the owner \
-                       did it, or the paperwork is lost). When the owner has the invoice that did \
-                       the work, choose `did_not_happen` and then record that invoice with the \
-                       same jobs, parts and schedule items, since only a recorded service keeps a \
-                       reminder's baseline. After `did_not_happen`, the jobs return to planned, \
-                       the incidents go back to unresolved unless another service also fixed \
-                       them, the recalls read open (`recalls_reopened`, or \
+                       completed, parts it installed, incidents it resolved other than ones the \
+                       owner resolved by hand, recalls it performed), this tool refuses and names \
+                       each item until you pass `completed_work`. Ask the owner what happened and \
+                       never choose on your own: `did_not_happen` when the work was never done on \
+                       this invoice, or `done_another_way` when it was done but has no invoice to \
+                       file, which leaves an incident resolved on the owner's word, \
+                       `resolved_by_hand` (the owner did it, or the paperwork is lost). When the \
+                       owner has the invoice that did the work, choose `did_not_happen` and then \
+                       record that invoice with the same jobs, parts and schedule items, since \
+                       only a recorded service keeps a reminder's baseline. After \
+                       `did_not_happen`, the jobs return to planned, the incidents go back to \
+                       unresolved unless another service also fixed them or the owner marked them \
+                       resolved by hand, the recalls read open (`recalls_reopened`, or \
                        `recalls_still_done_elsewhere` when another service performed them too), \
                        and installed parts go back to purchased with their install details \
                        cleared; a part a later service replaced stays replaced. A hand-closed \

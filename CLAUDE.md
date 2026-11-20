@@ -155,7 +155,9 @@ service's dates and shop, a service reading's source, a schedule item's override
 finding's status, and `m20261120_000001_job_schedule_links`, which removes each stored schedule
 link that repeats the schedule item of a job the same service completes, and
 `m20261120_000002_job_incident_links`, which does the same for a stored `resolved` incident link
-that repeats a completed job's incident. They run on startup.
+that repeats a completed job's incident, and `m20261120_000003_incident_resolved_by_hand`, which
+adds `incidents.resolved_by_hand`, marks each resolved incident that no service resolves and adds a
+CHECK that only a resolved incident carries it. They run on startup.
 
 **Test harness** (`test_support.rs`): `test_db()` is an in-memory SQLite database with migrations
 applied. It is compiled under `#[cfg(any(test, feature = "test-support"))]`; `glovebox-mcp` uses it
@@ -228,6 +230,9 @@ A job's incident is read from the job the same way (`incident::resolvers_of_serv
 incident and stays when the job is taken off, so that incident stays resolved; `update_incident`
 stores no link for a service only a job brings
 (`docs/adr/0018-a-jobs-incident-is-read-from-the-job.md`).
+An incident the owner marked resolved by hand carries `resolved_by_hand`, so `did_not_happen`
+leaves it resolved and the refusal never names it (`incident::set_resolution` is the one writer, and `done_another_way` marks an incident too;
+`docs/adr/0019-an-incident-records-a-resolution-by-hand.md`).
 Every service read carries `lines_total_cents`, and a `note` when the total differs from it (the
 kinds are `maintenance`, `mod`, `repair`, `inspection`, `recall` and `fee`; payers are `self`,
 `insurance`, `third_party` and `manufacturer`). A line may carry its own `paid_by`
@@ -506,7 +511,7 @@ role per control style, and `YYYY-MM-DD` dates.
   `research_finding::FindingStatus`, `service_record::CompletedWork`, `schedule::LinkMode` and `search::SearchScope`. A
   filter on a column never takes one of these.
   `docs/adr/0004-typed-vocabularies.md` records why.
-- **Migrations**: new migrations go after `m20261120_000002_job_incident_links`; the
+- **Migrations**: new migrations go after `m20261120_000003_incident_resolved_by_hand`; the
   `new-migration` skill has the templates. Use `Expr::cust()` for expressions inside builder queries; raw
   `execute_unprepared` only where no builder form exists (FTS5 DDL, cross-table copies). A delete
   by a correlated subquery has one: `Query::delete().cond_where(Expr::exists(subquery))`, as
