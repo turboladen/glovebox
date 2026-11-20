@@ -142,6 +142,60 @@ pub struct ServiceRecordWithLinks {
     /// service. Filled only by `update`; omitted from JSON when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub incident_names_ignored: Vec<i32>,
+    /// The vehicle's incidents that are still unresolved once the call's work
+    /// is recorded, newest first and without notes, so the caller can ask
+    /// whether the work fixed any of them. Filled by `create` when it writes
+    /// a record and by an `update` that sends `work_item_ids` or
+    /// `resolved_incident_ids`; omitted from JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub open_incidents: Vec<OpenIncident>,
+}
+
+/// An unresolved incident as a service reply lists it.
+#[derive(Clone, Debug, Serialize)]
+pub struct OpenIncident {
+    pub id: i32,
+    pub title: String,
+    pub category: IncidentCategory,
+    pub occurred_at: DayOrTime,
+    /// Ids of the planned jobs filed from the incident, in ascending order.
+    /// Completing one with a service resolves the incident.
+    pub planned_work_item_ids: Vec<i32>,
+}
+
+/// The vehicle's unresolved incidents, each with the planned jobs filed from
+/// it.
+async fn open_incidents(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+) -> DomainResult<Vec<OpenIncident>> {
+    let open = super::upcoming::open_incidents(db, vehicle_id).await?;
+    if open.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ids: Vec<i32> = open.iter().map(|i| i.id).collect();
+    let mut planned: std::collections::HashMap<i32, Vec<i32>> = std::collections::HashMap::new();
+    let jobs = job::Entity::find()
+        .filter(job::Column::IncidentId.is_in(ids))
+        .filter(job::Column::Status.eq(JobStatus::Planned))
+        .order_by_asc(job::Column::Id)
+        .all(db)
+        .await?;
+    for j in jobs {
+        if let Some(incident_id) = j.incident_id {
+            planned.entry(incident_id).or_default().push(j.id);
+        }
+    }
+    Ok(open
+        .into_iter()
+        .map(|i| OpenIncident {
+            planned_work_item_ids: planned.remove(&i.id).unwrap_or_default(),
+            id: i.id,
+            title: i.title,
+            category: i.category,
+            occurred_at: i.occurred_at,
+        })
+        .collect())
 }
 
 /// A need on a completed job whose linked part is neither installed nor
@@ -352,6 +406,7 @@ impl ServiceRecordWithLinks {
             released_schedule_item_ids: Vec::new(),
             incidents_kept_resolved: Vec::new(),
             incident_names_ignored: Vec::new(),
+            open_incidents: Vec::new(),
         }
     }
 }
@@ -915,6 +970,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
 
     let mut created = load_service_links(&txn, record).await?;
     created.unfitted_needs = unfitted_needs(&txn, &created.completed_work_items).await?;
+    created.open_incidents = open_incidents(&txn, vehicle_id).await?;
 
     txn.commit().await?;
 
@@ -938,6 +994,8 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     let txn = super::begin_write(db).await?;
     let db = &txn;
     let existing = require(db, vehicle_id, id).await?;
+    let changes_resolved_work =
+        input.work_item_ids.is_some() || input.resolved_incident_ids.is_some();
     // What the correction takes off the service is known before anything is
     // written, so a refusal names the work it would change and writes nothing.
     let recorded = if input.work_item_ids.is_some()
@@ -1180,6 +1238,9 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     released.sort_unstable();
     updated.released_schedule_item_ids = released;
     updated.incident_names_ignored = names_ignored;
+    if changes_resolved_work {
+        updated.open_incidents = open_incidents(&txn, vehicle_id).await?;
+    }
     updated.incidents_kept_resolved = updated
         .resolved_incidents
         .iter()
@@ -6336,6 +6397,99 @@ mod tests {
                 .iter()
                 .map(|i| (i.id, i.named_by_invoice))
                 .collect()
+        }
+
+        #[tokio::test]
+        async fn a_recorded_service_lists_the_incidents_it_left_open() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let fixed = observation(&db, v, None).await;
+            let fixed_job = job_for(&db, v, fixed).await;
+            let waiting = observation(&db, v, None).await;
+            let waiting_job = job_for(&db, v, waiting).await;
+            let unplanned = observation(&db, v, None).await;
+            incident::create(
+                &db,
+                v,
+                NewIncident {
+                    category: IncidentCategory::Note,
+                    title: "Prefers the dealer on Main".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            // Another vehicle's open incident is never listed.
+            let other = seed_vehicle(&db).await;
+            observation(&db, other, None).await;
+
+            let out = create(
+                &db,
+                v,
+                NewServiceRecord {
+                    service_date: date("2026-11-01"),
+                    work_item_ids: Some(vec![fixed_job]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            let open: Vec<(i32, Vec<i32>)> = out
+                .open_incidents
+                .iter()
+                .map(|i| (i.id, i.planned_work_item_ids.clone()))
+                .collect();
+            assert_eq!(
+                open,
+                vec![(unplanned, vec![]), (waiting, vec![waiting_job])]
+            );
+
+            // A read lists none, and the key is left out of its JSON.
+            let read = get(&db, v, out.record.id).await.unwrap();
+            crate::test_support::assert_empty(&read.open_incidents);
+            assert!(
+                serde_json::to_value(&read)
+                    .unwrap()
+                    .get("open_incidents")
+                    .is_none()
+            );
+        }
+
+        #[tokio::test]
+        async fn a_correction_lists_open_incidents_only_when_it_changes_the_resolved_work() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observation(&db, v, None).await;
+            let j = job_for(&db, v, incident).await;
+            let svc = completing(&db, v, vec![]).await;
+
+            let renamed = update(
+                &db,
+                v,
+                svc,
+                UpdateServiceRecord {
+                    notes: Some(Some("Paid by card".into())),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            crate::test_support::assert_empty(&renamed.open_incidents);
+
+            // A correction that sends a job list reports what is still open
+            // after it, which here is nothing.
+            let completed = update(&db, v, svc, jobs(vec![j], None)).await.unwrap();
+            crate::test_support::assert_empty(&completed.open_incidents);
+
+            let undone = update(&db, v, svc, jobs(vec![], Some(CompletedWork::DidNotHappen)))
+                .await
+                .unwrap();
+            let open: Vec<(i32, Vec<i32>)> = undone
+                .open_incidents
+                .iter()
+                .map(|i| (i.id, i.planned_work_item_ids.clone()))
+                .collect();
+            assert_eq!(open, vec![(incident, vec![j])]);
         }
 
         #[tokio::test]

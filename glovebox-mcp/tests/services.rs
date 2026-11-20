@@ -1787,6 +1787,70 @@ async fn correct_service_leaves_an_incident_resolved_by_hand_resolved() {
 }
 
 #[tokio::test]
+async fn record_service_lists_the_incidents_still_open() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let leak = t
+        .call(
+            "log_incident",
+            json!({ "vehicle_id": v.id, "title": "Leak" }),
+        )
+        .await;
+    let job = t
+        .call(
+            "plan_work",
+            json!({ "vehicle_id": v.id, "title": "Fix leak", "incident_id": leak["id"] }),
+        )
+        .await;
+    let rattle = t
+        .call(
+            "log_incident",
+            json!({ "vehicle_id": v.id, "title": "Rattle" }),
+        )
+        .await;
+
+    // The service completes no job, so both incidents stay open and the leak
+    // names the job planned for it.
+    let service = t
+        .call(
+            "record_service",
+            json!({ "vehicle_id": v.id, "service_date": "2026-06-01" }),
+        )
+        .await;
+    let open = service["open_incidents"].as_array().unwrap();
+    assert_eq!(open.len(), 2, "got: {service}");
+    let of_leak = open.iter().find(|i| i["id"] == leak["id"]).unwrap();
+    assert_eq!(of_leak["title"], "Leak");
+    assert_eq!(of_leak["planned_work_item_ids"], json!([job["id"]]));
+
+    // Completing the job resolves the leak, which leaves the rattle open.
+    let corrected = t
+        .call(
+            "correct_service",
+            json!({
+                "vehicle_id": v.id,
+                "service_id": service["id"],
+                "work_item_ids": [job["id"]]
+            }),
+        )
+        .await;
+    assert_eq!(corrected["resolved_incidents"][0]["id"], leak["id"]);
+    let open = corrected["open_incidents"].as_array().unwrap();
+    assert_eq!(open.len(), 1, "got: {corrected}");
+    assert_eq!(open[0]["id"], rattle["id"]);
+    assert_eq!(open[0]["planned_work_item_ids"], json!([]));
+
+    // A read of the service carries no such list.
+    let read = t
+        .call(
+            "get_service",
+            json!({ "vehicle_id": v.id, "service_id": service["id"] }),
+        )
+        .await;
+    assert!(read.get("open_incidents").is_none(), "got: {read}");
+}
+
+#[tokio::test]
 async fn correct_service_names_the_incidents_its_invoice_resolved() {
     let t = connect().await;
     let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
