@@ -133,12 +133,14 @@ impl ServerHandler for GloveboxMcp {
                  `mark_need_received`, and `return_part` for a wrong part; `add_todo` and \
                  `update_todo` for plain to-dos; `past_decisions` for what was chosen before. \
                  When the invoice arrives, pass `appointment_id` to `record_service` and ask \
-                 about every entry in its `unfitted_needs`. Also: `log_mileage` whenever the user \
-                 mentions an odometer reading (`list_mileage` / `delete_mileage` fix a typo, \
-                 `delete_vehicle` undoes a mistaken `add_vehicle`), `record_part` and \
-                 `list_parts` / `correct_part` / `delete_part` for parts, `save_note` for facts \
-                 worth keeping, `file_research_finding` for research worth keeping (read back \
-                 with `search_records`), `search_records` and `cost_summary` to look things up, \
+                 about every entry in its `unfitted_needs`. After a `record_service` that wrote a \
+                 record, name each incident it resolved and ask whether the work fixed any in \
+                 `open_incidents`. Also: `log_mileage` whenever the user mentions an odometer \
+                 reading (`list_mileage` / `delete_mileage` fix a typo, `delete_vehicle` undoes a \
+                 mistaken `add_vehicle`), `record_part` and `list_parts` / `correct_part` / \
+                 `delete_part` for parts, `save_note` for facts worth keeping, \
+                 `file_research_finding` for research worth keeping (read back with \
+                 `search_records`), `search_records` and `cost_summary` to look things up, \
                  `check_recalls` (once per conversation; a failed lookup still lists the known \
                  recalls) and `set_recall_status` for recalls. Services, parts, incidents and \
                  planned work can each be listed, corrected and deleted; a correct or update tool \

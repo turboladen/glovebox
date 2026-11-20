@@ -97,7 +97,21 @@ you link.
    (the list replaces the old one). When it was not, leave it and say so. `lines_total_cents` is
    the sum of the lines; when it differs from the total, a `note` gives both amounts, and a `fee`
    line for the tax or shop charges closes the gap (use `correct_service` to add it). `message` is
-   separate: it appears only for an already-recorded invoice number. Then call `get_service` if you
+   separate: it appears only for an already-recorded invoice number.
+5. Tell Steve what the service closed. Name every incident in `resolved_incidents` that reads
+   `resolved: true` by its title, whether the invoice named it or a completed job brought it, so
+   he hears that it is resolved and can say when it is not (`update_incident` with
+   `resolved: false` reopens it). Then read `open_incidents`, the incidents this visit could have
+   fixed and did not: still unresolved, dated no later than the service, and neither noticed
+   during it nor brought by one of its jobs. Ask whether this visit fixed any of them. When it
+   did, call `correct_service` with a `resolved_incident_ids` list holding every incident the
+   invoice names plus this one (the list replaces the old one). An entry with
+   `planned_work_item_ids` has a job planned for it: ask whether that job was part of this visit,
+   and when it was, call `correct_service` with a `work_item_ids` list holding every job the
+   service completed plus this one (that list replaces the old one too). An empty `open_incidents`
+   means nothing is open. The key is absent when the invoice number was already recorded, because
+   that call did not look. `correct_service` returns both lists when it sends `work_item_ids` or
+   `resolved_incident_ids`, so do the same after it. Then call `get_service` if you
    want to confirm the lines, parts and links.
 
 ## Capturing an advisory
@@ -111,7 +125,12 @@ another six months", record it as two linked records.
    `revisit_by_miles` or `revisit_by_date`. Add `est_cost_cents` when you know it.
 
 Later, when the fix is done, file it with `record_service` and put the planned work's id in
-`work_item_ids`. The incident then resolves with that service. Use `add_incident_followup` to log a
+`work_item_ids`. The incident then resolves with that service, and you tell Steve that it did.
+
+Only a job linked with `incident_id` resolves its incident. Before any `plan_work` for a repair,
+read the open incidents from `whats_coming`. When the job addresses one, say which and ask Steve
+whether to link it. When a job is already planned without the link, `update_planned_work` sets
+`incident_id`. Use `add_incident_followup` to log a
 phone call or a second opinion, and `update_planned_work` with `status` set to `dropped` when Steve
 decides not to do the work.
 

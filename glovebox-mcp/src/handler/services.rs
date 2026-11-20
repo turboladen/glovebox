@@ -72,7 +72,17 @@ impl GloveboxMcp {
                        which may name the need it fills with `need_id` and, for a kit, list its \
                        `contents`). A shop does not always fit everything that was brought. The \
                        result's `unfitted_needs` lists every need on a completed job whose part \
-                       is linked but neither installed nor replaced; ask the owner about each one."
+                       is linked but neither installed nor replaced; ask the owner about each \
+                       one. Tell the owner each incident in `resolved_incidents` that reads \
+                       `resolved: true` by its title, so a job that closed one never does so \
+                       unnoticed. The result's `open_incidents` lists the incidents this visit \
+                       could have fixed and did not: still unresolved, dated no later than the \
+                       service, and neither noticed during it nor brought by one of its jobs \
+                       (each with `planned_work_item_ids`, the planned jobs filed from it). Ask \
+                       the owner whether this work fixed any of them, and when it did, call \
+                       `correct_service` with `resolved_incident_ids`. An empty list means none \
+                       is open; the key is absent when the invoice was already recorded, because \
+                       that call did not look."
     )]
     async fn record_service(
         &self,
@@ -165,8 +175,12 @@ impl GloveboxMcp {
                        `link_service_to_maintenance` names it on the service again. Use this when \
                        the invoice was already recorded and something on it is wrong; do not \
                        record the work a second time with `record_service`, which creates a \
-                       duplicate. To close an incident, use `record_service` for new work or \
-                       `update_incident`."
+                       duplicate. A call that sends `work_item_ids` or `resolved_incident_ids` \
+                       returns `open_incidents` as `record_service` does (the key is absent from \
+                       any other call); tell the owner which incidents the service resolves and \
+                       ask about the open ones. To close an incident this invoice fixed, name it \
+                       in `resolved_incident_ids`; `update_incident` is for one fixed with no \
+                       invoice."
     )]
     async fn correct_service(
         &self,

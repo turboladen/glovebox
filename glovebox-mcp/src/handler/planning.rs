@@ -24,15 +24,19 @@ impl GloveboxMcp {
         description = "Add something to the vehicle's to-do list — work the user intends to do or \
                        have done. Link the source so completing the work closes the loop (a \
                        recall finding from check_recalls, an overdue schedule item from \
-                       whats_coming, or an incident). Set revisit_by_date and/or revisit_by_miles \
-                       for work to watch rather than do now. Pass `appointment_id` to put the job \
-                       on an appointment (from `plan_appointment`); a job with no appointment is \
-                       still planned and can collect needs with `add_need` before there is a shop \
-                       or a date. A quote for work not done yet is planned work: put the quoted \
-                       amount in `est_cost_cents`. Pass `quote_service_id` when it came with an \
-                       invoice for other work, which then gives its shop and date; pass \
-                       `quoted_by` and `quoted_on` for a quote with no invoice. Review the list \
-                       with list_planned_work."
+                       whats_coming, or an incident). Before planning a repair, read the open \
+                       incidents in `whats_coming`; when the job addresses one, ask the owner \
+                       whether to link it and pass `incident_id`, because only a linked job \
+                       resolves its incident when a service completes it. Set revisit_by_date \
+                       and/or revisit_by_miles for work to watch rather than do now. Pass \
+                       `appointment_id` to put the job on an appointment (from \
+                       `plan_appointment`); a job with no appointment is still planned and can \
+                       collect needs with `add_need` before there is a shop or a date. A quote \
+                       for work not done yet is planned work: put the quoted amount in \
+                       `est_cost_cents`. Pass `quote_service_id` when it came with an invoice for \
+                       other work, which then gives its shop and date; pass `quoted_by` and \
+                       `quoted_on` for a quote with no invoice. Review the list with \
+                       list_planned_work."
     )]
     async fn plan_work(
         &self,

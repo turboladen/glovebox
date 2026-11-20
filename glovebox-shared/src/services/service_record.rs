@@ -142,6 +142,81 @@ pub struct ServiceRecordWithLinks {
     /// service. Filled only by `update`; omitted from JSON when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub incident_names_ignored: Vec<i32>,
+    /// The vehicle's incidents this service could have fixed and did not:
+    /// unresolved once the call's work is recorded, dated no later than the
+    /// service's last day, and neither noticed during it nor brought by one
+    /// of its jobs. Newest first and without notes, so the caller can ask
+    /// whether the work fixed any of them. `Some`, which may be empty, from a
+    /// `create` that writes a record and from an `update` that sends
+    /// `work_item_ids` or `resolved_incident_ids`; `None`, and omitted from
+    /// JSON, when the call did not look.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_incidents: Option<Vec<OpenIncident>>,
+}
+
+/// An unresolved incident as a service reply lists it.
+#[derive(Clone, Debug, Serialize)]
+pub struct OpenIncident {
+    pub id: i32,
+    pub title: String,
+    pub category: IncidentCategory,
+    pub occurred_at: DayOrTime,
+    /// Ids of the planned jobs filed from the incident, in ascending order.
+    /// Completing one with a service resolves the incident.
+    pub planned_work_item_ids: Vec<i32>,
+}
+
+/// The unresolved incidents `service` could have fixed, each with the planned
+/// jobs filed from it; `ServiceRecordWithLinks::open_incidents` states which
+/// ones are left out.
+async fn open_incidents(
+    db: &impl ConnectionTrait,
+    service: &ServiceRecordWithLinks,
+) -> DomainResult<Vec<OpenIncident>> {
+    let last_day = service
+        .record
+        .end_date
+        .unwrap_or(service.record.service_date);
+    // An incident a job of this service brings stays in `resolved_incidents`
+    // after the owner reopens it, so it is left out here and never reads as
+    // both.
+    let linked: std::collections::HashSet<i32> = service
+        .noticed_incidents
+        .iter()
+        .chain(&service.resolved_incidents)
+        .map(|i| i.id)
+        .collect();
+    let open: Vec<incident::Model> = super::upcoming::open_incidents(db, service.record.vehicle_id)
+        .await?
+        .into_iter()
+        .filter(|i| i.occurred_at.day() <= last_day && !linked.contains(&i.id))
+        .collect();
+    if open.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ids: Vec<i32> = open.iter().map(|i| i.id).collect();
+    let mut planned: std::collections::HashMap<i32, Vec<i32>> = std::collections::HashMap::new();
+    let jobs = job::Entity::find()
+        .filter(job::Column::IncidentId.is_in(ids))
+        .filter(job::Column::Status.eq(JobStatus::Planned))
+        .order_by_asc(job::Column::Id)
+        .all(db)
+        .await?;
+    for j in jobs {
+        if let Some(incident_id) = j.incident_id {
+            planned.entry(incident_id).or_default().push(j.id);
+        }
+    }
+    Ok(open
+        .into_iter()
+        .map(|i| OpenIncident {
+            planned_work_item_ids: planned.remove(&i.id).unwrap_or_default(),
+            id: i.id,
+            title: i.title,
+            category: i.category,
+            occurred_at: i.occurred_at,
+        })
+        .collect())
 }
 
 /// A need on a completed job whose linked part is neither installed nor
@@ -352,6 +427,7 @@ impl ServiceRecordWithLinks {
             released_schedule_item_ids: Vec::new(),
             incidents_kept_resolved: Vec::new(),
             incident_names_ignored: Vec::new(),
+            open_incidents: None,
         }
     }
 }
@@ -915,6 +991,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
 
     let mut created = load_service_links(&txn, record).await?;
     created.unfitted_needs = unfitted_needs(&txn, &created.completed_work_items).await?;
+    created.open_incidents = Some(open_incidents(&txn, &created).await?);
 
     txn.commit().await?;
 
@@ -938,6 +1015,8 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     let txn = super::begin_write(db).await?;
     let db = &txn;
     let existing = require(db, vehicle_id, id).await?;
+    let changes_resolved_work =
+        input.work_item_ids.is_some() || input.resolved_incident_ids.is_some();
     // What the correction takes off the service is known before anything is
     // written, so a refusal names the work it would change and writes nothing.
     let recorded = if input.work_item_ids.is_some()
@@ -1180,6 +1259,9 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     released.sort_unstable();
     updated.released_schedule_item_ids = released;
     updated.incident_names_ignored = names_ignored;
+    if changes_resolved_work {
+        updated.open_incidents = Some(open_incidents(&txn, &updated).await?);
+    }
     updated.incidents_kept_resolved = updated
         .resolved_incidents
         .iter()
@@ -6336,6 +6418,159 @@ mod tests {
                 .iter()
                 .map(|i| (i.id, i.named_by_invoice))
                 .collect()
+        }
+
+        // An open shop observation dated before the 2026-11-01 services
+        // these tests record.
+        async fn observed(db: &DatabaseConnection, v: i32, on: &str) -> i32 {
+            incident::create(
+                db,
+                v,
+                NewIncident {
+                    category: IncidentCategory::ShopObservation,
+                    title: "Rear wiper streaks".into(),
+                    occurred_at: Some(DayOrTime::Day(date(on))),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .incident
+            .id
+        }
+
+        fn open_ids(out: &ServiceRecordWithLinks) -> Vec<(i32, Vec<i32>)> {
+            out.open_incidents
+                .as_ref()
+                .expect("the call lists open incidents")
+                .iter()
+                .map(|i| (i.id, i.planned_work_item_ids.clone()))
+                .collect()
+        }
+
+        #[tokio::test]
+        async fn a_recorded_service_lists_the_incidents_it_left_open() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let fixed = observed(&db, v, "2026-10-01").await;
+            let fixed_job = job_for(&db, v, fixed).await;
+            let waiting = observed(&db, v, "2026-10-02").await;
+            let waiting_job = job_for(&db, v, waiting).await;
+            let unplanned = observed(&db, v, "2026-11-02").await;
+            // Left out: a note, an incident noticed during the service, one
+            // that happened after its last day and another vehicle's.
+            incident::create(
+                &db,
+                v,
+                NewIncident {
+                    category: IncidentCategory::Note,
+                    title: "Prefers the dealer on Main".into(),
+                    occurred_at: Some(DayOrTime::Day(date("2026-10-01"))),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            let noticed = observed(&db, v, "2026-11-01").await;
+            observed(&db, v, "2026-11-03").await;
+            let other = seed_vehicle(&db).await;
+            observed(&db, other, "2026-10-01").await;
+
+            let out = create(
+                &db,
+                v,
+                NewServiceRecord {
+                    service_date: date("2026-11-01"),
+                    end_date: Some(date("2026-11-02")),
+                    work_item_ids: Some(vec![fixed_job]),
+                    noticed_incident_ids: Some(vec![noticed]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                open_ids(&out),
+                vec![(unplanned, vec![]), (waiting, vec![waiting_job])]
+            );
+
+            // A read does not look, and the key is left out of its JSON.
+            let read = get(&db, v, out.record.id).await.unwrap();
+            assert!(read.open_incidents.is_none());
+            assert!(
+                serde_json::to_value(&read)
+                    .unwrap()
+                    .get("open_incidents")
+                    .is_none()
+            );
+        }
+
+        #[tokio::test]
+        async fn a_correction_lists_open_incidents_only_when_it_changes_the_resolved_work() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let incident = observed(&db, v, "2026-10-01").await;
+            let j = job_for(&db, v, incident).await;
+            let svc = completing(&db, v, vec![]).await;
+
+            let noted = update(
+                &db,
+                v,
+                svc,
+                UpdateServiceRecord {
+                    notes: Some(Some("Paid by card".into())),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            assert!(noted.open_incidents.is_none());
+
+            // A correction that sends a job list reports what is still open
+            // after it, which here is nothing, as an empty list.
+            let completed = update(&db, v, svc, jobs(vec![j], None)).await.unwrap();
+            crate::test_support::assert_empty(&open_ids(&completed));
+            assert_eq!(
+                serde_json::to_value(&completed).unwrap()["open_incidents"],
+                serde_json::json!([])
+            );
+
+            // An incident the owner reopened while its job stays completed
+            // reads under `resolved_incidents` only.
+            incident::update(
+                &db,
+                v,
+                incident,
+                crate::inputs::incident::UpdateIncident {
+                    resolved: Some(false),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            let reopened = update(&db, v, svc, jobs(vec![j], None)).await.unwrap();
+            crate::test_support::assert_empty(&open_ids(&reopened));
+
+            let undone = update(&db, v, svc, jobs(vec![], Some(CompletedWork::DidNotHappen)))
+                .await
+                .unwrap();
+            assert_eq!(open_ids(&undone), vec![(incident, vec![j])]);
+        }
+
+        #[tokio::test]
+        async fn a_repeated_invoice_number_does_not_look_for_open_incidents() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            observed(&db, v, "2026-10-01").await;
+            let invoice = || NewServiceRecord {
+                service_date: date("2026-11-01"),
+                invoice_ref: Some("RO-1".into()),
+                ..Default::default()
+            };
+            let first = create(&db, v, invoice()).await.unwrap();
+            assert_eq!(open_ids(&first).len(), 1);
+            let again = create(&db, v, invoice()).await.unwrap();
+            assert!(again.already_recorded && again.open_incidents.is_none());
         }
 
         #[tokio::test]
