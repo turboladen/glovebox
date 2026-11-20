@@ -1028,8 +1028,6 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         None => Vec::new(),
     };
     link_incidents(&txn, vehicle_id, record.id, Vec::new(), Vec::new(), &added).await?;
-    let from_added: Vec<i32> = added.iter().filter_map(|w| w.research_finding_id).collect();
-    let added_recalls = recall::recall_ids_among(&txn, &from_added).await?;
     // These are the incidents of the jobs the correction took off.
     incident_svc::release_from_service(&txn, record.id, &removal.incidents, choice).await?;
 
@@ -1054,10 +1052,21 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         part_svc::follow_service(&txn, &record).await?;
     }
 
-    // A sent list replaces every recall link; without one, only the recalls
-    // of the jobs taken off lose theirs.
+    // A sent list replaces every recall link, and the service still performs
+    // the recall of each job the call lists, whether or not the list names
+    // it. Without a list only the recalls of the jobs taken off lose their
+    // link and only the jobs added bring one.
     let removed_recalls: Vec<i32> = removal.recalls.iter().map(|r| r.finding_id).collect();
-    let mut relink = added_recalls;
+    let bringing = if input.recall_finding_ids.is_some() {
+        &listed_jobs
+    } else {
+        &added
+    };
+    let from_jobs: Vec<i32> = bringing
+        .iter()
+        .filter_map(|w| w.research_finding_id)
+        .collect();
+    let mut relink = recall::recall_ids_among(&txn, &from_jobs).await?;
     match input.recall_finding_ids {
         Some(recall_ids) => {
             relink.extend(recall_ids);
@@ -1130,8 +1139,9 @@ impl RecordedWork {
     /// parts and recalls its replacement lists leave out, and with each job
     /// taken off the work that hangs off it (the incident and the recall it
     /// came from, and the parts fitted to its needs) unless a list the call
-    /// sends names that work or a job in `listed_jobs`, which the service
-    /// keeps or gains, came from the same incident or recall.
+    /// sends names that work. An incident or a recall that a job in
+    /// `listed_jobs` came from is never taken off, because the service keeps
+    /// or gains that job.
     async fn left_out_by(
         mut self,
         db: &impl ConnectionTrait,
@@ -1159,7 +1169,10 @@ impl RecordedWork {
             .collect();
         self.incidents.retain(|i| incident_ids.contains(&i.id));
         match &input.recall_finding_ids {
-            Some(list) => self.recalls.retain(|r| !list.contains(&r.finding_id)),
+            Some(list) => self.recalls.retain(|r| {
+                released(Some(r.finding_id), |l| l.research_finding_id).is_some()
+                    && !list.contains(&r.finding_id)
+            }),
             None => self.recalls.retain(|r| finding_ids.contains(&r.finding_id)),
         }
         match &input.part_ids {
@@ -5042,6 +5055,125 @@ mod tests {
             assert!(resolved(&db, v, incident).await);
             let performed: Vec<i32> = out.performed_recalls.iter().map(|r| r.finding_id).collect();
             assert_eq!(performed, vec![finding]);
+        }
+
+        async fn job_from_recall(db: &DatabaseConnection, v: i32, finding: i32) -> i32 {
+            job::create(
+                db,
+                v,
+                NewWorkItem {
+                    title: "Recall repair".into(),
+                    research_finding_id: Some(finding),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .id
+        }
+
+        fn no_recalls_but(ids: Vec<i32>) -> UpdateServiceRecord {
+            UpdateServiceRecord {
+                recall_finding_ids: Some(vec![]),
+                ..jobs(ids, None)
+            }
+        }
+
+        #[tokio::test]
+        async fn an_empty_recall_list_keeps_the_recall_of_a_job_added_in_the_same_call() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let finding = seed_recall(&db, v, "24V888").await;
+            let j = job_from_recall(&db, v, finding).await;
+            let svc = create(
+                &db,
+                v,
+                NewServiceRecord {
+                    service_date: date("2026-11-01"),
+                    recall_finding_ids: Some(vec![finding]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .record
+            .id;
+
+            // The job brings the recall back, so nothing is released.
+            let out = update(&db, v, svc, no_recalls_but(vec![j])).await.unwrap();
+            assert_eq!(job::get(&db, v, j).await.unwrap().status, JobStatus::Done);
+            let performed: Vec<i32> = out.performed_recalls.iter().map(|r| r.finding_id).collect();
+            assert_eq!(performed, vec![finding]);
+            assert_eq!(
+                recall_status(&db, v).await,
+                vec![(recall::ShownRecallStatus::Done, Some(svc))]
+            );
+        }
+
+        #[tokio::test]
+        async fn an_empty_recall_list_keeps_the_recall_of_a_job_the_service_already_completed() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let finding = seed_recall(&db, v, "24V889").await;
+            let j = job_from_recall(&db, v, finding).await;
+            let svc = completing(&db, v, vec![j]).await;
+
+            let out = update(&db, v, svc, no_recalls_but(vec![j])).await.unwrap();
+            assert_eq!(job::get(&db, v, j).await.unwrap().status, JobStatus::Done);
+            let performed: Vec<i32> = out.performed_recalls.iter().map(|r| r.finding_id).collect();
+            assert_eq!(performed, vec![finding]);
+        }
+
+        #[tokio::test]
+        async fn listing_a_kept_job_without_a_recall_list_adds_no_recall_link() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let finding = seed_recall(&db, v, "24V892").await;
+            let j = job_from_recall(&db, v, finding).await;
+            let svc = completing(&db, v, vec![j]).await;
+            recall::unlink_from_service(&db, svc, None).await.unwrap();
+
+            let out = update(&db, v, svc, jobs(vec![j], None)).await.unwrap();
+            crate::test_support::assert_empty(&out.performed_recalls);
+        }
+
+        #[tokio::test]
+        async fn a_recall_left_out_of_a_sent_list_with_no_job_behind_it_asks_for_an_answer() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let finding = seed_recall(&db, v, "24V890").await;
+            // `seed_recall` returns the vehicle's first recall, so the second
+            // one is read back from the list.
+            seed_recall(&db, v, "24V891").await;
+            let other = recall::list(&db, v)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|r| r.finding_id)
+                .find(|id| *id != finding)
+                .unwrap();
+            let j = job_from_recall(&db, v, other).await;
+            let svc = create(
+                &db,
+                v,
+                NewServiceRecord {
+                    service_date: date("2026-11-01"),
+                    recall_finding_ids: Some(vec![finding]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .record
+            .id;
+
+            let err = update(&db, v, svc, no_recalls_but(vec![j]))
+                .await
+                .unwrap_err();
+            let DomainError::BadRequest(message) = err else {
+                panic!("{err:?}");
+            };
+            assert!(message.contains(&format!("recall {finding}")), "{message}");
         }
 
         #[tokio::test]

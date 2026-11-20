@@ -997,6 +997,39 @@ async fn correct_service_replaces_the_recalls_it_performed() {
 }
 
 #[tokio::test]
+async fn correct_service_keeps_the_recall_of_a_job_it_lists() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let recall = common::seed_recall(&t.db, v.id, "24V110000").await;
+    let job = t
+        .call(
+            "plan_work",
+            json!({ "vehicle_id": v.id, "title": "Recall", "research_finding_id": recall }),
+        )
+        .await;
+    let service = t
+        .call(
+            "record_service",
+            json!({ "vehicle_id": v.id, "service_date": "2026-03-01", "recall_finding_ids": [recall] }),
+        )
+        .await;
+
+    // The listed job brings the recall back, so the call needs no `completed_work`.
+    let fixed = t
+        .call(
+            "correct_service",
+            json!({ "vehicle_id": v.id, "service_id": service["id"], "recall_finding_ids": [], "work_item_ids": [job["id"]] }),
+        )
+        .await;
+    assert_eq!(fixed["performed_recalls"][0]["finding_id"], recall);
+    let coming = t.call("whats_coming", json!({ "vehicle_id": v.id })).await;
+    assert!(
+        coming["recalls"].as_array().unwrap().is_empty(),
+        "got: {coming}"
+    );
+}
+
+#[tokio::test]
 async fn correcting_a_service_moves_its_parts_and_a_shop_part_is_not_charged_twice() {
     let t = connect().await;
     let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
