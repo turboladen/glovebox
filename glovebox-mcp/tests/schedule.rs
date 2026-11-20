@@ -236,7 +236,19 @@ async fn changing_an_inherited_item_keeps_its_service_history_and_plans() {
         .iter()
         .find(|w| w["id"] == planned["id"])
         .unwrap_or_else(|| panic!("planned work must still be open: {after}"));
+    // The planned work and the service both read as the copy's.
     assert_eq!(work["schedule_item_id"], updated["id"]);
+    let service = t
+        .call(
+            "get_service",
+            json!({ "vehicle_id": v.id, "service_id": service_id }),
+        )
+        .await;
+    assert_eq!(
+        service["schedule_item_ids"],
+        json!([updated["id"]]),
+        "got: {service}"
+    );
 
     // The same call on the new id edits the same item.
     let again = t

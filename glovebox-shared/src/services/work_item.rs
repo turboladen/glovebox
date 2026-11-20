@@ -143,14 +143,24 @@ pub async fn list(
 
 /// Lists a vehicle's to-do items, each with its revisit status judged against
 /// `today` and the estimated odometer. A vehicle with no mileage data is
-/// judged on dates alone.
+/// judged on dates alone. Each item's `schedule_item_id` is the schedule item
+/// the vehicle tracks (see `schedule::effective_ids`), which is the id a
+/// reminder for it carries.
 pub async fn list_with_status(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     include_done: bool,
     today: chrono::NaiveDate,
 ) -> DomainResult<Vec<PlannedItem>> {
-    let items = list(db, vehicle_id, include_done).await?;
+    let mut items = list(db, vehicle_id, include_done).await?;
+    // A reminder names the item the vehicle tracks, and a job may name the
+    // inherited row of an item the vehicle has its own copy of, so the list
+    // shows the item each job counts toward.
+    let named: Vec<i32> = items.iter().filter_map(|i| i.schedule_item_id).collect();
+    let counts_toward = super::schedule::effective_ids(db, vehicle_id, &named).await?;
+    for item in &mut items {
+        item.schedule_item_id = item.schedule_item_id.map(|id| counts_toward[&id]);
+    }
     let estimated = if items.iter().any(|i| i.revisit_by_miles.is_some()) {
         let v = crate::services::vehicle::require(db, vehicle_id).await?;
         let has_readings = mileage_log::Entity::find()
@@ -381,6 +391,7 @@ pub struct UpdatedWorkItem {
 /// service satisfies and the incident it resolved through the job.
 #[derive(Default)]
 struct CompletedLinks {
+    vehicle_id: i32,
     service_id: Option<i32>,
     schedule_item_id: Option<i32>,
     incident_id: Option<i32>,
@@ -393,6 +404,7 @@ impl CompletedLinks {
             return Self::default();
         };
         Self {
+            vehicle_id: job.vehicle_id,
             service_id: Some(service_id),
             schedule_item_id: job.schedule_item_id,
             incident_id: job.incident_id,
@@ -406,12 +418,17 @@ impl CompletedLinks {
         let Some(service_id) = self.service_id else {
             return Ok(released);
         };
-        if let Some(item_id) = self.schedule_item_id
-            && !super::schedule::links_of_services(db, &[service_id])
+        if let Some(item_id) = self.schedule_item_id {
+            // The service's links name the item the vehicle tracks, which
+            // may be its own copy of the row the job names.
+            let item_id =
+                super::schedule::effective_ids(db, self.vehicle_id, &[item_id]).await?[&item_id];
+            if !super::schedule::links_of_services(db, &[service_id])
                 .await?
                 .contains(&(service_id, item_id))
-        {
-            released.schedule_item_id = Some(item_id);
+            {
+                released.schedule_item_id = Some(item_id);
+            }
         }
         if let Some(incident_id) = self.incident_id
             && !super::incident::resolvers_of_incidents(db, &[incident_id])
@@ -586,6 +603,9 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         super::incident::keep_resolver(db, incident_id, service_id).await?;
     }
     if let Some((service_id, item_id)) = satisfied {
+        // The stored link names the item the vehicle tracks, which may be
+        // its own copy of the row the job named.
+        let item_id = super::schedule::effective_ids(db, vehicle_id, &[item_id]).await?[&item_id];
         super::schedule::insert_service_links(
             db,
             service_id,

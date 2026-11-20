@@ -1070,10 +1070,14 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
 
     // Jobs come first, with the work that hangs off each one; the lists the
     // call sends then apply as sent.
-    let released_items: Vec<i32> = removal
+    let named: Vec<i32> = removal
         .jobs
         .iter()
         .filter_map(|j| j.schedule_item_id)
+        .collect();
+    let released_items: Vec<i32> = schedule::effective_ids(&txn, vehicle_id, &named)
+        .await?
+        .into_values()
         .collect();
     let satisfied_before = schedule::links_of_services(&txn, &[record.id]).await?;
     let settled = work_item::release_completed(&txn, &removal.job_ids(), choice).await?;
@@ -1106,12 +1110,13 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     let incident_ids: Vec<i32> = removal.incidents.iter().map(|i| i.id).collect();
     incident_svc::release_resolved(&txn, record.id, incident_ids, choice).await?;
 
-    if let Some(mut item_ids) = input.schedule_item_ids {
+    if let Some(item_ids) = input.schedule_item_ids {
         // A read lists a job's item beside the named ones, so a list sent
         // with the call that takes the job off would store the item the job
-        // is taking with it.
+        // is taking with it. Both sides name the item the vehicle tracks.
+        let mut item_ids = schedule::tracked_ids(&txn, vehicle_id, &item_ids).await?;
         item_ids.retain(|id| !released_items.contains(id));
-        schedule::link_service(&txn, vehicle_id, record.id, &item_ids, LinkMode::Replace).await?;
+        schedule::insert_service_links(&txn, record.id, &item_ids, LinkMode::Replace).await?;
     }
 
     let parts_listed = input.part_ids.is_some();
