@@ -198,6 +198,11 @@ named as things a person would say:
 - `reads.rs`: `summarize_recent_activity`, `search_records`, `cost_summary`, `get_service`,
   `get_incident`
 
+A change to what a tool asks or refuses updates every copy of the rule: the tool `description`,
+the field docs in `src/schemas*`, `docs/claude-desktop/glovebox-project-prompt.md` (which restates
+them for Desktop) and the ADR that decided it. `rg` the rule's key phrase across `glovebox-mcp/src`
+and `docs/` to find them.
+
 Inputs are schemars-derived structs in `src/schemas.rs`, `src/schemas/corrections.rs` and
 `src/schemas/checklist.rs`; their doc
 comments become the LLM-visible field descriptions. `Parameters<T>` defers deserialize errors
