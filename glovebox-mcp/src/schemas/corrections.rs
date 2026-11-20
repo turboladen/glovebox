@@ -390,7 +390,7 @@ pub struct CorrectServiceInput {
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<String>")]
     pub invoice_ref: Option<Option<String>>,
-    /// REPLACES the recalls this service performed with exactly this list (`finding_id`s from `whats_coming` or `check_recalls`). A recall taken off the list needs `completed_work`. A recall that a job this service completes came from stays performed whether or not this list names it, so take the job off to take that recall off. Send `[]` to remove them all; omit to leave them alone.
+    /// REPLACES the recalls this service performed with exactly this list (`finding_id`s from `whats_coming` or `check_recalls`). A recall taken off the list needs `completed_work`. A recall that a job this service completes came from stays performed whether or not this list names it, so take the job off to take that recall off. Send `[]` to remove every recall no completed job brings; omit to leave them alone.
     pub recall_finding_ids: Option<Vec<i32>>,
     /// REPLACES the planned jobs this service completed with exactly this list (ids from `list_planned_work`). A job added must be planned and becomes done, resolving its incident and performing its recall; a job taken off needs `completed_work` and takes its incident (unless the invoice named that incident), recall, the parts fitted to its needs and the reminder baseline of its schedule item with it. Send `[]` to remove them all; omit to leave them alone.
     pub work_item_ids: Option<Vec<i32>>,

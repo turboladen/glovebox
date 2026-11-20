@@ -939,6 +939,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         recall::require_recalls(db, vehicle_id, &super::dedup_ids(finding_ids)).await?;
     }
     let completed_before = recorded.job_ids();
+    let recalls_before: Vec<i32> = recorded.recalls.iter().map(|r| r.finding_id).collect();
     // A call that sends no job list keeps the jobs the service completed.
     let kept_jobs = if input.work_item_ids.is_some() {
         listed_jobs
@@ -1091,19 +1092,21 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     }
 
     // A sent list replaces every recall link, and the service still performs
-    // the recall of each job the call lists, whether or not the list names
-    // it. Without a list only the recalls of the jobs taken off lose their
-    // link and only the jobs added bring one.
+    // the recall of each job it gains and of each job it keeps whose recall
+    // it performed before the call, whether or not the list names it. A kept
+    // job whose recall the service did not perform gains no link. Without a
+    // list only the recalls of the jobs taken off lose their link and only
+    // the jobs added bring one.
     let removed_recalls: Vec<i32> = removal.recalls.iter().map(|r| r.finding_id).collect();
-    let bringing = if input.recall_finding_ids.is_some() {
-        &kept_jobs
-    } else {
-        &added
-    };
-    let from_jobs: Vec<i32> = bringing
-        .iter()
-        .filter_map(|w| w.research_finding_id)
-        .collect();
+    let mut from_jobs: Vec<i32> = added.iter().filter_map(|w| w.research_finding_id).collect();
+    if input.recall_finding_ids.is_some() {
+        from_jobs.extend(
+            kept_jobs
+                .iter()
+                .filter_map(|w| w.research_finding_id)
+                .filter(|id| recalls_before.contains(id)),
+        );
+    }
     let mut relink = recall::recall_ids_among(&txn, &from_jobs).await?;
     match input.recall_finding_ids {
         Some(recall_ids) => {
@@ -5212,6 +5215,84 @@ mod tests {
                 recall_status(&db, v).await,
                 vec![(recall::ShownRecallStatus::Done, Some(svc))]
             );
+        }
+
+        #[tokio::test]
+        async fn an_empty_recall_list_without_a_job_list_takes_off_only_a_recall_no_job_brings() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let named = seed_recall(&db, v, "24V894").await;
+            // `seed_recall` returns the vehicle's first recall, so the second
+            // one is read back from the list.
+            seed_recall(&db, v, "24V895").await;
+            let from_job = recall::list(&db, v)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|r| r.finding_id)
+                .find(|id| *id != named)
+                .unwrap();
+            let j = job_from_recall(&db, v, from_job).await;
+            let svc = create(
+                &db,
+                v,
+                NewServiceRecord {
+                    service_date: date("2026-11-01"),
+                    recall_finding_ids: Some(vec![named]),
+                    work_item_ids: Some(vec![j]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .record
+            .id;
+            let no_recalls = |completed_work| UpdateServiceRecord {
+                recall_finding_ids: Some(vec![]),
+                completed_work,
+                ..Default::default()
+            };
+
+            let err = update(&db, v, svc, no_recalls(None)).await.unwrap_err();
+            let DomainError::BadRequest(message) = err else {
+                panic!("{err:?}");
+            };
+            assert!(message.contains(&format!("recall {named}")), "{message}");
+            assert!(
+                !message.contains(&format!("recall {from_job}")),
+                "{message}"
+            );
+
+            let out = update(&db, v, svc, no_recalls(Some(CompletedWork::DidNotHappen)))
+                .await
+                .unwrap();
+            let performed: Vec<i32> = out.performed_recalls.iter().map(|r| r.finding_id).collect();
+            assert_eq!(performed, vec![from_job]);
+        }
+
+        #[tokio::test]
+        async fn a_recall_list_gives_a_kept_job_no_recall_link_it_did_not_have() {
+            let db = test_db().await;
+            let v = seed_vehicle(&db).await;
+            let finding = seed_recall(&db, v, "24V896").await;
+            let j = job_from_recall(&db, v, finding).await;
+            let svc = completing(&db, v, vec![j]).await;
+            // The service keeps the job without a link to its recall, as it
+            // does after the owner says the recall was done another way.
+            recall::unlink_from_service(&db, svc, None).await.unwrap();
+
+            let out = update(
+                &db,
+                v,
+                svc,
+                UpdateServiceRecord {
+                    recall_finding_ids: Some(vec![]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            crate::test_support::assert_empty(&out.performed_recalls);
         }
 
         #[tokio::test]
