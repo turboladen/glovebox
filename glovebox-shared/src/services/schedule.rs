@@ -66,11 +66,22 @@ fn validate_intervals(miles: Option<i32>, months: Option<i32>) -> DomainResult<(
     Ok(())
 }
 
+/// Refuses a warning below zero. Zero warns only once the item is due.
+fn validate_warnings(miles: Option<i32>, days: Option<i32>) -> DomainResult<()> {
+    for (field, value) in [("warning_miles", miles), ("warning_days", days)] {
+        if value.is_some_and(|v| v < 0) {
+            return Err(DomainError::invalid(field, "must be zero or more"));
+        }
+    }
+    Ok(())
+}
+
 pub async fn create(
     db: &impl ConnectionTrait,
     input: NewScheduleItem,
 ) -> DomainResult<maintenance_schedule_item::Model> {
     validate_intervals(input.interval_miles, input.interval_months)?;
+    validate_warnings(input.warning_miles, input.warning_days)?;
     // Validate exactly one owner is set
     let owner_count = [
         input.platform_id.is_some(),
@@ -125,6 +136,7 @@ pub(crate) async fn update(
         input.interval_miles.flatten(),
         input.interval_months.flatten(),
     )?;
+    validate_warnings(input.warning_miles.flatten(), input.warning_days.flatten())?;
     let existing = get(db, id).await?;
     let mut active: maintenance_schedule_item::ActiveModel = existing.into();
 
@@ -1851,6 +1863,91 @@ mod tests {
         .unwrap_err();
         assert!(matches!(err, DomainError::Invalid { .. }), "got: {err}");
         crate::test_support::assert_empty(&own_items(&db, vid).await);
+    }
+
+    #[tokio::test]
+    async fn a_negative_warning_is_refused_and_zero_is_accepted() {
+        let db = test_db().await;
+        let (_pid, template_id, vid) = seed_chain(&db).await;
+        for (miles, days, field) in [
+            (Some(-1), None, "warning_miles"),
+            (None, Some(-1), "warning_days"),
+        ] {
+            let err = create_for_vehicle(
+                &db,
+                vid,
+                NewScheduleItem {
+                    warning_miles: miles,
+                    warning_days: days,
+                    ..item_named("Smog check")
+                },
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                matches!(&err, DomainError::Invalid { field: f, .. } if f == field),
+                "got: {err}"
+            );
+        }
+
+        // A refused change to an inherited item leaves no copy behind.
+        let inherited = create(
+            &db,
+            NewScheduleItem {
+                model_template_id: Some(template_id),
+                ..item_named("Spark Plugs")
+            },
+        )
+        .await
+        .unwrap();
+        for (miles, days, field) in [
+            (Some(Some(-1)), None, "warning_miles"),
+            (None, Some(Some(-1)), "warning_days"),
+        ] {
+            let err = update_for_vehicle(
+                &db,
+                vid,
+                inherited.id,
+                UpdateScheduleItem {
+                    warning_miles: miles,
+                    warning_days: days,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                matches!(&err, DomainError::Invalid { field: f, .. } if f == field),
+                "got: {err}"
+            );
+        }
+        crate::test_support::assert_empty(&own_items(&db, vid).await);
+
+        let zero = create_for_vehicle(
+            &db,
+            vid,
+            NewScheduleItem {
+                warning_miles: Some(0),
+                warning_days: Some(0),
+                ..item_named("Smog check")
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!((zero.warning_miles, zero.warning_days), (Some(0), Some(0)));
+        let updated = update_for_vehicle(
+            &db,
+            vid,
+            zero.id,
+            UpdateScheduleItem {
+                warning_miles: Some(Some(0)),
+                warning_days: Some(Some(0)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.warning_miles, Some(0));
     }
 
     #[tokio::test]

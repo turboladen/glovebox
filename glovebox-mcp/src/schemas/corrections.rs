@@ -981,9 +981,9 @@ pub struct AddScheduleItemInput {
     pub interval_miles: Option<i32>,
     /// Repeat every this many months. Must be greater than zero.
     pub interval_months: Option<i32>,
-    /// Start warning this many miles before due. Defaults to 1000.
+    /// Start warning this many miles before due. Must be zero or more. Defaults to 1000.
     pub warning_miles: Option<i32>,
-    /// Start warning this many days before due. Defaults to 30.
+    /// Start warning this many days before due. Must be zero or more. Defaults to 30.
     pub warning_days: Option<i32>,
     /// Where the interval comes from, e.g. 'owner manual'.
     pub source: Option<String>,
@@ -1051,13 +1051,13 @@ pub struct UpdateScheduleItemInput {
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<i32>")]
     pub interval_months: Option<Option<i32>>,
-    /// Start warning this many miles before due.
+    /// Start warning this many miles before due. Must be zero or more.
     ///
     /// Send `null` to restore the default of 1000; omit the key to leave it unchanged.
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<i32>")]
     pub warning_miles: Option<Option<i32>>,
-    /// Start warning this many days before due.
+    /// Start warning this many days before due. Must be zero or more.
     ///
     /// Send `null` to restore the default of 30; omit the key to leave it unchanged.
     #[serde(default, deserialize_with = "nullable")]

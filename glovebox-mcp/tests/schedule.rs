@@ -137,6 +137,21 @@ async fn add_and_update_schedule_items_round_trip() {
         assert!(err.starts_with("interval_months: "), "{tool} got: {err}");
     }
 
+    // A warning below zero means nothing.
+    for (tool, args) in [
+        (
+            "add_schedule_item",
+            json!({ "vehicle_id": v.id, "name": "Wipers", "warning_miles": -1 }),
+        ),
+        (
+            "update_schedule_item",
+            json!({ "vehicle_id": v.id, "schedule_item_id": item_id, "warning_miles": -1 }),
+        ),
+    ] {
+        let err = t.call_err(tool, args).await;
+        assert!(err.starts_with("warning_miles: "), "{tool} got: {err}");
+    }
+
     let other = vehicle::create(&t.db, new_vehicle("Other")).await.unwrap();
     let wrong = t
         .call_err(
