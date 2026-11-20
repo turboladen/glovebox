@@ -451,7 +451,18 @@ async fn repoint_links(
         .filter(work_item::Column::ScheduleItemId.is_in(from))
         .exec(db)
         .await?;
-    Ok(())
+
+    // A link and a completed job of one service can both land on the target.
+    let completing: Vec<i32> = work_item::Entity::find()
+        .select_only()
+        .column(work_item::Column::CompletedServiceId)
+        .filter(work_item::Column::VehicleId.eq(vehicle_id))
+        .filter(work_item::Column::ScheduleItemId.eq(target_id))
+        .filter(work_item::Column::CompletedServiceId.is_not_null())
+        .into_tuple()
+        .all(db)
+        .await?;
+    drop_links_jobs_bring(db, &completing).await
 }
 
 crate::vocab::vocabulary! {
@@ -462,6 +473,73 @@ crate::vocab::vocabulary! {
         Add => "add",
         Replace => "replace",
     }
+}
+
+/// Each pair of a service in `service_ids` and a schedule item it satisfies,
+/// ordered by service and then by item.
+pub(crate) async fn links_of_services(
+    db: &impl ConnectionTrait,
+    service_ids: &[i32],
+) -> DomainResult<Vec<(i32, i32)>> {
+    if service_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let stored = service_schedule_link::Entity::find()
+        .filter(service_schedule_link::Column::ServiceRecordId.is_in(service_ids.to_vec()));
+    let jobs = work_item::Entity::find()
+        .filter(work_item::Column::CompletedServiceId.is_in(service_ids.to_vec()));
+    satisfied(db, stored, jobs).await
+}
+
+/// Each pair of a service and a schedule item in `item_ids` that the service
+/// satisfies, ordered by service and then by item. A stored link is listed
+/// for any vehicle's service, and a job's item only for `vehicle_id`'s jobs.
+pub(crate) async fn links_to_items(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    item_ids: &[i32],
+) -> DomainResult<Vec<(i32, i32)>> {
+    if item_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let stored = service_schedule_link::Entity::find()
+        .filter(service_schedule_link::Column::ScheduleItemId.is_in(item_ids.to_vec()));
+    // An inherited item is shared by every vehicle on its template, so the
+    // jobs are narrowed to this vehicle's.
+    let jobs = work_item::Entity::find()
+        .filter(work_item::Column::VehicleId.eq(vehicle_id))
+        .filter(work_item::Column::ScheduleItemId.is_in(item_ids.to_vec()));
+    satisfied(db, stored, jobs).await
+}
+
+// A service satisfies the schedule items its stored links name and the
+// schedule item of each job it completed. A job's item is read from the job
+// and never stored as a link, so taking the job off the service takes the
+// item's baseline with it and leaves the other items the invoice named.
+async fn satisfied(
+    db: &impl ConnectionTrait,
+    stored: Select<service_schedule_link::Entity>,
+    jobs: Select<work_item::Entity>,
+) -> DomainResult<Vec<(i32, i32)>> {
+    let mut pairs: Vec<(i32, i32)> = stored
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|l| (l.service_record_id, l.schedule_item_id))
+        .collect();
+    let completed: Vec<(i32, i32)> = jobs
+        .select_only()
+        .column(work_item::Column::CompletedServiceId)
+        .column(work_item::Column::ScheduleItemId)
+        .filter(work_item::Column::CompletedServiceId.is_not_null())
+        .filter(work_item::Column::ScheduleItemId.is_not_null())
+        .into_tuple()
+        .all(db)
+        .await?;
+    pairs.extend(completed);
+    pairs.sort_unstable();
+    pairs.dedup();
+    Ok(pairs)
 }
 
 /// Links a service to the schedule items the vehicle tracks for `item_ids`,
@@ -480,8 +558,8 @@ pub(crate) async fn link_service(
 
 /// Writes a service's schedule links for ids that are already resolved:
 /// `Replace` drops the existing links first, `Add` skips the ones present.
-/// Callers that resolve through [`tracked_ids`] earlier, or hold an id that
-/// was resolved when it was stored, use this instead of [`link_service`].
+/// A caller that resolved the ids through [`tracked_ids`] earlier, or that
+/// holds an id a job stores, uses this instead of [`link_service`].
 pub(crate) async fn insert_service_links(
     db: &impl ConnectionTrait,
     service_record_id: i32,
@@ -513,6 +591,48 @@ pub(crate) async fn insert_service_links(
         });
     service_schedule_link::Entity::insert_many(new_links)
         .exec_without_returning(db)
+        .await?;
+    drop_links_jobs_bring(db, &[service_record_id]).await
+}
+
+/// Removes the stored links of the named services that name the schedule item
+/// of a job the same service completes. Runs on the caller's connection.
+// A job's schedule item is read from the job. A stored link for the same item
+// would outlive the job when a correction takes the job off, and a service
+// read lists the job's item, so a caller that sends the list back would store
+// one. A write that stores a link, completes a job, or changes the schedule
+// item of a completed job ends here.
+pub(crate) async fn drop_links_jobs_bring(
+    db: &impl ConnectionTrait,
+    service_ids: &[i32],
+) -> DomainResult<()> {
+    if service_ids.is_empty() {
+        return Ok(());
+    }
+    let from_jobs: Vec<(i32, i32)> = work_item::Entity::find()
+        .select_only()
+        .column(work_item::Column::CompletedServiceId)
+        .column(work_item::Column::ScheduleItemId)
+        .filter(work_item::Column::CompletedServiceId.is_in(service_ids.to_vec()))
+        .filter(work_item::Column::ScheduleItemId.is_not_null())
+        .into_tuple()
+        .all(db)
+        .await?;
+    if from_jobs.is_empty() {
+        return Ok(());
+    }
+    let repeated = from_jobs
+        .into_iter()
+        .fold(Condition::any(), |any, (service_id, item_id)| {
+            any.add(
+                Condition::all()
+                    .add(service_schedule_link::Column::ServiceRecordId.eq(service_id))
+                    .add(service_schedule_link::Column::ScheduleItemId.eq(item_id)),
+            )
+        });
+    service_schedule_link::Entity::delete_many()
+        .filter(repeated)
+        .exec(db)
         .await?;
     Ok(())
 }

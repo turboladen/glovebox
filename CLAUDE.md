@@ -146,7 +146,8 @@ RESTRICT`, and `m20261119_000003_appointment_ending_check`, which refuses to fin
 appointment is both closed and cancelled and then adds that rule as a CHECK, and
 `m20261119_000004_single_row_checks`, which does the same for a job's completing service, a
 service's dates and shop, a service reading's source, a schedule item's override and a research
-finding's status. They run on startup.
+finding's status, and `m20261120_000001_job_schedule_links`, which removes each stored schedule
+link that repeats the schedule item of a job the same service completes. They run on startup.
 
 **Test harness** (`test_support.rs`): `test_db()` is an in-memory SQLite database with migrations
 applied. It is compiled under `#[cfg(any(test, feature = "test-support"))]`; `glovebox-mcp` uses it
@@ -207,6 +208,13 @@ and commits nothing. Re-recording an existing `invoice_ref` for the vehicle retu
 record with `already_recorded: true` and a `message` and writes nothing (both keys appear only
 on that path). Completing planned work happens by naming
 `work_item_ids` in `record_service`, or in `correct_service` for a service already recorded.
+A service satisfies the schedule items its `service_schedule_links` rows name (the ones an invoice
+named) and the schedule item of each job it completes, which is read from the job and never
+stored as a link. Every reader goes through `schedule::links_of_services` or
+`schedule::links_to_items`, and a write that stores a link, completes a job or changes a completed
+job's schedule item ends with `schedule::drop_links_jobs_bring`, so an item named beside its job
+follows the job; deleting a completed job keeps the item as a stored link
+(`docs/adr/0017-a-jobs-schedule-item-is-read-from-the-job.md`).
 Every service read carries `lines_total_cents`, and a `note` when the total differs from it (the
 kinds are `maintenance`, `mod`, `repair`, `inspection`, `recall` and `fee`; payers are `self`,
 `insurance`, `third_party` and `manufacturer`). A line may carry its own `paid_by`
@@ -480,7 +488,7 @@ role per control style, and `YYYY-MM-DD` dates.
   `research_finding::FindingStatus`, `service_record::CompletedWork`, `schedule::LinkMode` and `search::SearchScope`. A
   filter on a column never takes one of these.
   `docs/adr/0004-typed-vocabularies.md` records why.
-- **Migrations**: new migrations go after `m20261119_000004_single_row_checks`; the
+- **Migrations**: new migrations go after `m20261120_000001_job_schedule_links`; the
   `new-migration` skill has the templates. Use `Expr::cust()` for expressions inside builder queries; raw
   `execute_unprepared` only where no builder form exists (FTS5 DDL, cross-table copies).
 - **Migrations are not transactional on SQLite** (sea-orm-migration only wraps Postgres), so write

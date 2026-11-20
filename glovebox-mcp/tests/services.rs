@@ -43,6 +43,58 @@ async fn record_service_then_summarize_recent_activity_round_trip() {
 }
 
 #[tokio::test]
+async fn taking_a_job_off_a_service_as_not_done_brings_its_reminder_back() {
+    let t = connect().await;
+    let v = vehicle::create(
+        &t.db,
+        NewVehicle {
+            purchase_date: Some(glovebox_shared::test_support::date("2020-01-01")),
+            ..new_vehicle("Daily")
+        },
+    )
+    .await
+    .unwrap();
+    let item = schedule_svc::create(
+        &t.db,
+        schedule_item_every_12_months(v.id, "Brake fluid flush"),
+    )
+    .await
+    .unwrap();
+    let job = t
+        .call(
+            "plan_work",
+            json!({ "vehicle_id": v.id, "title": "Flush brake fluid", "schedule_item_id": item.id }),
+        )
+        .await;
+
+    let service = t
+        .call(
+            "record_service",
+            json!({ "vehicle_id": v.id, "service_date": days_ago(0), "work_item_ids": [job["id"]] }),
+        )
+        .await;
+    assert_eq!(service["schedule_item_ids"], json!([item.id]));
+    assert_eq!(reminder_status(&t, v.id, "Brake fluid flush").await, "ok");
+
+    let fixed = t
+        .call(
+            "correct_service",
+            json!({
+                "vehicle_id": v.id,
+                "service_id": service["id"],
+                "work_item_ids": [],
+                "completed_work": "did_not_happen"
+            }),
+        )
+        .await;
+    assert_eq!(fixed["schedule_item_ids"], json!([]));
+    assert_eq!(
+        reminder_status(&t, v.id, "Brake fluid flush").await,
+        "overdue"
+    );
+}
+
+#[tokio::test]
 async fn record_service_schedule_item_ids_clears_the_overdue_reminder() {
     let t = connect().await;
     let v = vehicle::create(

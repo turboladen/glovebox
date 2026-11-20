@@ -119,18 +119,20 @@ impl GloveboxMcp {
                        it, null to take it off), or its `status`. Send only the fields to change; \
                        null clears a field, and a field left out is untouched. Set `status: \
                        \"dropped\"` when the owner no longer intends to do the work (it leaves \
-                       `whats_coming` but stays in history), or `planned` to reopen an item. When \
-                       the work was done and there is an invoice, record it with `record_service` \
-                       and `work_item_ids` instead, so the service, reminder, incident and recall \
-                       are linked; set `done` here only for work that left no paperwork. Setting \
-                       `done` here does not close a recall or incident the item is linked to: \
-                       also call `set_recall_status` or `update_incident` for it. Use \
-                       `delete_planned_work` only for an item added by mistake. Setting `planned` \
-                       on an item whose appointment was closed by hand opens that appointment \
-                       again, and the result names it in `reopened_appointment_id`. On a \
-                       cancelled appointment the item comes off it and is unscheduled, and the \
-                       result names the appointment in `left_cancelled_appointment_id`. Tell the \
-                       owner when either happens."
+                       `whats_coming` but stays in history), or `planned` to reopen an item. \
+                       Taking a job a service completed off `done`, or changing its schedule \
+                       item, moves the reminder with it: the old schedule item no longer counts \
+                       from that service. When the work was done and there is an invoice, record \
+                       it with `record_service` and `work_item_ids` instead, so the service, \
+                       reminder, incident and recall are linked; set `done` here only for work \
+                       that left no paperwork. Setting `done` here does not close a recall or \
+                       incident the item is linked to: also call `set_recall_status` or \
+                       `update_incident` for it. Use `delete_planned_work` only for an item added \
+                       by mistake. Setting `planned` on an item whose appointment was closed by \
+                       hand opens that appointment again, and the result names it in \
+                       `reopened_appointment_id`. On a cancelled appointment the item comes off \
+                       it and is unscheduled, and the result names the appointment in \
+                       `left_cancelled_appointment_id`. Tell the owner when either happens."
     )]
     async fn update_planned_work(
         &self,

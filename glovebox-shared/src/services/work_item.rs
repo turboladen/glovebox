@@ -179,8 +179,8 @@ pub async fn list_with_status(
         .collect())
 }
 
-/// Marks the named open items of a vehicle as done by a service record, and
-/// links each item's schedule item to that service so its reminder clears.
+/// Marks the named open items of a vehicle as done by a service record, which
+/// then satisfies each item's schedule item (`schedule::links_of_services`).
 /// Runs inside the caller's transaction. An id from another vehicle reads as
 /// nonexistent; an item that is already done or dropped is a `BadRequest`.
 pub(crate) async fn complete_with_service(
@@ -198,25 +198,13 @@ pub(crate) async fn complete_with_service(
                 existing.status
             )));
         }
-        let schedule_item_id = existing.schedule_item_id;
         let mut active: work_item::ActiveModel = existing.into();
         active.status = Set(JobStatus::Done);
         active.completed_service_id = Set(Some(service_record_id));
         active.updated_at = Set(super::now());
         completed.push(active.update(db).await?);
-
-        // The stored schedule item id was resolved when the work item was
-        // filed, so it is linked as is.
-        if let Some(schedule_item_id) = schedule_item_id {
-            super::schedule::insert_service_links(
-                db,
-                service_record_id,
-                &[schedule_item_id],
-                super::schedule::LinkMode::Add,
-            )
-            .await?;
-        }
     }
+    super::schedule::drop_links_jobs_bring(db, &[service_record_id]).await?;
     Ok(completed)
 }
 
@@ -461,6 +449,11 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
 
     active.updated_at = Set(super::now());
     let updated = active.update(db).await?;
+    // The edit may have given a completed job a schedule item its service
+    // also names.
+    if let Some(service_id) = updated.completed_service_id {
+        super::schedule::drop_links_jobs_bring(db, &[service_id]).await?;
+    }
     let mut out = UpdatedWorkItem {
         reopened_appointment_id: None,
         left_cancelled_appointment_id: None,
@@ -488,7 +481,20 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     let txn = super::begin_write(db).await?;
     let db = &txn;
     let existing = get(db, vehicle_id, id).await?;
+    let satisfied = existing.completed_service_id.zip(existing.schedule_item_id);
     existing.delete(db).await?;
+    // The service did the work whether or not the job's record is kept, so
+    // the schedule item the job brought is stored as a link of the service
+    // and its reminder keeps counting from there.
+    if let Some((service_id, item_id)) = satisfied {
+        super::schedule::insert_service_links(
+            db,
+            service_id,
+            &[item_id],
+            super::schedule::LinkMode::Add,
+        )
+        .await?;
+    }
     txn.commit().await?;
     Ok(())
 }

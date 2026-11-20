@@ -75,5 +75,5 @@ performed. A correction that removes none of that work needs no answer.
 - Jobs, parts and recalls each have one release function that takes the answer
   (`work_item::release_completed`, `part::release_from_service`, `recall::release_from_service`),
   which `delete_service` and `correct_service` both call.
-- A correction leaves the schedule links alone, so a job taken off a service keeps the reminder
-  baseline its schedule item got, until `schedule_item_ids` is corrected too.
+- A job taken off a service takes the reminder baseline of its schedule item with it, and the
+  schedule items the invoice named stay. ADR-0017 records how.
