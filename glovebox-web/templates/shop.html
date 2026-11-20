@@ -8,8 +8,7 @@
   <div class="summary">
     {% if let Some(a) = d.address %}<div><span class="l">Address</span>{{ a }}</div>{% endif %}
     {% if let Some(p) = d.phone %}<div><span class="l">Phone</span>{{ p }}</div>{% endif %}
-    {% if let Some(w) = d.website_href %}<div><span class="l">Website</span><a href="{{ w }}">{{ w }}</a></div>{% endif %}
-    {% if let Some(w) = d.website_text %}<div><span class="l">Website</span>{{ w }}</div>{% endif %}
+    {% if let Some(w) = d.website %}<div><span class="l">Website</span>{% if d.website_is_link %}<a href="{{ w }}">{{ w }}</a>{% else %}{{ w }}{% endif %}</div>{% endif %}
     {% if let Some(s) = d.specialty %}<div><span class="l">Specialty</span>{{ s }}</div>{% endif %}
     <div><span class="l">Total spent</span><span class="price">{{ v.total }}</span></div>
     <div><span class="l">You paid</span><span class="price">{{ v.paid }}</span></div>
@@ -49,7 +48,7 @@
       <li class="row row--appts">
         <span class="key"><a href="{{ a.href }}">{{ a.purpose }}</a></span>
         <span data-l="Vehicle">{{ a.vehicle }}</span>
-        <span data-l="Date">{% if let Some(t) = a.date %}{{ t }}{% else %}<span class="empty">Not booked</span>{% endif %}</span>
+        <span data-l="Date">{% if a.dated %}{{ a.when }}{% else %}<span class="empty cap">{{ a.when }}</span>{% endif %}</span>
         <span data-l="Status"><span class="pill pill--{{ a.status.kind }}">{{ a.status.text }}</span></span>
       </li>
       {% endfor %}

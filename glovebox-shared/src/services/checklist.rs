@@ -765,10 +765,7 @@ fn home_appointment(s: AppointmentSummary) -> HomeAppointment {
         purpose: s.appointment.purpose,
         shop_id: s.appointment.shop_id,
         shop_name: s.shop_name,
-        when: s
-            .appointment
-            .planned_date
-            .map_or_else(|| "not booked".to_owned(), super::date_label),
+        when: super::appointment::when(s.appointment.planned_date),
         dated: s.appointment.planned_date.is_some(),
         phase: s.phase,
         jobs: s.jobs,

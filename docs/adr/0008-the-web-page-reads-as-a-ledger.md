@@ -69,7 +69,7 @@ each shop with its address in gray beneath the name, its service and appointment
 aligned, and its last visit. A shop's page heads with its details and totals as labeled values,
 like an appointment's head. It then has one panel for the services, with the totals and the
 owner's share right aligned as prices, and one for the appointments, which reuse the phase
-pills and add no kind. A missing value is gray: "No services", "No total" and "Not booked". The
+pills and add no kind. A missing value is gray: "No services", "No total" and "Not booked". The shared layer writes "not booked", as it does for the home rows. The
 pages hold no forms, because the shop directory changes only through Claude Desktop. A shop
 name printed elsewhere links to its page, and on the work sheet that link sits in the on-screen
 strip, so the printed sheet stays plain.

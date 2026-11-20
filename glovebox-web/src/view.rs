@@ -14,7 +14,7 @@ use glovebox_shared::{
     },
     money::format_cents,
     services::{
-        appointment::AppointmentPhase,
+        appointment::{self, AppointmentPhase},
         checklist::{self, Checklist, HomeAppointment, JobView, NeedView, StepRow},
         date_label,
         need::{self, Stage},
@@ -1070,13 +1070,18 @@ pub struct ShopLink {
 }
 
 impl ShopLink {
+    /// The link to shop `id`, named `name`.
+    pub fn new(id: i32, name: &str) -> Self {
+        Self {
+            name: name.to_owned(),
+            href: crate::pages::shop_path(id),
+        }
+    }
+
     /// The link for a record that names shop `id` as `name`, or `None` when it
     /// names no shop.
     pub fn of(id: Option<i32>, name: Option<&str>) -> Option<Self> {
-        Some(Self {
-            name: name?.to_owned(),
-            href: crate::pages::shop_path(id?),
-        })
+        Some(Self::new(id?, name?))
     }
 }
 
@@ -1093,10 +1098,7 @@ pub struct ShopRow {
 impl From<&ShopListing> for ShopRow {
     fn from(l: &ShopListing) -> Self {
         Self {
-            link: ShopLink {
-                name: l.shop.name.clone(),
-                href: crate::pages::shop_path(l.shop.id),
-            },
+            link: ShopLink::new(l.shop.id, &l.shop.name),
             address: l.shop.address.clone(),
             services: l.service_count,
             appointments: l.appointment_count,
@@ -1110,26 +1112,22 @@ pub struct ShopDetails {
     pub name: String,
     pub address: Option<String>,
     pub phone: Option<String>,
-    /// The website as a link, when it is an `http` or `https` address.
-    pub website_href: Option<String>,
-    /// The website as text, when it is some other value.
-    pub website_text: Option<String>,
+    pub website: Option<String>,
+    /// True when the website is an `http` or `https` address, which the page
+    /// shows as a link.
+    pub website_is_link: bool,
     pub specialty: Option<String>,
     pub notes: Option<String>,
 }
 
 impl From<&shop::Model> for ShopDetails {
     fn from(s: &shop::Model) -> Self {
-        let (website_href, website_text) = match &s.website {
-            Some(w) if is_web_address(w) => (Some(w.clone()), None),
-            other => (None, other.clone()),
-        };
         Self {
             name: s.name.clone(),
             address: s.address.clone(),
             phone: s.phone.clone(),
-            website_href,
-            website_text,
+            website: s.website.clone(),
+            website_is_link: s.website.as_deref().is_some_and(is_web_address),
             specialty: s.specialty.clone(),
             notes: s.notes.clone(),
         }
@@ -1152,7 +1150,9 @@ pub struct ShopAppointmentRow {
     pub href: String,
     pub purpose: String,
     pub vehicle: String,
-    pub date: Option<String>,
+    /// The planned date, or the words the shared layer gives when there is none.
+    pub when: String,
+    pub dated: bool,
     pub status: Tag,
 }
 
@@ -1191,7 +1191,8 @@ impl From<&ShopHistory> for ShopPageView {
                         href: crate::pages::appointment_path(appt.vehicle_id, appt.id),
                         purpose: appt.purpose.clone(),
                         vehicle: a.vehicle_name.clone(),
-                        date: appt.planned_date.map(date_label),
+                        when: appointment::when(appt.planned_date),
+                        dated: appt.planned_date.is_some(),
                         status: Tag::of_phase(a.summary.phase),
                     }
                 })

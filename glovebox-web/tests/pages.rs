@@ -1233,7 +1233,7 @@ async fn a_shop_page_shows_its_work_across_vehicles_and_what_it_cost() {
         section_rows(&body, "Appointments"),
         [
             "Alignment Alltrack 2026-11-20 Cancelled",
-            "Rear brakes Golf Not booked Planning",
+            "Rear brakes Golf not booked Planning",
         ]
     );
     assert!(
@@ -1259,11 +1259,8 @@ async fn a_shop_website_that_is_not_a_web_address_prints_as_text() {
         &db,
         NewShop {
             name: "Odd Shop".into(),
-            address: None,
-            phone: None,
             website: Some("javascript:alert(1)".into()),
-            specialty: None,
-            notes: None,
+            ..Default::default()
         },
     )
     .await
