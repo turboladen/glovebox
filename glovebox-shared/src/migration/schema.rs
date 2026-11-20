@@ -405,6 +405,42 @@ pub(super) mod testing {
         first_row(db, sql).await.try_get_by_index(0).unwrap()
     }
 
+    /// The stored definitions of the named tables, ordered by table name and
+    /// joined with `;`. Panics if none exists.
+    pub async fn table_sql(db: &DatabaseConnection, tables: &[&str]) -> String {
+        let names = quoted(tables);
+        text(
+            db,
+            &format!(
+                "SELECT group_concat(sql, ';') FROM (SELECT sql FROM sqlite_schema WHERE type = \
+                 'table' AND name IN ({names}) ORDER BY name)"
+            ),
+        )
+        .await
+    }
+
+    /// The stored indexes and triggers of the named tables, ordered by name
+    /// and joined with `;`. Panics if there are none.
+    pub async fn surrounding_sql(db: &DatabaseConnection, tables: &[&str]) -> String {
+        let names = quoted(tables);
+        text(
+            db,
+            &format!(
+                "SELECT group_concat(sql, ';') FROM (SELECT sql FROM sqlite_schema WHERE tbl_name \
+                 IN ({names}) AND type <> 'table' ORDER BY name)"
+            ),
+        )
+        .await
+    }
+
+    fn quoted(names: &[&str]) -> String {
+        names
+            .iter()
+            .map(|name| format!("'{name}'"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
     /// Runs FTS5's `integrity-check` on each named index. Panics if one
     /// fails.
     pub async fn fts_integrity(db: &DatabaseConnection, indexes: &[&str]) {
@@ -429,7 +465,7 @@ pub(super) mod testing {
 mod tests {
     use sea_orm::ConnectionTrait;
 
-    use super::{edit_definitions, scalar, soundness};
+    use super::{edit_definitions, scalar, soundness, testing::table_sql};
 
     // Rows that already break a key are reported in a stable order, and an
     // edit that breaks another key is refused with writable_schema off and,
@@ -452,14 +488,7 @@ mod tests {
         let checked = soundness(&db).await.unwrap();
         assert_eq!(checked.integrity, ["ok"]);
         assert_eq!(checked.broken_links.len(), 2, "{:?}", checked.broken_links);
-        let definition = || async {
-            scalar::<String>(
-                &db,
-                "SELECT sql FROM sqlite_schema WHERE name = 'work_items'",
-            )
-            .await
-            .unwrap()
-        };
+        let definition = || table_sql(&db, &["work_items"]);
         let before = definition().await;
 
         let txn = db.begin().await.unwrap();

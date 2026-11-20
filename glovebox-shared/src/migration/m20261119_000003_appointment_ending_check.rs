@@ -45,7 +45,7 @@ mod tests {
 
     use crate::migration::{
         Migrator,
-        schema::testing::{migrated_to, text},
+        schema::testing::{migrated_to, surrounding_sql, table_sql, text},
     };
 
     // The number of migrations that run before this one.
@@ -73,23 +73,6 @@ mod tests {
         db
     }
 
-    async fn definition(db: &DatabaseConnection) -> String {
-        text(
-            db,
-            "SELECT sql FROM sqlite_schema WHERE name = 'appointments'",
-        )
-        .await
-    }
-
-    async fn everything_else(db: &DatabaseConnection) -> String {
-        text(
-            db,
-            "SELECT group_concat(sql, ';') FROM (SELECT sql FROM sqlite_schema WHERE tbl_name = \
-             'appointments' AND type <> 'table' ORDER BY name)",
-        )
-        .await
-    }
-
     async fn rows(db: &DatabaseConnection) -> String {
         text(
             db,
@@ -103,17 +86,17 @@ mod tests {
     async fn the_table_keeps_its_rows_and_indexes_and_gains_the_check() {
         let db = db_before().await;
         let before = rows(&db).await;
-        let around = everything_else(&db).await;
+        let around = surrounding_sql(&db, &["appointments"]).await;
 
         Migrator::up(&db, Some(1)).await.unwrap();
 
-        let def = definition(&db).await;
+        let def = table_sql(&db, &["appointments"]).await;
         assert!(
             def.contains("CONSTRAINT \"appointments_one_ending\" CHECK"),
             "{def}"
         );
         assert_eq!(rows(&db).await, before);
-        assert_eq!(everything_else(&db).await, around);
+        assert_eq!(surrounding_sql(&db, &["appointments"]).await, around);
         let err = db
             .execute_unprepared("UPDATE appointments SET cancelled_on = '2026-11-03' WHERE id = 2")
             .await
@@ -126,10 +109,10 @@ mod tests {
     async fn running_it_again_changes_nothing() {
         let db = db_before().await;
         Migrator::up(&db, Some(1)).await.unwrap();
-        let after = definition(&db).await;
+        let after = table_sql(&db, &["appointments"]).await;
         Migrator::down(&db, Some(1)).await.unwrap();
         Migrator::up(&db, Some(1)).await.unwrap();
-        assert_eq!(definition(&db).await, after);
+        assert_eq!(table_sql(&db, &["appointments"]).await, after);
     }
 
     #[tokio::test]
@@ -138,7 +121,7 @@ mod tests {
         db.execute_unprepared("UPDATE appointments SET cancelled_on = '2026-11-03' WHERE id = 2")
             .await
             .unwrap();
-        let before = definition(&db).await;
+        let before = table_sql(&db, &["appointments"]).await;
 
         let err = Migrator::up(&db, Some(1)).await.unwrap_err().to_string();
 
@@ -149,6 +132,6 @@ mod tests {
             ),
             "{err}"
         );
-        assert_eq!(definition(&db).await, before);
+        assert_eq!(table_sql(&db, &["appointments"]).await, before);
     }
 }

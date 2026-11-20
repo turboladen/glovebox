@@ -96,7 +96,7 @@ mod tests {
 
     use crate::migration::{
         Migrator,
-        schema::testing::{count, fts_integrity, migrated_to, text},
+        schema::testing::{count, fts_integrity, migrated_to, surrounding_sql, table_sql, text},
     };
 
     // The number of migrations that run before this one.
@@ -133,26 +133,6 @@ mod tests {
         db
     }
 
-    async fn definitions(db: &DatabaseConnection) -> String {
-        text(
-            db,
-            "SELECT group_concat(sql, ';') FROM (SELECT sql FROM sqlite_schema WHERE name IN \
-             ('job_needs', 'need_options') ORDER BY name)",
-        )
-        .await
-    }
-
-    // Everything in `sqlite_schema` that belongs to the two tables but their
-    // own rows.
-    async fn surroundings(db: &DatabaseConnection) -> String {
-        text(
-            db,
-            "SELECT group_concat(sql, ';') FROM (SELECT sql FROM sqlite_schema WHERE tbl_name IN \
-             ('job_needs', 'need_options') AND type <> 'table' ORDER BY name)",
-        )
-        .await
-    }
-
     async fn rows(db: &DatabaseConnection) -> String {
         text(
             db,
@@ -168,11 +148,11 @@ mod tests {
     async fn the_tables_keep_their_rows_and_gain_the_checks_and_the_key() {
         let db = db_before().await;
         let before = rows(&db).await;
-        let around = surroundings(&db).await;
+        let around = surrounding_sql(&db, &["job_needs", "need_options"]).await;
 
         Migrator::up(&db, Some(1)).await.unwrap();
 
-        let defs = definitions(&db).await;
+        let defs = table_sql(&db, &["job_needs", "need_options"]).await;
         for name in [
             "job_needs_choice_dated",
             "job_needs_reason_held",
@@ -186,7 +166,10 @@ mod tests {
         }
         assert_eq!(super::on_delete(&db).await.unwrap(), "RESTRICT");
         assert_eq!(rows(&db).await, before);
-        assert_eq!(surroundings(&db).await, around);
+        assert_eq!(
+            surrounding_sql(&db, &["job_needs", "need_options"]).await,
+            around
+        );
         fts_integrity(&db, &["fts_work_items"]).await;
     }
 
@@ -246,10 +229,10 @@ mod tests {
     async fn running_it_again_changes_nothing() {
         let db = db_before().await;
         Migrator::up(&db, Some(1)).await.unwrap();
-        let after = definitions(&db).await;
+        let after = table_sql(&db, &["job_needs", "need_options"]).await;
         Migrator::down(&db, Some(1)).await.unwrap();
         Migrator::up(&db, Some(1)).await.unwrap();
-        assert_eq!(definitions(&db).await, after);
+        assert_eq!(table_sql(&db, &["job_needs", "need_options"]).await, after);
     }
 
     #[tokio::test]
@@ -261,7 +244,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let before = definitions(&db).await;
+        let before = table_sql(&db, &["job_needs", "need_options"]).await;
 
         let err = Migrator::up(&db, Some(1)).await.unwrap_err().to_string();
 
@@ -273,7 +256,7 @@ mod tests {
             ),
             "{err}"
         );
-        assert_eq!(definitions(&db).await, before);
+        assert_eq!(table_sql(&db, &["job_needs", "need_options"]).await, before);
         assert_eq!(super::on_delete(&db).await.unwrap(), "SET NULL");
     }
 }

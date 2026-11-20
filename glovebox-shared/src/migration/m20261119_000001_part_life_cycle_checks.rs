@@ -71,7 +71,7 @@ mod tests {
 
     use crate::migration::{
         Migrator,
-        schema::testing::{count, fts_integrity, migrated_to, text},
+        schema::testing::{count, fts_integrity, migrated_to, surrounding_sql, table_sql, text},
     };
 
     // The number of migrations that run before this one.
@@ -113,25 +113,11 @@ mod tests {
         db
     }
 
-    async fn definition(db: &DatabaseConnection) -> String {
-        text(db, "SELECT sql FROM sqlite_schema WHERE name = 'parts'").await
-    }
-
-    // Everything in `sqlite_schema` that belongs to `parts` but its own row.
-    async fn surroundings(db: &DatabaseConnection) -> String {
-        text(
-            db,
-            "SELECT group_concat(sql, ';') FROM (SELECT sql FROM sqlite_schema WHERE tbl_name = \
-             'parts' AND type <> 'table' ORDER BY name)",
-        )
-        .await
-    }
-
     #[tokio::test]
     async fn the_table_keeps_its_rows_triggers_and_indexes_and_gains_the_checks() {
         let db = db_before().await;
         let rows = text(&db, "SELECT group_concat(id || status, ',') FROM parts").await;
-        let around = surroundings(&db).await;
+        let around = surrounding_sql(&db, &["parts"]).await;
         let columns = text(
             &db,
             "SELECT group_concat(name, ',') FROM pragma_table_info('parts')",
@@ -140,7 +126,7 @@ mod tests {
 
         Migrator::up(&db, Some(1)).await.unwrap();
 
-        let def = definition(&db).await;
+        let def = table_sql(&db, &["parts"]).await;
         for name in [
             "parts_install_while_fitted",
             "parts_replace_while_replaced",
@@ -157,7 +143,7 @@ mod tests {
             text(&db, "SELECT group_concat(id || status, ',') FROM parts").await,
             rows
         );
-        assert_eq!(surroundings(&db).await, around);
+        assert_eq!(surrounding_sql(&db, &["parts"]).await, around);
         assert_eq!(
             text(
                 &db,
@@ -232,10 +218,10 @@ mod tests {
     async fn running_it_again_changes_nothing() {
         let db = db_before().await;
         Migrator::up(&db, Some(1)).await.unwrap();
-        let after = definition(&db).await;
+        let after = table_sql(&db, &["parts"]).await;
         Migrator::down(&db, Some(1)).await.unwrap();
         Migrator::up(&db, Some(1)).await.unwrap();
-        assert_eq!(definition(&db).await, after);
+        assert_eq!(table_sql(&db, &["parts"]).await, after);
     }
 
     #[tokio::test]
@@ -247,7 +233,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let before = definition(&db).await;
+        let before = table_sql(&db, &["parts"]).await;
 
         let err = Migrator::up(&db, Some(1)).await.unwrap_err().to_string();
 
@@ -259,6 +245,6 @@ mod tests {
             ),
             "{err}"
         );
-        assert_eq!(definition(&db).await, before);
+        assert_eq!(table_sql(&db, &["parts"]).await, before);
     }
 }
