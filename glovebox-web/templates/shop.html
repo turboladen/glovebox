@@ -8,9 +8,9 @@
   <div class="summary">
     {% if let Some(a) = d.address %}<div><span class="l">Address</span>{{ a }}</div>{% endif %}
     {% if let Some(p) = d.phone %}<div><span class="l">Phone</span>{{ p }}</div>{% endif %}
-    {% if let Some(w) = d.website %}<div><span class="l">Website</span>{% if d.website_is_link %}<a href="{{ w }}">{{ w }}</a>{% else %}{{ w }}{% endif %}</div>{% endif %}
+    {% if let Some(w) = d.website %}<div><span class="l">Website</span>{% if d.website_is_link %}<a href="{{ w }}" target="_blank" rel="noopener noreferrer">{{ w }}</a>{% else %}{{ w }}{% endif %}</div>{% endif %}
     {% if let Some(s) = d.specialty %}<div><span class="l">Specialty</span>{{ s }}</div>{% endif %}
-    <div><span class="l">Total spent</span><span class="price">{{ v.total }}</span></div>
+    <div><span class="l">Invoiced</span><span class="price">{{ v.total }}</span></div>
     <div><span class="l">You paid</span><span class="price">{{ v.paid }}</span></div>
   </div>
   {% if let Some(n) = d.notes %}<p class="shop-notes"><span class="l">Notes </span>{{ n }}</p>{% endif %}

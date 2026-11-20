@@ -66,7 +66,7 @@ Return it, Add a to-do).
 
 **The shop pages follow the same rules (2026-11-20).** `/shops` is one panel whose ledger lists
 each shop with its address in gray beneath the name, its service and appointment counts right
-aligned, and its last visit. A shop's page heads with its details and totals as labeled values,
+aligned, and its last visit. A shop's page heads with its details and totals as labeled values (Invoiced, the invoices' grand totals including work others paid for, and You paid),
 like an appointment's head. It then has one panel for the services, with the totals and the
 owner's share right aligned as prices, and one for the appointments, which reuse the phase
 pills and add no kind. A missing value is gray: "No services", "No total" and "Not booked". The shared layer writes "not booked", as it does for the home rows. The

@@ -1213,9 +1213,9 @@ async fn a_shop_page_shows_its_work_across_vehicles_and_what_it_cost() {
     for detail in [
         r#"<span class="l">Address</span>1 Main St"#,
         r#"<span class="l">Phone</span>555-0100"#,
-        r#"<span class="l">Website</span><a href="https://smith.example">https://smith.example</a>"#,
+        r#"<span class="l">Website</span><a href="https://smith.example" target="_blank" rel="noopener noreferrer">https://smith.example</a>"#,
         r#"<span class="l">Specialty</span>VW"#,
-        r#"<span class="l">Total spent</span><span class="price">$620.00</span>"#,
+        r#"<span class="l">Invoiced</span><span class="price">$620.00</span>"#,
         r#"<span class="l">You paid</span><span class="price">$420.00</span>"#,
         "Ask for Pat",
     ] {
