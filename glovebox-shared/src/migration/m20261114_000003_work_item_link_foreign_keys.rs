@@ -191,7 +191,7 @@ mod tests {
     use super::{clear_dangling, foreign_keys};
     use crate::migration::{
         Migrator,
-        schema::testing::{count, migrated_to, text},
+        schema::testing::{count, migrated_to, table_sql, text},
     };
 
     // The number of migrations that run before this one.
@@ -247,14 +247,6 @@ mod tests {
             "SELECT group_concat(id || ':' || coalesce(schedule_item_id, '-') || ',' || \
              coalesce(research_finding_id, '-') || ',' || coalesce(incident_id, '-'), ' ') FROM \
              (SELECT * FROM work_items ORDER BY id)",
-        )
-        .await
-    }
-
-    async fn definition(db: &DatabaseConnection) -> String {
-        text(
-            db,
-            "SELECT sql FROM sqlite_schema WHERE name = 'work_items'",
         )
         .await
     }
@@ -439,13 +431,13 @@ mod tests {
     async fn running_it_again_changes_nothing() {
         let db = db_before().await;
         Migrator::up(&db, Some(1)).await.unwrap();
-        let once = definition(&db).await;
+        let once = table_sql(&db, &["work_items"]).await;
         assert_eq!(once.matches("ON DELETE SET NULL").count(), 5, "{once}");
 
         Migrator::down(&db, Some(1)).await.unwrap();
         Migrator::up(&db, Some(1)).await.unwrap();
 
-        assert_eq!(definition(&db).await, once);
+        assert_eq!(table_sql(&db, &["work_items"]).await, once);
         assert_eq!(links(&db).await, "1:9001,-,- 2:-,9002,- 3:-,-,9003");
         assert_eq!(text(&db, "PRAGMA integrity_check").await, "ok");
     }
@@ -466,7 +458,7 @@ mod tests {
 
         Migrator::up(&db, Some(1)).await.unwrap();
 
-        let stored = definition(&db).await;
+        let stored = table_sql(&db, &["work_items"]).await;
         assert_eq!(stored.matches("ON DELETE SET NULL").count(), 5, "{stored}");
         assert_eq!(foreign_keys(&db).await.unwrap().len(), 6);
     }
@@ -513,13 +505,13 @@ mod tests {
         )
         .await
         .unwrap();
-        let before = definition(&db).await;
+        let before = table_sql(&db, &["work_items"]).await;
         assert!(before.contains("\"incident_id\" INTEGER,"));
 
         let err = Migrator::up(&db, Some(1)).await.unwrap_err().to_string();
 
         assert!(err.contains("no key was added for: [incident_id]"), "{err}");
-        assert_eq!(definition(&db).await, before);
+        assert_eq!(table_sql(&db, &["work_items"]).await, before);
         assert_eq!(
             links(&db).await,
             "1:9001,-,- 2:-,9002,- 3:-,-,9003 4:777,888,999"
