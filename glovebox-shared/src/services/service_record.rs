@@ -1176,7 +1176,8 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         incident_svc::replace_named(&txn, vehicle_id, record.id, named).await?;
     }
     // These are the incidents the correction took off, which no other job of
-    // this service and no link of its invoice still resolves.
+    // this service, no link of its invoice and no other service still
+    // resolves.
     let mut names_ignored: Vec<i32> = input
         .resolved_incident_ids
         .iter()
@@ -1276,8 +1277,9 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
 
 /// The work a service records as done: the jobs it completed that still read
 /// done, the parts it installed, the incidents only it resolves (leaving out
-/// one resolved by hand) and the recalls it performed. Deleting the service releases all of it, and a correction
-/// releases what its replacement lists leave out.
+/// one resolved by hand) and the recalls it performed. Deleting the service
+/// releases all of it, and a correction releases what its replacement lists
+/// leave out.
 #[derive(Default)]
 struct RecordedWork {
     jobs: Vec<job::Model>,

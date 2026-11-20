@@ -24,7 +24,8 @@ takes `completed: Option<CompletedWork>`. When the service completed a job, inst
 resolved an incident or performed a recall, `None` is refused. The refusal names each item, and
 nothing is written. A service that recorded none of these deletes without a choice. The MCP
 argument `completed_work` replaces `recalls`, and the tool tells Claude to ask the owner rather
-than choose.
+than choose. An incident another service also resolves, or one the owner resolved by hand, is
+left out of the refusal, because neither answer changes it.
 
 **`did_not_happen` undoes the work.** Jobs return to planned, which reopens a hand-closed
 appointment or takes the job off a cancelled one. Incidents go back to unresolved and recalls to
