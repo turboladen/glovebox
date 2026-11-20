@@ -189,7 +189,7 @@ pub(crate) async fn update(
 /// it takes the inherited item's spelling of the name and, for every field
 /// the caller leaves out, the inherited item's value. The vehicle's services
 /// and planned work linked to the inherited item move to the new one. A name the vehicle already has its own item for is a
-/// `BadRequest`, and an interval of zero or less is `Invalid`.
+/// `BadRequest`, and an interval of zero or less or a warning below zero is `Invalid`.
 pub async fn create_for_vehicle<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -235,7 +235,7 @@ pub async fn create_for_vehicle<C: ConnectionTrait + TransactionTrait>(
 /// item for this vehicle, as [`create_for_vehicle`] does, and then keeps the
 /// name too.
 ///
-/// An interval of zero or less is `Invalid`. An id that is not visible to
+/// An interval of zero or less or a warning below zero is `Invalid`. An id that is not visible to
 /// this vehicle reads as nonexistent.
 pub async fn update_for_vehicle<C: ConnectionTrait + TransactionTrait>(
     db: &C,
@@ -1935,10 +1935,13 @@ mod tests {
         .await
         .unwrap();
         assert_eq!((zero.warning_miles, zero.warning_days), (Some(0), Some(0)));
+        let defaults = create_for_vehicle(&db, vid, item_named("Wipers"))
+            .await
+            .unwrap();
         let updated = update_for_vehicle(
             &db,
             vid,
-            zero.id,
+            defaults.id,
             UpdateScheduleItem {
                 warning_miles: Some(Some(0)),
                 warning_days: Some(Some(0)),
@@ -1947,7 +1950,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(updated.warning_miles, Some(0));
+        assert_eq!(
+            (updated.warning_miles, updated.warning_days),
+            (Some(0), Some(0))
+        );
     }
 
     #[tokio::test]
