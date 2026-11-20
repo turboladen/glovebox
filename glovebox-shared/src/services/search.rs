@@ -311,12 +311,17 @@ pub async fn search(
         // A hit on a shop's name, address or notes finds the newest services
         // it did. Every one of them shares the shop's rank, so a shop with a
         // long history would otherwise fill the results.
+        // The vehicle filter goes inside the cap, so it picks that car's newest.
+        let shop_services = format!(
+            "JOIN service_records s ON s.shop_id = fts_shops.rowid AND s.id IN (SELECT r.id FROM \
+             service_records r WHERE r.shop_id = fts_shops.rowid{} ORDER BY r.service_date DESC, \
+             r.id DESC LIMIT 5)",
+            if filt { " AND r.vehicle_id = ?2" } else { "" }
+        );
         subs.push(subquery(
             "service",
             "fts_shops",
-            "JOIN service_records s ON s.shop_id = fts_shops.rowid AND s.id IN (SELECT r.id FROM \
-             service_records r WHERE r.shop_id = fts_shops.rowid ORDER BY r.service_date DESC, \
-             r.id DESC LIMIT 5)",
+            &shop_services,
             "s.id",
             "s.vehicle_id",
             service_title,
@@ -554,6 +559,27 @@ mod tests {
             .collect();
         found.sort_unstable();
         assert_eq!(found, newest[1..]);
+
+        // The cap counts only the searched car's services at the shop.
+        let other = seed_vehicle(&db, "Alltrack").await;
+        let theirs = seed_service(&db, other, "older visit").await;
+        entities::service_record::Entity::update_many()
+            .col_expr(
+                entities::service_record::Column::ShopId,
+                sea_orm::sea_query::Expr::value(shop_id),
+            )
+            .col_expr(
+                entities::service_record::Column::ServiceDate,
+                sea_orm::sea_query::Expr::value(date::<chrono::NaiveDate>("2020-01-01")),
+            )
+            .filter(entities::service_record::Column::Id.eq(theirs))
+            .exec(&db)
+            .await
+            .unwrap();
+        let hits = search(&db, "clovis", SearchScope::Services, Some(other))
+            .await
+            .unwrap();
+        assert_eq!(hits.iter().map(|h| h.id).collect::<Vec<_>>(), [theirs]);
     }
 
     #[tokio::test]

@@ -161,7 +161,7 @@ that repeats a completed job's incident, and `m20261120_000003_incident_resolved
 adds `incidents.resolved_by_hand`, marks each resolved incident that no service resolves and adds a
 CHECK that only a resolved incident carries it, and `m20261121_000001_shops_search`, which adds
 the FTS5 index `fts_shops`, and `m20261121_000002_shops_from_names`, which moves every stored
-`shop_name` into the shop directory (a trailing `(…)` is the address), sets each row's `shop_id`
+`shop_name` into the shop directory (a trailing `(…)` holding a digit is the address), sets each row's `shop_id`
 and adds a CHECK that `shop_name` stays NULL on services and appointments. They run on startup.
 
 **Test harness** (`test_support.rs`): `test_db()` is an in-memory SQLite database with migrations

@@ -2,7 +2,8 @@
 //! directory: each row then names a shop by `shop_id` and its `shop_name` is
 //! empty, and a CHECK keeps it empty.
 //!
-//! A trailing `(…)` in a stored name is the shop's address. Names that are
+//! A trailing `(…)` in a stored name that holds a digit is the shop's
+//! address. Names that are
 //! equal apart from ASCII case and surrounding spaces become one shop unless
 //! their addresses differ, and then each address is a shop of its own. Names
 //! that differ, such as one dealer under two names, stay two shops for the
@@ -56,7 +57,9 @@ fn split_name_and_address(text: &str) -> Option<ShopText> {
                 .map(|open| (&rest[..open], &rest[open + 1..]))
         })
         .map(|(name, address)| (name.trim(), address.trim()))
-        .filter(|(name, address)| !name.is_empty() && !address.is_empty());
+        // A street address holds a number, so a remark such as "(oil only)"
+        // stays part of the name.
+        .filter(|(name, address)| !name.is_empty() && address.chars().any(|c| c.is_ascii_digit()));
     Some(match split {
         Some((name, address)) => ShopText {
             name: name.to_owned(),
@@ -163,13 +166,17 @@ impl Directory {
     // already joined what belongs together.
     fn find(&self, shop: &ShopText) -> Option<i32> {
         let (name, address) = directory_key(shop);
-        let stored = |exact: bool| {
-            self.stored.iter().find(|(_, n, a)| {
-                *n == name && (*a == address || (!exact && (a.is_none() || address.is_none())))
-            })
+        let same_name: Vec<&(i32, String, Option<String>)> =
+            self.stored.iter().filter(|(_, n, _)| *n == name).collect();
+        let exact = same_name.iter().find(|(_, _, a)| *a == address);
+        // The loose match holds only when it names one shop: with two stored
+        // shops of the name, a missing address cannot say which one is meant.
+        let loose = match same_name.as_slice() {
+            [only @ (_, _, a)] if a.is_none() || address.is_none() => Some(only),
+            _ => None,
         };
-        stored(true)
-            .or_else(|| stored(false))
+        exact
+            .or(loose)
             .map(|(id, ..)| *id)
             .or_else(|| self.created.get(&(name, address)).copied())
     }
@@ -320,6 +327,10 @@ mod tests {
         assert_eq!(
             split_name_and_address("Tint ()"),
             Some(shop("Tint ()", None))
+        );
+        assert_eq!(
+            split_name_and_address("Jiffy Lube (oil only)"),
+            Some(shop("Jiffy Lube (oil only)", None))
         );
         assert_eq!(split_name_and_address("   "), None);
     }

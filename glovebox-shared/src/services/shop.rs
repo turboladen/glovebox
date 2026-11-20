@@ -452,10 +452,18 @@ pub async fn history(
 
 // Folds the merged shops' details into the kept one: an empty field takes
 // the first merged value, notes are joined, and every other value that
-// differs is reported, so nothing the owner typed goes missing unsaid.
+// differs is reported, the merged shop's name included, so nothing the owner
+// typed goes missing unsaid.
 fn fold_details(kept: &mut shop::Model, merged: &[shop::Model]) -> Vec<DiscardedValue> {
     let mut discarded = Vec::new();
     for other in merged {
+        if text_key(&other.name) != text_key(&kept.name) {
+            discarded.push(DiscardedValue {
+                shop_id: other.id,
+                field: "name",
+                value: other.name.clone(),
+            });
+        }
         let mut take = |field: &'static str, slot: &mut Option<String>, value: &Option<String>| {
             let Some(value) = value.clone() else {
                 return;
@@ -476,7 +484,13 @@ fn fold_details(kept: &mut shop::Model, merged: &[shop::Model]) -> Vec<Discarded
         take("specialty", &mut kept.specialty, &other.specialty);
         if let Some(notes) = &other.notes {
             kept.notes = Some(match kept.notes.take() {
-                Some(current) if text_key(&current) == text_key(notes) => current,
+                Some(current)
+                    if current
+                        .split("\n\n")
+                        .any(|piece| text_key(piece) == text_key(notes)) =>
+                {
+                    current
+                }
                 Some(current) => format!("{current}\n\n{notes}"),
                 None => notes.clone(),
             });
@@ -545,7 +559,7 @@ pub async fn merge<C: ConnectionTrait + TransactionTrait>(
         .await?;
     // An address the kept shop takes from a merged one could make it the
     // same shop as another one left in the directory.
-    if !had_address {
+    if !had_address && kept.address.is_some() {
         refuse_duplicate(&txn, &kept.name, kept.address.as_deref(), Some(keep_id)).await?;
     }
     let mut active = shop::ActiveModel::from(kept).reset_all();
@@ -881,11 +895,18 @@ mod tests {
         );
         assert_eq!(
             got.discarded,
-            [DiscardedValue {
-                shop_id: dup.id,
-                field: "phone",
-                value: "555-0199".into()
-            }]
+            [
+                DiscardedValue {
+                    shop_id: dup.id,
+                    field: "name",
+                    value: "Volkswagen of Clovis".into()
+                },
+                DiscardedValue {
+                    shop_id: dup.id,
+                    field: "phone",
+                    value: "555-0199".into()
+                }
+            ]
         );
         assert_eq!(get(&db, kept.id).await.unwrap(), got.shop);
         assert!(matches!(
@@ -956,6 +977,10 @@ mod tests {
 
         let err = merge(&db, bare.id, &[typo.id]).await.unwrap_err();
         assert!(matches!(err, DomainError::BadRequest(_)), "{err}");
+        // A merge that leaves the kept shop with no address changes nothing a
+        // duplicate is judged by, so it goes ahead.
+        let no_address = create(&db, named("America Tire", None)).await.unwrap();
+        merge(&db, bare.id, &[no_address.id]).await.unwrap();
         assert_eq!(get(&db, bare.id).await.unwrap().address, None);
         assert_eq!(
             history(&db, typo.id, date("2026-11-13"))

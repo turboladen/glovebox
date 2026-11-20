@@ -40,13 +40,14 @@ history with no shop.
 owner's out-of-pocket share, and its appointments as every appointment read summarizes them.
 
 **The upgrade moves every stored name into the directory**
-(`m20261121_000002_shops_from_names`). A trailing `(…)` becomes the address. Names that are equal
+(`m20261121_000002_shops_from_names`). A trailing `(…)` that holds a digit becomes the address. Names that are equal
 by the same comparison become one shop unless their addresses differ; then each address is its
 own shop, and the entries with no address share one more. In the owner's records the two KW
 entries become one shop with its address, the two America's Tire locations stay two shops, and
 the two Clovis dealer names stay two shops until the owner merges them. The migration reuses a
 shop already in the directory by the directory's own rule (the same name, and the same address or
-either one missing), so it never adds a duplicate of a shop the owner added.
+either one missing, when only one stored shop has that name), so it never adds a duplicate of a
+shop the owner added.
 
 ## Alternatives considered
 

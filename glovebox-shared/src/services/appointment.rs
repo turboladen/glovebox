@@ -215,8 +215,13 @@ pub async fn plan<C: ConnectionTrait + TransactionTrait>(
     input: NewAppointment,
     today: chrono::NaiveDate,
 ) -> DomainResult<AppointmentSummary> {
-    let created = create(db, vehicle_id, input).await?;
-    summary(db, vehicle_id, created.id, today).await
+    // The summary is read on the same transaction, so it is of the row the
+    // call created.
+    let txn = super::begin_write(db).await?;
+    let created = create(&txn, vehicle_id, input).await?;
+    let planned = summary(&txn, vehicle_id, created.id, today).await?;
+    txn.commit().await?;
+    Ok(planned)
 }
 
 /// Changes an appointment's purpose, shop, date or notes.
