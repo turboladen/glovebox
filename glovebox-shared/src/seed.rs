@@ -205,15 +205,26 @@ async fn build(db: &(impl ConnectionTrait + TransactionTrait)) -> DomainResult<(
     )
     .await?;
     let v = car.id;
-    let shop = shop::create(
-        db,
-        NewShop {
-            name: "Demo Auto Works".into(),
-            address: Some("1 Example Way".into()),
-            ..Default::default()
-        },
-    )
-    .await?;
+    // The shop directory is not per vehicle, so an earlier demo car may have
+    // left its shop behind.
+    let existing = shop::list(db)
+        .await?
+        .into_iter()
+        .find(|s| s.shop.name == "Demo Auto Works");
+    let shop = match existing {
+        Some(listed) => listed.shop,
+        None => {
+            shop::create(
+                db,
+                NewShop {
+                    name: "Demo Auto Works".into(),
+                    address: Some("1 Example Way".into()),
+                    ..Default::default()
+                },
+            )
+            .await?
+        }
+    };
     let visit = appointment::create(
         db,
         v,
@@ -689,6 +700,21 @@ mod tests {
                 .flat_map(|j| &j.owner_supplies)
                 .any(|line| line.notes.is_some()),
             "{sheet:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn demo_seed_reuses_the_shop_an_earlier_demo_left() {
+        let db = test_db().await;
+        demo(&db).await.unwrap();
+        entities::vehicle::Entity::delete_many()
+            .exec(&db)
+            .await
+            .unwrap();
+        demo(&db).await.unwrap();
+        assert_eq!(
+            crate::test_support::row_count::<entities::shop::Entity>(&db).await,
+            1
         );
     }
 

@@ -30,6 +30,12 @@ pub enum ShopChoice {
 }
 
 impl ShopChoice {
+    /// True for a name with nothing but whitespace, which names no shop.
+    #[must_use]
+    pub fn is_blank(&self) -> bool {
+        matches!(self, ShopChoice::Name(name) if name.trim().is_empty())
+    }
+
     /// The argument a refusal about this choice names.
     #[must_use]
     pub fn field(&self) -> &'static str {

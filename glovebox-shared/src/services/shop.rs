@@ -491,8 +491,9 @@ fn fold_details(kept: &mut shop::Model, merged: &[shop::Model]) -> Vec<Discarded
 /// keeps its name.
 ///
 /// # Errors
-/// `BadRequest` when `merge_ids` is empty or names the kept shop; `NotFound`
-/// for a shop that does not exist, which writes nothing.
+/// `BadRequest` when `merge_ids` is empty or names the kept shop, or when the
+/// address the kept shop would take makes it a duplicate of another shop;
+/// `NotFound` for a shop that does not exist. A refused merge writes nothing.
 pub async fn merge<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     keep_id: i32,
@@ -536,11 +537,17 @@ pub async fn merge<C: ConnectionTrait + TransactionTrait>(
         .map(|a| a.id)
         .collect();
     moved_appointment_ids.sort_unstable();
+    let had_address = kept.address.is_some();
     let discarded = fold_details(&mut kept, &merged);
     shop::Entity::delete_many()
         .filter(shop::Column::Id.is_in(merge_ids.iter().copied()))
         .exec(&txn)
         .await?;
+    // An address the kept shop takes from a merged one could make it the
+    // same shop as another one left in the directory.
+    if !had_address {
+        refuse_duplicate(&txn, &kept.name, kept.address.as_deref(), Some(keep_id)).await?;
+    }
     let mut active = shop::ActiveModel::from(kept).reset_all();
     active.updated_at = Set(now);
     let shop = active.update(&txn).await?;
@@ -920,6 +927,44 @@ mod tests {
             merge(&db, 999, &[dup.id]).await.unwrap_err(),
             DomainError::NotFound(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn a_merge_that_would_make_a_duplicate_is_refused() {
+        let db = test_db().await;
+        let vid = VehicleFixture::new().insert_id(&db).await;
+        // Stored before the duplicate rule, as the upgrade can leave them.
+        let bare = shop::ActiveModel {
+            name: Set("America's Tire".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        shop::ActiveModel {
+            name: Set("America's Tire".into()),
+            address: Set(Some("433 E Shaw Ave".into())),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        let typo = create(&db, named("Americas Tire", Some("433 E Shaw Ave")))
+            .await
+            .unwrap();
+        service_at(&db, vid, typo.id, "2025-01-02", None).await;
+
+        let err = merge(&db, bare.id, &[typo.id]).await.unwrap_err();
+        assert!(matches!(err, DomainError::BadRequest(_)), "{err}");
+        assert_eq!(get(&db, bare.id).await.unwrap().address, None);
+        assert_eq!(
+            history(&db, typo.id, date("2026-11-13"))
+                .await
+                .unwrap()
+                .services
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]

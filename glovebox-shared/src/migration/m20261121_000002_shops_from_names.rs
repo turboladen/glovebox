@@ -144,15 +144,39 @@ async fn named_rows(db: &impl ConnectionTrait) -> Result<Vec<Named>, DbErr> {
     Ok(out)
 }
 
-// The stored shops by the key of their name and address.
-type Directory = HashMap<(String, Option<String>), i32>;
+// The shops by the key of their name and address. `stored` holds the shops
+// the directory held before the upgrade, and `created` the ones it adds.
+#[derive(Default)]
+struct Directory {
+    stored: Vec<(i32, String, Option<String>)>,
+    created: HashMap<(String, Option<String>), i32>,
+}
 
 fn directory_key(shop: &ShopText) -> (String, Option<String>) {
     (key(&shop.name), shop.address.as_deref().map(key))
 }
 
+impl Directory {
+    // A shop the owner added matches by the directory's own rule: the same
+    // name, and the same address or either one missing. A shop this upgrade
+    // adds matches its planned name and address exactly, as `plan_shops`
+    // already joined what belongs together.
+    fn find(&self, shop: &ShopText) -> Option<i32> {
+        let (name, address) = directory_key(shop);
+        let stored = |exact: bool| {
+            self.stored.iter().find(|(_, n, a)| {
+                *n == name && (*a == address || (!exact && (a.is_none() || address.is_none())))
+            })
+        };
+        stored(true)
+            .or_else(|| stored(false))
+            .map(|(id, ..)| *id)
+            .or_else(|| self.created.get(&(name, address)).copied())
+    }
+}
+
 async fn stored_shops(db: &impl ConnectionTrait) -> Result<Directory, DbErr> {
-    let mut out = Directory::new();
+    let mut out = Directory::default();
     for row in db
         .query_all_raw(Statement::from_string(
             DatabaseBackend::Sqlite,
@@ -164,22 +188,22 @@ async fn stored_shops(db: &impl ConnectionTrait) -> Result<Directory, DbErr> {
             name: row.try_get_by_index(1)?,
             address: row.try_get_by_index(2)?,
         };
-        out.entry(directory_key(&shop))
-            .or_insert(row.try_get_by_index(0)?);
+        let (name, address) = directory_key(&shop);
+        out.stored.push((row.try_get_by_index(0)?, name, address));
     }
     Ok(out)
 }
 
-// The id of the stored shop with this name and address, compared by key, or
-// of a new one, which `directory` then holds.
+// The id of the shop `directory` finds for this name and address, or of a
+// new one, which `directory` then holds.
 async fn shop_for(
     db: &impl ConnectionTrait,
     directory: &mut Directory,
     shop: &ShopText,
     stamp: &Value,
 ) -> Result<i32, DbErr> {
-    if let Some(id) = directory.get(&directory_key(shop)) {
-        return Ok(*id);
+    if let Some(id) = directory.find(shop) {
+        return Ok(id);
     }
     let insert = Query::insert()
         .into_table(Alias::new("shops"))
@@ -197,7 +221,7 @@ async fn shop_for(
         .await?
         .ok_or_else(|| DbErr::Migration("inserting a shop returned no id".into()))?;
     let id = row.try_get_by_index(0)?;
-    directory.insert(directory_key(shop), id);
+    directory.created.insert(directory_key(shop), id);
     Ok(id)
 }
 
@@ -344,6 +368,7 @@ mod tests {
                         (5, 1, '2026-05-01', 'Tint Pros (6129 N Blackstone Ave)', NULL, 'shop',
                             {STAMP}, {STAMP}),
                         (6, 1, '2026-06-01', 'Somewhere else', 7, 'shop', {STAMP}, {STAMP}),
+                        (8, 1, '2026-08-01', 'tint pros', NULL, 'shop', {STAMP}, {STAMP}),
                         (7, 1, '2026-07-01', NULL, NULL, 'self', {STAMP}, {STAMP});
              INSERT INTO appointments (id, vehicle_id, purpose, shop_name, created_at, updated_at)
                  VALUES (1, 1, 'Brakes', 'kw automotive', {STAMP}, {STAMP}),
@@ -373,7 +398,7 @@ mod tests {
         );
         assert_eq!(
             text(&db, &links("service_records")).await,
-            "1=8 2=8 3=9 4=10 5=7 6=7 7=-"
+            "1=8 2=8 3=9 4=10 5=7 6=7 7=- 8=7"
         );
         assert_eq!(text(&db, &links("appointments")).await, "1=8 2=-");
         let named = "SELECT (SELECT count(*) FROM service_records WHERE shop_name IS NOT NULL) + \

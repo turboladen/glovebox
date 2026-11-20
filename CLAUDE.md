@@ -477,7 +477,7 @@ role per control style, and `YYYY-MM-DD` dates.
   that follow see the committed state. A transaction from plain `begin` holds a snapshot from its
   first read, and when the other program commits before its first write, SQLite fails it with a
   busy-snapshot error at once. A no-op `UPDATE` as the first statement does not fix that on the
-  ten tables with an FTS5 trigger, which fail with "database is locked" without waiting out the
+  eleven tables with an FTS5 trigger, which fail with "database is locked" without waiting out the
   busy timeout. A race test opens several pools on one file (`test_support::race_pools`) and
   fails when the transaction opens with plain `begin`.
 - **Stamps are set by code, never by the database.** No stamp column has a default. An entity

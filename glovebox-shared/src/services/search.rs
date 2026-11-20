@@ -308,11 +308,15 @@ pub async fn search(
             service_title,
             filt,
         ));
-        // A hit on a shop's name, address or notes finds every service it did.
+        // A hit on a shop's name, address or notes finds the newest services
+        // it did. Every one of them shares the shop's rank, so a shop with a
+        // long history would otherwise fill the results.
         subs.push(subquery(
             "service",
             "fts_shops",
-            "JOIN service_records s ON s.shop_id = fts_shops.rowid",
+            "JOIN service_records s ON s.shop_id = fts_shops.rowid AND s.id IN (SELECT r.id FROM \
+             service_records r WHERE r.shop_id = fts_shops.rowid ORDER BY r.service_date DESC, \
+             r.id DESC LIMIT 5)",
             "s.id",
             "s.vehicle_id",
             service_title,
@@ -526,6 +530,30 @@ mod tests {
                 .collect::<Vec<_>>(),
             [("service", sid)]
         );
+
+        // A shop with a long history finds only its newest five services.
+        let mut newest = Vec::new();
+        for _ in 0..6 {
+            let id = seed_service(&db, vid, "another visit").await;
+            entities::service_record::Entity::update_many()
+                .col_expr(
+                    entities::service_record::Column::ShopId,
+                    sea_orm::sea_query::Expr::value(shop_id),
+                )
+                .filter(entities::service_record::Column::Id.eq(id))
+                .exec(&db)
+                .await
+                .unwrap();
+            newest.push(id);
+        }
+        let mut found: Vec<i32> = search(&db, "clovis", SearchScope::Services, Some(vid))
+            .await
+            .unwrap()
+            .iter()
+            .map(|h| h.id)
+            .collect();
+        found.sort_unstable();
+        assert_eq!(found, newest[1..]);
     }
 
     #[tokio::test]

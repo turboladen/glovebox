@@ -64,8 +64,9 @@ pub(crate) fn shop_choice(
     }
 }
 
-/// The change to a record's shop, from its two arguments: `null` in either
-/// clears it.
+/// The change to a record's shop, from its two arguments: `null` clears it,
+/// and a value in one beside anything in the other is refused, unless both
+/// are `null`.
 #[expect(
     clippy::option_option,
     reason = "an absent change differs from clearing"

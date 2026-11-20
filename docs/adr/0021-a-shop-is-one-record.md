@@ -17,7 +17,9 @@ existed with no write path (ADR-0013).
 **A shop is a row of the shop directory, and a service or appointment names it by `shop_id`.**
 `shop_name` stays as a column, always NULL, and a CHECK on each table keeps it so. Every read
 prints the name of the shop `shop_id` names, under the same `shop_name` key clients already read.
-A search finds a service by its shop's name, address or notes through an FTS index on `shops`.
+A search finds a service by its shop's name, address or notes through an FTS index on `shops`,
+up to the shop's newest five services, since they all share the shop's rank and a long history
+would otherwise fill the results.
 
 **The directory refuses a second shop of the same name** (ASCII case and surrounding spaces aside)
 unless both carry different addresses, as two locations of one chain do. A shop with no address
@@ -29,7 +31,8 @@ lists them. Sending both arguments is refused. A blank name names no shop.
 
 **Duplicates are merged, not deleted.** `merge_shops` moves every service and appointment to the
 kept shop, which keeps its name and takes each detail it lacks; notes are joined, and each value
-the kept shop already had a different one of is listed in `discarded`. `delete_shop` refuses a
+the kept shop already had a different one of is listed in `discarded`. A merge that gives the
+kept shop an address another shop of its name already has is refused. `delete_shop` refuses a
 shop that any record names, because the foreign key's `ON DELETE SET NULL` would leave the
 history with no shop.
 
@@ -42,7 +45,8 @@ by the same comparison become one shop unless their addresses differ; then each 
 own shop, and the entries with no address share one more. In the owner's records the two KW
 entries become one shop with its address, the two America's Tire locations stay two shops, and
 the two Clovis dealer names stay two shops until the owner merges them. The migration reuses a
-shop already in the directory with the same name and address.
+shop already in the directory by the directory's own rule (the same name, and the same address or
+either one missing), so it never adds a duplicate of a shop the owner added.
 
 ## Alternatives considered
 

@@ -897,13 +897,19 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     }
 
     let performed_by = input.performed_by.unwrap_or(Performer::Shop);
-    let shop_id = super::shop::resolve(db, input.shop.as_ref()).await?;
+    // A self-performed service is refused before its shop is looked up, so
+    // the refusal names the real problem.
     validate_who_and_when(
         input.service_date,
         input.end_date,
         performed_by,
-        shop_id.and(input.shop.as_ref().map(ShopChoice::field)),
+        input
+            .shop
+            .as_ref()
+            .filter(|c| !c.is_blank())
+            .map(ShopChoice::field),
     )?;
+    let shop_id = super::shop::resolve(db, input.shop.as_ref()).await?;
     let line_items_input = input.line_items.unwrap_or_default();
     if let Some(appointment_id) = input.appointment_id {
         appointment::require_assignable(db, vehicle_id, appointment_id).await?;
@@ -1057,19 +1063,18 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         .await?;
     let choice = removal.choice(existing.id, ChoiceFor::Correction, input.completed_work)?;
 
-    let shop_id = super::shop::resolve_change(db, input.shop.as_ref()).await?;
+    let named_shop = match &input.shop {
+        Some(Some(choice)) => (!choice.is_blank()).then(|| choice.field()),
+        Some(None) => None,
+        None => existing.shop_id.map(|_| "shop_id"),
+    };
     validate_who_and_when(
         input.service_date.unwrap_or(existing.service_date),
         input.end_date.unwrap_or(existing.end_date),
         input.performed_by.unwrap_or(existing.performed_by),
-        shop_id.unwrap_or(existing.shop_id).map(|_| {
-            input
-                .shop
-                .as_ref()
-                .and_then(Option::as_ref)
-                .map_or("shop_id", ShopChoice::field)
-        }),
+        named_shop,
     )?;
+    let shop_id = super::shop::resolve_change(db, input.shop.as_ref()).await?;
     let invoice_ref = input
         .invoice_ref
         .map(|r| r.as_deref().and_then(super::trim_to_none));
@@ -2891,8 +2896,11 @@ mod tests {
         let db = test_db().await;
         let vid = seed_vehicle(&db).await;
         let shop_id = add_shop(&db, "Example VW", None).await;
+        // A name not in the directory gets the same answer, since a
+        // self-performed service names no shop at all.
         for (choice, field) in [
             (ShopChoice::Name("Example VW".into()), "shop_name"),
+            (ShopChoice::Name("My Garage".into()), "shop_name"),
             (ShopChoice::Id(shop_id), "shop_id"),
         ] {
             let err = create(
