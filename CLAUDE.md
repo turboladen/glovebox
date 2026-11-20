@@ -331,8 +331,9 @@ item's spelling of the name and, for every field the caller leaves out, its valu
 `list_schedule` shows it with `overrides` (the replaced item's id and `inherited_from`). A stored
 schedule item id names a row and counts toward the item the vehicle tracks under that row's name,
 so a reader that compares one with a tracked item maps it through `schedule::effective_ids`
-first, and no write moves links when a vehicle gets its own copy or changes its template; a job
-read prints the id as stored (`docs/adr/0020-schedule-links-resolve-when-read.md`). A vehicle
+first, and no write moves links when a vehicle gets its own copy or changes its template; the
+planned-work list (`work_item::list_with_status`) shows the tracked id and other job reads print
+the id as stored (`docs/adr/0020-schedule-links-resolve-when-read.md`). A vehicle
 created with a `model_template_id` takes the template's year, make, model, trim, body style, engine,
 transmission and drivetrain for each one left empty, with the precedence caller, then template,
 then VIN decode; `update_vehicle` setting a template fills only the empty ones. Each reminder

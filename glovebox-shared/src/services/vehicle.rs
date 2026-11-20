@@ -217,6 +217,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     let txn = super::begin_write(db).await?;
     let db = &txn;
     let existing = require(db, id).await?;
+    let template_before = existing.model_template_id;
     let template = require_template(db, input.model_template_id.flatten()).await?;
     let mut input = input;
     if let Some(t) = template {
@@ -299,6 +300,10 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     active.updated_at = Set(super::now());
 
     let out = active.update(db).await?;
+    if out.model_template_id != template_before {
+        // Another template changes which schedule item each name stands for.
+        super::schedule::drop_links_the_vehicles_jobs_bring(db, out.id).await?;
+    }
     txn.commit().await?;
     Ok(out)
 }

@@ -236,9 +236,8 @@ async fn changing_an_inherited_item_keeps_its_service_history_and_plans() {
         .iter()
         .find(|w| w["id"] == planned["id"])
         .unwrap_or_else(|| panic!("planned work must still be open: {after}"));
-    // The job keeps the id it was planned with, which the car's copy names
-    // in `overrides_item_id`, and the service reads as the copy's.
-    assert_eq!(work["schedule_item_id"], updated["overrides_item_id"]);
+    // The planned work and the service both read as the copy's.
+    assert_eq!(work["schedule_item_id"], updated["id"]);
     let service = t
         .call(
             "get_service",

@@ -1110,12 +1110,13 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     let incident_ids: Vec<i32> = removal.incidents.iter().map(|i| i.id).collect();
     incident_svc::release_resolved(&txn, record.id, incident_ids, choice).await?;
 
-    if let Some(mut item_ids) = input.schedule_item_ids {
+    if let Some(item_ids) = input.schedule_item_ids {
         // A read lists a job's item beside the named ones, so a list sent
         // with the call that takes the job off would store the item the job
-        // is taking with it.
+        // is taking with it. Both sides name the item the vehicle tracks.
+        let mut item_ids = schedule::tracked_ids(&txn, vehicle_id, &item_ids).await?;
         item_ids.retain(|id| !released_items.contains(id));
-        schedule::link_service(&txn, vehicle_id, record.id, &item_ids, LinkMode::Replace).await?;
+        schedule::insert_service_links(&txn, record.id, &item_ids, LinkMode::Replace).await?;
     }
 
     let parts_listed = input.part_ids.is_some();

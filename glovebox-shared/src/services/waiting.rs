@@ -142,26 +142,6 @@ impl Cover {
         }
     }
 }
-// The planned jobs that cover each schedule item, keyed by the item the
-// vehicle tracks. A job may name the inherited row of an item the vehicle
-// has its own copy of, so each job's item is read as the one it counts toward.
-async fn jobs_by_tracked_item<'a>(
-    db: &impl ConnectionTrait,
-    vehicle_id: i32,
-    jobs: impl Iterator<Item = &'a work_item::Model>,
-) -> DomainResult<std::collections::HashMap<i32, Vec<&'a work_item::Model>>> {
-    let with_item: Vec<(i32, &work_item::Model)> = jobs
-        .filter_map(|job| job.schedule_item_id.map(|id| (id, job)))
-        .collect();
-    let named: Vec<i32> = with_item.iter().map(|(id, _)| *id).collect();
-    let counts_toward = super::schedule::effective_ids(db, vehicle_id, &named).await?;
-    let mut by_item: std::collections::HashMap<i32, Vec<&work_item::Model>> =
-        std::collections::HashMap::new();
-    for (named, job) in with_item {
-        by_item.entry(counts_toward[&named]).or_default().push(job);
-    }
-    Ok(by_item)
-}
 
 /// What is waiting on one vehicle as of `today`.
 ///
@@ -184,8 +164,6 @@ pub async fn waiting(
         .job_id()
     };
 
-    let by_item = jobs_by_tracked_item(db, vehicle_id, planned.iter().map(|p| &p.item)).await?;
-
     let due: Vec<_> = reminders
         .reminders
         .iter()
@@ -194,8 +172,7 @@ pub async fn waiting(
     let maintenance: Vec<WaitingMaintenance> = due
         .iter()
         .filter_map(|r| {
-            let jobs = by_item.get(&r.schedule_item.id).into_iter().flatten();
-            let job_id = Cover::of(jobs.copied()).job_id()?;
+            let job_id = covering(|job| job.schedule_item_id, r.schedule_item.id)?;
             Some(WaitingMaintenance {
                 schedule_item_id: r.schedule_item.id,
                 name: r.schedule_item.name.clone(),

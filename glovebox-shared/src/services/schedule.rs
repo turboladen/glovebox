@@ -218,6 +218,7 @@ pub async fn create_for_vehicle<C: ConnectionTrait + TransactionTrait>(
         fill_from_inherited(&mut input, inherited);
     }
     let created = create(&txn, input).await?;
+    drop_links_the_vehicles_jobs_bring(&txn, vehicle_id).await?;
     txn.commit().await?;
     Ok(created)
 }
@@ -297,6 +298,7 @@ pub async fn update_for_vehicle<C: ConnectionTrait + TransactionTrait>(
         }
         _ => updated,
     };
+    drop_links_the_vehicles_jobs_bring(&txn, vehicle_id).await?;
     txn.commit().await?;
     Ok(updated)
 }
@@ -438,20 +440,31 @@ pub(crate) async fn effective_ids(
     if item_ids.is_empty() {
         return Ok(out);
     }
-    let named: Vec<(i32, String)> = maintenance_schedule_item::Entity::find()
+    let named: Vec<(i32, String, Option<i32>)> = maintenance_schedule_item::Entity::find()
         .select_only()
         .column(maintenance_schedule_item::Column::Id)
         .column(maintenance_schedule_item::Column::Name)
+        .column(maintenance_schedule_item::Column::VehicleId)
         .filter(maintenance_schedule_item::Column::Id.is_in(item_ids.to_vec()))
         .into_tuple()
         .all(db)
         .await?;
+    // The vehicle's own row is the one it tracks, so the schedule is
+    // resolved only when an id names some other row.
+    let others: Vec<(i32, String)> = named
+        .into_iter()
+        .filter(|(_, _, owner)| *owner != Some(vehicle_id))
+        .map(|(id, name, _)| (id, name))
+        .collect();
+    if others.is_empty() {
+        return Ok(out);
+    }
     let tracked: HashMap<String, i32> = resolve_for_listing(db, vehicle_id, true)
         .await?
         .into_iter()
         .map(|r| (name_key(&r.effective_item.name), r.effective_item.id))
         .collect();
-    for (id, name) in named {
+    for (id, name) in others {
         if let Some(effective) = tracked.get(&name_key(&name)) {
             out.insert(id, *effective);
         }
@@ -635,12 +648,12 @@ pub(crate) async fn insert_service_links(
                 .await?;
             std::collections::HashSet::new()
         }
-        LinkMode::Add => service_schedule_link::Entity::find()
-            .filter(service_schedule_link::Column::ServiceRecordId.eq(service_record_id))
-            .all(db)
+        // A link to the inherited row already counts toward the vehicle's
+        // copy, so the links are compared by the items they count toward.
+        LinkMode::Add => links_of_services(db, &[service_record_id])
             .await?
             .into_iter()
-            .map(|l| l.schedule_item_id)
+            .map(|(_, item_id)| item_id)
             .collect(),
     };
     let new_links = super::dedup_ids(item_ids)
@@ -682,9 +695,6 @@ pub(crate) async fn drop_links_jobs_bring(
     if from_jobs.is_empty() {
         return Ok(());
     }
-    // A link repeats a job's item when both count toward the same item, even
-    // when one names the inherited row and the other the vehicle's copy.
-    let from_jobs = effective_pairs(db, from_jobs).await?;
     let stored: Vec<(i32, i32)> = service_schedule_link::Entity::find()
         .filter(service_schedule_link::Column::ServiceRecordId.is_in(service_ids.to_vec()))
         .all(db)
@@ -692,7 +702,15 @@ pub(crate) async fn drop_links_jobs_bring(
         .into_iter()
         .map(|l| (l.service_record_id, l.schedule_item_id))
         .collect();
-    let counted = effective_items(db, &stored).await?;
+    // A link repeats a job's item when both count toward the same item, even
+    // when one names the inherited row and the other the vehicle's copy.
+    let both: Vec<(i32, i32)> = stored.iter().chain(&from_jobs).copied().collect();
+    let mut counted = effective_items(db, &both).await?;
+    let from_jobs: Vec<(i32, i32)> = from_jobs
+        .iter()
+        .zip(counted.split_off(stored.len()))
+        .map(|((service_id, _), item_id)| (*service_id, item_id))
+        .collect();
     for ((service_id, item_id), counted) in stored.into_iter().zip(counted) {
         if from_jobs.contains(&(service_id, counted)) {
             service_schedule_link::Entity::delete_by_id((service_id, item_id))
@@ -703,12 +721,33 @@ pub(crate) async fn drop_links_jobs_bring(
     Ok(())
 }
 
+/// Runs [`drop_links_jobs_bring`] for every service that completed one of
+/// the vehicle's jobs.
+// A change to which row the vehicle tracks under a name can make a stored
+// link and a completed job of one service count toward the same item, so the
+// writes that make one end here: a new or renamed item, and a change of the
+// vehicle's model template.
+pub(crate) async fn drop_links_the_vehicles_jobs_bring(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+) -> DomainResult<()> {
+    let completing: Vec<i32> = work_item::Entity::find()
+        .select_only()
+        .column(work_item::Column::CompletedServiceId)
+        .filter(work_item::Column::VehicleId.eq(vehicle_id))
+        .filter(work_item::Column::ScheduleItemId.is_not_null())
+        .filter(work_item::Column::CompletedServiceId.is_not_null())
+        .into_tuple()
+        .all(db)
+        .await?;
+    drop_links_jobs_bring(db, &super::dedup_ids(&completing)).await
+}
+
 /// Checks that every id is in the vehicle's schedule scope and maps each one
-/// to the item the vehicle actually tracks, the one [`resolve`] shows under
-/// that name: the vehicle's own item, else the model template's, else the
-/// platform's. Duplicates are
-/// dropped, first occurrence kept. An id outside the scope reads as
-/// nonexistent.
+/// to the item the vehicle tracks under that name (see [`effective_ids`]):
+/// the vehicle's own item, else the model template's, else the platform's.
+/// Duplicates are dropped, first occurrence kept. An id outside the scope
+/// reads as nonexistent.
 pub(crate) async fn tracked_ids(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -738,31 +777,8 @@ pub(crate) async fn tracked_ids(
         )));
     }
 
-    // An inherited id maps to the item `resolve` shows under its name.
-    let tracked_by_name: HashMap<String, i32> =
-        if found.values().any(|i| i.vehicle_id != Some(vehicle_id)) {
-            resolve_for_listing(db, vehicle_id, true)
-                .await?
-                .into_iter()
-                .map(|r| (name_key(&r.effective_item.name), r.effective_item.id))
-                .collect()
-        } else {
-            HashMap::new()
-        };
-    let mapped: Vec<i32> = ids
-        .iter()
-        .map(|id| {
-            let item = &found[id];
-            if item.vehicle_id == Some(vehicle_id) {
-                *id
-            } else {
-                tracked_by_name
-                    .get(&name_key(&item.name))
-                    .copied()
-                    .unwrap_or(*id)
-            }
-        })
-        .collect();
+    let tracked = effective_ids(db, vehicle_id, ids).await?;
+    let mapped: Vec<i32> = ids.iter().map(|id| tracked[id]).collect();
     Ok(super::dedup_ids(&mapped))
 }
 
@@ -1895,6 +1911,200 @@ mod tests {
         .unwrap();
         crate::test_support::assert_empty(&off.schedule_item_ids);
         assert_eq!(off.released_schedule_item_ids, vec![over.id]);
+    }
+
+    // An inherited "Spark Plugs", a job planned on it, and then the vehicle's
+    // own copy, so the job names a row the vehicle does not track.
+    async fn job_on_a_row_the_copy_replaced(db: &DatabaseConnection) -> (i32, i32, i32, i32) {
+        let (_pid, template_id, vid) = seed_chain(db).await;
+        let inherited = create(
+            db,
+            NewScheduleItem {
+                model_template_id: Some(template_id),
+                ..item_named("Spark Plugs")
+            },
+        )
+        .await
+        .unwrap();
+        let job = crate::services::work_item::create(
+            db,
+            vid,
+            crate::inputs::work_item::NewWorkItem {
+                title: "Plugs".into(),
+                schedule_item_id: Some(inherited.id),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let over = update_for_vehicle(
+            db,
+            vid,
+            inherited.id,
+            UpdateScheduleItem {
+                est_cost_cents: Some(Some(1)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        (vid, inherited.id, over.id, job.id)
+    }
+
+    #[tokio::test]
+    async fn the_planned_work_list_names_the_item_each_job_counts_toward() {
+        use crate::services::work_item;
+        let db = test_db().await;
+        let (vid, inherited, over, job) = job_on_a_row_the_copy_replaced(&db).await;
+
+        let stored = work_item::get(&db, vid, job).await.unwrap();
+        assert_eq!(stored.schedule_item_id, Some(inherited));
+        let listed = work_item::list_with_status(&db, vid, false, crate::services::today())
+            .await
+            .unwrap();
+        assert_eq!(listed[0].item.schedule_item_id, Some(over));
+    }
+
+    #[tokio::test]
+    async fn a_job_on_a_replaced_row_releases_and_shields_the_tracked_item() {
+        use crate::{
+            inputs::service_record::{NewServiceRecord, UpdateServiceRecord},
+            services::service_record,
+        };
+        let db = test_db().await;
+        let (vid, inherited, over, job) = job_on_a_row_the_copy_replaced(&db).await;
+        let svc = service_record::create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: days_ago(1),
+                work_item_ids: Some(vec![job]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(svc.schedule_item_ids, vec![over]);
+
+        // A list that names the item by its inherited id, sent with the call
+        // that takes the job off, stores nothing for it.
+        let off = service_record::update(
+            &db,
+            vid,
+            svc.record.id,
+            UpdateServiceRecord {
+                work_item_ids: Some(vec![]),
+                schedule_item_ids: Some(vec![inherited]),
+                completed_work: Some(service_record::CompletedWork::DoneAnotherWay),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        crate::test_support::assert_empty(&off.schedule_item_ids);
+        assert_eq!(off.released_schedule_item_ids, vec![over]);
+    }
+
+    #[tokio::test]
+    async fn a_job_edit_names_the_tracked_item_it_released() {
+        use crate::{
+            entities::work_item::JobStatus,
+            inputs::{service_record::NewServiceRecord, work_item::UpdateWorkItem},
+            services::{service_record, work_item},
+        };
+        let db = test_db().await;
+        let (vid, _inherited, over, job) = job_on_a_row_the_copy_replaced(&db).await;
+        service_record::create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: days_ago(1),
+                work_item_ids: Some(vec![job]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let back = work_item::update(
+            &db,
+            vid,
+            job,
+            UpdateWorkItem {
+                status: Some(JobStatus::Planned),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(back.released_schedule_item_id, Some(over));
+    }
+
+    #[tokio::test]
+    async fn an_item_renamed_onto_an_inherited_name_drops_the_link_its_job_repeats() {
+        use crate::{
+            inputs::service_record::UpdateServiceRecord,
+            services::{service_record, work_item},
+        };
+        let db = test_db().await;
+        let (_pid, template_id, vid) = seed_chain(&db).await;
+        let inherited = create(
+            &db,
+            NewScheduleItem {
+                model_template_id: Some(template_id),
+                ..item_named("Spark Plugs")
+            },
+        )
+        .await
+        .unwrap();
+        let own = create_for_vehicle(&db, vid, item_named("Plugs"))
+            .await
+            .unwrap();
+        let svc = service_on(&db, vid, inherited.id).await;
+        let job = work_item::create(
+            &db,
+            vid,
+            crate::inputs::work_item::NewWorkItem {
+                title: "Plugs".into(),
+                schedule_item_id: Some(own.id),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let complete = |ids: Vec<i32>, completed_work| UpdateServiceRecord {
+            work_item_ids: Some(ids),
+            completed_work,
+            ..Default::default()
+        };
+        service_record::update(&db, vid, svc, complete(vec![job.id], None))
+            .await
+            .unwrap();
+
+        update_for_vehicle(
+            &db,
+            vid,
+            own.id,
+            UpdateScheduleItem {
+                name: Some("Spark Plugs".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        // The link and the job count toward one item, so the item goes with
+        // the job.
+        let off = service_record::update(
+            &db,
+            vid,
+            svc,
+            complete(vec![], Some(service_record::CompletedWork::DidNotHappen)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(off.released_schedule_item_ids, vec![own.id]);
+        crate::test_support::assert_empty(&off.schedule_item_ids);
     }
 
     #[tokio::test]
