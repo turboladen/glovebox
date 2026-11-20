@@ -1070,10 +1070,14 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
 
     // Jobs come first, with the work that hangs off each one; the lists the
     // call sends then apply as sent.
-    let released_items: Vec<i32> = removal
+    let named: Vec<i32> = removal
         .jobs
         .iter()
         .filter_map(|j| j.schedule_item_id)
+        .collect();
+    let released_items: Vec<i32> = schedule::effective_ids(&txn, vehicle_id, &named)
+        .await?
+        .into_values()
         .collect();
     let satisfied_before = schedule::links_of_services(&txn, &[record.id]).await?;
     let settled = work_item::release_completed(&txn, &removal.job_ids(), choice).await?;

@@ -114,8 +114,9 @@ impl GloveboxMcp {
                        own copy (the result has a new `id` and `overrides_item_id` set to the \
                        inherited one); later calls with either id change that copy. Services and \
                        planned work already linked to the item stay linked, so its last service \
-                       and status carry over. Send only the fields to change; null clears a \
-                       field. Do not use this to record that work was done; that is \
+                       and status carry over; a planned job keeps showing the inherited id, which \
+                       is the copy's `overrides_item_id`. Send only the fields to change; null \
+                       clears a field. Do not use this to record that work was done; that is \
                        `record_service` with `schedule_item_ids`."
     )]
     async fn update_schedule_item(

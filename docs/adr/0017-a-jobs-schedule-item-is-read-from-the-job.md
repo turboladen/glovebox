@@ -27,9 +27,9 @@ baseline.
 No stored link names an item that a job of the same service brings.
 `schedule::drop_links_jobs_bring` removes such a link, and each write that could create one ends
 with it: storing links (`schedule::insert_service_links`), completing jobs
-(`work_item::complete_with_service`), changing a completed job's schedule item
-(`work_item::update`) and moving links to a vehicle's own item (`schedule::repoint_links`). A
-service read lists a job's item beside the named ones, so a caller that sends the list back
+(`work_item::complete_with_service`) and changing a completed job's schedule item
+(`work_item::update`). It compares the items the two count toward (ADR-0020), so a link to an
+inherited row repeats a job on the vehicle's own copy. A service read lists a job's item beside the named ones, so a caller that sends the list back
 stores nothing for it.
 
 ## Alternatives considered

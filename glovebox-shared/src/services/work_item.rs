@@ -381,6 +381,7 @@ pub struct UpdatedWorkItem {
 /// service satisfies and the incident it resolved through the job.
 #[derive(Default)]
 struct CompletedLinks {
+    vehicle_id: i32,
     service_id: Option<i32>,
     schedule_item_id: Option<i32>,
     incident_id: Option<i32>,
@@ -393,6 +394,7 @@ impl CompletedLinks {
             return Self::default();
         };
         Self {
+            vehicle_id: job.vehicle_id,
             service_id: Some(service_id),
             schedule_item_id: job.schedule_item_id,
             incident_id: job.incident_id,
@@ -406,12 +408,17 @@ impl CompletedLinks {
         let Some(service_id) = self.service_id else {
             return Ok(released);
         };
-        if let Some(item_id) = self.schedule_item_id
-            && !super::schedule::links_of_services(db, &[service_id])
+        if let Some(item_id) = self.schedule_item_id {
+            // The service's links name the item the vehicle tracks, which
+            // may be its own copy of the row the job names.
+            let item_id =
+                super::schedule::effective_ids(db, self.vehicle_id, &[item_id]).await?[&item_id];
+            if !super::schedule::links_of_services(db, &[service_id])
                 .await?
                 .contains(&(service_id, item_id))
-        {
-            released.schedule_item_id = Some(item_id);
+            {
+                released.schedule_item_id = Some(item_id);
+            }
         }
         if let Some(incident_id) = self.incident_id
             && !super::incident::resolvers_of_incidents(db, &[incident_id])

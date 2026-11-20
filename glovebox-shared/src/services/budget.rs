@@ -137,8 +137,14 @@ pub async fn forecast_from(
         .all(db)
         .await?;
 
+    // A job may name the inherited row of an item the vehicle has its own
+    // copy of, so each id is read as the item it counts toward.
+    let named: Vec<i32> = backlog.iter().filter_map(|i| i.schedule_item_id).collect();
     let planned_schedule_items: HashSet<i32> =
-        backlog.iter().filter_map(|i| i.schedule_item_id).collect();
+        super::schedule::effective_ids(db, vehicle_id, &named)
+            .await?
+            .into_values()
+            .collect();
 
     let avg_daily = rems.avg_daily_miles;
     let miles_to_days = |miles: i32| -> Option<i64> {

@@ -1,12 +1,11 @@
 use chrono::{Datelike, NaiveDate};
 use sea_orm::*;
 use serde::Serialize;
-use std::collections::HashMap;
 
 use crate::{
-    entities::{maintenance_schedule_item, mileage_log, model_template, service_record, vehicle},
+    entities::{maintenance_schedule_item, mileage_log, service_record, vehicle},
     error::{DomainError, DomainResult},
-    services::schedule::{DEFAULT_WARNING_DAYS, DEFAULT_WARNING_MILES, name_key},
+    services::schedule::{DEFAULT_WARNING_DAYS, DEFAULT_WARNING_MILES},
 };
 
 crate::vocab::vocabulary! {
@@ -314,8 +313,12 @@ pub async fn calculate_reminders_on(
     let (estimated_mileage, mileage_as_of, avg_daily_miles, mileage_is_estimate) =
         estimate_mileage(db, vehicle_id, &v, today).await?;
 
-    // The same layering as `schedule::resolve`: vehicle over template over platform.
-    let effective_items = resolve_schedule(db, &v).await?;
+    let effective_items: Vec<maintenance_schedule_item::Model> =
+        super::schedule::resolve(db, vehicle_id)
+            .await?
+            .into_iter()
+            .map(|r| r.effective_item)
+            .collect();
 
     // Batch-load all schedule links and service records for this vehicle (avoids N+1)
     let item_ids: Vec<i32> = effective_items.iter().map(|i| i.id).collect();
@@ -491,56 +494,6 @@ fn odometer_on(
         }
         (None, None) => None,
     }
-}
-
-/// Resolve effective schedule items for a vehicle (Platform → Model Template → Vehicle).
-// Reads each layer in descending id order, as `schedule::resolve_for_listing`
-// does, so both keep the lowest id when a name repeats.
-async fn resolve_schedule(
-    db: &impl ConnectionTrait,
-    v: &vehicle::Model,
-) -> DomainResult<Vec<maintenance_schedule_item::Model>> {
-    let mut schedule: HashMap<String, maintenance_schedule_item::Model> = HashMap::new();
-
-    if let Some(mt_id) = v.model_template_id {
-        let mt = model_template::Entity::find_by_id(mt_id).one(db).await?;
-        if let Some(mt) = &mt {
-            // Layer 1: Platform items
-            if let Some(platform_id) = mt.platform_id {
-                let items = maintenance_schedule_item::Entity::find()
-                    .filter(maintenance_schedule_item::Column::PlatformId.eq(platform_id))
-                    .order_by_desc(maintenance_schedule_item::Column::Id)
-                    .all(db)
-                    .await?;
-                for item in items {
-                    schedule.insert(name_key(&item.name), item);
-                }
-            }
-
-            // Layer 2: Model template items
-            let items = maintenance_schedule_item::Entity::find()
-                .filter(maintenance_schedule_item::Column::ModelTemplateId.eq(mt_id))
-                .order_by_desc(maintenance_schedule_item::Column::Id)
-                .all(db)
-                .await?;
-            for item in items {
-                schedule.insert(name_key(&item.name), item);
-            }
-        }
-    }
-
-    // Layer 3: Vehicle-level items
-    let items = maintenance_schedule_item::Entity::find()
-        .filter(maintenance_schedule_item::Column::VehicleId.eq(v.id))
-        .order_by_desc(maintenance_schedule_item::Column::Id)
-        .all(db)
-        .await?;
-    for item in items {
-        schedule.insert(name_key(&item.name), item);
-    }
-
-    // Filter disabled
-    Ok(schedule.into_values().filter(|i| i.enabled).collect())
 }
 
 /// Writes a mileage with a comma between thousands, such as `61,200`.

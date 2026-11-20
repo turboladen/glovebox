@@ -188,8 +188,9 @@ pub(crate) async fn update(
 /// An item named like one the vehicle inherits replaces it for this vehicle:
 /// it takes the inherited item's spelling of the name and, for every field
 /// the caller leaves out, the inherited item's value. The vehicle's services
-/// and planned work linked to the inherited item move to the new one. A name the vehicle already has its own item for is a
-/// `BadRequest`, and an interval of zero or less or a warning below zero is `Invalid`.
+/// and planned work linked to the inherited item count toward the new one.
+/// A name the vehicle already has its own item for is a `BadRequest`, and an
+/// interval of zero or less or a warning below zero is `Invalid`.
 pub async fn create_for_vehicle<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -217,7 +218,6 @@ pub async fn create_for_vehicle<C: ConnectionTrait + TransactionTrait>(
         fill_from_inherited(&mut input, inherited);
     }
     let created = create(&txn, input).await?;
-    repoint_links(&txn, vehicle_id, &shadowed, created.id).await?;
     txn.commit().await?;
     Ok(created)
 }
@@ -229,7 +229,7 @@ pub async fn create_for_vehicle<C: ConnectionTrait + TransactionTrait>(
 /// the change lands on this vehicle's own copy of it, which is created on
 /// first use and reused afterwards, whether the call names the inherited id
 /// or the copy's id. The vehicle's services and planned work linked to the
-/// inherited item move to the copy, so its history and plans still count.
+/// inherited item count toward the copy, so its history and plans stay.
 /// The copy keeps the inherited item's name; a rename is a `BadRequest`. A
 /// vehicle-owned item renamed onto an inherited item's name replaces that
 /// item for this vehicle, as [`create_for_vehicle`] does, and then keeps the
@@ -297,7 +297,6 @@ pub async fn update_for_vehicle<C: ConnectionTrait + TransactionTrait>(
         }
         _ => updated,
     };
-    repoint_links(&txn, vehicle_id, &shadowed, updated.id).await?;
     txn.commit().await?;
     Ok(updated)
 }
@@ -412,71 +411,6 @@ async fn copy_for_vehicle(
     create(db, copy).await
 }
 
-/// Moves this vehicle's service links and planned work from the `shadowed`
-/// inherited items to the vehicle's own item `target_id`. Other vehicles'
-/// rows are untouched: a service belongs to one vehicle, and so does a work
-/// item.
-async fn repoint_links(
-    db: &impl ConnectionTrait,
-    vehicle_id: i32,
-    shadowed: &[maintenance_schedule_item::Model],
-    target_id: i32,
-) -> DomainResult<()> {
-    let from: Vec<i32> = shadowed.iter().map(|i| i.id).collect();
-    if from.is_empty() {
-        return Ok(());
-    }
-    let own_services = service_record::Entity::find()
-        .select_only()
-        .column(service_record::Column::Id)
-        .filter(service_record::Column::VehicleId.eq(vehicle_id))
-        .into_query();
-    let links = service_schedule_link::Entity::find()
-        .filter(service_schedule_link::Column::ScheduleItemId.is_in(from.clone()))
-        .filter(service_schedule_link::Column::ServiceRecordId.in_subquery(own_services))
-        .all(db)
-        .await?;
-    for link in links {
-        let service_record_id = link.service_record_id;
-        link.delete(db).await?;
-        let already = service_schedule_link::Entity::find_by_id((service_record_id, target_id))
-            .one(db)
-            .await?
-            .is_some();
-        if !already {
-            service_schedule_link::ActiveModel {
-                service_record_id: Set(service_record_id),
-                schedule_item_id: Set(target_id),
-            }
-            .insert(db)
-            .await?;
-        }
-    }
-
-    work_item::Entity::update_many()
-        .set(work_item::ActiveModel {
-            schedule_item_id: Set(Some(target_id)),
-            updated_at: Set(super::now()),
-            ..Default::default()
-        })
-        .filter(work_item::Column::VehicleId.eq(vehicle_id))
-        .filter(work_item::Column::ScheduleItemId.is_in(from))
-        .exec(db)
-        .await?;
-
-    // A link and a completed job of one service can both land on the target.
-    let completing: Vec<i32> = work_item::Entity::find()
-        .select_only()
-        .column(work_item::Column::CompletedServiceId)
-        .filter(work_item::Column::VehicleId.eq(vehicle_id))
-        .filter(work_item::Column::ScheduleItemId.eq(target_id))
-        .filter(work_item::Column::CompletedServiceId.is_not_null())
-        .into_tuple()
-        .all(db)
-        .await?;
-    drop_links_jobs_bring(db, &completing).await
-}
-
 crate::vocab::vocabulary! {
     /// How a service's schedule links combine with the items given.
     // `add` unions them with the links already there, so a reconciliation
@@ -487,8 +421,107 @@ crate::vocab::vocabulary! {
     }
 }
 
+/// The schedule item each of `item_ids` counts toward for the vehicle: the
+/// item [`resolve_for_listing`] shows under the same name (see [`name_key`]),
+/// dismissed ones included, or the id itself when the vehicle has no item of
+/// that name. An id of no row maps to itself.
+// A stored link or a job names a row, and the row a vehicle tracks under a
+// name changes when the vehicle gets its own copy of an inherited item or
+// moves to another model template. Reading through the name keeps the
+// history and the plans on whichever row the vehicle tracks.
+pub(crate) async fn effective_ids(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    item_ids: &[i32],
+) -> DomainResult<HashMap<i32, i32>> {
+    let mut out: HashMap<i32, i32> = item_ids.iter().map(|id| (*id, *id)).collect();
+    if item_ids.is_empty() {
+        return Ok(out);
+    }
+    let named: Vec<(i32, String)> = maintenance_schedule_item::Entity::find()
+        .select_only()
+        .column(maintenance_schedule_item::Column::Id)
+        .column(maintenance_schedule_item::Column::Name)
+        .filter(maintenance_schedule_item::Column::Id.is_in(item_ids.to_vec()))
+        .into_tuple()
+        .all(db)
+        .await?;
+    let tracked: HashMap<String, i32> = resolve_for_listing(db, vehicle_id, true)
+        .await?
+        .into_iter()
+        .map(|r| (name_key(&r.effective_item.name), r.effective_item.id))
+        .collect();
+    for (id, name) in named {
+        if let Some(effective) = tracked.get(&name_key(&name)) {
+            out.insert(id, *effective);
+        }
+    }
+    Ok(out)
+}
+
+// The item each `(service, item)` pair counts toward for the service's
+// vehicle, in the order of `pairs`.
+async fn effective_items(
+    db: &impl ConnectionTrait,
+    pairs: &[(i32, i32)],
+) -> DomainResult<Vec<i32>> {
+    if pairs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let service_ids: Vec<i32> = pairs.iter().map(|(service_id, _)| *service_id).collect();
+    let vehicle_of: HashMap<i32, i32> = service_record::Entity::find()
+        .select_only()
+        .column(service_record::Column::Id)
+        .column(service_record::Column::VehicleId)
+        .filter(service_record::Column::Id.is_in(service_ids))
+        .into_tuple::<(i32, i32)>()
+        .all(db)
+        .await?
+        .into_iter()
+        .collect();
+    let mut by_vehicle: HashMap<i32, Vec<i32>> = HashMap::new();
+    for (service_id, item_id) in pairs {
+        if let Some(vehicle_id) = vehicle_of.get(service_id) {
+            by_vehicle.entry(*vehicle_id).or_default().push(*item_id);
+        }
+    }
+    let mut maps: HashMap<i32, HashMap<i32, i32>> = HashMap::new();
+    for (vehicle_id, item_ids) in by_vehicle {
+        maps.insert(vehicle_id, effective_ids(db, vehicle_id, &item_ids).await?);
+    }
+    Ok(pairs
+        .iter()
+        .map(|(service_id, item_id)| {
+            vehicle_of
+                .get(service_id)
+                .and_then(|vehicle_id| maps.get(vehicle_id))
+                .and_then(|map| map.get(item_id))
+                .copied()
+                .unwrap_or(*item_id)
+        })
+        .collect())
+}
+
+// Rewrites the item of each `(service, item)` pair to the item it counts
+// toward, then sorts the pairs and drops repeats.
+async fn effective_pairs(
+    db: &impl ConnectionTrait,
+    pairs: Vec<(i32, i32)>,
+) -> DomainResult<Vec<(i32, i32)>> {
+    let items = effective_items(db, &pairs).await?;
+    let mut out: Vec<(i32, i32)> = pairs
+        .into_iter()
+        .zip(items)
+        .map(|((service_id, _), item_id)| (service_id, item_id))
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    Ok(out)
+}
+
 /// Each pair of a service in `service_ids` and a schedule item it satisfies,
-/// ordered by service and then by item.
+/// ordered by service and then by item. Each item is the one the service's
+/// vehicle tracks under that name (see [`effective_ids`]).
 pub(crate) async fn links_of_services(
     db: &impl ConnectionTrait,
     service_ids: &[i32],
@@ -500,12 +533,13 @@ pub(crate) async fn links_of_services(
         .filter(service_schedule_link::Column::ServiceRecordId.is_in(service_ids.to_vec()));
     let jobs = work_item::Entity::find()
         .filter(work_item::Column::CompletedServiceId.is_in(service_ids.to_vec()));
-    satisfied(db, stored, jobs).await
+    effective_pairs(db, satisfied(db, stored, jobs).await?).await
 }
 
-/// Each pair of a service and a schedule item in `item_ids` that the service
-/// satisfies, ordered by service and then by item. A stored link is listed
-/// for any vehicle's service, and a job's item only for `vehicle_id`'s jobs.
+/// Each pair of one of the vehicle's services and a schedule item in
+/// `item_ids` that the service satisfies, ordered by service and then by
+/// item. A link or a job that names another row of the same name counts
+/// toward the item the vehicle tracks (see [`effective_ids`]).
 pub(crate) async fn links_to_items(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -514,20 +548,35 @@ pub(crate) async fn links_to_items(
     if item_ids.is_empty() {
         return Ok(Vec::new());
     }
+    // A link may name a row the vehicle tracked before it got its own copy
+    // or changed its template, so every link of the vehicle is read and
+    // judged by the item it counts toward.
+    let own_services = service_record::Entity::find()
+        .select_only()
+        .column(service_record::Column::Id)
+        .filter(service_record::Column::VehicleId.eq(vehicle_id))
+        .into_query();
     let stored = service_schedule_link::Entity::find()
-        .filter(service_schedule_link::Column::ScheduleItemId.is_in(item_ids.to_vec()));
-    // An inherited item is shared by every vehicle on its template, so the
-    // jobs are narrowed to this vehicle's.
-    let jobs = work_item::Entity::find()
-        .filter(work_item::Column::VehicleId.eq(vehicle_id))
-        .filter(work_item::Column::ScheduleItemId.is_in(item_ids.to_vec()));
-    satisfied(db, stored, jobs).await
+        .filter(service_schedule_link::Column::ServiceRecordId.in_subquery(own_services));
+    let jobs = work_item::Entity::find().filter(work_item::Column::VehicleId.eq(vehicle_id));
+    let pairs = satisfied(db, stored, jobs).await?;
+    let seen: Vec<i32> = pairs.iter().map(|(_, item_id)| *item_id).collect();
+    let effective = effective_ids(db, vehicle_id, &seen).await?;
+    let mut out: Vec<(i32, i32)> = pairs
+        .into_iter()
+        .map(|(service_id, item_id)| (service_id, effective[&item_id]))
+        .filter(|(_, item_id)| item_ids.contains(item_id))
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    Ok(out)
 }
 
 // A service satisfies the schedule items its stored links name and the
 // schedule item of each job it completed. A job's item is read from the job
 // and never stored as a link, so taking the job off the service takes the
-// item's baseline with it and leaves the other items the invoice named.
+// item's baseline with it and leaves the other items the invoice named. The
+// pairs name rows as stored.
 async fn satisfied(
     db: &impl ConnectionTrait,
     stored: Select<service_schedule_link::Entity>,
@@ -633,19 +682,24 @@ pub(crate) async fn drop_links_jobs_bring(
     if from_jobs.is_empty() {
         return Ok(());
     }
-    let repeated = from_jobs
+    // A link repeats a job's item when both count toward the same item, even
+    // when one names the inherited row and the other the vehicle's copy.
+    let from_jobs = effective_pairs(db, from_jobs).await?;
+    let stored: Vec<(i32, i32)> = service_schedule_link::Entity::find()
+        .filter(service_schedule_link::Column::ServiceRecordId.is_in(service_ids.to_vec()))
+        .all(db)
+        .await?
         .into_iter()
-        .fold(Condition::any(), |any, (service_id, item_id)| {
-            any.add(
-                Condition::all()
-                    .add(service_schedule_link::Column::ServiceRecordId.eq(service_id))
-                    .add(service_schedule_link::Column::ScheduleItemId.eq(item_id)),
-            )
-        });
-    service_schedule_link::Entity::delete_many()
-        .filter(repeated)
-        .exec(db)
-        .await?;
+        .map(|l| (l.service_record_id, l.schedule_item_id))
+        .collect();
+    let counted = effective_items(db, &stored).await?;
+    for ((service_id, item_id), counted) in stored.into_iter().zip(counted) {
+        if from_jobs.contains(&(service_id, counted)) {
+            service_schedule_link::Entity::delete_by_id((service_id, item_id))
+                .exec(db)
+                .await?;
+        }
+    }
     Ok(())
 }
 
@@ -726,8 +780,7 @@ pub async fn resolve(
 /// dismissed item then appears as the vehicle's disabled row, whose id is
 /// what [`undismiss_for_vehicle`] takes.
 // Each layer is read in descending id order, so when a name repeats the
-// lowest id is the one kept, as `own_item_named` picks; `tracked_ids` and the
-// reminders' `resolve_schedule` must agree with it.
+// lowest id is the one kept, as `own_item_named` picks.
 pub async fn resolve_for_listing(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -876,7 +929,7 @@ fn append_dismiss_reason(notes: Option<String>, reason: Option<&str>) -> Option<
 /// A vehicle-owned item is disabled in place. An inherited item gets the
 /// vehicle's own copy of it (created on first use, as
 /// [`update_for_vehicle`] does), disabled, and the vehicle's services and
-/// planned work linked to the inherited item move to the copy. Returns the
+/// planned work linked to the inherited item count toward the copy. Returns the
 /// disabled row; its id is what [`undismiss_for_vehicle`] takes. A `reason`
 /// is appended to the row's notes.
 pub async fn dismiss_for_vehicle<C: ConnectionTrait + TransactionTrait>(
@@ -887,7 +940,6 @@ pub async fn dismiss_for_vehicle<C: ConnectionTrait + TransactionTrait>(
 ) -> DomainResult<maintenance_schedule_item::Model> {
     let txn = super::begin_write(db).await?;
     let item = require_in_vehicle_scope(&txn, vehicle_id, schedule_item_id).await?;
-    let v = crate::services::vehicle::require(&txn, vehicle_id).await?;
 
     // Re-dismissing an inherited item reuses the vehicle's existing copy
     // rather than stacking a second one.
@@ -906,8 +958,6 @@ pub async fn dismiss_for_vehicle<C: ConnectionTrait + TransactionTrait>(
     active.updated_at = Set(super::now());
     let dismissed = active.update(&txn).await?;
 
-    let shadowed = inherited_named(&txn, &v, &dismissed.name).await?;
-    repoint_links(&txn, vehicle_id, &shadowed, dismissed.id).await?;
     txn.commit().await?;
     Ok(dismissed)
 }
@@ -1545,10 +1595,10 @@ mod tests {
         assert_eq!(plugs.status, DueStatus::NotDue);
         assert_eq!(plugs.last_service.as_ref().map(|s| s.id), Some(svc));
 
-        // The planned work now points at the override, so it still stands in
-        // for the first projected occurrence.
-        let moved = work_item::get(&db, vid, planned.id).await.unwrap();
-        assert_eq!(moved.schedule_item_id, Some(over.id));
+        // The planned work names the inherited row and counts toward the
+        // override, so it still stands in for the first projected occurrence.
+        let kept = work_item::get(&db, vid, planned.id).await.unwrap();
+        assert_eq!(kept.schedule_item_id, Some(inherited.id));
         let f = budget::forecast_from(&db, vid, &rems, crate::services::today())
             .await
             .unwrap();
@@ -1714,6 +1764,137 @@ mod tests {
         let rems = reminders::calculate_reminders(&db, vid).await.unwrap();
         let plugs = reminder_for(&rems, "Spark Plugs");
         assert_eq!(plugs.last_service.as_ref().map(|s| s.id), Some(svc));
+    }
+
+    #[tokio::test]
+    async fn history_follows_a_vehicle_to_another_template_with_an_item_of_the_same_name() {
+        use crate::services::reminders;
+        let db = test_db().await;
+        let (pid, template_id, vid) = seed_chain(&db).await;
+        let old = create(
+            &db,
+            NewScheduleItem {
+                model_template_id: Some(template_id),
+                interval_months: Some(12),
+                ..item_named("Spark Plugs")
+            },
+        )
+        .await
+        .unwrap();
+        let svc = service_on(&db, vid, old.id).await;
+
+        let other_template = model_template::ActiveModel {
+            platform_id: Set(Some(pid)),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap()
+        .id;
+        let new = create(
+            &db,
+            NewScheduleItem {
+                model_template_id: Some(other_template),
+                interval_months: Some(12),
+                ..item_named("spark plugs")
+            },
+        )
+        .await
+        .unwrap();
+        crate::services::vehicle::update(
+            &db,
+            vid,
+            crate::inputs::vehicle::UpdateVehicle {
+                model_template_id: Some(Some(other_template)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        // The link names the first template's row, and the service counts
+        // toward the item the vehicle tracks under that name.
+        let rems = reminders::calculate_reminders(&db, vid).await.unwrap();
+        let plugs = reminder_for(&rems, "spark plugs");
+        assert_eq!(plugs.schedule_item.id, new.id);
+        assert_eq!(plugs.last_service.as_ref().map(|s| s.id), Some(svc));
+        let read = crate::services::service_record::get(&db, vid, svc)
+            .await
+            .unwrap();
+        assert_eq!(read.schedule_item_ids, vec![new.id]);
+    }
+
+    #[tokio::test]
+    async fn a_link_to_the_inherited_row_follows_a_job_on_the_cars_own_item() {
+        use crate::{
+            inputs::service_record::UpdateServiceRecord,
+            services::{service_record, work_item},
+        };
+        let db = test_db().await;
+        let (_pid, template_id, vid) = seed_chain(&db).await;
+        let inherited = create(
+            &db,
+            NewScheduleItem {
+                model_template_id: Some(template_id),
+                ..item_named("Spark Plugs")
+            },
+        )
+        .await
+        .unwrap();
+        // The invoice names the item while the vehicle still tracks the
+        // inherited row, and the vehicle gets its own copy afterwards.
+        let svc = service_on(&db, vid, inherited.id).await;
+        let over = update_for_vehicle(
+            &db,
+            vid,
+            inherited.id,
+            UpdateScheduleItem {
+                est_cost_cents: Some(Some(1)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let job = work_item::create(
+            &db,
+            vid,
+            crate::inputs::work_item::NewWorkItem {
+                title: "Plugs".into(),
+                schedule_item_id: Some(over.id),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        // Completing the job drops the stored link that counts toward the
+        // same item, so the item goes with the job when it is taken off.
+        let done = service_record::update(
+            &db,
+            vid,
+            svc,
+            UpdateServiceRecord {
+                work_item_ids: Some(vec![job.id]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(done.schedule_item_ids, vec![over.id]);
+        let off = service_record::update(
+            &db,
+            vid,
+            svc,
+            UpdateServiceRecord {
+                work_item_ids: Some(vec![]),
+                completed_work: Some(service_record::CompletedWork::DidNotHappen),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        crate::test_support::assert_empty(&off.schedule_item_ids);
+        assert_eq!(off.released_schedule_item_ids, vec![over.id]);
     }
 
     #[tokio::test]
