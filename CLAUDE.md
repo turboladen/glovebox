@@ -419,7 +419,8 @@ A page is a view of the shared library, and a future page follows the same rules
   (`AppState::today`, `common::today()` = 2026-11-13); date fixtures by `common::today()`, not
   `services::today()`. Askama escapes only `{{ }}` values, so assert literal template text as
   written (`I'm`) and rendered values escaped (`&#39;bogus&#39;`). Askama writes `<` and `>` as
-  `&#60;` and `&#62;`.
+  `&#60;` and `&#62;`. CSS changes case only on screen (the `cap` class), so assert the text as
+  the template or `view.rs` writes it.
   Need-row and linked-part tests live in `tests/actions.rs`; its `need_summary` helper reads only
   the row's `<summary>`, so markup a test checks there must sit inside it.
 - **The home page leads with what is waiting.** Per vehicle it lists the maintenance that is
@@ -434,8 +435,9 @@ A page is a view of the shared library, and a future page follows the same rules
   under its title and a linked part's notes under its line.
   Undecided and to-order needs are left off and shown in an on-screen "Before you print" box,
   whose "Ask the shop" posts the existing supplier form without an approach, which leaves the
-  stored approach alone. `docs/adr/0009-the-work-sheet-prints-plain.md`
-  records why.
+  stored approach alone. A link or control meant only for the screen goes in the sheet's
+  `noprint` strip, so the printed sheet stays unchanged.
+  `docs/adr/0009-the-work-sheet-prints-plain.md` records why.
 - **The shop pages are read-only** (`/shops` from `shop::list`, `/shops/{id}` from
   `shop::history`). The directory changes only through Claude Desktop, and every shop name a page
   prints links to the shop's page.
