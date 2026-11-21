@@ -9,17 +9,18 @@ use glovebox_shared::{
         job_need::Approach,
         need_option::{self, Fitment},
         part::{self, Supplier},
-        todo,
+        shop, todo,
         work_item::JobStatus,
     },
     money::format_cents,
     services::{
-        appointment::AppointmentPhase,
+        appointment::{self, AppointmentPhase},
         checklist::{self, Checklist, HomeAppointment, JobView, NeedView, StepRow},
         date_label,
         need::{self, Stage},
         part as part_svc,
         reminders::{self, DueStatus},
+        shop::{ShopHistory, ShopListing},
         waiting::{Waiting, booked_note},
         work_sheet::{SheetLine, WorkSheet},
     },
@@ -414,7 +415,7 @@ impl Steps {
 pub struct HomeAppointmentRow {
     pub id: i32,
     pub purpose: String,
-    pub shop_name: Option<String>,
+    pub shop: Option<ShopLink>,
     /// The planned date, or the words the shared row gives when there is none.
     pub when: String,
     pub dated: bool,
@@ -429,7 +430,7 @@ impl From<&HomeAppointment> for HomeAppointmentRow {
         Self {
             id: a.id,
             purpose: a.purpose.clone(),
-            shop_name: a.shop_name.clone(),
+            shop: ShopLink::of(a.shop_id, a.shop_name.as_deref()),
             when: a.when.clone(),
             dated: a.dated,
             status: Tag::of_phase(a.phase),
@@ -1060,4 +1061,142 @@ pub fn unsettled_rows(sheet: &WorkSheet, vid: i32, failure: Option<&Failure>) ->
                 .map(|f| f.message.clone()),
         })
         .collect()
+}
+
+/// A shop's name linked to its page.
+pub struct ShopLink {
+    pub name: String,
+    pub href: String,
+}
+
+impl ShopLink {
+    /// The link to shop `id`, named `name`.
+    pub fn new(id: i32, name: &str) -> Self {
+        Self {
+            name: name.to_owned(),
+            href: crate::pages::shop_path(id),
+        }
+    }
+
+    /// The link for a record that names shop `id` as `name`, or `None` when it
+    /// names no shop.
+    pub fn of(id: Option<i32>, name: Option<&str>) -> Option<Self> {
+        Some(Self::new(id?, name?))
+    }
+}
+
+/// One shop as the shops page lists it.
+pub struct ShopRow {
+    pub link: ShopLink,
+    pub address: Option<String>,
+    pub services: u64,
+    pub appointments: u64,
+    /// The date of the newest service, when there is one.
+    pub last_visit: Option<String>,
+}
+
+impl From<&ShopListing> for ShopRow {
+    fn from(l: &ShopListing) -> Self {
+        Self {
+            link: ShopLink::new(l.shop.id, &l.shop.name),
+            address: l.shop.address.clone(),
+            services: l.service_count,
+            appointments: l.appointment_count,
+            last_visit: l.last_service_on.map(date_label),
+        }
+    }
+}
+
+/// A shop's own details, as the head of its page shows them.
+pub struct ShopDetails {
+    pub name: String,
+    pub address: Option<String>,
+    pub phone: Option<String>,
+    pub website: Option<String>,
+    /// True when the website is an `http` or `https` address, which the page
+    /// shows as a link.
+    pub website_is_link: bool,
+    pub specialty: Option<String>,
+    pub notes: Option<String>,
+}
+
+impl From<&shop::Model> for ShopDetails {
+    fn from(s: &shop::Model) -> Self {
+        Self {
+            name: s.name.clone(),
+            address: s.address.clone(),
+            phone: s.phone.clone(),
+            website: s.website.clone(),
+            website_is_link: s.website.as_deref().is_some_and(is_web_address),
+            specialty: s.specialty.clone(),
+            notes: s.notes.clone(),
+        }
+    }
+}
+
+/// One service in a shop's history.
+pub struct ShopServiceRow {
+    pub date: String,
+    pub vehicle: String,
+    pub description: Option<String>,
+    /// The invoice's total, when the service records one.
+    pub total: Option<String>,
+    /// The owner's share of the total, when there is a total.
+    pub paid: Option<String>,
+}
+
+/// One appointment in a shop's history.
+pub struct ShopAppointmentRow {
+    pub href: String,
+    pub purpose: String,
+    pub vehicle: String,
+    /// The planned date, or the words the shared layer gives when there is none.
+    pub when: String,
+    pub dated: bool,
+    pub status: Tag,
+}
+
+/// The rows and totals of a shop's page.
+pub struct ShopPageView {
+    pub details: ShopDetails,
+    pub total: String,
+    pub paid: String,
+    pub services: Vec<ShopServiceRow>,
+    pub appointments: Vec<ShopAppointmentRow>,
+}
+
+impl From<&ShopHistory> for ShopPageView {
+    fn from(h: &ShopHistory) -> Self {
+        Self {
+            details: ShopDetails::from(&h.shop),
+            total: format_cents(h.total_cost_cents),
+            paid: format_cents(h.out_of_pocket_cents),
+            services: h
+                .services
+                .iter()
+                .map(|s| ShopServiceRow {
+                    date: date_label(s.service_date),
+                    vehicle: s.vehicle_name.clone(),
+                    description: s.description.clone(),
+                    total: s.total_cost_cents.map(format_cents),
+                    paid: s.out_of_pocket_cents.map(format_cents),
+                })
+                .collect(),
+            appointments: h
+                .appointments
+                .iter()
+                .map(|a| {
+                    let appt = &a.summary.appointment;
+                    ShopAppointmentRow {
+                        href: crate::pages::appointment_path(appt.vehicle_id, appt.id),
+                        purpose: appt.purpose.clone(),
+                        vehicle: a.vehicle_name.clone(),
+                        when: appointment::when(appt.planned_date),
+                        dated: appt.planned_date.is_some(),
+                        status: Tag::of_phase(a.summary.phase),
+                    }
+                })
+                .collect(),
+        }
+    }
 }

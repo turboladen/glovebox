@@ -157,6 +157,13 @@ crate::vocab::vocabulary! {
     }
 }
 
+/// When an appointment is: its planned date, or `not booked` when it has
+/// none.
+#[must_use]
+pub fn when(planned_date: Option<chrono::NaiveDate>) -> String {
+    planned_date.map_or_else(|| "not booked".to_owned(), super::date_label)
+}
+
 /// The phase of an appointment with `status` and `planned_date` on `today`.
 /// An open appointment is `planning` without a date, `booked` before its
 /// date and `in_shop` from its date on. `done` and `cancelled` carry over.

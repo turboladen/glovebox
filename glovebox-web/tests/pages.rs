@@ -1038,3 +1038,279 @@ async fn appointment_page_links_to_its_print_sheet() {
     );
     assert!(body.contains("Print sheet"), "{body}");
 }
+
+// Two shops: "Smith Auto" with two Golf services (one partly paid by
+// insurance, one with no total), an Alltrack service, an appointment in
+// planning and a cancelled one; and "Acme Tires" with nothing. Returns
+// (Smith Auto, Golf, the planning appointment).
+async fn shop_fixture(db: &DatabaseConnection) -> (i32, i32, i32) {
+    use glovebox_shared::{
+        entities::{
+            service_record::{Payer, Performer},
+            service_record_line_item::WorkKind,
+        },
+        inputs::{
+            service_record::{NewLineItem, NewServiceRecord},
+            shop::{NewShop, ShopChoice},
+        },
+        services::{service_record, shop},
+    };
+    let smith = shop::create(
+        db,
+        NewShop {
+            name: "Smith Auto".into(),
+            address: Some("1 Main St".into()),
+            phone: Some("555-0100".into()),
+            website: Some("https://smith.example".into()),
+            specialty: Some("VW".into()),
+            notes: Some("Ask for Pat".into()),
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    glovebox_shared::test_support::add_shop(db, "Acme Tires").await;
+    let golf = VehicleFixture::new().name("Golf").insert_id(db).await;
+    let alltrack = VehicleFixture::new().name("Alltrack").insert_id(db).await;
+    let service = |on: &str, description: &str, total: Option<i32>, lines| NewServiceRecord {
+        service_date: date(on),
+        performed_by: Some(Performer::Shop),
+        shop: Some(ShopChoice::Id(smith)),
+        description: Some(description.into()),
+        total_cost_cents: total,
+        line_items: lines,
+        ..Default::default()
+    };
+    let line = |description: &str, paid_by, cents| NewLineItem {
+        description: description.into(),
+        work_kind: WorkKind::Repair,
+        paid_by,
+        quantity: None,
+        unit_cost_cents: None,
+        cost_cents: Some(cents),
+    };
+    service_record::create(
+        db,
+        golf,
+        service(
+            "2026-10-01",
+            "Windshield and wipers",
+            Some(50_000),
+            Some(vec![
+                line("Windshield", Some(Payer::Insurance), 20_000),
+                line("Wipers", None, 30_000),
+            ]),
+        ),
+    )
+    .await
+    .unwrap();
+    service_record::create(db, golf, service("2026-09-01", "Inspection", None, None))
+        .await
+        .unwrap();
+    service_record::create(
+        db,
+        alltrack,
+        service("2026-11-01", "Oil change", Some(12_000), None),
+    )
+    .await
+    .unwrap();
+    let planning = appointment::create(
+        db,
+        golf,
+        NewAppointment {
+            purpose: "Rear brakes".into(),
+            shop: Some(ShopChoice::Id(smith)),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    let dropped = appointment::create(
+        db,
+        alltrack,
+        NewAppointment {
+            purpose: "Alignment".into(),
+            shop: Some(ShopChoice::Id(smith)),
+            planned_date: Some(date("2026-11-20")),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    appointment::cancel(db, alltrack, dropped).await.unwrap();
+    (smith, golf, planning)
+}
+
+// The rows of the section headed `heading`, each with its tags stripped and
+// its whitespace collapsed.
+fn section_rows(body: &str, heading: &str) -> Vec<String> {
+    let section = body
+        .split(&format!(">{heading}</h3>"))
+        .nth(1)
+        .unwrap_or_else(|| panic!("no {heading} section: {body}"));
+    let section = section.split("</section>").next().unwrap_or_default();
+    section
+        .split("<li class=\"row")
+        .skip(1)
+        .map(|row| {
+            let row = row.split("</li>").next().unwrap_or_default();
+            let row = row.split_once('>').map_or("", |(_, rest)| rest);
+            let mut text = String::new();
+            let mut in_tag = false;
+            for c in row.chars() {
+                match c {
+                    '<' => in_tag = true,
+                    '>' => {
+                        in_tag = false;
+                        text.push(' ');
+                    }
+                    _ if !in_tag => text.push(c),
+                    _ => {}
+                }
+            }
+            text.split_whitespace().collect::<Vec<_>>().join(" ")
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn shops_page_lists_each_shop_with_its_counts() {
+    let db = db().await;
+    let (smith, _, _) = shop_fixture(&db).await;
+    let (status, body) = page(app(db, "test"), get("/shops")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains(&format!(r#"<a href="/shops/{smith}">Smith Auto</a>"#)),
+        "{body}"
+    );
+    assert_eq!(
+        section_rows(&body, "Directory"),
+        [
+            "Acme Tires Services 0 Appointments 0 No services",
+            "Smith Auto 1 Main St Services 3 Appointments 2 2026-11-01",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn an_empty_directory_says_so() {
+    let (status, body) = page(app(db().await, "test"), get("/shops")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains("No shops yet. Ask Claude to add one."),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn a_shop_page_shows_its_work_across_vehicles_and_what_it_cost() {
+    let db = db().await;
+    let (smith, golf, planning) = shop_fixture(&db).await;
+    let (status, body) = page(app(db, "test"), get(&format!("/shops/{smith}"))).await;
+    assert_eq!(status, StatusCode::OK);
+    for detail in [
+        r#"<span class="l">Address</span>1 Main St"#,
+        r#"<span class="l">Phone</span>555-0100"#,
+        r#"<span class="l">Website</span><a href="https://smith.example" target="_blank" rel="noopener noreferrer">https://smith.example</a>"#,
+        r#"<span class="l">Specialty</span>VW"#,
+        r#"<span class="l">Invoiced</span><span class="price">$620.00</span>"#,
+        r#"<span class="l">You paid</span><span class="price">$420.00</span>"#,
+        "Ask for Pat",
+    ] {
+        assert!(body.contains(detail), "missing {detail}: {body}");
+    }
+    assert_eq!(
+        section_rows(&body, "Services"),
+        [
+            "2026-11-01 Alltrack Oil change $120.00 $120.00",
+            "2026-10-01 Golf Windshield and wipers $500.00 $300.00",
+            "2026-09-01 Golf Inspection No total",
+        ]
+    );
+    assert_eq!(
+        section_rows(&body, "Appointments"),
+        [
+            "Alignment Alltrack 2026-11-20 Cancelled",
+            "Rear brakes Golf not booked Planning",
+        ]
+    );
+    assert!(
+        body.contains(&format!(
+            r#"<a href="/vehicles/{golf}/appointments/{planning}">Rear brakes</a>"#
+        )),
+        "{body}"
+    );
+    assert!(body.contains("pill pill--plain\">Cancelled"), "{body}");
+}
+
+#[tokio::test]
+async fn a_missing_shop_is_the_not_found_page() {
+    let (status, _) = page(app(db().await, "test"), get("/shops/999")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_shop_website_that_is_not_a_web_address_prints_as_text() {
+    use glovebox_shared::{inputs::shop::NewShop, services::shop};
+    let db = db().await;
+    let id = shop::create(
+        &db,
+        NewShop {
+            name: "Odd Shop".into(),
+            website: Some("javascript:alert(1)".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    let (_, body) = page(app(db, "test"), get(&format!("/shops/{id}"))).await;
+    assert!(
+        body.contains(r#"<span class="l">Website</span>javascript:alert(1)</div>"#),
+        "{body}"
+    );
+    assert!(!body.contains(r#"href="javascript"#), "{body}");
+}
+
+#[tokio::test]
+async fn a_shop_name_links_to_its_page_wherever_it_is_printed() {
+    let db = db().await;
+    let (smith, golf, planning) = shop_fixture(&db).await;
+    let link = format!(r#"<a href="/shops/{smith}">Smith Auto</a>"#);
+    for path in [
+        "/".to_owned(),
+        format!("/vehicles/{golf}/appointments/{planning}"),
+        format!("/vehicles/{golf}/appointments/{planning}/print"),
+    ] {
+        let (status, body) = page(app(db.clone(), "test"), get(&path)).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert!(body.contains(&link), "{path}: {body}");
+        assert!(body.contains(r#"<a href="/shops">Shops</a>"#), "{path}");
+    }
+}
+
+#[tokio::test]
+async fn an_appointment_with_no_shop_links_to_none() {
+    let db = db().await;
+    let v = VehicleFixture::new().insert_id(&db).await;
+    let a = appointment::create(
+        &db,
+        v,
+        NewAppointment {
+            purpose: "Detailing".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    for path in [
+        format!("/vehicles/{v}/appointments/{a}"),
+        format!("/vehicles/{v}/appointments/{a}/print"),
+    ] {
+        let (_, body) = page(app(db.clone(), "test"), get(&path)).await;
+        assert!(!body.contains(r#"href="/shops/"#), "{path}: {body}");
+    }
+}

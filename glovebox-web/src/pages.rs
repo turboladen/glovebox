@@ -13,7 +13,7 @@ use glovebox_shared::{
         appointment,
         checklist::{self, NeedView, VehicleHome},
         need::{self, Stage},
-        part, todo as todo_svc, vehicle, work_sheet,
+        part, shop, todo as todo_svc, vehicle, work_sheet,
     },
 };
 use serde::Deserialize;
@@ -21,9 +21,9 @@ use serde::Deserialize;
 use crate::{
     AppState, DeletedTodo,
     view::{
-        Banner, CardContext, Count, Failure, HomeAppointmentRow, JobCard, SheetJobCard, Steps, Tag,
-        Target, TodoCard, TodoForm, UnsettledRow, WaitingRows, job_card, sheet_heading, sheet_jobs,
-        steps, unsettled_rows,
+        Banner, CardContext, Count, Failure, HomeAppointmentRow, JobCard, SheetJobCard, ShopLink,
+        ShopPageView, ShopRow, Steps, Tag, Target, TodoCard, TodoForm, UnsettledRow, WaitingRows,
+        job_card, sheet_heading, sheet_jobs, steps, unsettled_rows,
     },
 };
 
@@ -103,7 +103,7 @@ struct AppointmentPage {
     sheet_href: String,
     vehicle: String,
     purpose: String,
-    shop: Option<String>,
+    shop: Option<ShopLink>,
     date: Option<String>,
     status: Tag,
     needs_open: Count,
@@ -386,6 +386,11 @@ pub fn sheet_path(vid: i32, id: i32) -> String {
     format!("/vehicles/{vid}/appointments/{id}/print")
 }
 
+/// The path of a shop's page.
+pub fn shop_path(id: i32) -> String {
+    format!("/shops/{id}")
+}
+
 /// The path of a job's page.
 pub fn job_path(vid: i32, id: i32) -> String {
     format!("/vehicles/{vid}/jobs/{id}")
@@ -465,7 +470,7 @@ async fn appointment_page(
         top_error,
         vehicle: car.name,
         purpose: summary.appointment.purpose.clone(),
-        shop: summary.shop_name.clone(),
+        shop: ShopLink::of(summary.appointment.shop_id, summary.shop_name.as_deref()),
         date: summary
             .appointment
             .planned_date
@@ -558,6 +563,7 @@ struct SheetPage {
     /// The path the forms on this page return to.
     back: String,
     appointment_href: String,
+    shop: Option<ShopLink>,
     heading: String,
     jobs: Vec<SheetJobCard>,
     unsettled: Vec<UnsettledRow>,
@@ -603,8 +609,49 @@ async fn sheet_page(
         vid,
         back: sheet_path(vid, id),
         appointment_href: appointment_path(vid, id),
+        shop: ShopLink::of(sheet.shop_id, sheet.shop.as_deref()),
         heading: sheet_heading(&sheet),
         jobs: sheet_jobs(&sheet),
         unsettled,
     })
+}
+
+#[derive(Template)]
+#[template(path = "shops.html")]
+struct ShopsPage {
+    chrome: Chrome,
+    shops: Vec<ShopRow>,
+}
+
+pub async fn get_shops(State(state): State<AppState>) -> Response {
+    match shop::list(&state.db).await {
+        Ok(listings) => {
+            let page = ShopsPage {
+                chrome: Chrome::of(&state),
+                shops: listings.iter().map(Into::into).collect(),
+            };
+            html(StatusCode::OK, page.render())
+        }
+        Err(e) => internal(&e),
+    }
+}
+
+#[derive(Template)]
+#[template(path = "shop.html")]
+struct ShopPage {
+    chrome: Chrome,
+    v: ShopPageView,
+}
+
+pub async fn get_shop(State(state): State<AppState>, Path(id): Path<i32>) -> Response {
+    match shop::history(&state.db, id, (state.today)()).await {
+        Ok(history) => {
+            let page = ShopPage {
+                chrome: Chrome::of(&state),
+                v: ShopPageView::from(&history),
+            };
+            html(StatusCode::OK, page.render())
+        }
+        Err(e) => load_failed(&state, &e),
+    }
 }

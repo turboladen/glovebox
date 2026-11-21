@@ -230,11 +230,12 @@ async fn appointment_page_shows_next_steps_then_jobs() {
 
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("60k service"), "{body}");
-    for (label, value) in [
-        ("Vehicle", "Golf GTI"),
-        ("Shop", "Demo Auto Works"),
-        ("Date", "2026-12-01"),
-    ] {
+    assert!(
+        body.contains(r#"<span class="l">Shop</span><a href="/shops/"#)
+            && body.contains(r#"">Demo Auto Works</a></div>"#),
+        "{body}"
+    );
+    for (label, value) in [("Vehicle", "Golf GTI"), ("Date", "2026-12-01")] {
         assert!(
             body.contains(&format!(r#"<span class="l">{label}</span>{value}</div>"#)),
             "{label}: {body}"

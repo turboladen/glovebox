@@ -2,7 +2,7 @@
 {% block title %}Work sheet - Glovebox{% endblock %}
 {% block content %}
 <div class="noprint page">
-  <p><a href="{{ appointment_href }}">Back to the appointment</a></p>
+  <p><a href="{{ appointment_href }}">Back to the appointment</a>{% if let Some(shop) = shop %} <span class="l">· Shop</span> <a href="{{ shop.href }}">{{ shop.name }}</a>{% endif %}</p>
   {% if let Some(e) = top_error %}<p class="error" role="alert"><b>Not saved.</b> {{ e }}</p>{% endif %}
   {% if jobs.is_empty() && unsettled.is_empty() %}
   <p>No planned jobs on this appointment.</p>

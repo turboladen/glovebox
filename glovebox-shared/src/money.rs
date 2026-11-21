@@ -57,7 +57,8 @@ pub fn parse_dollars(text: &str) -> DomainResult<i32> {
 
 /// Formats whole cents as dollars with thousands separators, such as
 /// `$1,234.50`. A negative amount carries a leading minus sign.
-pub fn format_cents(cents: i32) -> String {
+pub fn format_cents(cents: impl Into<i64>) -> String {
+    let cents: i64 = cents.into();
     let sign = if cents < 0 { "-" } else { "" };
     let abs = cents.unsigned_abs();
     let whole = (abs / 100).to_string();
@@ -145,5 +146,12 @@ mod tests {
         ] {
             assert_eq!(format_cents(cents), text);
         }
+    }
+
+    #[test]
+    fn format_cents_takes_a_sum_wider_than_one_amount() {
+        let sum = i64::from(i32::MAX) + 1;
+        assert_eq!(format_cents(sum), "$21,474,836.48");
+        assert_eq!(format_cents(i64::MIN), "-$92,233,720,368,547,758.08");
     }
 }
