@@ -74,6 +74,19 @@ pages hold no forms, because the shop directory changes only through Claude Desk
 name printed elsewhere links to its page, and on the work sheet that link sits in the on-screen
 strip, so the printed sheet stays plain.
 
+**A service's page follows the same rules (2026-11-24).** It heads with labeled values, like an
+appointment's head: the vehicle, date, shop, odometer, invoice reference and amounts, with the
+amounts as prices and "No total" in gray. Each kind of linked record then has its own panel (the
+lines, the jobs completed, the quotes, the parts installed, the schedule items, the recalls and
+the incidents), and a panel with no rows is left out. Every panel reuses the home page's waiting
+columns, so the page adds no column template: a line's quantity and cost sit where a waiting row
+shows its date and its job. A line's kind and an incident's kind are plain text, as on the home
+page, and an incident's status reuses the `ok` and `plain` pills. A kit's items sit under its part
+as they do in a need's row, and the one new stylesheet rule (`.row--wait > .memo`) starts that
+list at the third waiting column on a wide window. The page holds no forms, because a service is
+corrected only through Claude Desktop. A job's page links to the service that completed it as a
+labeled value in its head.
+
 **The page has no script.** The content security policy in `glovebox-web/src/guard.rs` allows
 inline styles and fonts from this server, and nothing else loads.
 

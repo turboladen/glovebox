@@ -9,6 +9,8 @@ use glovebox_shared::{
         job_need::Approach,
         need_option::{self, Fitment},
         part::{self, Supplier},
+        part_content,
+        service_record::{Payer, Performer},
         shop, todo,
         work_item::JobStatus,
     },
@@ -17,11 +19,16 @@ use glovebox_shared::{
         appointment::{self, AppointmentPhase},
         checklist::{self, Checklist, HomeAppointment, JobView, NeedView, StepRow},
         date_label,
+        incident::ServiceRef,
         need::{self, Stage},
         part as part_svc,
         reminders::{self, DueStatus},
+        service_detail::ServiceDetail,
+        service_record::IncidentRef,
         shop::{ShopHistory, ShopListing},
+        trim_to_none,
         waiting::{Waiting, booked_note},
+        work_item::WorkItemRef,
         work_sheet::{SheetLine, WorkSheet},
     },
     vocab::Vocabulary,
@@ -392,6 +399,8 @@ pub struct JobCard {
     pub status_text: String,
     pub open: Count,
     pub needs: Vec<NeedCard>,
+    /// The service that completed the job, which the job's page links to.
+    pub completed_by: Option<ServiceLink>,
 }
 
 /// The grouped rows of an appointment's next steps.
@@ -641,7 +650,7 @@ impl From<&Waiting> for WaitingRows {
                 .iter()
                 .map(|i| IncidentRow {
                     title: i.title.clone(),
-                    category: sentence_case(&i.category.as_str().replace('_', " ")),
+                    category: vocab_label(i.category),
                     date: date_label(i.occurred_at.day()),
                     job_id: i.job_id,
                 })
@@ -656,6 +665,11 @@ pub fn sentence_case(word: &str) -> String {
     chars
         .next()
         .map_or_default(|c| c.to_uppercase().chain(chars).collect())
+}
+
+// A vocabulary value as a page prints it, such as "Third party".
+fn vocab_label(value: impl Vocabulary) -> String {
+    sentence_case(&value.as_str().replace('_', " "))
 }
 
 fn stage_text(stage: Stage) -> &'static str {
@@ -856,6 +870,10 @@ pub fn job_card(job: &JobView, ctx: &CardContext<'_>) -> JobCard {
         status_text: sentence_case(job.job.status.as_str()),
         open: Count::new(open, "need open", "needs open"),
         needs,
+        completed_by: job
+            .completed_by
+            .as_ref()
+            .map(|s| ServiceLink::new(ctx.vid, s)),
     }
 }
 
@@ -978,8 +996,14 @@ pub struct SheetLineCard {
 // the part is not a kit.
 fn kit_items(view: &NeedView) -> Vec<KitItemCard> {
     view.part
+        .as_ref()
+        .map_or_else(Vec::new, |p| kit_cards(&p.contents))
+}
+
+// A kit's items, in print order.
+fn kit_cards(contents: &[part_content::Model]) -> Vec<KitItemCard> {
+    contents
         .iter()
-        .flat_map(|p| &p.contents)
         .map(|item| {
             KitItemCard::new(
                 &item.name,
@@ -990,7 +1014,7 @@ fn kit_items(view: &NeedView) -> Vec<KitItemCard> {
         .collect()
 }
 
-/// One item inside a kit, on the work sheet or a need's row.
+/// One item inside a kit, on the work sheet, a need's row or a service's part.
 #[derive(Clone)]
 pub struct KitItemCard {
     /// The item's name, with " × N" when the kit holds more than one.
@@ -1171,6 +1195,8 @@ impl From<&shop::Model> for ShopDetails {
 
 /// One service in a shop's history.
 pub struct ShopServiceRow {
+    /// The path of the service's page.
+    pub href: String,
     pub date: String,
     pub vehicle: String,
     pub description: Option<String>,
@@ -1210,6 +1236,7 @@ impl From<&ShopHistory> for ShopPageView {
                 .services
                 .iter()
                 .map(|s| ShopServiceRow {
+                    href: crate::pages::service_path(s.vehicle_id, s.id),
                     date: date_label(s.service_date),
                     vehicle: s.vehicle_name.clone(),
                     description: s.description.clone(),
@@ -1232,6 +1259,237 @@ impl From<&ShopHistory> for ShopPageView {
                     }
                 })
                 .collect(),
+        }
+    }
+}
+
+/// One line of a service's invoice.
+pub struct ServiceLineRow {
+    pub description: String,
+    pub kind: String,
+    /// Who paid for the line, when someone other than the owner paid for it
+    /// or for the service.
+    pub paid_by: Option<String>,
+    /// The stored quantity and unit cost, such as `5 × $9.00`.
+    pub quantity: Option<String>,
+    pub cost: Option<String>,
+}
+
+// A line's quantity and unit cost as stored, side by side: `5 × $9.00`,
+// `× 5` with no unit cost, or `$9.00 each` with no quantity.
+fn line_quantity(quantity: Option<f64>, unit_cost_cents: Option<i32>) -> Option<String> {
+    match (quantity, unit_cost_cents.map(format_cents)) {
+        (Some(q), Some(unit)) => Some(format!("{q} \u{d7} {unit}")),
+        (Some(q), None) => Some(format!("\u{d7} {q}")),
+        (None, Some(unit)) => Some(format!("{unit} each")),
+        (None, None) => None,
+    }
+}
+
+/// A job's title linked to its page.
+pub struct JobLink {
+    pub title: String,
+    pub href: String,
+}
+
+impl JobLink {
+    fn new(vid: i32, id: i32, title: &str) -> Self {
+        Self {
+            title: title.to_owned(),
+            href: crate::pages::job_path(vid, id),
+        }
+    }
+}
+
+/// One part a service installed.
+pub struct ServicePartRow {
+    pub name: String,
+    /// The manufacturer and part number.
+    pub label: Option<String>,
+    /// The items inside the part when it is a kit.
+    pub kit: Vec<KitItemCard>,
+}
+
+/// One recall a service performed.
+pub struct ServiceRecallRow {
+    pub title: String,
+    pub campaign: Option<String>,
+}
+
+/// A service's date linked to that service's page.
+pub struct ServiceLink {
+    pub date: String,
+    pub href: String,
+}
+
+impl ServiceLink {
+    fn new(vid: i32, service: &ServiceRef) -> Self {
+        Self {
+            date: date_label(service.service_date),
+            href: crate::pages::service_path(vid, service.id),
+        }
+    }
+}
+
+/// One incident a service resolved or noticed.
+pub struct ServiceIncidentRow {
+    pub title: String,
+    pub category: String,
+    pub status: Tag,
+    /// The service at the other end of the incident: the one that noticed an
+    /// incident this service resolved, or the one that resolved an incident
+    /// this service noticed. It is `None` when that service is this one.
+    pub other: Option<ServiceLink>,
+}
+
+impl ServiceIncidentRow {
+    fn new(vid: i32, service_id: i32, incident: &IncidentRef) -> Self {
+        let (kind, text) = if incident.resolved {
+            (PillKind::Ok, "Resolved")
+        } else {
+            (PillKind::Plain, "Open")
+        };
+        Self {
+            title: incident.title.clone(),
+            category: vocab_label(incident.category),
+            status: Tag {
+                kind: kind.class(),
+                text: text.to_owned(),
+            },
+            other: incident
+                .other_service
+                .as_ref()
+                .filter(|s| s.id != service_id)
+                .map(|s| ServiceLink::new(vid, s)),
+        }
+    }
+}
+
+/// The head and the rows of a service's page.
+pub struct ServicePageView {
+    /// The service's description, or "Service" when it has none or a blank one.
+    pub title: String,
+    pub vehicle: String,
+    /// The service's day, or its first and last day when they differ.
+    pub date: String,
+    pub shop: Option<ShopLink>,
+    /// True for a service the owner performed, which names no shop.
+    pub self_performed: bool,
+    pub odometer: Option<String>,
+    pub invoice: Option<String>,
+    /// Who paid for the service, when it was not the owner.
+    pub paid_by: Option<String>,
+    pub payer_note: Option<String>,
+    pub parts_cost: Option<String>,
+    pub labor_cost: Option<String>,
+    pub total: Option<String>,
+    pub lines_total: Option<String>,
+    /// The owner's share of the total.
+    pub paid: Option<String>,
+    /// What others paid of the total, when they paid anything.
+    pub covered: Option<String>,
+    pub lines_note: Option<String>,
+    pub notes: Option<String>,
+    pub lines: Vec<ServiceLineRow>,
+    pub jobs: Vec<JobLink>,
+    pub quotes: Vec<JobLink>,
+    pub parts: Vec<ServicePartRow>,
+    /// The names of the schedule items the service counts toward.
+    pub schedule: Vec<String>,
+    pub recalls: Vec<ServiceRecallRow>,
+    pub resolved: Vec<ServiceIncidentRow>,
+    pub noticed: Vec<ServiceIncidentRow>,
+}
+
+// Who paid, as a line or the head prints it. The owner reads "You", as in
+// "You paid".
+fn payer_label(payer: Payer) -> String {
+    match payer {
+        Payer::Owner => "You".to_owned(),
+        other => vocab_label(other),
+    }
+}
+
+impl From<&ServiceDetail> for ServicePageView {
+    fn from(d: &ServiceDetail) -> Self {
+        let s = &d.service;
+        let r = &s.record;
+        let vid = r.vehicle_id;
+        let covered_service = r.paid_by.is_covered();
+        let job_links = |jobs: &[WorkItemRef]| {
+            jobs.iter()
+                .map(|j| JobLink::new(vid, j.id, &j.title))
+                .collect()
+        };
+        let incidents = |refs: &[IncidentRef]| {
+            refs.iter()
+                .map(|i| ServiceIncidentRow::new(vid, r.id, i))
+                .collect()
+        };
+        Self {
+            title: r
+                .description
+                .as_deref()
+                .and_then(trim_to_none)
+                .unwrap_or_else(|| "Service".to_owned()),
+            vehicle: d.vehicle_name.clone(),
+            date: match r.end_date {
+                Some(end) if end != r.service_date => {
+                    format!("{} to {}", date_label(r.service_date), date_label(end))
+                }
+                _ => date_label(r.service_date),
+            },
+            shop: ShopLink::of(r.shop_id, s.shop_name.as_deref()),
+            self_performed: r.performed_by == Performer::Owner,
+            odometer: r.mileage.map(|miles| reminders::judged_at(miles, false)),
+            invoice: r.invoice_ref.clone(),
+            paid_by: covered_service.then(|| payer_label(r.paid_by)),
+            payer_note: r.payer_note.clone(),
+            parts_cost: r.parts_cost_cents.map(format_cents),
+            labor_cost: r.labor_cost_cents.map(format_cents),
+            total: r.total_cost_cents.map(format_cents),
+            lines_total: s.lines_total_cents.map(format_cents),
+            paid: d.out_of_pocket_cents.map(format_cents),
+            covered: d.covered_cents.filter(|c| *c > 0).map(format_cents),
+            lines_note: d.lines_note.clone(),
+            notes: r.notes.clone(),
+            lines: s
+                .line_items
+                .iter()
+                .map(|l| ServiceLineRow {
+                    description: l.description.clone(),
+                    kind: vocab_label(l.work_kind),
+                    paid_by: (covered_service || l.effective_paid_by.is_covered())
+                        .then(|| payer_label(l.effective_paid_by)),
+                    quantity: line_quantity(l.quantity, l.unit_cost_cents),
+                    cost: l.cost_cents.map(format_cents),
+                })
+                .collect(),
+            jobs: job_links(&s.completed_work_items),
+            quotes: job_links(&s.quoted_work_items),
+            parts: s
+                .parts
+                .iter()
+                .map(|p| ServicePartRow {
+                    name: p.part.name.clone(),
+                    label: part_svc::label(
+                        p.part.manufacturer.as_deref(),
+                        p.part.part_number.as_deref(),
+                    ),
+                    kit: kit_cards(&p.contents),
+                })
+                .collect(),
+            schedule: d.schedule_items.iter().map(|i| i.name.clone()).collect(),
+            recalls: s
+                .performed_recalls
+                .iter()
+                .map(|c| ServiceRecallRow {
+                    title: c.title.clone(),
+                    campaign: c.campaign_number.clone(),
+                })
+                .collect(),
+            resolved: incidents(&s.resolved_incidents),
+            noticed: incidents(&s.noticed_incidents),
         }
     }
 }

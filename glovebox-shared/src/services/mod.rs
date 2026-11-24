@@ -14,6 +14,7 @@ pub mod reminders;
 pub mod research;
 pub mod schedule;
 pub mod search;
+pub mod service_detail;
 pub mod service_record;
 pub mod shop;
 pub mod todo;

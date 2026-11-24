@@ -8,6 +8,7 @@
   <div class="summary">
     <div><span class="l">Vehicle</span>{{ vehicle }}</div>
     <div><span class="l">Appointment</span>{% if let Some(a) = appointment %}<a href="/vehicles/{{ vid }}/appointments/{{ a.id }}">{{ a.purpose }}</a>{% else %}<span class="empty">Not on an appointment yet</span>{% endif %}</div>
+    {% if let Some(s) = j.completed_by %}<div><span class="l">Completed by</span><a href="{{ s.href }}">Service of {{ s.date }}</a></div>{% endif %}
   </div>
 </section>
 <section class="section page" aria-labelledby="jobs-title">

@@ -26,7 +26,7 @@
     <ul class="needs">
       {% for s in v.services %}
       <li class="row row--visits">
-        <span class="key">{{ s.date }}</span>
+        <span class="key"><a href="{{ s.href }}">{{ s.date }}</a></span>
         <span data-l="Vehicle">{{ s.vehicle }}</span>
         <span data-l="Description">{% if let Some(t) = s.description %}{{ t }}{% endif %}</span>
         <span class="num price" data-l="Total">{% if let Some(t) = s.total %}{{ t }}{% else %}<span class="empty">No total</span>{% endif %}</span>

@@ -191,6 +191,7 @@
   .opt--blocked > span:not(.pick):not(.memo):not(.l) { color: var(--label); }
   @media (width > 76rem) {
     .opt--bad .pn { text-decoration: line-through; }
+    .row--wait > .memo { grid-column: 3 / -1; }
   }
   .memo .note { font-weight: 600; }
   .memo .kit { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; }

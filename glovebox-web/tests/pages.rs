@@ -1492,3 +1492,423 @@ async fn an_appointment_with_no_shop_links_to_none() {
         assert!(!body.contains(r#"href="/shops/"#), "{path}: {body}");
     }
 }
+
+// A Golf service at "Smith Auto" that runs three days and carries every kind
+// of link: two lines (one paid by insurance) that add up to $50.00 less than
+// the total, a completed job, a quote, a kit, a schedule item, a recall, an
+// incident it resolved and one noticed during it. Returns (Smith Auto, Golf,
+// the service, the completed job, the quoted job).
+async fn service_fixture(db: &DatabaseConnection) -> (i32, i32, i32, i32, i32) {
+    use glovebox_shared::{
+        entities::{service_record::Payer, service_record_line_item::WorkKind},
+        inputs::{
+            schedule::NewScheduleItem,
+            service_record::{NewLineItem, NewServiceRecord},
+            shop::ShopChoice,
+        },
+        services::{schedule, service_record},
+        test_support::{add_job, add_shop, seed_recall},
+    };
+    let smith = add_shop(db, "Smith Auto").await;
+    let golf = VehicleFixture::new().name("Golf").insert_id(db).await;
+    let fluid = schedule::create(
+        db,
+        NewScheduleItem {
+            vehicle_id: Some(golf),
+            name: "Brake fluid".into(),
+            interval_months: Some(24),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    let brakes = add_job(db, golf, "Rear brakes", None).await;
+    let recall = seed_recall(db, golf, "24V123", "Fuel pump").await;
+    let squeal = incident_on(db, golf, IncidentCategory::Noise, "Squeal <rear>").await;
+    let light = incident_on(db, golf, IncidentCategory::WarningLight, "EPC light").await;
+    let line = |description: &str, work_kind, paid_by, cents| NewLineItem {
+        description: description.into(),
+        work_kind,
+        paid_by,
+        quantity: None,
+        unit_cost_cents: None,
+        cost_cents: Some(cents),
+    };
+    let service = service_record::create(
+        db,
+        golf,
+        NewServiceRecord {
+            service_date: date("2026-10-01"),
+            end_date: Some(date("2026-10-03")),
+            mileage: Some(61_200),
+            description: Some("Brakes & glass".into()),
+            total_cost_cents: Some(50_000),
+            shop: Some(ShopChoice::Id(smith)),
+            notes: Some("Left the old pads in the trunk".into()),
+            invoice_ref: Some("INV-77".into()),
+            schedule_item_ids: Some(vec![fluid]),
+            work_item_ids: Some(vec![brakes]),
+            recall_finding_ids: Some(vec![recall]),
+            resolved_incident_ids: Some(vec![squeal]),
+            noticed_incident_ids: Some(vec![light]),
+            line_items: Some(vec![
+                line(
+                    "Windshield",
+                    WorkKind::Repair,
+                    Some(Payer::Insurance),
+                    20_000,
+                ),
+                line("Rear pads", WorkKind::Maintenance, None, 25_000),
+            ]),
+            parts: Some(vec![brake_kit()]),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .record
+    .id;
+    let quote = work_item::create(
+        db,
+        golf,
+        NewWorkItem {
+            title: "Front rotors".into(),
+            quote_service_id: Some(service),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    (smith, golf, service, brakes, quote)
+}
+
+// A kit of four numbered pads and a set of shims with no number.
+fn brake_kit() -> glovebox_shared::inputs::part::NewPart {
+    use glovebox_shared::inputs::part::{NewPart, NewPartContent};
+    let item = |name: &str, part_number: Option<&str>, quantity| NewPartContent {
+        name: name.into(),
+        manufacturer: part_number.map(|_| "Akebono".into()),
+        part_number: part_number.map(Into::into),
+        quantity,
+    };
+    NewPart {
+        name: "Rear brake kit".into(),
+        manufacturer: Some("ATE".into()),
+        part_number: Some("13.0460".into()),
+        contents: vec![
+            item("Pads", Some("ACT1633A"), Some(4)),
+            item("Shims", None, None),
+        ],
+        ..Default::default()
+    }
+}
+
+// An incident dated before the service fixture's service.
+async fn incident_on(
+    db: &DatabaseConnection,
+    vehicle: i32,
+    category: IncidentCategory,
+    title: &str,
+) -> i32 {
+    let input = NewIncident {
+        category,
+        title: title.into(),
+        occurred_at: Some(date("2026-09-20")),
+        ..Default::default()
+    };
+    let created = incident::create(db, vehicle, input).await.unwrap();
+    created.incident.id
+}
+
+fn service_path(v: i32, id: i32) -> String {
+    format!("/vehicles/{v}/services/{id}")
+}
+
+#[tokio::test]
+async fn a_service_page_lists_its_lines_totals_and_linked_work() {
+    let db = db().await;
+    let (smith, golf, service, brakes, quote) = service_fixture(&db).await;
+    let (status, body) = page(app(db, "test"), get(&service_path(golf, service))).await;
+    assert_eq!(status, StatusCode::OK);
+    let shop_link = format!(r#"<a href="/shops/{smith}">Smith Auto</a>"#);
+    for detail in [
+        r#"<h1 id="service-title">Brakes &#38; glass</h1>"#.to_owned(),
+        r#"<a href="/">Garage</a>"#.to_owned(),
+        r#"<span class="l">Vehicle</span>Golf"#.to_owned(),
+        r#"<span class="l">Date</span>2026-10-01 to 2026-10-03"#.to_owned(),
+        format!(r#"<span class="l">Shop</span>{shop_link}"#),
+        r#"<span class="l">Odometer</span>61,200 mi"#.to_owned(),
+        r#"<span class="l">Invoice</span><span class="pn">INV-77</span>"#.to_owned(),
+        r#"<span class="l">Total</span><span class="price">$500.00</span>"#.to_owned(),
+        r#"<span class="l">Lines</span><span class="price">$450.00</span>"#.to_owned(),
+        r#"<span class="l">You paid</span><span class="price">$300.00</span>"#.to_owned(),
+        r#"<span class="l">Paid by others</span><span class="price">$200.00</span>"#.to_owned(),
+        "<p>The lines add up to $450.00, which is $50.00 less than the total.</p>".to_owned(),
+        r#"<span class="l">Notes </span>Left the old pads in the trunk"#.to_owned(),
+        format!(r#"<a href="/vehicles/{golf}/jobs/{brakes}">Rear brakes</a>"#),
+        format!(r#"<a href="/vehicles/{golf}/jobs/{quote}">Front rotors</a>"#),
+        r#"pill pill--ok">Resolved"#.to_owned(),
+        r#"pill pill--plain">Open"#.to_owned(),
+    ] {
+        assert!(body.contains(&detail), "missing {detail}: {body}");
+    }
+    for (heading, rows) in [
+        (
+            "Lines",
+            vec![
+                "Windshield Repair Insurance $200.00",
+                "Rear pads Maintenance $250.00",
+            ],
+        ),
+        ("Jobs completed", vec!["Rear brakes"]),
+        ("Quotes", vec!["Front rotors"]),
+        (
+            "Parts installed",
+            vec!["Rear brake kit ATE 13.0460 In the kit Pads × 4 Akebono ACT1633A Shims"],
+        ),
+        ("Maintenance it counts toward", vec!["Brake fluid"]),
+        ("Recalls performed", vec!["Fuel pump 24V123"]),
+        (
+            "Incidents resolved",
+            vec!["Squeal &#60;rear&#62; Noise Resolved"],
+        ),
+        ("Incidents noticed", vec!["EPC light Warning light Open"]),
+    ] {
+        assert_eq!(section_rows(&body, heading), rows, "{heading}");
+    }
+    // The page is read-only and runs nothing.
+    assert!(!body.contains("<form"), "{body}");
+    assert!(!body.contains("<script"), "{body}");
+}
+
+// The shop fixture's "Inspection" names a shop and records nothing else.
+#[tokio::test]
+async fn a_service_page_omits_its_empty_sections() {
+    let db = db().await;
+    let (_, golf, _) = shop_fixture(&db).await;
+    let services = glovebox_shared::services::service_record::list(&db, golf)
+        .await
+        .unwrap();
+    let inspection = services
+        .iter()
+        .find(|s| s.record.description.as_deref() == Some("Inspection"))
+        .unwrap()
+        .record
+        .id;
+    let (status, body) = page(app(db, "test"), get(&service_path(golf, inspection))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains(r#"<span class="l">Total</span><span class="empty">No total</span>"#),
+        "{body}"
+    );
+    for absent in [
+        "<h3",
+        ">Odometer<",
+        ">Invoice<",
+        ">Lines<",
+        ">You paid<",
+        ">Paid by others<",
+        ">Paid by<",
+        ">Notes <",
+        "The lines add up to",
+    ] {
+        assert!(!body.contains(absent), "{absent} is shown: {body}");
+    }
+}
+
+#[tokio::test]
+async fn a_missing_service_and_another_vehicles_service_are_the_same_not_found_page() {
+    let db = db().await;
+    let (_, golf, service, _, _) = service_fixture(&db).await;
+    let other = VehicleFixture::new().name("Alltrack").insert_id(&db).await;
+    let (missing_status, missing) =
+        page(app(db.clone(), "test"), get(&service_path(golf, 999))).await;
+    let (wrong_status, wrong) = page(app(db, "test"), get(&service_path(other, service))).await;
+    assert_eq!(missing_status, StatusCode::NOT_FOUND);
+    assert_eq!(wrong_status, StatusCode::NOT_FOUND);
+    assert!(missing.contains("Page not found"), "{missing}");
+    assert_eq!(wrong, missing);
+}
+
+#[tokio::test]
+async fn a_shop_page_links_each_service_to_its_page() {
+    let db = db().await;
+    let (smith, golf, service, _, _) = service_fixture(&db).await;
+    let (_, body) = page(app(db, "test"), get(&format!("/shops/{smith}"))).await;
+    assert!(
+        body.contains(&format!(
+            r#"<span class="key"><a href="/vehicles/{golf}/services/{service}">2026-10-01</a></span>"#
+        )),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn a_self_performed_service_names_no_shop() {
+    use glovebox_shared::{
+        entities::service_record::Performer, inputs::service_record::NewServiceRecord,
+        services::service_record,
+    };
+    let db = db().await;
+    let v = VehicleFixture::new().insert_id(&db).await;
+    let service = service_record::create(
+        &db,
+        v,
+        NewServiceRecord {
+            service_date: date("2026-11-01"),
+            performed_by: Some(Performer::Owner),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .record
+    .id;
+    let (status, body) = page(app(db, "test"), get(&service_path(v, service))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains(r#"<span class="l">Shop</span>Self-performed"#),
+        "{body}"
+    );
+    assert!(
+        body.contains(r#"<h1 id="service-title">Service</h1>"#),
+        "{body}"
+    );
+    assert!(!body.contains(r#"href="/shops/"#), "{body}");
+}
+
+// Records `input` on a new vehicle and returns the vehicle, the service and
+// the service's page.
+async fn service_page_of(
+    db: DatabaseConnection,
+    input: glovebox_shared::inputs::service_record::NewServiceRecord,
+) -> (i32, i32, String) {
+    let v = VehicleFixture::new().insert_id(&db).await;
+    let created = glovebox_shared::services::service_record::create(&db, v, input)
+        .await
+        .unwrap();
+    let service = created.record.id;
+    let (status, body) = page(app(db, "test"), get(&service_path(v, service))).await;
+    assert_eq!(status, StatusCode::OK);
+    (v, service, body)
+}
+
+#[tokio::test]
+async fn a_service_line_shows_its_quantity_and_unit_cost_and_the_head_its_parts_and_labor() {
+    use glovebox_shared::{
+        entities::service_record_line_item::WorkKind,
+        inputs::service_record::{NewLineItem, NewServiceRecord},
+    };
+    let line = |description: &str, quantity, unit_cost_cents| NewLineItem {
+        description: description.into(),
+        work_kind: WorkKind::Fee,
+        paid_by: None,
+        quantity,
+        unit_cost_cents,
+        cost_cents: None,
+    };
+    let input = NewServiceRecord {
+        service_date: date("2026-10-01"),
+        parts_cost_cents: Some(4_500),
+        labor_cost_cents: Some(12_000),
+        line_items: Some(vec![
+            line("Shop rags", Some(5.0), Some(900)),
+            line("Oil", Some(5.5), None),
+            line("Disposal", None, Some(300)),
+        ]),
+        ..Default::default()
+    };
+    let (_, _, body) = service_page_of(db().await, input).await;
+    assert_eq!(
+        section_rows(&body, "Lines"),
+        [
+            "Shop rags Fee 5 × $9.00",
+            "Oil Fee × 5.5",
+            "Disposal Fee $3.00 each",
+        ]
+    );
+    for detail in [
+        r#"<span class="l">Parts</span><span class="price">$45.00</span>"#,
+        r#"<span class="l">Labor</span><span class="price">$120.00</span>"#,
+    ] {
+        assert!(body.contains(detail), "missing {detail}: {body}");
+    }
+}
+
+#[tokio::test]
+async fn a_service_with_a_blank_description_is_headed_service() {
+    let input = glovebox_shared::inputs::service_record::NewServiceRecord {
+        service_date: date("2026-10-01"),
+        description: Some("  ".into()),
+        ..Default::default()
+    };
+    let (_, _, body) = service_page_of(db().await, input).await;
+    assert!(
+        body.contains(r#"<h1 id="service-title">Service</h1>"#),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn a_service_that_ends_the_day_it_starts_shows_one_date() {
+    let input = glovebox_shared::inputs::service_record::NewServiceRecord {
+        service_date: date("2026-10-01"),
+        end_date: Some(date("2026-10-01")),
+        ..Default::default()
+    };
+    let (_, _, body) = service_page_of(db().await, input).await;
+    assert!(
+        body.contains(r#"<span class="l">Date</span>2026-10-01</div>"#),
+        "{body}"
+    );
+}
+
+// A service can both notice and resolve one incident, and neither row links
+// back to the page it is on.
+#[tokio::test]
+async fn an_incident_a_service_noticed_and_resolved_links_to_no_service() {
+    let db = db().await;
+    let v = VehicleFixture::new().insert_id(&db).await;
+    let rattle = incident_on(&db, v, IncidentCategory::Noise, "Rattle").await;
+    let created = glovebox_shared::services::service_record::create(
+        &db,
+        v,
+        glovebox_shared::inputs::service_record::NewServiceRecord {
+            service_date: date("2026-10-01"),
+            resolved_incident_ids: Some(vec![rattle]),
+            noticed_incident_ids: Some(vec![rattle]),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let path = service_path(v, created.record.id);
+    let (_, body) = page(app(db, "test"), get(&path)).await;
+    assert_eq!(
+        section_rows(&body, "Incidents resolved"),
+        ["Rattle Noise Resolved"]
+    );
+    assert_eq!(
+        section_rows(&body, "Incidents noticed"),
+        ["Rattle Noise Resolved"]
+    );
+    assert!(!body.contains(&format!(r#"href="{path}""#)), "{body}");
+}
+
+#[tokio::test]
+async fn a_completed_jobs_page_links_to_the_service_that_completed_it() {
+    let db = db().await;
+    let (_, golf, service, brakes, quote) = service_fixture(&db).await;
+    let job = |id: i32| format!("/vehicles/{golf}/jobs/{id}");
+    let (_, body) = page(app(db.clone(), "test"), get(&job(brakes))).await;
+    assert!(
+        body.contains(&format!(
+            r#"<span class="l">Completed by</span><a href="/vehicles/{golf}/services/{service}">Service of 2026-10-01</a>"#
+        )),
+        "{body}"
+    );
+    let (_, body) = page(app(db, "test"), get(&job(quote))).await;
+    assert!(!body.contains("Completed by"), "{body}");
+}

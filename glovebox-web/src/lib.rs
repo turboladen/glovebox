@@ -91,6 +91,7 @@ pub fn router(state: AppState) -> Router {
             get(pages::get_sheet),
         )
         .route("/vehicles/{vid}/jobs/{id}", get(pages::get_job))
+        .route("/vehicles/{vid}/services/{id}", get(pages::get_service))
         .route("/shops", get(pages::get_shops))
         .route("/shops/{id}", get(pages::get_shop))
         .route(

@@ -15,7 +15,7 @@ use crate::{
         job_need,
         need_option::{self, Fitment},
         part::{self, Supplier},
-        todo, vehicle,
+        service_record, todo, vehicle,
         work_item::{self, JobStatus},
     },
     error::{DomainError, DomainResult},
@@ -23,6 +23,7 @@ use crate::{
     money::format_cents,
     services::{
         appointment::{self, AppointmentSummary},
+        incident::ServiceRef,
         need::{self, Stage, stage},
         todo as todo_svc,
         waiting::{self, Waiting},
@@ -111,6 +112,11 @@ pub struct StepRow {
 pub struct JobView {
     pub job: work_item::Model,
     pub needs: Vec<NeedView>,
+    /// The service that completed the job, when one did.
+    // A tool reply names that service by the job's `completed_service_id`,
+    // so the key stays out of JSON.
+    #[serde(skip)]
+    pub completed_by: Option<ServiceRef>,
 }
 
 impl JobView {
@@ -482,10 +488,22 @@ async fn job_views(
             .or_default()
             .push(need_view(need, own_options, linked));
     }
+    let completing: HashMap<i32, ServiceRef> = service_record::Entity::find()
+        .filter(
+            service_record::Column::Id.is_in(jobs.iter().filter_map(|j| j.completed_service_id)),
+        )
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|s| (s.id, ServiceRef::from(s)))
+        .collect();
     Ok(jobs
         .into_iter()
         .map(|job| JobView {
             needs: by_job.remove(&job.id).unwrap_or_default(),
+            completed_by: job
+                .completed_service_id
+                .and_then(|id| completing.get(&id).cloned()),
             job,
         })
         .collect())
