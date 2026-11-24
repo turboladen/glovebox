@@ -140,7 +140,7 @@ pub struct RecordServiceInput {
     pub performed_by: Option<Performer>,
     /// What was done, e.g. "Oil change + tire rotation".
     pub description: Option<String>,
-    /// Odometer reading at service time. Also logs a mileage entry.
+    /// Odometer reading at service time, zero or more. Also logs a mileage entry.
     pub mileage: Option<i32>,
     /// The invoice's grand total across all lines, in integer cents (e.g.
     /// $123.45 -> 12345), including lines someone else paid for. What the
@@ -681,7 +681,7 @@ pub struct ListPlannedWorkInput {
 pub struct LogMileageInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
-    /// Odometer reading (whole miles).
+    /// Odometer reading (whole miles), zero or more.
     pub mileage: i32,
     /// When the reading was taken, `YYYY-MM-DD HH:MM:SS` or just `YYYY-MM-DD`, no later than today. Defaults to the current local date and time.
     pub recorded_at: Option<String>,
