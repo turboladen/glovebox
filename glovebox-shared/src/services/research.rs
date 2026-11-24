@@ -336,11 +336,9 @@ pub async fn file_finding<C: ConnectionTrait + TransactionTrait>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{VehicleFixture, test_db};
+    use crate::test_support::test_db;
 
-    async fn seed_vehicle(db: &impl ConnectionTrait) -> i32 {
-        VehicleFixture::new().insert_id(db).await
-    }
+    use crate::test_support::seed_vehicle;
 
     #[tokio::test]
     async fn a_failed_lookup_still_returns_the_known_recalls() {

@@ -6,9 +6,7 @@ use crate::{
     test_support::{VehicleFixture, date, row_count, test_db},
 };
 
-async fn seed_vehicle(db: &impl ConnectionTrait) -> i32 {
-    VehicleFixture::new().insert_id(db).await
-}
+use crate::test_support::seed_vehicle;
 
 async fn seed_part(db: &impl ConnectionTrait, vehicle_id: i32, name: &str) -> i32 {
     part::ActiveModel {
@@ -1871,25 +1869,7 @@ async fn deleting_a_service_reopens_what_it_closed() {
 }
 
 async fn seed_recall(db: &DatabaseConnection, v: i32, campaign: &str) -> i32 {
-    crate::services::research::record_recalls(
-        db,
-        v,
-        &[crate::services::nhtsa::RecallInfo {
-            campaign_number: campaign.into(),
-            manufacturer: None,
-            title: "Pump".into(),
-            summary: None,
-            consequence: None,
-            remedy: None,
-            report_date: None,
-            component: None,
-            action_number: None,
-        }],
-    )
-    .await
-    .unwrap()
-    .recalls[0]
-        .finding_id
+    crate::test_support::seed_recall(db, v, campaign, "Pump").await
 }
 
 async fn service_with_recall(db: &DatabaseConnection, v: i32, finding_id: i32) -> i32 {

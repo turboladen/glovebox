@@ -102,11 +102,9 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{VehicleFixture, assert_empty, date, test_db};
+    use crate::test_support::{assert_empty, date, test_db};
 
-    async fn seed_vehicle(db: &impl ConnectionTrait) -> i32 {
-        VehicleFixture::new().insert_id(db).await
-    }
+    use crate::test_support::seed_vehicle;
 
     #[tokio::test]
     async fn create_then_list_round_trips() {
