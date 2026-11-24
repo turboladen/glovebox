@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Layering gate: glovebox-shared is the transport-agnostic domain, so its
-# sources must not import axum or rmcp. glovebox-web renders what the shared
-# services return, so its manifest and sources must not name sea-orm. A
-# service transaction opens with services::begin_write (BEGIN IMMEDIATE), so
-# glovebox-shared/src/services must not begin one any other way.
+# manifest and sources must not name axum or rmcp. glovebox-web renders what
+# the shared services return, so its manifest and sources must not name
+# sea-orm. A service transaction opens with services::begin_write (BEGIN
+# IMMEDIATE), so glovebox-shared/src/services must not begin one any other
+# way. An MCP tool maps arguments and calls a shared service, so
+# glovebox-mcp/src/handler must not build a query or an ActiveModel.
 #
 # Run from the repo root: ./scripts/check-layering.sh
 set -euo pipefail
@@ -11,11 +13,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 status=0
-grep -rnwE 'axum|rmcp' glovebox-shared/src || status=$?
+grep -rnwE 'axum|rmcp' glovebox-shared/Cargo.toml glovebox-shared/src || status=$?
 
 case "$status" in
   0)
-    echo "FAIL: glovebox-shared/src references axum or rmcp (the domain must stay transport-agnostic)"
+    echo "FAIL: glovebox-shared references axum or rmcp (the domain must stay transport-agnostic)"
     exit 1
     ;;
   1) ;;
@@ -50,6 +52,22 @@ grep -rnEi 'sea[-_]orm' glovebox-web/Cargo.toml glovebox-web/src glovebox-web/te
 case "$status" in
   0)
     echo "FAIL: glovebox-web names sea-orm (it holds glovebox_shared::db::DatabaseConnection and calls shared services)"
+    exit 1
+    ;;
+  1) ;;
+  *)
+    echo "FAIL: grep errored with status $status"
+    exit "$status"
+    ;;
+esac
+
+status=0
+grep -rnE 'ActiveModel|Entity|QueryFilter|ColumnTrait|ConnectionTrait|TransactionTrait|Statement|execute_unprepared' \
+  glovebox-mcp/src/handler || status=$?
+
+case "$status" in
+  0)
+    echo "FAIL: an MCP handler queries the database (SQL and business logic live in glovebox-shared services)"
     exit 1
     ;;
   1)

@@ -76,7 +76,19 @@ fn validate_warnings(miles: Option<i32>, days: Option<i32>) -> DomainResult<()> 
     Ok(())
 }
 
+/// Inserts a schedule item for any owner (a platform, a template or a
+/// vehicle) with no check on its name. Tests build inherited items with it,
+/// which no tool writes; a vehicle's own item goes through
+/// [`create_for_vehicle`].
+#[cfg(any(test, feature = "test-support"))]
 pub async fn create(
+    db: &impl ConnectionTrait,
+    input: NewScheduleItem,
+) -> DomainResult<maintenance_schedule_item::Model> {
+    insert(db, input).await
+}
+
+async fn insert(
     db: &impl ConnectionTrait,
     input: NewScheduleItem,
 ) -> DomainResult<maintenance_schedule_item::Model> {
@@ -196,11 +208,12 @@ pub async fn create_for_vehicle<C: ConnectionTrait + TransactionTrait>(
     vehicle_id: i32,
     mut input: NewScheduleItem,
 ) -> DomainResult<maintenance_schedule_item::Model> {
-    let v = crate::services::vehicle::require(db, vehicle_id).await?;
+    let txn = super::begin_write(db).await?;
+    // The vehicle's template decides which inherited item the name shadows.
+    let v = crate::services::vehicle::require(&txn, vehicle_id).await?;
     if input.name.trim().is_empty() {
         return Err(DomainError::invalid("name", "must not be blank"));
     }
-    let txn = super::begin_write(db).await?;
     if let Some(own) = own_item_named(&txn, vehicle_id, &input.name).await? {
         return Err(DomainError::BadRequest(format!(
             "This vehicle already has a schedule item named '{}' (id {}). Change it with \
@@ -217,7 +230,7 @@ pub async fn create_for_vehicle<C: ConnectionTrait + TransactionTrait>(
     if let Some(inherited) = effective_inherited(&shadowed) {
         fill_from_inherited(&mut input, inherited);
     }
-    let created = create(&txn, input).await?;
+    let created = insert(&txn, input).await?;
     drop_links_the_vehicles_jobs_bring(&txn, vehicle_id).await?;
     txn.commit().await?;
     Ok(created)
@@ -410,7 +423,7 @@ async fn copy_for_vehicle(
         ..Default::default()
     };
     fill_from_inherited(&mut copy, item);
-    create(db, copy).await
+    insert(db, copy).await
 }
 
 crate::vocab::vocabulary! {

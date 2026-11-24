@@ -359,11 +359,17 @@ enum Resolution {
 }
 
 impl Resolution {
-    fn of(incident: &incident::Model) -> Self {
+    // The table's CHECK refuses an open incident marked resolved by hand, so
+    // reading one means the row did not come through this module.
+    fn of(incident: &incident::Model) -> DomainResult<Self> {
         match (incident.resolved, incident.resolved_by_hand) {
-            (false, _) => Self::Open,
-            (true, true) => Self::ByHand,
-            (true, false) => Self::ByService,
+            (false, false) => Ok(Self::Open),
+            (true, true) => Ok(Self::ByHand),
+            (true, false) => Ok(Self::ByService),
+            (false, true) => Err(DomainError::Internal(format!(
+                "incident {} is open and marked resolved by hand",
+                incident.id
+            ))),
         }
     }
 }
@@ -608,18 +614,21 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     // it is the owner's word only when no service resolves it, so a read
     // sent back marks nothing.
     let inc = require_incident(&txn, vehicle_id, inc.id).await?;
+    // Reopening does not read the stored pair, so it also repairs a row that
+    // breaks the pair's rule.
     let resolution = match (input.resolved, Resolution::of(&inc)) {
         (Some(false), _) => Some(Resolution::Open),
-        (Some(true), Resolution::Open) if names_a_service => Some(Resolution::ByService),
-        (Some(true), Resolution::Open) => Some(Resolution::ByHand),
-        (Some(true), Resolution::ByService)
+        (_, Err(broken)) => return Err(broken),
+        (Some(true), Ok(Resolution::Open)) if names_a_service => Some(Resolution::ByService),
+        (Some(true), Ok(Resolution::Open)) => Some(Resolution::ByHand),
+        (Some(true), Ok(Resolution::ByService))
             if resolvers_of_incidents(&txn, &[inc.id]).await?.is_empty() =>
         {
             Some(Resolution::ByHand)
         }
         // Clearing the list takes the services away, and the owner's word
         // still stands.
-        (None, Resolution::ByService) if cleared_all_resolvers => Some(Resolution::Open),
+        (None, Ok(Resolution::ByService)) if cleared_all_resolvers => Some(Resolution::Open),
         _ => None,
     };
     let inc = if let Some(resolution) = resolution {
@@ -644,9 +653,8 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     vehicle_id: i32,
     id: i32,
 ) -> DomainResult<()> {
-    let existing = require_incident(db, vehicle_id, id).await?;
-
     let txn = super::begin_write(db).await?;
+    let existing = require_incident(&txn, vehicle_id, id).await?;
 
     incident_followup::Entity::delete_many()
         .filter(incident_followup::Column::IncidentId.eq(existing.id))
@@ -1764,5 +1772,34 @@ mod tests {
         })
         .await;
         assert!(results.iter().all(Result::is_ok), "{results:?}");
+    }
+
+    // A delete that reads the incident before it holds the write lock lets
+    // every racer see the row and answer `Ok`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn racing_deletes_remove_the_incident_once() {
+        let (_dir, pools) = crate::test_support::race_pools().await;
+        let first = &pools[0];
+        let v = seed_vehicle(first).await;
+        let incident = create(first, v, new_incident("Rattle", IncidentCategory::Noise))
+            .await
+            .unwrap()
+            .incident
+            .id;
+        let results =
+            crate::test_support::race(
+                &pools,
+                |_, db| async move { delete(&db, v, incident).await },
+            )
+            .await;
+        let deleted = results.iter().filter(|r| r.is_ok()).count();
+        assert_eq!(deleted, 1, "{results:?}");
+        assert!(
+            results
+                .iter()
+                .filter_map(|r| r.as_ref().err())
+                .all(|e| matches!(e, DomainError::NotFound(_))),
+            "{results:?}"
+        );
     }
 }

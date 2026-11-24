@@ -80,8 +80,9 @@ MCP server, and its `--open` flag opens the browser.
   the form posts, `src/view.rs` the view structs, `src/guard.rs` the request guard and the content
   security policy, and `templates/` the askama templates.
 - `scripts/check-layering.sh` (run by CI and `just ci`) keeps axum and rmcp out of `glovebox-shared`
-  and SeaORM out of `glovebox-web`, and refuses a transaction in `glovebox-shared/src/services`
-  opened any way but `services::begin_write`.
+  and SeaORM out of `glovebox-web`, refuses a transaction in `glovebox-shared/src/services`
+  opened any way but `services::begin_write`, and refuses a query or an `ActiveModel` in
+  `glovebox-mcp/src/handler`.
 
 ### Domain library (`glovebox-shared/src/`)
 
@@ -403,9 +404,8 @@ A page is a view of the shared library, and a future page follows the same rules
   slot for the last to-do deleted on the page. It holds only a row this server deleted, and it
   does not make the page a store of records, so a future page keeps its records in the database.
   Its accepted limits: one slot serves every vehicle and tab, a double-clicked Delete or Undo can
-  answer with an error page although the action worked, a failed undo keeps its row without
-  showing the banner again, and a vehicle deleted during an undo gives an opaque error and writes
-  nothing.
+  answer with an error page although the action worked, and a failed undo keeps its row without
+  showing the banner again.
 - **No script.** Every action is an HTML form post followed by a redirect back to the page, and a
   failed write renders the page again with the domain error beside the row. That page is served
   at the form's address, so every link on a page names the page's own path. The content security
@@ -474,7 +474,9 @@ role per control style, and `YYYY-MM-DD` dates.
   (`todo::delete`), or a step only ever run inside a caller's transaction, which is
   `pub(crate)` when nothing outside the crate calls it.
   `glovebox-mcp/tests` call shared services directly as fixtures (`schedule_svc::create`), so
-  search that directory before narrowing a `pub` service function to `pub(crate)`.
+  search that directory before narrowing a `pub` service function to `pub(crate)`. A function
+  only fixtures call is `pub` under `#[cfg(any(test, feature = "test-support"))]`, as
+  `schedule::create` is.
 - **A list an update REPLACES holds only stored values.** When a read lists derived values beside
   stored ones (a service's `schedule_item_ids` includes its jobs' items), a caller will send the
   read back, so the write ignores the derived ones (`schedule::drop_links_jobs_bring`).
