@@ -3,26 +3,12 @@
 use rmcp::{ErrorData as McpError, model::CallToolResult, tool, tool_router};
 
 use super::{GloveboxMcp, Parameters, deleted_result, domain_result};
-use glovebox_shared::{
-    entities,
-    services::{mileage, model_template, vehicle, vin_decode},
-};
-use serde::Serialize;
+use glovebox_shared::services::{mileage, model_template, vehicle, vin_decode};
 
 use crate::schemas::{
     AddVehicleInput, ArchiveVehicleInput, DeleteMileageInput, EmptyParams, ListVehiclesInput,
     LogMileageInput, UpdateVehicleInput, VehicleBrief, VehicleParams,
 };
-
-/// The created vehicle plus what the VIN lookup did, when one was asked for.
-#[derive(Serialize)]
-struct AddedVehicle {
-    #[serde(flatten)]
-    vehicle: entities::vehicle::Model,
-    /// Present only when a `vin` was sent and the lookup failed.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    vin_decode_error: Option<String>,
-}
 
 #[tool_router(router = vehicles_router, vis = "pub(super)")]
 impl GloveboxMcp {
@@ -50,7 +36,9 @@ impl GloveboxMcp {
         name = "get_vehicle",
         description = "Read one vehicle's full record: VIN, engine/transmission/drivetrain, \
                        purchase info, plate, color, notes. Call after `list_vehicles` when the \
-                       conversation needs specifics."
+                       conversation needs specifics. The details NHTSA decoded from the VIN \
+                       (plant, doors, airbags, displacement and the rest) are not in this record: \
+                       `list_vehicle_attributes` reads them."
     )]
     async fn get_vehicle(
         &self,
@@ -171,9 +159,10 @@ impl GloveboxMcp {
                        engine, transmission and drivetrain for every one of them you leave out. \
                        Pass `vin` to fill what is still blank from NHTSA; the order is what you \
                        send, then the template, then the VIN decode, and if the lookup fails \
-                       (offline, invalid VIN) the car is still added and the result carries \
-                       `vin_decode_error`. Use `update_vehicle` to change a car that already \
-                       exists."
+                       (offline, a malformed VIN, or one NHTSA cannot decode) the car is still \
+                       added and the result carries `vin_decode_error`. Use `update_vehicle` to \
+                       change a car that already exists, and `decode_vin` to decode the VIN of \
+                       one."
     )]
     async fn add_vehicle(
         &self,
@@ -181,32 +170,57 @@ impl GloveboxMcp {
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "add_vehicle");
         let input = domain_input!(p.into_domain());
-        let (decoded, vin_decode_error) = match input.vin.as_deref().map(str::trim) {
-            Some(vin) if !vin.is_empty() => match vin_decode::decode_vin(vin).await {
-                Ok(d) => (Some(d), None),
-                Err(e) => (None, Some(e)),
-            },
-            _ => (None, None),
-        };
-        domain_result(
-            vehicle::create_with_vin_decode(&*self.db, input, decoded.as_ref())
-                .await
-                .map(|vehicle| AddedVehicle {
-                    vehicle,
-                    vin_decode_error,
-                }),
-        )
+        domain_result(vehicle::create_with_vin(&*self.db, input).await)
+    }
+
+    #[tool(
+        name = "list_vehicle_attributes",
+        description = "List what NHTSA decoded from the car's VIN: every stored attribute as \
+                       `key`, `value` and `source`, sorted by key (about 140 for a decoded car, \
+                       such as `PlantCity`, `Doors` and `DisplacementL`). Use it for a detail \
+                       `get_vehicle` does not carry. An empty list means no decode is stored: \
+                       `decode_vin` fetches one."
+    )]
+    async fn list_vehicle_attributes(
+        &self,
+        params: Parameters<VehicleParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = tool_input!(params, "list_vehicle_attributes");
+        domain_result(vin_decode::list_attributes(&*self.db, p.vehicle_id).await)
+    }
+
+    #[tool(
+        name = "decode_vin",
+        description = "Decode the VIN a car already on file has, with a live NHTSA request. It \
+                       replaces the car's stored attributes (`list_vehicle_attributes` reads \
+                       them) and fills only the EMPTY ones among year, make, model, trim, body \
+                       style, engine, transmission and drivetrain; a field that holds a value \
+                       keeps it, so change one with `update_vehicle`. The result carries the \
+                       `vehicle`, `filled_fields` (the names of the fields it filled) and \
+                       `attributes_stored`. If the lookup fails (offline, a malformed VIN, or a \
+                       VIN NHTSA answers with no make and no model year) nothing changes and the \
+                       result carries `vin_decode_error`, with NHTSA's own error text when it \
+                       sent one. A car with no VIN is refused: set one with `update_vehicle` \
+                       first. `add_vehicle` with a `vin` already decodes a new car."
+    )]
+    async fn decode_vin(
+        &self,
+        params: Parameters<VehicleParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = tool_input!(params, "decode_vin");
+        domain_result(vin_decode::decode_for_vehicle(&*self.db, p.vehicle_id).await)
     }
 
     #[tool(
         name = "update_vehicle",
         description = "Change details of an existing vehicle: name, plate, color, VIN, purchase \
-                       or sale details, warranty expiry, notes, model template. Setting a model \
-                       template fills the year, make, model, trim, body style, engine, \
-                       transmission and drivetrain that are empty on the car and leaves the ones \
-                       it has. Send only the fields to change; a field sent as null is cleared, \
-                       and a field left out is untouched. Use `add_vehicle` for a car that is not \
-                       in the garage yet."
+                       or sale details, warranty expiry, notes, model template. Setting a VIN \
+                       decodes nothing; call `decode_vin` afterwards. Setting a model template \
+                       fills the year, make, model, trim, body style, engine, transmission and \
+                       drivetrain that are empty on the car and leaves the ones it has. Send only \
+                       the fields to change; a field sent as null is cleared, and a field left \
+                       out is untouched. Use `add_vehicle` for a car that is not in the garage \
+                       yet."
     )]
     async fn update_vehicle(
         &self,

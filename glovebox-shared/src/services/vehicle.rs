@@ -20,7 +20,6 @@ pub async fn require(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult
         .ok_or_else(|| DomainError::NotFound(format!("Vehicle {vehicle_id} not found")))
 }
 
-/// The vehicles in id order, leaving out the archived ones unless
 /// Verifies a vehicle exists and is in the garage, for a write that adds
 /// open work (a planned job, an appointment or a to-do).
 ///
@@ -41,6 +40,7 @@ pub(crate) async fn require_in_garage(
     Ok(v)
 }
 
+/// The vehicles in id order, leaving out the archived ones unless
 /// `include_archived` is set.
 pub async fn list(
     db: &impl ConnectionTrait,
@@ -132,15 +132,79 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     Ok(out)
 }
 
-/// Creates a vehicle, filling the fields the caller left empty and storing the
-/// decoded VIN attributes.
+/// A created vehicle and what its VIN lookup did.
+#[derive(Debug, serde::Serialize)]
+pub struct CreatedVehicle {
+    #[serde(flatten)]
+    pub vehicle: vehicle::Model,
+    /// Why the lookup failed. It is `None` when the input had no VIN or the
+    /// lookup succeeded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vin_decode_error: Option<String>,
+}
+
+/// Creates a vehicle, decoding its VIN on NHTSA (a live web request) when the
+/// input carries one.
 ///
 /// Year, make, model, trim, body style, engine, transmission and drivetrain
 /// each take the first value available from the caller, then the model
-/// template, then the VIN decode. With `decoded` of `None` this behaves like
-/// [`create`]. The decode is a parameter so the lookup (a live web request)
-/// stays with the caller and this function stays testable offline.
-pub async fn create_with_vin_decode<C: ConnectionTrait + TransactionTrait>(
+/// template, then the VIN decode, and the decoded attributes are stored. A
+/// failed lookup is not an error: the vehicle is created without the decode
+/// and the result carries `vin_decode_error`.
+///
+/// # Errors
+/// `Invalid` for a negative purchase mileage and `NotFound` for an unknown
+/// model template, both before any request is made.
+pub async fn create_with_vin<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    input: NewVehicle,
+) -> DomainResult<CreatedVehicle> {
+    create_with_vin_lookup(db, input, |vin| async move {
+        vin_decode::decode_vin(&vin).await
+    })
+    .await
+}
+
+/// [`create_with_vin`] with the VIN lookup supplied by the caller, so a test
+/// can stand in for the network.
+pub(crate) async fn create_with_vin_lookup<C, F, Fut>(
+    db: &C,
+    input: NewVehicle,
+    lookup: F,
+) -> DomainResult<CreatedVehicle>
+where
+    C: ConnectionTrait + TransactionTrait,
+    F: FnOnce(String) -> Fut,
+    Fut: std::future::Future<Output = Result<VinDecodeResult, String>>,
+{
+    // Each refusal `create` can give comes before the request, so a bad input
+    // costs no lookup. The request runs outside any transaction, and `create`
+    // checks again inside its own.
+    validate_purchase_mileage(input.purchase_mileage)?;
+    require_template(db, input.model_template_id).await?;
+    let mut input = input;
+    input.vin = input
+        .vin
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    let (decoded, vin_decode_error) = match input.vin.clone() {
+        Some(vin) => match lookup(vin).await {
+            Ok(d) => (Some(d), None),
+            Err(e) => (None, Some(e)),
+        },
+        None => (None, None),
+    };
+    let vehicle = create_with_vin_decode(db, input, decoded.as_ref()).await?;
+    Ok(CreatedVehicle {
+        vehicle,
+        vin_decode_error,
+    })
+}
+
+/// Creates a vehicle from an input and an optional finished VIN decode,
+/// filling the fields the caller left empty and storing the decoded
+/// attributes. With `decoded` of `None` this behaves like [`create`].
+async fn create_with_vin_decode<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     mut input: NewVehicle,
     decoded: Option<&VinDecodeResult>,
@@ -922,6 +986,117 @@ mod tests {
         .unwrap();
         assert_eq!(made.make, None);
         assert_eq!(attribute_count(&db, made.id).await, 0);
+    }
+
+    #[tokio::test]
+    async fn create_with_vin_decodes_the_vin_and_fills_the_blanks() {
+        let db = test_db().await;
+        let made = create_with_vin_lookup(
+            &db,
+            NewVehicle {
+                name: "Daily".into(),
+                make: Some("VW".into()),
+                vin: Some(" WVWZZZAUZKW000001 ".into()),
+                ..Default::default()
+            },
+            |vin| async move {
+                assert_eq!(vin, "WVWZZZAUZKW000001");
+                Ok(decoded())
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(made.vin_decode_error, None);
+        assert_eq!(
+            made.vehicle.vin.as_deref(),
+            Some("WVWZZZAUZKW000001"),
+            "the VIN is stored without its surrounding spaces"
+        );
+        assert_eq!(made.vehicle.make.as_deref(), Some("VW"));
+        assert_eq!(made.vehicle.model.as_deref(), Some("Golf R"));
+        assert_eq!(attribute_count(&db, made.vehicle.id).await, 1);
+        // The reply is the vehicle's own keys, with no error key on success.
+        let json = serde_json::to_value(&made).unwrap();
+        assert_eq!(json["name"], "Daily");
+        assert_eq!(json["id"], made.vehicle.id);
+        assert_eq!(json["vin"], "WVWZZZAUZKW000001");
+        assert!(
+            json.get("vehicle").is_none(),
+            "the vehicle's keys are flattened: {json}"
+        );
+        assert!(json.get("vin_decode_error").is_none(), "{json}");
+    }
+
+    #[tokio::test]
+    async fn create_with_vin_still_creates_when_the_lookup_fails() {
+        let db = test_db().await;
+        let made = create_with_vin_lookup(
+            &db,
+            NewVehicle {
+                name: "Daily".into(),
+                vin: Some("WVWZZZAUZKW000001".into()),
+                ..Default::default()
+            },
+            |_| async { Err("NHTSA API request failed: offline".to_string()) },
+        )
+        .await
+        .unwrap();
+        assert_eq!(made.vehicle.vin.as_deref(), Some("WVWZZZAUZKW000001"));
+        assert_eq!(made.vehicle.make, None);
+        assert_eq!(attribute_count(&db, made.vehicle.id).await, 0);
+        let json = serde_json::to_value(&made).unwrap();
+        assert_eq!(json["id"], made.vehicle.id);
+        assert!(json.get("vehicle").is_none(), "{json}");
+        assert_eq!(
+            json["vin_decode_error"],
+            "NHTSA API request failed: offline"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_with_vin_makes_no_lookup_without_a_vin() {
+        let db = test_db().await;
+        for vin in [None, Some("  ".to_string())] {
+            let made = create_with_vin_lookup(
+                &db,
+                NewVehicle {
+                    name: "Daily".into(),
+                    vin,
+                    ..Default::default()
+                },
+                |_| async { panic!("no VIN was given, so nothing is looked up") },
+            )
+            .await
+            .unwrap();
+            assert_eq!(made.vin_decode_error, None);
+            assert_eq!(made.vehicle.vin, None, "a blank VIN is stored as none");
+        }
+    }
+
+    #[tokio::test]
+    async fn create_with_vin_refuses_a_bad_input_before_the_lookup() {
+        let db = test_db().await;
+        let bad_mileage = NewVehicle {
+            name: "Daily".into(),
+            vin: Some("WVWZZZAUZKW000001".into()),
+            purchase_mileage: Some(-1),
+            ..Default::default()
+        };
+        let bad_template = NewVehicle {
+            name: "Daily".into(),
+            vin: Some("WVWZZZAUZKW000001".into()),
+            model_template_id: Some(99_999),
+            ..Default::default()
+        };
+        for (input, refusal) in [(bad_mileage, "purchase_mileage"), (bad_template, "99999")] {
+            let err = create_with_vin_lookup(&db, input, |_| async {
+                panic!("a refused input must not reach the lookup")
+            })
+            .await
+            .unwrap_err();
+            assert!(err.to_string().contains(refusal), "{err}");
+        }
+        crate::test_support::assert_empty(&list(&db, true).await.unwrap());
     }
 
     #[tokio::test]

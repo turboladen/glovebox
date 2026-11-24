@@ -191,7 +191,7 @@ named as things a person would say:
 
 - `vehicles.rs`: `list_vehicles`, `get_vehicle`, `add_vehicle`, `update_vehicle`, `delete_vehicle`,
   `archive_vehicle`, `unarchive_vehicle`, `log_mileage`, `list_mileage`, `delete_mileage`,
-  `list_model_templates`
+  `list_model_templates`, `list_vehicle_attributes`, `decode_vin`
 - `services.rs`: `record_service`, `link_service_to_maintenance`, `list_services`,
   `correct_service`, `delete_service`
 - `parts.rs`: `record_part`, `list_parts`, `correct_part`, `delete_part`
@@ -366,7 +366,13 @@ planned-work list (`work_item::list_with_status`) shows the tracked id and other
 the id as stored (`docs/adr/0020-schedule-links-resolve-when-read.md`). A vehicle
 created with a `model_template_id` takes the template's year, make, model, trim, body style, engine,
 transmission and drivetrain for each one left empty, with the precedence caller, then template,
-then VIN decode; `update_vehicle` setting a template fills only the empty ones. Each reminder
+then VIN decode; `update_vehicle` setting a template fills only the empty ones.
+`vehicle::create_with_vin` decodes a new car's VIN and `vin_decode::decode_for_vehicle` (the
+`decode_vin` tool) decodes a stored one: it fills only the empty ones of those fields and replaces
+the stored `vehicle_attributes`, which `vin_decode::list_attributes` reads. Both make the NHTSA
+request before their transaction opens, take the lookup as a closure in their `pub(crate)` form
+so a test needs no network, and report a failed lookup as `vin_decode_error` in an `Ok` reply
+(`docs/adr/0024-vin-attributes-are-readable.md`). Each reminder
 carries a `baseline` (`last_service`, `purchase` or `none`; with no purchase date a time-based
 item counts from the model year, and the mileage estimate ignores a reading dated after today:
 `docs/adr/0022-a-reminder-with-no-purchase-date-counts-from-the-model-year.md`), the forecast names the schedule items
