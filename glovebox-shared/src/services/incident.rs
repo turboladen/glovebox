@@ -426,25 +426,20 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     Ok(created.pop().expect("one incident in, one detail out"))
 }
 
-#[allow(clippy::too_many_lines)]
-pub async fn update<C: ConnectionTrait + TransactionTrait>(
-    db: &C,
-    vehicle_id: i32,
+/// Refuses a recurrence target that is the incident itself or that reaches it
+/// through its own chain of recurrences.
+async fn refuse_recurrence_cycle(
+    db: &impl ConnectionTrait,
     id: i32,
-    input: UpdateIncident,
-) -> DomainResult<IncidentWithDetails> {
-    let txn = super::begin_write(db).await?;
-    let db = &txn;
-    let existing = require_incident(db, vehicle_id, id).await?;
-
-    require_links_owned(db, vehicle_id, input.recurrence_of_id.flatten()).await?;
+    target: Option<i32>,
+) -> DomainResult<()> {
     // An incident cannot be a recurrence of itself — directly or through a
     // chain. Walk the proposed target's ancestors; if `id` appears, linking
     // would close a cycle and the first feature that traverses recurrence
     // chains would loop forever. Chains are short (bounded walk, one query
     // per hop), and the walk runs under the write lock so two updates at once
     // cannot close a cycle between them.
-    if let Some(target) = input.recurrence_of_id.flatten() {
+    if let Some(target) = target {
         if target == id {
             return Err(DomainError::BadRequest(
                 "An incident cannot be a recurrence of itself".into(),
@@ -472,9 +467,12 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
                 .and_then(|i| i.recurrence_of_id);
         }
     }
+    Ok(())
+}
 
-    let mut active: incident::ActiveModel = existing.into();
-
+/// Sets on `active` each of the incident's own columns that `input` carries.
+/// The resolution and the service links are not columns it sets.
+fn apply_fields(active: &mut incident::ActiveModel, input: UpdateIncident) {
     if let Some(v) = input.category {
         active.category = Set(v);
     }
@@ -535,7 +533,102 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     if let Some(v) = input.recurrence_of_id {
         active.recurrence_of_id = Set(v);
     }
+}
 
+/// Replaces the incident's stored `resolved` links with one per service in
+/// `sids`, and returns whether no service resolves the incident afterwards.
+async fn replace_resolvers(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    incident_id: i32,
+    sids: &[i32],
+) -> DomainResult<bool> {
+    let from_jobs: Vec<i32> = work_item::Entity::find()
+        .select_only()
+        .column(work_item::Column::CompletedServiceId)
+        .filter(work_item::Column::IncidentId.eq(incident_id))
+        .filter(work_item::Column::CompletedServiceId.is_not_null())
+        .into_tuple()
+        .all(db)
+        .await?;
+    let cleared_all_resolvers = sids.is_empty() && from_jobs.is_empty();
+    // The list cannot take off a service a job brings, so that service's
+    // links stay as they are: a stored one keeps saying the invoice named
+    // the incident, and none is stored for a list sent back from a read,
+    // which names the service because the job does.
+    let replaced: Vec<i32> = incident_service_link::Entity::find()
+        .filter(incident_service_link::Column::IncidentId.eq(incident_id))
+        .filter(incident_service_link::Column::Role.eq(LinkRole::Resolved))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|l| l.service_record_id)
+        .filter(|sid| !from_jobs.contains(sid))
+        .collect();
+    if !replaced.is_empty() {
+        incident_service_link::Entity::delete_many()
+            .filter(incident_service_link::Column::IncidentId.eq(incident_id))
+            .filter(incident_service_link::Column::Role.eq(LinkRole::Resolved))
+            .filter(incident_service_link::Column::ServiceRecordId.is_in(replaced))
+            .exec(db)
+            .await?;
+    }
+    for sid in super::dedup_ids(sids) {
+        if !from_jobs.contains(&sid) {
+            link_service(db, vehicle_id, incident_id, sid, LinkRole::Resolved).await?;
+        }
+    }
+    Ok(cleared_all_resolvers)
+}
+
+/// The resolution an update writes to the incident, or `None` when the stored
+/// one stands.
+async fn decide_resolution(
+    db: &impl ConnectionTrait,
+    inc: &incident::Model,
+    resolved: Option<bool>,
+    names_a_service: bool,
+    cleared_all_resolvers: bool,
+) -> DomainResult<Option<Resolution>> {
+    // Reopening does not read the stored pair, so it also repairs a row that
+    // breaks the pair's rule.
+    let resolution = match (resolved, Resolution::of(inc)) {
+        (Some(false), _) => Some(Resolution::Open),
+        (_, Err(broken)) => return Err(broken),
+        (Some(true), Ok(Resolution::Open)) if names_a_service => Some(Resolution::ByService),
+        (Some(true), Ok(Resolution::Open)) => Some(Resolution::ByHand),
+        (Some(true), Ok(Resolution::ByService))
+            if resolvers_of_incidents(db, &[inc.id]).await?.is_empty() =>
+        {
+            Some(Resolution::ByHand)
+        }
+        // Clearing the list takes the services away, and the owner's word
+        // still stands.
+        (None, Ok(Resolution::ByService)) if cleared_all_resolvers => Some(Resolution::Open),
+        _ => None,
+    };
+    Ok(resolution)
+}
+
+pub async fn update<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    id: i32,
+    mut input: UpdateIncident,
+) -> DomainResult<IncidentWithDetails> {
+    let txn = super::begin_write(db).await?;
+    let db = &txn;
+    let existing = require_incident(db, vehicle_id, id).await?;
+
+    require_links_owned(db, vehicle_id, input.recurrence_of_id.flatten()).await?;
+    refuse_recurrence_cycle(db, id, input.recurrence_of_id.flatten()).await?;
+
+    let resolved = input.resolved;
+    let noticed_during_service_id = input.noticed_during_service_id;
+    let resolved_by_service_ids = input.resolved_by_service_ids.take();
+
+    let mut active: incident::ActiveModel = existing.into();
+    apply_fields(&mut active, input);
     active.updated_at = Set(super::now());
 
     let inc = active.update(&txn).await?;
@@ -544,50 +637,15 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     // the incident, so it reads as unresolved unless the caller says
     // otherwise, a completed job still resolves it or the owner resolved it
     // by hand.
-    let names_a_service = input
-        .resolved_by_service_ids
+    let names_a_service = resolved_by_service_ids
         .as_ref()
         .is_some_and(|sids| !sids.is_empty());
-    let mut cleared_all_resolvers = false;
-    if let Some(sids) = input.resolved_by_service_ids {
-        let from_jobs: Vec<i32> = work_item::Entity::find()
-            .select_only()
-            .column(work_item::Column::CompletedServiceId)
-            .filter(work_item::Column::IncidentId.eq(inc.id))
-            .filter(work_item::Column::CompletedServiceId.is_not_null())
-            .into_tuple()
-            .all(&txn)
-            .await?;
-        cleared_all_resolvers = sids.is_empty() && from_jobs.is_empty();
-        // The list cannot take off a service a job brings, so that service's
-        // links stay as they are: a stored one keeps saying the invoice named
-        // the incident, and none is stored for a list sent back from a read,
-        // which names the service because the job does.
-        let replaced: Vec<i32> = incident_service_link::Entity::find()
-            .filter(incident_service_link::Column::IncidentId.eq(inc.id))
-            .filter(incident_service_link::Column::Role.eq(LinkRole::Resolved))
-            .all(&txn)
-            .await?
-            .into_iter()
-            .map(|l| l.service_record_id)
-            .filter(|sid| !from_jobs.contains(sid))
-            .collect();
-        if !replaced.is_empty() {
-            incident_service_link::Entity::delete_many()
-                .filter(incident_service_link::Column::IncidentId.eq(inc.id))
-                .filter(incident_service_link::Column::Role.eq(LinkRole::Resolved))
-                .filter(incident_service_link::Column::ServiceRecordId.is_in(replaced))
-                .exec(&txn)
-                .await?;
-        }
-        for sid in super::dedup_ids(&sids) {
-            if !from_jobs.contains(&sid) {
-                link_service(&txn, vehicle_id, inc.id, sid, LinkRole::Resolved).await?;
-            }
-        }
-    }
+    let cleared_all_resolvers = match resolved_by_service_ids {
+        Some(sids) => replace_resolvers(&txn, vehicle_id, inc.id, &sids).await?,
+        None => false,
+    };
 
-    if let Some(noticed) = input.noticed_during_service_id {
+    if let Some(noticed) = noticed_during_service_id {
         incident_service_link::Entity::delete_many()
             .filter(incident_service_link::Column::IncidentId.eq(inc.id))
             .filter(incident_service_link::Column::Role.eq(LinkRole::Noticed))
@@ -605,23 +663,8 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     // it is the owner's word only when no service resolves it, so a read
     // sent back marks nothing.
     let inc = require_incident(&txn, vehicle_id, inc.id).await?;
-    // Reopening does not read the stored pair, so it also repairs a row that
-    // breaks the pair's rule.
-    let resolution = match (input.resolved, Resolution::of(&inc)) {
-        (Some(false), _) => Some(Resolution::Open),
-        (_, Err(broken)) => return Err(broken),
-        (Some(true), Ok(Resolution::Open)) if names_a_service => Some(Resolution::ByService),
-        (Some(true), Ok(Resolution::Open)) => Some(Resolution::ByHand),
-        (Some(true), Ok(Resolution::ByService))
-            if resolvers_of_incidents(&txn, &[inc.id]).await?.is_empty() =>
-        {
-            Some(Resolution::ByHand)
-        }
-        // Clearing the list takes the services away, and the owner's word
-        // still stands.
-        (None, Ok(Resolution::ByService)) if cleared_all_resolvers => Some(Resolution::Open),
-        _ => None,
-    };
+    let resolution =
+        decide_resolution(&txn, &inc, resolved, names_a_service, cleared_all_resolvers).await?;
     let inc = if let Some(resolution) = resolution {
         let mut active: incident::ActiveModel = inc.into();
         set_resolution(&mut active, resolution);
