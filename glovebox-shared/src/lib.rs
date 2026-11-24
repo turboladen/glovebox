@@ -4,11 +4,9 @@
     clippy::struct_field_names,
     clippy::wildcard_imports
 )]
-// These pedantic lints target public-API surface. They did not fire while this
-// code lived in the `glovebox` binary crate (nothing was externally reachable);
-// they surface now only because the domain became a library. Phase A is a
-// behavior-preserving mechanical move, so we preserve the prior (green) state
-// rather than churn every service fn with doc/must_use annotations.
+// These pedantic lints target a published API. The only callers of this
+// library are the workspace's own programs, so a `# Errors` section or a
+// `#[must_use]` on every service function would add text and no information.
 #![allow(
     clippy::missing_errors_doc,
     clippy::missing_panics_doc,

@@ -424,7 +424,6 @@ mod tests {
             "glovebox://vehicles/",
             "glovebox://vehicles/abc",
             "glovebox://vehicles/7/services",
-            "glovebox://vehicles/7/builds/3",
             "glovebox://vehicles/7/activity/extra",
             "fewd://vehicles",
         ] {

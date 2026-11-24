@@ -260,6 +260,14 @@ second service to patch the first.
   as `null` is cleared.
 - `correct_service` also fixes the `invoice_ref` and replaces the recalls a service performed
   (`recall_finding_ids`). `update_incident` sets, changes or clears `noticed_during_service_id`.
+- `delete_appointment`, `delete_need`, `delete_need_option` and `delete_todo` remove a checklist
+  record made by mistake. Deleting an appointment leaves its jobs, to-dos and services in place
+  with no appointment. To put an appointment away use `update_appointment` with a `status`, to
+  rule an option out use `update_need_option` with a `rejected_reason`, and to finish a to-do
+  tick it with `update_todo`, because each of those keeps the history.
+- `link_service_to_maintenance` links a service already on file to the schedule items it
+  performed, so their reminders clear. Use it when a service was recorded without
+  `schedule_item_ids`.
 - `delete_service`, `delete_part`, `delete_incident` and `delete_planned_work` remove a record.
   A service that recorded work as done (jobs, installed parts, resolved incidents, recalls) is
   refused until you pass `completed_work`. Ask the owner what happened and never choose for them:
@@ -295,7 +303,8 @@ second service to patch the first.
 
 ## Looking things up
 
-`summarize_recent_activity` gives recent history in one call. `list_services`, `list_parts` and
+`summarize_recent_activity` gives recent history in one call. `get_vehicle` reads one car's full
+record (VIN, engine, transmission, purchase details, plate). `list_services`, `list_parts` and
 `list_incidents` list records, and `get_service` and `get_incident` read one in full.
 `search_records` searches everything, and `cost_summary` reports what the car has cost. `save_note`
 keeps a plain fact worth remembering.

@@ -43,4 +43,4 @@ the duplicate names `shop_name` already holds, and history per shop) as a featur
 
 - Adding a second kind of car is a code change and a release, not a conversation.
 - No tool writes a shop, so `shop_id` stays empty until the shop feature lands. Services and
-  appointments still check a `shop_id` they are given (`shop::require_if_named`).
+  appointments still check a `shop_id` they are given.
