@@ -467,7 +467,8 @@ A page is a view of the shared library, and a future page follows the same rules
   reference and totals, then lists the lines, the jobs completed, the quotes, the parts installed
   (a kit's items beneath), the schedule items, the recalls and the incidents, and leaves out a
   section that is empty. Its lists reuse the home page's waiting columns (`row--wait`). A shop
-  page's service row links to it, and a service is corrected only through Claude Desktop.
+  page's service row links to it, as does the page of a job it completed
+  (`JobView::completed_by`), and a service is corrected only through Claude Desktop.
 - **Marking a need ordered has no undo**, because it creates a purchase record. A to-do tick, a
   received date and a deleted to-do show a banner with an undo form. The undo of a delete puts
   the row back through `todo::restore` and lasts until the next delete or a restart of the server.

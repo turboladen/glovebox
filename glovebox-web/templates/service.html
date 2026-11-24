@@ -12,6 +12,8 @@
     {% if let Some(i) = v.invoice %}<div><span class="l">Invoice</span><span class="pn">{{ i }}</span></div>{% endif %}
     {% if let Some(p) = v.paid_by %}<div><span class="l">Paid by</span>{{ p }}</div>{% endif %}
     {% if let Some(n) = v.payer_note %}<div><span class="l">Payer note</span>{{ n }}</div>{% endif %}
+    {% if let Some(c) = v.parts_cost %}<div><span class="l">Parts</span><span class="price">{{ c }}</span></div>{% endif %}
+    {% if let Some(c) = v.labor_cost %}<div><span class="l">Labor</span><span class="price">{{ c }}</span></div>{% endif %}
     <div><span class="l">Total</span>{% if let Some(t) = v.total %}<span class="price">{{ t }}</span>{% else %}<span class="empty">No total</span>{% endif %}</div>
     {% if let Some(t) = v.lines_total %}<div><span class="l">Lines</span><span class="price">{{ t }}</span></div>{% endif %}
     {% if let Some(p) = v.paid %}<div><span class="l">You paid</span><span class="price">{{ p }}</span></div>{% endif %}
@@ -25,13 +27,14 @@
   {% if !v.lines.is_empty() %}
   <section class="sheet" aria-labelledby="service-lines">
     <div class="sheet-head"><h3 id="service-lines">Lines</h3><span class="n">{{ v.lines.len() }}</span></div>
-    <div class="cols cols--wait" aria-hidden="true"><span class="at-key">Line</span><span class="at-wide">Kind</span><span>Paid by</span><span class="at-job num">Cost</span></div>
+    <div class="cols cols--wait" aria-hidden="true"><span class="at-key">Line</span><span class="at-wide">Kind</span><span>Paid by</span><span class="at-date">Quantity</span><span class="at-job num">Cost</span></div>
     <ul class="needs">
       {% for l in v.lines %}
       <li class="row row--wait">
         <span class="key at-key">{{ l.description }}</span>
         <span class="at-wide" data-l="Kind">{{ l.kind }}</span>
         <span data-l="Paid by">{% if let Some(p) = l.paid_by %}{{ p }}{% endif %}</span>
+        <span class="at-date price" data-l="Quantity">{% if let Some(q) = l.quantity %}{{ q }}{% endif %}</span>
         <span class="at-job num price" data-l="Cost">{% if let Some(c) = l.cost %}{{ c }}{% endif %}</span>
       </li>
       {% endfor %}

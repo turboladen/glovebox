@@ -1316,3 +1316,34 @@ async fn get_reads_the_same_as_the_function_for_its_scope() {
         );
     }
 }
+
+// Two jobs one service completed both name it, and a planned job names none.
+#[tokio::test]
+async fn a_job_view_names_the_service_that_completed_it() {
+    use crate::{inputs::service_record::NewServiceRecord, services::service_record};
+    let db = test_db().await;
+    let v = VehicleFixture::new().insert_id(&db).await;
+    let pads = add_job(&db, v, "Rear pads", None).await;
+    let fluid = add_job(&db, v, "Brake fluid", None).await;
+    let planned = add_job(&db, v, "Tires", None).await;
+    let service = service_record::create(
+        &db,
+        v,
+        NewServiceRecord {
+            service_date: date("2026-10-01"),
+            work_item_ids: Some(vec![pads, fluid]),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .record
+    .id;
+
+    for job in [pads, fluid] {
+        let by = for_job(&db, v, job).await.unwrap().completed_by.unwrap();
+        assert_eq!((by.id, by.service_date), (service, date("2026-10-01")));
+    }
+    let view = for_job(&db, v, planned).await.unwrap();
+    assert!(view.completed_by.is_none(), "{:?}", view.completed_by);
+}

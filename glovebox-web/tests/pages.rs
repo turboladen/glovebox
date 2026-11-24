@@ -1778,3 +1778,137 @@ async fn a_self_performed_service_names_no_shop() {
     );
     assert!(!body.contains(r#"href="/shops/"#), "{body}");
 }
+
+// Records `input` on a new vehicle and returns the vehicle, the service and
+// the service's page.
+async fn service_page_of(
+    db: DatabaseConnection,
+    input: glovebox_shared::inputs::service_record::NewServiceRecord,
+) -> (i32, i32, String) {
+    let v = VehicleFixture::new().insert_id(&db).await;
+    let created = glovebox_shared::services::service_record::create(&db, v, input)
+        .await
+        .unwrap();
+    let service = created.record.id;
+    let (status, body) = page(app(db, "test"), get(&service_path(v, service))).await;
+    assert_eq!(status, StatusCode::OK);
+    (v, service, body)
+}
+
+#[tokio::test]
+async fn a_service_line_shows_its_quantity_and_unit_cost_and_the_head_its_parts_and_labor() {
+    use glovebox_shared::{
+        entities::service_record_line_item::WorkKind,
+        inputs::service_record::{NewLineItem, NewServiceRecord},
+    };
+    let line = |description: &str, quantity, unit_cost_cents| NewLineItem {
+        description: description.into(),
+        work_kind: WorkKind::Fee,
+        paid_by: None,
+        quantity,
+        unit_cost_cents,
+        cost_cents: None,
+    };
+    let input = NewServiceRecord {
+        service_date: date("2026-10-01"),
+        parts_cost_cents: Some(4_500),
+        labor_cost_cents: Some(12_000),
+        line_items: Some(vec![
+            line("Shop rags", Some(5.0), Some(900)),
+            line("Oil", Some(5.5), None),
+            line("Disposal", None, Some(300)),
+        ]),
+        ..Default::default()
+    };
+    let (_, _, body) = service_page_of(db().await, input).await;
+    assert_eq!(
+        section_rows(&body, "Lines"),
+        [
+            "Shop rags Fee 5 × $9.00",
+            "Oil Fee × 5.5",
+            "Disposal Fee $3.00 each",
+        ]
+    );
+    for detail in [
+        r#"<span class="l">Parts</span><span class="price">$45.00</span>"#,
+        r#"<span class="l">Labor</span><span class="price">$120.00</span>"#,
+    ] {
+        assert!(body.contains(detail), "missing {detail}: {body}");
+    }
+}
+
+#[tokio::test]
+async fn a_service_with_a_blank_description_is_headed_service() {
+    let input = glovebox_shared::inputs::service_record::NewServiceRecord {
+        service_date: date("2026-10-01"),
+        description: Some("  ".into()),
+        ..Default::default()
+    };
+    let (_, _, body) = service_page_of(db().await, input).await;
+    assert!(
+        body.contains(r#"<h1 id="service-title">Service</h1>"#),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn a_service_that_ends_the_day_it_starts_shows_one_date() {
+    let input = glovebox_shared::inputs::service_record::NewServiceRecord {
+        service_date: date("2026-10-01"),
+        end_date: Some(date("2026-10-01")),
+        ..Default::default()
+    };
+    let (_, _, body) = service_page_of(db().await, input).await;
+    assert!(
+        body.contains(r#"<span class="l">Date</span>2026-10-01</div>"#),
+        "{body}"
+    );
+}
+
+// A service can both notice and resolve one incident, and neither row links
+// back to the page it is on.
+#[tokio::test]
+async fn an_incident_a_service_noticed_and_resolved_links_to_no_service() {
+    let db = db().await;
+    let v = VehicleFixture::new().insert_id(&db).await;
+    let rattle = incident_on(&db, v, IncidentCategory::Noise, "Rattle").await;
+    let created = glovebox_shared::services::service_record::create(
+        &db,
+        v,
+        glovebox_shared::inputs::service_record::NewServiceRecord {
+            service_date: date("2026-10-01"),
+            resolved_incident_ids: Some(vec![rattle]),
+            noticed_incident_ids: Some(vec![rattle]),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let path = service_path(v, created.record.id);
+    let (_, body) = page(app(db, "test"), get(&path)).await;
+    assert_eq!(
+        section_rows(&body, "Incidents resolved"),
+        ["Rattle Noise Resolved"]
+    );
+    assert_eq!(
+        section_rows(&body, "Incidents noticed"),
+        ["Rattle Noise Resolved"]
+    );
+    assert!(!body.contains(&format!(r#"href="{path}""#)), "{body}");
+}
+
+#[tokio::test]
+async fn a_completed_jobs_page_links_to_the_service_that_completed_it() {
+    let db = db().await;
+    let (_, golf, service, brakes, quote) = service_fixture(&db).await;
+    let job = |id: i32| format!("/vehicles/{golf}/jobs/{id}");
+    let (_, body) = page(app(db.clone(), "test"), get(&job(brakes))).await;
+    assert!(
+        body.contains(&format!(
+            r#"<span class="l">Completed by</span><a href="/vehicles/{golf}/services/{service}">Service of 2026-10-01</a>"#
+        )),
+        "{body}"
+    );
+    let (_, body) = page(app(db, "test"), get(&job(quote))).await;
+    assert!(!body.contains("Completed by"), "{body}");
+}

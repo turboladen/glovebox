@@ -9,7 +9,7 @@ use crate::{
     error::DomainResult,
     money::format_cents,
     services::{
-        costs,
+        costs, schedule,
         service_record::{self, ServiceRecordWithLinks},
         vehicle,
     },
@@ -21,7 +21,8 @@ pub struct ServiceDetail {
     /// The vehicle's name.
     pub vehicle_name: String,
     pub service: ServiceRecordWithLinks,
-    /// The schedule items behind the service's `schedule_item_ids`, by name.
+    /// The schedule items behind the service's `schedule_item_ids`, by name
+    /// with ASCII case ignored.
     pub schedule_items: Vec<ScheduleItemRef>,
     /// The owner's share of the total; `None` when the service has no total.
     pub out_of_pocket_cents: Option<i64>,
@@ -71,7 +72,8 @@ pub async fn get(
     })
 }
 
-// The items named by `ids`, by name and then id, in one query.
+// The items named by `ids` in one query, ordered as schedule names compare
+// (see `schedule::name_key`) and then by id.
 async fn schedule_items(
     db: &impl ConnectionTrait,
     ids: &[i32],
@@ -79,16 +81,15 @@ async fn schedule_items(
     if ids.is_empty() {
         return Ok(Vec::new());
     }
-    let named: Vec<(i32, String)> = maintenance_schedule_item::Entity::find()
+    let mut named: Vec<(i32, String)> = maintenance_schedule_item::Entity::find()
         .select_only()
         .column(maintenance_schedule_item::Column::Id)
         .column(maintenance_schedule_item::Column::Name)
         .filter(maintenance_schedule_item::Column::Id.is_in(ids.to_vec()))
-        .order_by_asc(maintenance_schedule_item::Column::Name)
-        .order_by_asc(maintenance_schedule_item::Column::Id)
         .into_tuple()
         .all(db)
         .await?;
+    named.sort_by_cached_key(|(id, name)| (schedule::name_key(name), *id));
     Ok(named
         .into_iter()
         .map(|(id, name)| ScheduleItemRef { id, name })
@@ -120,7 +121,6 @@ mod tests {
             schedule::NewScheduleItem,
             service_record::{NewLineItem, NewServiceRecord},
         },
-        services::schedule,
         test_support::{assert_empty, date, seed_service, seed_vehicle, test_db},
     };
 
@@ -140,7 +140,7 @@ mod tests {
         let db = test_db().await;
         let v = seed_vehicle(&db).await;
         let mut items = Vec::new();
-        for name in ["Wiper blades", "Brake fluid"] {
+        for name in ["Wiper blades", "brake fluid"] {
             let item = NewScheduleItem {
                 vehicle_id: Some(v),
                 name: name.into(),
@@ -175,7 +175,7 @@ mod tests {
             [
                 ScheduleItemRef {
                     id: items[1],
-                    name: "Brake fluid".into()
+                    name: "brake fluid".into()
                 },
                 ScheduleItemRef {
                     id: items[0],
