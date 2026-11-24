@@ -43,6 +43,10 @@ pub struct RecallCheck {
     pub newly_found: usize,
     pub recalls: Vec<RecallWithStatus>,
     pub message: Option<String>,
+    /// The model line NHTSA was asked about, when it does not list the
+    /// vehicle's own model. Its recalls cover every car of that line, so one
+    /// may not apply to this vehicle.
+    pub searched_model: Option<String>,
 }
 
 /// Looks the vehicle up on NHTSA by make, model and year (a live web
@@ -87,8 +91,22 @@ where
         DomainError::BadRequest("Vehicle has no year set — required for recall lookup".to_string())
     })?;
 
-    match lookup(make, model, year).await {
-        Ok(result) => record_recalls(db, vehicle_id, &result.recalls).await,
+    match lookup(make, model.clone(), year).await {
+        Ok(result) => {
+            let mut check = record_recalls(db, vehicle_id, &result.recalls).await?;
+            let own: Vec<&str> = model.split_whitespace().collect();
+            if !result.model.eq_ignore_ascii_case(&own.join(" ")) {
+                if check.recalls.is_empty() {
+                    check.message = Some(format!(
+                        "NHTSA does not list the {model}; it lists no recalls for the {} line of \
+                         this make and year.",
+                        result.model
+                    ));
+                }
+                check.searched_model = Some(result.model);
+            }
+            Ok(check)
+        }
         Err(e) => {
             tracing::warn!(vehicle_id, error = %e, "NHTSA recall lookup failed");
             Ok(RecallCheck {
@@ -98,6 +116,7 @@ where
                     "NHTSA lookup failed: {e}. The recalls listed are the ones already known; try \
                      again later."
                 )),
+                searched_model: None,
             })
         }
     }
@@ -123,6 +142,7 @@ pub(crate) async fn record_recalls<C: ConnectionTrait + TransactionTrait>(
         newly_found,
         recalls,
         message,
+        searched_model: None,
     })
 }
 
@@ -368,6 +388,52 @@ mod tests {
 
         let missing = check_recalls(&db, 99_999).await.unwrap_err();
         assert_eq!(missing.to_string(), "Vehicle 99999 not found");
+    }
+
+    #[tokio::test]
+    async fn a_lookup_by_the_model_line_names_the_line_it_asked_about() {
+        let db = test_db().await;
+        let vid = crate::entities::vehicle::ActiveModel {
+            name: Set("GTI".into()),
+            make: Set(Some("Volkswagen".into())),
+            model: Set(Some("Golf GTI".into())),
+            year: Set(Some(2017)),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap()
+        .id;
+        let answer = |model: &'static str| {
+            move |make: String, _, model_year| async move {
+                Ok(nhtsa::RecallCheckResult {
+                    make,
+                    model: model.to_owned(),
+                    model_year,
+                    recall_count: 0,
+                    recalls: Vec::new(),
+                })
+            }
+        };
+
+        let by_line = check_recalls_with(&db, vid, answer("Golf")).await.unwrap();
+        assert_eq!(by_line.searched_model.as_deref(), Some("Golf"));
+        assert_eq!(
+            by_line.message.as_deref(),
+            Some(
+                "NHTSA does not list the Golf GTI; it lists no recalls for the Golf line of this \
+                 make and year."
+            )
+        );
+        // The tool description and the project prompt promise this key.
+        assert_eq!(
+            serde_json::to_value(&by_line).unwrap()["searched_model"],
+            "Golf"
+        );
+        let by_model = check_recalls_with(&db, vid, answer("golf gti"))
+            .await
+            .unwrap();
+        assert_eq!(by_model.searched_model, None);
     }
 
     fn full_recall(campaign: &str, title: &str) -> RecallInfo {

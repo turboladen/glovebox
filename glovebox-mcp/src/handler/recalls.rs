@@ -19,16 +19,20 @@ impl GloveboxMcp {
                        item (`work_item_id`) or service linked to it; `newly_found` counts only \
                        recalls stored by this call. If NHTSA cannot be reached, the call still \
                        succeeds with the recalls already known, `newly_found: 0`, and a `message` \
-                       starting \"NHTSA lookup failed:\"; carry on with those. Call it once per \
-                       conversation; `whats_coming` lists the open and planned recalls after \
-                       that, and `list_recalls` lists every recall with its status. NHTSA is \
-                       queried by make, model and year, so it cannot know whether a recall was \
-                       already performed on this car: when an invoice names a campaign number, \
-                       match it to a recall here and pass its `finding_id` in `record_service`'s \
-                       `recall_finding_ids`. To act on an open recall, `plan_work` it with \
-                       `research_finding_id`; completing that work through `record_service` links \
-                       the service to the recall. Use `set_recall_status` for a recall that was \
-                       done without paperwork or does not apply."
+                       starting \"NHTSA lookup failed:\"; carry on with those. NHTSA lists \
+                       recalls by model line, so when it does not list the car's own model \
+                       `searched_model` names the line it was asked about (`Golf` for a Golf \
+                       GTI): say a recall may not apply to this car, and mark one that does not \
+                       with `set_recall_status`. Call it once per conversation; `whats_coming` \
+                       lists the open and planned recalls after that, and `list_recalls` lists \
+                       every recall with its status. NHTSA is queried by make, model and year, so \
+                       it cannot know whether a recall was already performed on this car: when an \
+                       invoice names a campaign number, match it to a recall here and pass its \
+                       `finding_id` in `record_service`'s `recall_finding_ids`. To act on an open \
+                       recall, `plan_work` it with `research_finding_id`; completing that work \
+                       through `record_service` links the service to the recall. Use \
+                       `set_recall_status` for a recall that was done without paperwork or does \
+                       not apply."
     )]
     async fn check_recalls(
         &self,
