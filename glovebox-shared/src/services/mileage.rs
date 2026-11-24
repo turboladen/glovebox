@@ -25,7 +25,8 @@ pub async fn list(
 ///
 /// # Errors
 /// `NotFound` for a vehicle that does not exist; `Invalid` on `source` for
-/// `service`, which names only the reading a service logs.
+/// `service`, which names only the reading a service logs, on `mileage` for
+/// a reading below zero, and on `recorded_at` for a day after today.
 pub async fn create<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -39,6 +40,20 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
         return Err(DomainError::invalid(
             "source",
             "a reading from a service is recorded with the service",
+        ));
+    }
+    if input.mileage < 0 {
+        return Err(DomainError::invalid("mileage", "must not be negative"));
+    }
+    // A reading dated ahead would be the newest one, and every estimate
+    // would start from it.
+    if input
+        .recorded_at
+        .is_some_and(|at| at.day() > super::today())
+    {
+        return Err(DomainError::invalid(
+            "recorded_at",
+            "must not be after today",
         ));
     }
     let txn = super::begin_write(db).await?;
@@ -87,7 +102,7 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{VehicleFixture, date, test_db};
+    use crate::test_support::{VehicleFixture, assert_empty, date, test_db};
 
     async fn seed_vehicle(db: &impl ConnectionTrait) -> i32 {
         VehicleFixture::new().insert_id(db).await
@@ -116,6 +131,28 @@ mod tests {
         let entries = list(&db, vid).await.unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].mileage, 42000);
+    }
+
+    #[tokio::test]
+    async fn a_negative_reading_is_refused() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let err = create(&db, vid, reading(-1)).await.unwrap_err();
+        assert_eq!(err.to_string(), "mileage: must not be negative");
+        assert_empty(&list(&db, vid).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_reading_dated_after_today_is_refused() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let tomorrow = crate::services::today() + chrono::Duration::days(1);
+        let err = create(&db, vid, dated(tomorrow)).await.unwrap_err();
+        assert_eq!(err.to_string(), "recorded_at: must not be after today");
+        assert_empty(&list(&db, vid).await.unwrap());
+        create(&db, vid, dated(crate::services::today()))
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -217,6 +254,13 @@ mod tests {
         })
         .await;
         assert!(results.iter().all(Result::is_ok), "{results:?}");
+    }
+
+    fn dated(day: chrono::NaiveDate) -> NewMileageEntry {
+        NewMileageEntry {
+            recorded_at: Some(day.into()),
+            ..reading(42_000)
+        }
     }
 
     fn reading(mileage: i32) -> NewMileageEntry {

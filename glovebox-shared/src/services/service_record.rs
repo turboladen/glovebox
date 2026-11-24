@@ -54,6 +54,13 @@ fn validate_who_and_when(
     Ok(())
 }
 
+fn validate_mileage(mileage: Option<i32>) -> DomainResult<()> {
+    if mileage.is_some_and(|miles| miles < 0) {
+        return Err(DomainError::invalid("mileage", "must not be negative"));
+    }
+    Ok(())
+}
+
 /// Who paid for a line: its own `paid_by` when it has one, otherwise the
 /// service's.
 pub fn effective_payer(line_paid_by: Option<Payer>, service_paid_by: Payer) -> Payer {
@@ -896,6 +903,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
         }
     }
 
+    validate_mileage(input.mileage)?;
     let performed_by = input.performed_by.unwrap_or(Performer::Shop);
     // A self-performed service is refused before its shop is looked up, so
     // the refusal names the real problem.
@@ -1068,6 +1076,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         Some(None) => None,
         None => existing.shop_id.map(|_| "shop_id"),
     };
+    validate_mileage(input.mileage.flatten())?;
     validate_who_and_when(
         input.service_date.unwrap_or(existing.service_date),
         input.end_date.unwrap_or(existing.end_date),

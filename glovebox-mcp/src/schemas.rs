@@ -683,7 +683,7 @@ pub struct LogMileageInput {
     pub vehicle_id: i32,
     /// Odometer reading (whole miles).
     pub mileage: i32,
-    /// When the reading was taken, `YYYY-MM-DD HH:MM:SS` or just `YYYY-MM-DD`. Defaults to the current local date and time.
+    /// When the reading was taken, `YYYY-MM-DD HH:MM:SS` or just `YYYY-MM-DD`, no later than today. Defaults to the current local date and time.
     pub recorded_at: Option<String>,
     /// Free-form notes.
     pub notes: Option<String>,
@@ -748,7 +748,7 @@ pub struct ListScheduleInput {
 pub struct SummarizeActivityInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
-    /// Max items to return (default 20).
+    /// Max items to return (default 20, at most 200).
     pub limit: Option<u32>,
 }
 

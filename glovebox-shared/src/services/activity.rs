@@ -15,6 +15,8 @@ use crate::{
 
 /// Item count used when the caller doesn't specify a limit.
 pub const DEFAULT_LIMIT: usize = 20;
+/// The most items [`recent`] returns, whatever `limit` asks for.
+pub const MAX_LIMIT: usize = 200;
 
 /// One entry in the merged feed. `date` is the record's own domain date
 /// (`service_date`, `occurred_at`, or `recorded_at`), printed
@@ -41,7 +43,8 @@ pub struct ActivityItem {
 }
 
 /// The `limit` most recent services + incidents + mileage logs for a
-/// vehicle, merged and sorted newest-first by their own dates.
+/// vehicle, merged and sorted newest-first by their own dates. A `limit`
+/// above [`MAX_LIMIT`] returns that many.
 ///
 /// The reading a service logs is left out, because the service's own item
 /// already carries that odometer reading.
@@ -52,6 +55,7 @@ pub async fn recent(
 ) -> DomainResult<Vec<ActivityItem>> {
     let vehicle = super::vehicle::require(db, vehicle_id).await?;
     let vehicle_name = vehicle.name;
+    let limit = limit.min(MAX_LIMIT);
     let limit_u64 = limit as u64;
 
     let services = service_record::Entity::find()

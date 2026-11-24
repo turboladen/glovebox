@@ -64,7 +64,8 @@ impl GloveboxMcp {
         name = "log_mileage",
         description = "Record an odometer reading. Keeps mileage-based maintenance reminders \
                        accurate — log whenever the user mentions their current mileage. \
-                       (`record_service` with `mileage` set logs one automatically.)"
+                       (`record_service` with `mileage` set logs one automatically.) A reading \
+                       below zero or dated after today is refused."
     )]
     async fn log_mileage(
         &self,

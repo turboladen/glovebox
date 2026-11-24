@@ -216,7 +216,9 @@ need has a decision, every decision has a reason, and every part ordered has arr
    cost forecast and the warranty status. Warranty coverage may apply: remind Steve to check it
    before he pays.
    An overdue item whose `baseline` is `purchase` has no service on record, so say its history is
-   missing rather than that the work is late. The forecast names the items and planned work it
+   missing rather than that the work is late. An item whose `baseline` is `none` has no purchase
+   date or mileage to count from either, so its due date counts from the start of the model year:
+   ask Steve when the work was last done. The forecast names the items and planned work it
    could not price in `unestimated_items` and `unestimated_planned_work`; when either has entries,
    say the total is a floor.
 2. Group the overdue and due-soon items into one shop trip. Say what each named service includes,
