@@ -240,6 +240,48 @@ async fn earlier_rate_anchor(
     Ok(v.purchase_date.zip(v.purchase_mileage))
 }
 
+// The vehicle's newest readings, newest first, without any dated after `today`.
+async fn recent_readings(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    today: NaiveDate,
+) -> DomainResult<Vec<mileage_log::Model>> {
+    // A service dated ahead by mistake logs a reading dated ahead, which must
+    // not become the point every estimate starts from. The stored text is a
+    // day or a day and time, so a reading is dated no later than `today`
+    // exactly when its text sorts below tomorrow's day. The bound is part of
+    // the query so that readings dated ahead take no place in the window.
+    let tomorrow = today.succ_opt().unwrap_or(NaiveDate::MAX);
+    Ok(mileage_log::Entity::find()
+        .filter(mileage_log::Column::VehicleId.eq(vehicle_id))
+        .filter(mileage_log::Column::RecordedAt.lt(crate::dates::DayOrTime::Day(tomorrow)))
+        .order_by_desc(mileage_log::Column::RecordedAt)
+        .limit(RATE_WINDOW_READINGS)
+        .all(db)
+        .await?)
+}
+
+// A reading with no time of day counts as the end of its day, as a service's
+// reading is, although its stored text sorts first. Of two at the same moment
+// the higher is the later: an odometer only climbs.
+fn newest_reading(entries: &[mileage_log::Model]) -> Option<&mileage_log::Model> {
+    entries
+        .iter()
+        .max_by_key(|e| (e.recorded_at.or_end_of_day(), e.mileage))
+}
+
+/// The vehicle's newest logged odometer reading dated no later than `today`,
+/// with the day it was taken, or none when no such reading is logged. It is
+/// the reading [`estimate_mileage`] projects forward from.
+pub(crate) async fn last_reading(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    today: NaiveDate,
+) -> DomainResult<Option<(i32, NaiveDate)>> {
+    let entries = recent_readings(db, vehicle_id, today).await?;
+    Ok(newest_reading(&entries).map(|e| (e.mileage, e.recorded_at.day())))
+}
+
 /// Estimate current mileage from `mileage_log` entries.
 ///
 /// The daily rate is measured across the newest 50 readings when they span at
@@ -254,26 +296,8 @@ pub(crate) async fn estimate_mileage(
     v: &vehicle::Model,
     today: NaiveDate,
 ) -> DomainResult<(i32, NaiveDate, f64, bool)> {
-    let entries = mileage_log::Entity::find()
-        .filter(mileage_log::Column::VehicleId.eq(vehicle_id))
-        .order_by_desc(mileage_log::Column::RecordedAt)
-        .limit(RATE_WINDOW_READINGS)
-        .all(db)
-        .await?;
-
-    // A service dated ahead by mistake logs a reading dated ahead, which must
-    // not become the point every estimate starts from.
-    let entries: Vec<_> = entries
-        .into_iter()
-        .filter(|e| e.recorded_at.day() <= today)
-        .collect();
-    // A reading with no time of day counts as the end of its day, as a
-    // service's reading is, although its stored text sorts first. Of two at
-    // the same moment the higher is the later: an odometer only climbs.
-    let Some(latest) = entries
-        .iter()
-        .max_by_key(|e| (e.recorded_at.or_end_of_day(), e.mileage))
-    else {
+    let entries = recent_readings(db, vehicle_id, today).await?;
+    let Some(latest) = newest_reading(&entries) else {
         let mileage = v.purchase_mileage.unwrap_or(0);
         return Ok((mileage, today, 0.0, true));
     };
@@ -989,6 +1013,48 @@ mod tests {
         let plugs = &calculate_reminders(&db, vid).await.unwrap().reminders[0];
         assert_eq!(plugs.status, DueStatus::NotDue);
         assert_eq!(plugs.due_at_miles, Some(124_000));
+    }
+
+    async fn log_reading_at(db: &DatabaseConnection, vehicle_id: i32, at: &str, miles: i32) {
+        mileage_log::ActiveModel {
+            vehicle_id: Set(vehicle_id),
+            mileage: Set(miles),
+            recorded_at: Set(date(at)),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn readings_dated_ahead_never_hide_the_last_reading() {
+        let db = test_db().await;
+        let vid = VehicleFixture::new().insert_id(&db).await;
+        log_reading_at(&db, vid, "2026-11-13 08:00:00", 61_000).await;
+        let ahead = usize::try_from(RATE_WINDOW_READINGS).unwrap() + 5;
+        for day in date::<NaiveDate>("2026-11-14").iter_days().take(ahead) {
+            log_reading_at(&db, vid, &day.to_string(), 99_000).await;
+        }
+
+        let last = last_reading(&db, vid, date("2026-11-13")).await.unwrap();
+
+        assert_eq!(last, Some((61_000, date("2026-11-13"))));
+    }
+
+    // The timed reading is the higher one, so the rule that a reading with no
+    // time of day is the end of its day decides, and the higher reading does
+    // not.
+    #[tokio::test]
+    async fn a_date_only_reading_is_later_than_a_timed_one_on_its_day() {
+        let db = test_db().await;
+        let vid = VehicleFixture::new().insert_id(&db).await;
+        log_reading_at(&db, vid, "2026-11-10 09:00:00", 61_500).await;
+        log_reading_at(&db, vid, "2026-11-10", 61_050).await;
+
+        let last = last_reading(&db, vid, date("2026-11-13")).await.unwrap();
+
+        assert_eq!(last, Some((61_050, date("2026-11-10"))));
     }
 
     async fn log_reading(db: &DatabaseConnection, vehicle_id: i32, age_days: i64, miles: i32) {

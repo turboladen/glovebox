@@ -937,9 +937,25 @@ pub fn steps(list: &Checklist, jobs: &[JobCard], ctx: &CardContext<'_>) -> Steps
     }
 }
 
+/// What identifies the car, under the work sheet's heading.
+pub struct SheetCar {
+    /// The year, make, model and trim on one line.
+    pub description: Option<String>,
+    /// Each detail the vehicle has, as a label and its value.
+    pub facts: Vec<(&'static str, String)>,
+}
+
+/// The symptom a job on the work sheet answers.
+pub struct SymptomCard {
+    pub title: String,
+    pub description: Option<String>,
+}
+
 /// One job on the work sheet.
 pub struct SheetJobCard {
     pub title: String,
+    /// The symptom reported in the incident the job was filed from.
+    pub symptom: Option<SymptomCard>,
     /// The job's notes for the shop.
     pub notes: Option<String>,
     pub owner: Vec<SheetLineCard>,
@@ -1019,6 +1035,21 @@ pub fn sheet_heading(sheet: &WorkSheet) -> String {
     parts.join(" \u{2014} ")
 }
 
+pub fn sheet_car(sheet: &WorkSheet) -> SheetCar {
+    let facts = [
+        ("VIN", sheet.vin.clone()),
+        ("Plate", sheet.license_plate.clone()),
+        ("Odometer", sheet.odometer_text()),
+    ];
+    SheetCar {
+        description: sheet.vehicle_description.clone(),
+        facts: facts
+            .into_iter()
+            .filter_map(|(label, value)| Some((label, value?)))
+            .collect(),
+    }
+}
+
 pub fn sheet_jobs(sheet: &WorkSheet) -> Vec<SheetJobCard> {
     let card = |line: &SheetLine| SheetLineCard {
         text: count_text(&line.name, line.quantity),
@@ -1035,6 +1066,10 @@ pub fn sheet_jobs(sheet: &WorkSheet) -> Vec<SheetJobCard> {
         .iter()
         .map(|job| SheetJobCard {
             title: job.title.clone(),
+            symptom: job.symptom.clone().map(|title| SymptomCard {
+                title,
+                description: job.symptom_description.clone(),
+            }),
             notes: job.notes.clone(),
             owner: job.owner_supplies.iter().map(card).collect(),
             shop: job.shop_supplies.iter().map(card).collect(),

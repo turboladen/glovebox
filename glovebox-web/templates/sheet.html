@@ -30,10 +30,17 @@
   {% endif %}
 </div>
 <article class="ws page">
-  <h1>{{ heading }}</h1>
+  <header>
+    <h1>{{ heading }}</h1>
+    {% if let Some(d) = car.description %}<p class="ws-car">{{ d }}</p>{% endif %}
+    {% if !car.facts.is_empty() %}
+    <p class="ws-facts">{% for (label, value) in car.facts %}<span><span class="l">{{ label }}</span> {{ value }}</span>{% endfor %}</p>
+    {% endif %}
+  </header>
   {% for j in jobs %}
   <section class="ws-job">
     <p class="ws-title"><span class="ws-box"></span>{{ j.title }}</p>
+    {% if let Some(s) = j.symptom %}<p class="ws-note"><b>Reported symptom:</b> {{ s.title }}{% if let Some(d) = s.description %}<span class="ws-note">{{ d }}</span>{% endif %}</p>{% endif %}
     {% if let Some(n) = j.notes %}<p class="ws-note">{{ n }}</p>{% endif %}
     {% if !j.owner.is_empty() %}
     <h2>I'm supplying</h2>

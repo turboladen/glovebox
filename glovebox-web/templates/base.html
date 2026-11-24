@@ -304,6 +304,8 @@
      the ledger; ADR 0009 records why. */
   .ws { padding-block: 1rem 2rem; display: grid; gap: 1.25rem; }
   .ws h1 { font-size: 1.4rem; }
+  .ws-car { font-weight: 600; }
+  .ws-facts { display: flex; flex-wrap: wrap; gap: 0 1.5rem; }
   .ws-job { break-inside: avoid; display: grid; gap: 0.35rem; }
   .ws-title { display: flex; gap: 0.6rem; align-items: baseline; font-size: 1.15rem; font-weight: 600; }
   .ws-box { flex: none; display: inline-block; width: 0.9em; height: 0.9em; border: 1.5px solid currentColor; }
@@ -323,7 +325,7 @@
     body:has(.ws) :is(.chrome, .hint), .noprint { display: none; }
     body:has(.ws) { background: #fff; color: #000; }
     .ws { padding: 0; }
-    .ws-note { color: #000; }
+    .ws-note, .ws-facts .l { color: #000; }
   }
 </style>
 </head>

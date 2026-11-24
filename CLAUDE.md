@@ -445,7 +445,12 @@ A page is a view of the shared library, and a future page follows the same rules
   forms. An item a planned job covers links to the job, and an item whose job is on an
   appointment is left out. `docs/adr/0002-home-page-shows-waiting-work.md` records why.
 - **The work sheet** (`/vehicles/{vid}/appointments/{id}/print`, `work_sheet::for_appointment`)
-  lists each planned job with the owner's parts (received or ordered, with the name, manufacturer
+  opens with the car: its name, the shop and the date, then the year, make, model and trim on
+  one line, and the VIN, plate and odometer for each one the vehicle has. The odometer is the
+  newest logged reading with its day (`reminders::last_reading`), never the estimate. A job
+  filed from an incident prints that incident's title and description as the reported symptom,
+  but only while the incident is unresolved and its category is not `note`.
+  The sheet lists each planned job with the owner's parts (received or ordered, with the name, manufacturer
   and part number the linked part records, never a researched option's, and a kit's contents
   beneath it, each with a tick box) and the shop's parts by the need's name. A job's notes print
   under its title and a linked part's notes under its line.

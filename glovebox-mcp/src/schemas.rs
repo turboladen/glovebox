@@ -300,13 +300,13 @@ impl RecordServiceInput {
 pub struct LogIncidentInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
-    /// Short title, e.g. "Squeak from front left on braking".
+    /// Short title, e.g. "Squeak from front left on braking". When a planned job is filed from the incident, this prints on the appointment's work sheet for the shop, so keep it to what the shop may read.
     pub title: String,
     /// Defaults to `general`. Collisions/crashes with another party belong
     /// under category `accident`; anything a shop flagged but did not fix
     /// belongs under `shop_observation`.
     pub category: Option<IncidentCategory>,
-    /// Longer description of what happened or was noticed.
+    /// Longer description of what happened or was noticed. When a planned job is filed from the incident, this prints on the appointment's work sheet for the shop, so keep it to what the shop may read.
     pub description: Option<String>,
     /// Odometer reading when it happened.
     pub odometer: Option<i32>,
@@ -612,7 +612,7 @@ pub struct PlanWorkInput {
     /// work is done. Completing the work through `record_service` also links the service to it.
     pub research_finding_id: Option<i32>,
     /// The incident this fixes (from `log_incident`) — completing the work
-    /// links the incident to the service record.
+    /// links the incident to the service record. While the job is planned and the incident is unresolved and not a `note`, the appointment's work sheet prints the incident's title and description for the shop as the reported symptom, so check that both hold only what the shop may read.
     pub incident_id: Option<i32>,
     /// Date to look at this item again, `YYYY-MM-DD`, for work to watch
     /// rather than do now.
