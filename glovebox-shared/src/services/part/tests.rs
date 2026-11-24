@@ -1446,3 +1446,19 @@ async fn a_part_is_never_received_before_it_was_bought() {
         Some(date("2026-11-05"))
     );
 }
+
+// The column's default is 'USD', and no part names a currency.
+#[tokio::test]
+async fn a_new_part_stores_no_currency() {
+    let db = test_db().await;
+    let vid = seed_vehicle(&db).await;
+    let created = create(&db, vid, minimal_part("Wiper blade", None))
+        .await
+        .unwrap();
+    let stored = part::Entity::find_by_id(created.id)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.cost_currency, None);
+}
