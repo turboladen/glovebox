@@ -863,13 +863,100 @@ async fn load_existing(
     Ok(found)
 }
 
+/// Checks a new record's mileage, dates, shop and appointment, and returns
+/// who performed the service and the id of the shop it names.
+async fn check_new(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    input: &NewServiceRecord,
+) -> DomainResult<(Performer, Option<i32>)> {
+    validate_mileage(input.mileage)?;
+    let performed_by = input.performed_by.unwrap_or(Performer::Shop);
+    // A self-performed service is refused before its shop is looked up, so
+    // the refusal names the real problem.
+    validate_who_and_when(
+        input.service_date,
+        input.end_date,
+        performed_by,
+        input
+            .shop
+            .as_ref()
+            .filter(|c| !c.is_blank())
+            .map(ShopChoice::field),
+    )?;
+    let shop_id = super::shop::resolve(db, input.shop.as_ref()).await?;
+    if let Some(appointment_id) = input.appointment_id {
+        appointment::require_assignable(db, vehicle_id, appointment_id).await?;
+    }
+    Ok((performed_by, shop_id))
+}
+
+/// The work a new record names: what it links to and the rows it owns.
+struct NewRecordLinks {
+    /// The schedule items, each as the id the vehicle tracks.
+    schedule_item_ids: Vec<i32>,
+    work_item_ids: Vec<i32>,
+    resolved_incident_ids: Vec<i32>,
+    noticed_incident_ids: Vec<i32>,
+    recall_finding_ids: Vec<i32>,
+    part_ids: Vec<i32>,
+    parts: Vec<NewPart>,
+    line_items: Vec<NewLineItem>,
+}
+
+/// Writes every link, part, line item and odometer reading of a record just
+/// inserted. It runs only inside the transaction that inserted the record.
+async fn link_new_record(
+    txn: &(impl ConnectionTrait + TransactionTrait),
+    vehicle_id: i32,
+    record: &service_record::Model,
+    links: NewRecordLinks,
+) -> DomainResult<()> {
+    // Every link step below runs on `txn`, so a failure in any of them rolls
+    // back the record and everything written before it.
+    schedule::insert_service_links(txn, record.id, &links.schedule_item_ids, LinkMode::Add).await?;
+
+    let completed =
+        work_item::complete_with_service(txn, vehicle_id, &links.work_item_ids, record.id).await?;
+
+    link_incidents(
+        txn,
+        vehicle_id,
+        record.id,
+        links.resolved_incident_ids,
+        links.noticed_incident_ids,
+        &completed,
+    )
+    .await?;
+
+    let mut recall_ids = links.recall_finding_ids;
+    // Only the explicit ids must be recalls; a completed to-do may come from
+    // any kind of finding, and only a recall-sourced one links a recall.
+    let from_work: Vec<i32> = completed
+        .iter()
+        .filter_map(|w| w.research_finding_id)
+        .collect();
+    recall_ids.extend(recall::recall_ids_among(txn, &from_work).await?);
+    recall::link_service(txn, vehicle_id, &recall_ids, record.id).await?;
+
+    install_parts(txn, vehicle_id, record, links.part_ids, links.parts).await?;
+
+    insert_line_items(txn, record.id, links.line_items).await?;
+
+    // The odometer reading is linked by FK (activity dedupe and
+    // update/delete maintenance key on it); `source` is a display label.
+    if let Some(miles) = record.mileage {
+        insert_auto_mileage_log(txn, vehicle_id, record, miles).await?;
+    }
+    Ok(())
+}
+
 /// Creates a service record with its line items, installed parts, schedule
 /// links and odometer reading in one transaction; any failure leaves nothing
 /// behind. A record already filed under the same `invoice_ref` is returned
 /// unchanged with `already_recorded` set, and the incident and recall ids in
 /// this call are ignored in that case. A completed to-do that came from a
 /// recall links that recall to the record as well.
-#[allow(clippy::too_many_lines)]
 pub async fn create<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -903,25 +990,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
         }
     }
 
-    validate_mileage(input.mileage)?;
-    let performed_by = input.performed_by.unwrap_or(Performer::Shop);
-    // A self-performed service is refused before its shop is looked up, so
-    // the refusal names the real problem.
-    validate_who_and_when(
-        input.service_date,
-        input.end_date,
-        performed_by,
-        input
-            .shop
-            .as_ref()
-            .filter(|c| !c.is_blank())
-            .map(ShopChoice::field),
-    )?;
-    let shop_id = super::shop::resolve(db, input.shop.as_ref()).await?;
-    let line_items_input = input.line_items.unwrap_or_default();
-    if let Some(appointment_id) = input.appointment_id {
-        appointment::require_assignable(db, vehicle_id, appointment_id).await?;
-    }
+    let (performed_by, shop_id) = check_new(db, vehicle_id, &input).await?;
 
     // Resolved before the record is written so a bad schedule id is reported
     // ahead of any error the insert itself could raise.
@@ -952,54 +1021,17 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     };
     let record = record.insert(&txn).await?;
 
-    // Every link step below runs on `txn`, so a failure in any of them rolls
-    // back the record and everything written before it.
-    schedule::insert_service_links(&txn, record.id, &schedule_item_ids, LinkMode::Add).await?;
-
-    let completed = work_item::complete_with_service(
-        &txn,
-        vehicle_id,
-        &input.work_item_ids.unwrap_or_default(),
-        record.id,
-    )
-    .await?;
-
-    link_incidents(
-        &txn,
-        vehicle_id,
-        record.id,
-        input.resolved_incident_ids.unwrap_or_default(),
-        input.noticed_incident_ids.unwrap_or_default(),
-        &completed,
-    )
-    .await?;
-
-    let mut recall_ids = input.recall_finding_ids.unwrap_or_default();
-    // Only the explicit ids must be recalls; a completed to-do may come from
-    // any kind of finding, and only a recall-sourced one links a recall.
-    let from_work: Vec<i32> = completed
-        .iter()
-        .filter_map(|w| w.research_finding_id)
-        .collect();
-    recall_ids.extend(recall::recall_ids_among(&txn, &from_work).await?);
-    recall::link_service(&txn, vehicle_id, &recall_ids, record.id).await?;
-
-    install_parts(
-        &txn,
-        vehicle_id,
-        &record,
-        input.part_ids.unwrap_or_default(),
-        input.parts.unwrap_or_default(),
-    )
-    .await?;
-
-    insert_line_items(&txn, record.id, line_items_input).await?;
-
-    // The odometer reading is linked by FK (activity dedupe and
-    // update/delete maintenance key on it); `source` is a display label.
-    if let Some(miles) = record.mileage {
-        insert_auto_mileage_log(&txn, vehicle_id, &record, miles).await?;
-    }
+    let links = NewRecordLinks {
+        schedule_item_ids,
+        work_item_ids: input.work_item_ids.unwrap_or_default(),
+        resolved_incident_ids: input.resolved_incident_ids.unwrap_or_default(),
+        noticed_incident_ids: input.noticed_incident_ids.unwrap_or_default(),
+        recall_finding_ids: input.recall_finding_ids.unwrap_or_default(),
+        part_ids: input.part_ids.unwrap_or_default(),
+        parts: input.parts.unwrap_or_default(),
+        line_items: input.line_items.unwrap_or_default(),
+    };
+    link_new_record(&txn, vehicle_id, &record, links).await?;
 
     let mut created = load_service_links(&txn, record).await?;
     created.unfitted_needs = unfitted_needs(&txn, &created.completed_work_items).await?;
@@ -1017,18 +1049,28 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     Ok(created)
 }
 
-#[allow(clippy::too_many_lines)]
-pub async fn update<C: ConnectionTrait + TransactionTrait>(
-    db: &C,
+/// What a correction takes off its service, with the owner's answer for it.
+struct Correction {
+    /// The recorded work the correction takes off.
+    removal: RecordedWork,
+    choice: CompletedWork,
+    /// The jobs the service keeps or gains.
+    kept_jobs: Vec<job::Model>,
+    /// Ids of the jobs the service completed before the call.
+    completed_before: Vec<i32>,
+    /// Ids of the recalls the service performed before the call.
+    recalls_before: Vec<i32>,
+}
+
+/// Reads what `input` takes off the service and the owner's answer for it.
+/// An id a list names that the vehicle does not have is `NotFound`, and work
+/// taken off with no answer is refused. It writes nothing.
+async fn plan_correction(
+    db: &impl ConnectionTrait,
     vehicle_id: i32,
-    id: i32,
-    input: UpdateServiceRecord,
-) -> DomainResult<ServiceRecordWithLinks> {
-    let txn = super::begin_write(db).await?;
-    let db = &txn;
-    let existing = require(db, vehicle_id, id).await?;
-    let changes_resolved_work =
-        input.work_item_ids.is_some() || input.resolved_incident_ids.is_some();
+    existing: &service_record::Model,
+    input: &UpdateServiceRecord,
+) -> DomainResult<Correction> {
     // What the correction takes off the service is known before anything is
     // written, so a refusal names the work it would change and writes nothing.
     let recorded = if input.work_item_ids.is_some()
@@ -1064,10 +1106,26 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         recorded.jobs.clone()
     };
     let removal = recorded
-        .left_out_by(db, existing.id, &input, &kept_jobs)
+        .left_out_by(db, existing.id, input, &kept_jobs)
         .await?;
     let choice = removal.choice(existing.id, ChoiceFor::Correction, input.completed_work)?;
+    Ok(Correction {
+        removal,
+        choice,
+        kept_jobs,
+        completed_before,
+        recalls_before,
+    })
+}
 
+/// Checks a correction's mileage, dates, shop, invoice number and
+/// appointment, and returns the shop change and the trimmed invoice number.
+async fn check_correction(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    existing: &service_record::Model,
+    input: &UpdateServiceRecord,
+) -> DomainResult<(Option<Option<i32>>, Option<Option<String>>)> {
     let named_shop = match &input.shop {
         Some(Some(choice)) => (!choice.is_blank()).then(|| choice.field()),
         Some(None) => None,
@@ -1083,9 +1141,10 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     let shop_id = super::shop::resolve_change(db, input.shop.as_ref()).await?;
     let invoice_ref = input
         .invoice_ref
+        .as_ref()
         .map(|r| r.as_deref().and_then(super::trim_to_none));
     if let Some(Some(invoice_ref)) = &invoice_ref {
-        require_invoice_ref_free(db, vehicle_id, id, invoice_ref).await?;
+        require_invoice_ref_free(db, vehicle_id, existing.id, invoice_ref).await?;
     }
     // Keeping the appointment a service already names is not a new
     // assignment, so it stays allowed after the appointment closes.
@@ -1094,8 +1153,17 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     {
         appointment::require_assignable(db, vehicle_id, appointment_id).await?;
     }
+    Ok((shop_id, invoice_ref))
+}
 
-    let (date_before, mileage_before) = (existing.service_date, existing.mileage);
+/// Sets on the record each scalar field the correction sends, taking the
+/// text fields out of `input`, and stamps the record as updated.
+fn apply_fields(
+    existing: service_record::Model,
+    input: &mut UpdateServiceRecord,
+    shop_id: Option<Option<i32>>,
+    invoice_ref: Option<Option<String>>,
+) -> service_record::ActiveModel {
     let mut active: service_record::ActiveModel = existing.into();
     if let Some(v) = invoice_ref {
         active.invoice_ref = Set(v);
@@ -1113,7 +1181,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     if let Some(v) = input.mileage {
         active.mileage = Set(v);
     }
-    if let Some(v) = input.description {
+    if let Some(v) = input.description.take() {
         active.description = Set(v);
     }
     if let Some(v) = input.parts_cost_cents {
@@ -1128,13 +1196,13 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     if let Some(v) = shop_id {
         active.shop_id = Set(v);
     }
-    if let Some(v) = input.notes {
+    if let Some(v) = input.notes.take() {
         active.notes = Set(v);
     }
     if let Some(v) = input.paid_by {
         active.paid_by = Set(v);
     }
-    if let Some(v) = input.payer_note {
+    if let Some(v) = input.payer_note.take() {
         active.payer_note = Set(v);
     }
     if let Some(v) = input.appointment_id {
@@ -1142,12 +1210,34 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     }
 
     active.updated_at = Set(super::now());
+    active
+}
 
-    let record = active.update(&txn).await?;
+/// What changing a service's jobs and incident names did, for the steps
+/// that follow and for the reply.
+struct JobChanges {
+    /// The tracked schedule items of the jobs taken off.
+    released_items: Vec<i32>,
+    /// The service's schedule links, as (service id, item id), read before
+    /// any job changed.
+    satisfied_before: Vec<(i32, i32)>,
+    settled: appointment::SettledJobs,
+    /// The jobs the call completed with the service.
+    added: Vec<job::Model>,
+    /// The incident names the call sent that the invoice does not store.
+    names_ignored: Vec<i32>,
+}
 
-    // Keep the auto-created mileage log in step with the record.
-    sync_auto_mileage_log(&txn, vehicle_id, &record).await?;
-
+/// Releases the jobs a correction takes off, completes the jobs it adds and
+/// brings the incidents the service resolves in line with both.
+async fn relink_jobs(
+    txn: &impl ConnectionTrait,
+    vehicle_id: i32,
+    record: &service_record::Model,
+    input: &UpdateServiceRecord,
+    plan: &Correction,
+) -> DomainResult<JobChanges> {
+    let (removal, choice) = (&plan.removal, plan.choice);
     // Jobs come first, with the work that hangs off each one; the lists the
     // call sends then apply as sent.
     let named: Vec<i32> = removal
@@ -1155,26 +1245,26 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         .iter()
         .filter_map(|j| j.schedule_item_id)
         .collect();
-    let released_items: Vec<i32> = schedule::effective_ids(&txn, vehicle_id, &named)
+    let released_items: Vec<i32> = schedule::effective_ids(txn, vehicle_id, &named)
         .await?
         .into_values()
         .collect();
-    let satisfied_before = schedule::links_of_services(&txn, &[record.id]).await?;
-    let settled = work_item::release_completed(&txn, &removal.job_ids(), choice).await?;
+    let satisfied_before = schedule::links_of_services(txn, &[record.id]).await?;
+    let settled = work_item::release_completed(txn, &removal.job_ids(), choice).await?;
     let added = match &input.work_item_ids {
         Some(job_ids) => {
             let added: Vec<i32> = job_ids
                 .iter()
                 .copied()
-                .filter(|id| !completed_before.contains(id))
+                .filter(|id| !plan.completed_before.contains(id))
                 .collect();
-            work_item::complete_with_service(&txn, vehicle_id, &added, record.id).await?
+            work_item::complete_with_service(txn, vehicle_id, &added, record.id).await?
         }
         None => Vec::new(),
     };
-    link_incidents(&txn, vehicle_id, record.id, Vec::new(), Vec::new(), &added).await?;
+    link_incidents(txn, vehicle_id, record.id, Vec::new(), Vec::new(), &added).await?;
     if let Some(named) = &removal.names_to_store {
-        incident_svc::replace_named(&txn, vehicle_id, record.id, named).await?;
+        incident_svc::replace_named(txn, vehicle_id, record.id, named).await?;
     }
     // The names the call sent that the invoice does not store, which the
     // reply lists in `incident_names_ignored`.
@@ -1191,56 +1281,137 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     // this service, no link of its invoice and no other service still
     // resolves.
     let incident_ids: Vec<i32> = removal.incidents.iter().map(|i| i.id).collect();
-    incident_svc::release_resolved(&txn, incident_ids, choice).await?;
+    incident_svc::release_resolved(txn, incident_ids, choice).await?;
+    Ok(JobChanges {
+        released_items,
+        satisfied_before,
+        settled,
+        added,
+        names_ignored,
+    })
+}
 
-    if let Some(item_ids) = input.schedule_item_ids {
-        // A read lists a job's item beside the named ones, so a list sent
-        // with the call that takes the job off would store the item the job
-        // is taking with it. Both sides name the item the vehicle tracks.
-        let mut item_ids = schedule::tracked_ids(&txn, vehicle_id, &item_ids).await?;
-        item_ids.retain(|id| !released_items.contains(id));
-        schedule::insert_service_links(&txn, record.id, &item_ids, LinkMode::Replace).await?;
-    }
-
-    let parts_listed = input.part_ids.is_some();
-    part_svc::release_from_service(&txn, removal.parts, choice).await?;
-    if let Some(new_part_ids) = input.part_ids {
+/// Releases the parts a correction takes off and installs the ones its list
+/// names. With no list, the installed parts follow a change to the service's
+/// date or mileage; `before` is that date and mileage before the call.
+async fn refit_parts(
+    txn: &(impl ConnectionTrait + TransactionTrait),
+    vehicle_id: i32,
+    record: &service_record::Model,
+    removed: Vec<part::Model>,
+    part_ids: Option<Vec<i32>>,
+    before: (chrono::NaiveDate, Option<i32>),
+    choice: CompletedWork,
+) -> DomainResult<()> {
+    let (date_before, mileage_before) = before;
+    let parts_listed = part_ids.is_some();
+    part_svc::release_from_service(txn, removed, choice).await?;
+    if let Some(new_part_ids) = part_ids {
         for &part_id in &new_part_ids {
-            part_svc::install(&txn, vehicle_id, part_id, &record, record.mileage.map(Some)).await?;
+            part_svc::install(txn, vehicle_id, part_id, record, record.mileage.map(Some)).await?;
         }
     }
     if !parts_listed && (record.service_date != date_before || record.mileage != mileage_before) {
         // The parts this service installed carry its date and mileage as
         // their install date and odometer.
-        part_svc::follow_service(&txn, &record).await?;
+        part_svc::follow_service(txn, record).await?;
     }
+    Ok(())
+}
 
+/// Brings the recalls a service performs in line with a correction: `sent`
+/// is the call's replacement list and `added` the jobs the call completed.
+async fn relink_recalls(
+    txn: &impl ConnectionTrait,
+    vehicle_id: i32,
+    record_id: i32,
+    plan: &Correction,
+    added: &[job::Model],
+    sent: Option<Vec<i32>>,
+) -> DomainResult<()> {
     // A sent list replaces every recall link, and the service still performs
     // the recall of each job it gains and of each job it keeps whose recall
     // it performed before the call, whether or not the list names it. A kept
     // job whose recall the service did not perform gains no link. Without a
     // list only the recalls of the jobs taken off lose their link and only
     // the jobs added bring one.
-    let removed_recalls: Vec<i32> = removal.recalls.iter().map(|r| r.finding_id).collect();
+    let removed_recalls: Vec<i32> = plan.removal.recalls.iter().map(|r| r.finding_id).collect();
     let mut from_jobs: Vec<i32> = added.iter().filter_map(|w| w.research_finding_id).collect();
-    if input.recall_finding_ids.is_some() {
+    if sent.is_some() {
         from_jobs.extend(
-            kept_jobs
+            plan.kept_jobs
                 .iter()
                 .filter_map(|w| w.research_finding_id)
-                .filter(|id| recalls_before.contains(id)),
+                .filter(|id| plan.recalls_before.contains(id)),
         );
     }
-    let mut relink = recall::recall_ids_among(&txn, &from_jobs).await?;
-    match input.recall_finding_ids {
+    let mut relink = recall::recall_ids_among(txn, &from_jobs).await?;
+    match sent {
         Some(recall_ids) => {
             relink.extend(recall_ids);
-            recall::unlink_from_service(&txn, record.id, None).await?;
+            recall::unlink_from_service(txn, record_id, None).await?;
         }
-        None => recall::unlink_from_service(&txn, record.id, Some(&removed_recalls)).await?,
+        None => recall::unlink_from_service(txn, record_id, Some(&removed_recalls)).await?,
     }
-    recall::link_service(&txn, vehicle_id, &relink, record.id).await?;
-    recall::release_from_service(&txn, removed_recalls, choice).await?;
+    recall::link_service(txn, vehicle_id, &relink, record_id).await?;
+    recall::release_from_service(txn, removed_recalls, plan.choice).await?;
+    Ok(())
+}
+
+pub async fn update<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    id: i32,
+    mut input: UpdateServiceRecord,
+) -> DomainResult<ServiceRecordWithLinks> {
+    let txn = super::begin_write(db).await?;
+    let db = &txn;
+    let existing = require(db, vehicle_id, id).await?;
+    let changes_resolved_work =
+        input.work_item_ids.is_some() || input.resolved_incident_ids.is_some();
+    let mut plan = plan_correction(db, vehicle_id, &existing, &input).await?;
+    let (shop_id, invoice_ref) = check_correction(db, vehicle_id, &existing, &input).await?;
+
+    let before = (existing.service_date, existing.mileage);
+    let active = apply_fields(existing, &mut input, shop_id, invoice_ref);
+
+    let record = active.update(&txn).await?;
+
+    // Keep the auto-created mileage log in step with the record.
+    sync_auto_mileage_log(&txn, vehicle_id, &record).await?;
+
+    let jobs = relink_jobs(&txn, vehicle_id, &record, &input, &plan).await?;
+
+    if let Some(item_ids) = input.schedule_item_ids {
+        // A read lists a job's item beside the named ones, so a list sent
+        // with the call that takes the job off would store the item the job
+        // is taking with it. Both sides name the item the vehicle tracks.
+        let mut item_ids = schedule::tracked_ids(&txn, vehicle_id, &item_ids).await?;
+        item_ids.retain(|id| !jobs.released_items.contains(id));
+        schedule::insert_service_links(&txn, record.id, &item_ids, LinkMode::Replace).await?;
+    }
+
+    let removed_parts = std::mem::take(&mut plan.removal.parts);
+    refit_parts(
+        &txn,
+        vehicle_id,
+        &record,
+        removed_parts,
+        input.part_ids,
+        before,
+        plan.choice,
+    )
+    .await?;
+
+    relink_recalls(
+        &txn,
+        vehicle_id,
+        record.id,
+        &plan,
+        &jobs.added,
+        input.recall_finding_ids,
+    )
+    .await?;
 
     // Handle line items: replace-all semantics when provided
     if let Some(new_line_items) = input.line_items {
@@ -1253,23 +1424,24 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
 
     let mut updated = load_service_links(&txn, record).await?;
     updated.unfitted_needs = unfitted_needs(&txn, &updated.completed_work_items).await?;
-    updated.reopened_appointment_ids = settled.reopened_appointment_ids;
-    updated.unassigned_job_ids = settled.unassigned_job_ids;
-    let mut released: Vec<i32> = satisfied_before
+    updated.reopened_appointment_ids = jobs.settled.reopened_appointment_ids;
+    updated.unassigned_job_ids = jobs.settled.unassigned_job_ids;
+    let mut released: Vec<i32> = jobs
+        .satisfied_before
         .into_iter()
         .map(|(_, item_id)| item_id)
         .filter(|item_id| !updated.schedule_item_ids.contains(item_id))
         .collect();
     released.sort_unstable();
     updated.released_schedule_item_ids = released;
-    updated.incident_names_ignored = names_ignored;
+    updated.incident_names_ignored = jobs.names_ignored;
     if changes_resolved_work {
         updated.open_incidents = Some(open_incidents(&txn, &updated).await?);
     }
     updated.incidents_kept_resolved = updated
         .resolved_incidents
         .iter()
-        .filter(|i| i.resolved && removal.incidents_kept.contains(&i.id))
+        .filter(|i| i.resolved && plan.removal.incidents_kept.contains(&i.id))
         .map(|i| i.id)
         .collect();
 
