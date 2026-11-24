@@ -366,6 +366,9 @@ reading themselves are still inside it). `list_parts` goes through `part::list_o
 `today` and returns each `part::ListedPart`: the `PartView` plus a derived `warranty` when the part
 has a bound. No other reply that returns a part carries it. `under_warranty: true` keeps the
 purchased and installed parts whose warranty is in force (`part::is_under_warranty`).
+The vehicle's `warranty` in `whats_coming` (`reminders::WarrantyStatus`) carries the same reading
+flat beside `possibly_covered`, which stays true while either bound holds; a client reports
+`in_force`. `docs/adr/0026-a-warranty-ends-at-its-first-bound.md` records why.
 
 **Schedule names** compare through `schedule::name_key` (ASCII case and surrounding spaces do not
 matter), so a vehicle's "Cabin air filter" shadows the inherited "Cabin Air Filter". A new item that shadows an inherited one takes that

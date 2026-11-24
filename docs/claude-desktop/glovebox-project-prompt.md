@@ -236,8 +236,12 @@ need has a decision, every decision has a reason, and every part ordered has arr
 
 1. Call `whats_coming`. It returns the scheduled maintenance with each item's status, the planned
    work sorted by urgency with `revisit_status`, open recalls, unresolved incidents, the 12-month
-   cost forecast and the warranty status. Warranty coverage may apply: remind Steve to check it
-   before he pays.
+   cost forecast and the warranty status. A warranty ends at whichever bound comes first, so read
+   `warranty.in_force`, which is true only while neither the date nor the mileage bound has
+   passed. When it is true, say what is left (`days_left`, `miles_left`) and remind Steve to check
+   coverage before he pays. When it is false, say the warranty has ended and which bound passed
+   (`date_passed`, `mileage_passed`), and do not tell him to check coverage. Never report
+   `possibly_covered` as coverage: it stays true while either bound still holds.
    An overdue item whose `baseline` is `purchase` has no service on record, so say its history is
    missing rather than that the work is late. An item whose `baseline` is `none` has no service and
    no purchase date or mileage to count from, so a missing date counts from the start of the
