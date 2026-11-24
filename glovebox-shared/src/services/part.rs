@@ -14,7 +14,7 @@ use crate::{
     inputs::part::{
         Fitting, Install, InstallPatch, NewFitting, NewPart, NewPartContent, PartFilter, UpdatePart,
     },
-    services::service_record::CompletedWork,
+    services::{service_record::CompletedWork, warranty::WarrantyBounds},
 };
 
 /// A part's manufacturer and number joined by a space, such as
@@ -357,21 +357,90 @@ pub struct PartView {
     pub contents: Vec<part_content::Model>,
 }
 
-/// The vehicle's parts, newest first, each with its kit contents.
+/// A part in a list, with how its warranty reads on the day of the list.
+#[derive(Debug, Serialize)]
+pub struct ListedPart {
+    #[serde(flatten)]
+    pub view: PartView,
+    /// The part's warranty bounds as of the list's day and the vehicle's
+    /// estimated mileage. The key is left out for a part with no warranty
+    /// expiry date and no expiry reading. It reads the bounds alone, so a
+    /// part that is off the car can still show `in_force`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warranty: Option<WarrantyBounds>,
+}
+
+/// Whether a part counts as under warranty: it is purchased or installed and
+/// its warranty is in force.
+#[must_use]
+pub fn is_under_warranty(part: &part::Model, warranty: Option<&WarrantyBounds>) -> bool {
+    matches!(part.status, PartStatus::Purchased | PartStatus::Installed)
+        && warranty.is_some_and(|w| w.in_force)
+}
+
+/// The vehicle's parts, newest first, each with its kit contents. A filter on
+/// `under_warranty` is judged as of the day the server runs.
 pub async fn list(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     filter: PartFilter,
 ) -> DomainResult<Vec<PartView>> {
-    super::vehicle::require(db, vehicle_id).await?;
+    let listed = list_on(db, vehicle_id, filter, crate::services::today()).await?;
+    Ok(listed.into_iter().map(|p| p.view).collect())
+}
+
+/// The vehicle's parts, newest first, each with its kit contents and its
+/// warranty as of `today`. A mileage bound is compared with the vehicle's
+/// estimated mileage on that day.
+pub async fn list_on(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    filter: PartFilter,
+    today: NaiveDate,
+) -> DomainResult<Vec<ListedPart>> {
+    let vehicle = super::vehicle::require(db, vehicle_id).await?;
     let mut query = part::Entity::find().filter(part::Column::VehicleId.eq(vehicle_id));
 
     if let Some(status) = filter.status {
         query = query.filter(part::Column::Status.eq(status));
     }
 
-    let parts = query.order_by_desc(part::Column::CreatedAt).all(db).await?;
-    views(db, parts).await
+    // Stamps hold whole seconds, so the id orders parts recorded together.
+    let parts = query
+        .order_by_desc(part::Column::CreatedAt)
+        .order_by_desc(part::Column::Id)
+        .all(db)
+        .await?;
+    let mileage = if parts.iter().any(|p| p.warranty_expires_miles.is_some()) {
+        super::reminders::estimate_mileage(db, vehicle_id, &vehicle, today)
+            .await?
+            .0
+    } else {
+        0
+    };
+    let mut judged: Vec<(part::Model, Option<WarrantyBounds>)> = parts
+        .into_iter()
+        .map(|p| {
+            let bounds = super::warranty::read(
+                p.warranty_expires_on,
+                p.warranty_expires_miles,
+                mileage,
+                today,
+            );
+            (p, bounds)
+        })
+        .collect();
+    if let Some(wanted) = filter.under_warranty {
+        judged.retain(|(p, bounds)| is_under_warranty(p, bounds.as_ref()) == wanted);
+    }
+
+    let (parts, warranties): (Vec<_>, Vec<_>) = judged.into_iter().unzip();
+    Ok(views(db, parts)
+        .await?
+        .into_iter()
+        .zip(warranties)
+        .map(|(view, warranty)| ListedPart { view, warranty })
+        .collect())
 }
 
 /// Each part with its kit contents, in the order given, from one query.

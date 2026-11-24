@@ -297,6 +297,8 @@ pub struct ListPartsInput {
     pub vehicle_id: i32,
     /// Only parts with this status.
     pub status: Option<PartStatus>,
+    /// `true` for the parts still under warranty: purchased or installed, with a warranty expiry date or expiry odometer reading, and no bound passed (a part with both is under warranty only while neither has passed). `false` for every other part. Omit for all.
+    pub under_warranty: Option<bool>,
 }
 
 #[derive(Deserialize, JsonSchema)]

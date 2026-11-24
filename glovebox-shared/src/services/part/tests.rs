@@ -252,7 +252,8 @@ async fn list_filters_by_status() {
             &db,
             vid,
             PartFilter {
-                status: Some(PartStatus::Purchased)
+                status: Some(PartStatus::Purchased),
+                ..Default::default()
             }
         )
         .await
@@ -1461,4 +1462,181 @@ async fn a_new_part_stores_no_currency() {
         .unwrap()
         .unwrap();
     assert_eq!(stored.cost_currency, None);
+}
+
+const WARRANTY_TODAY: &str = "2026-11-24";
+
+async fn part_with_warranty(
+    db: &DatabaseConnection,
+    vehicle_id: i32,
+    name: &str,
+    expires_on: Option<&str>,
+    expires_miles: Option<i32>,
+) -> i32 {
+    create(
+        db,
+        vehicle_id,
+        NewPart {
+            warranty_expires_on: expires_on.map(date),
+            warranty_expires_miles: expires_miles,
+            ..minimal_part(name, None)
+        },
+    )
+    .await
+    .unwrap()
+    .id
+}
+
+async fn names_on(
+    db: &DatabaseConnection,
+    vehicle_id: i32,
+    under_warranty: Option<bool>,
+) -> Vec<String> {
+    let filter = PartFilter {
+        under_warranty,
+        ..Default::default()
+    };
+    let mut names: Vec<String> = list_on(db, vehicle_id, filter, date(WARRANTY_TODAY))
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|p| p.view.part.name)
+        .collect();
+    names.sort();
+    names
+}
+
+// The vehicle has no odometer reading, so its estimated mileage is its
+// purchase mileage, 50,000.
+#[tokio::test]
+async fn under_warranty_lists_the_parts_whose_every_bound_holds() {
+    let db = test_db().await;
+    let v = crate::test_support::VehicleFixture::new()
+        .purchase_mileage(50_000)
+        .insert_id(&db)
+        .await;
+    for (name, on, miles) in [
+        ("date ahead", Some("2027-11-24"), None),
+        ("date today", Some(WARRANTY_TODAY), None),
+        ("date behind", Some("2026-11-23"), None),
+        ("miles ahead", None, Some(60_000)),
+        ("miles behind", None, Some(49_999)),
+        ("both hold", Some("2027-11-24"), Some(60_000)),
+        ("date gone miles hold", Some("2020-01-01"), Some(60_000)),
+        ("date holds miles gone", Some("2027-11-24"), Some(40_000)),
+        ("no bound", None, None),
+    ] {
+        part_with_warranty(&db, v, name, on, miles).await;
+    }
+
+    assert_eq!(
+        names_on(&db, v, Some(true)).await,
+        ["both hold", "date ahead", "date today", "miles ahead"]
+    );
+    assert_eq!(
+        names_on(&db, v, Some(false)).await,
+        [
+            "date behind",
+            "date gone miles hold",
+            "date holds miles gone",
+            "miles behind",
+            "no bound"
+        ]
+    );
+    assert_eq!(names_on(&db, v, None).await.len(), 9);
+}
+
+#[tokio::test]
+async fn under_warranty_leaves_out_a_part_that_is_replaced_or_returned() {
+    let db = test_db().await;
+    let v = seed_vehicle(&db).await;
+    let ahead = Some("2027-11-24");
+    part_with_warranty(&db, v, "purchased", ahead, None).await;
+    let installed = part_with_warranty(&db, v, "installed", ahead, None).await;
+    let replaced = part_with_warranty(&db, v, "replaced", ahead, None).await;
+    let returned = part_with_warranty(&db, v, "returned", ahead, None).await;
+    for (id, status) in [
+        (installed, PartStatus::Installed),
+        (replaced, PartStatus::Replaced),
+    ] {
+        let change = UpdatePart {
+            fitting: fitting(status),
+            ..Default::default()
+        };
+        update(&db, v, id, change).await.unwrap();
+    }
+    // A return made through `mark_returned` needs a need, which this test has
+    // no use for, so the row is written directly.
+    part::ActiveModel {
+        id: Set(returned),
+        status: Set(PartStatus::Returned),
+        returned_on: Set(Some(date("2026-11-01"))),
+        return_reason: Set(Some("wrong size".into())),
+        ..Default::default()
+    }
+    .update(&db)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        names_on(&db, v, Some(true)).await,
+        ["installed", "purchased"]
+    );
+    assert_eq!(
+        names_on(&db, v, Some(false)).await,
+        ["replaced", "returned"]
+    );
+
+    // The warranty value reads the bounds alone, whatever the status.
+    let listed = list_on(&db, v, PartFilter::default(), date(WARRANTY_TODAY))
+        .await
+        .unwrap();
+    assert!(listed.iter().all(|p| p.warranty.as_ref().unwrap().in_force));
+}
+
+#[tokio::test]
+async fn a_listed_part_carries_what_is_left_of_its_warranty() {
+    let db = test_db().await;
+    let v = seed_vehicle(&db).await;
+    crate::entities::mileage_log::ActiveModel {
+        vehicle_id: Set(v),
+        mileage: Set(48_500),
+        recorded_at: Set(date(WARRANTY_TODAY)),
+        ..Default::default()
+    }
+    .insert(&db)
+    .await
+    .unwrap();
+    part_with_warranty(&db, v, "Battery", Some("2026-12-24"), Some(60_000)).await;
+    part_with_warranty(&db, v, "Wipers", None, None).await;
+
+    let listed = list_on(&db, v, PartFilter::default(), date(WARRANTY_TODAY))
+        .await
+        .unwrap();
+    let json = serde_json::to_value(&listed).unwrap();
+    let battery = &json[1];
+    assert_eq!(battery["name"], "Battery");
+    assert_eq!(
+        battery["warranty"],
+        serde_json::json!({
+            "in_force": true,
+            "date_passed": false,
+            "mileage_passed": false,
+            "days_left": 30,
+            "miles_left": 11_500
+        })
+    );
+    assert_eq!(battery["contents"], serde_json::json!([]));
+    let wipers = &json[0];
+    assert_eq!(wipers["name"], "Wipers");
+    assert!(wipers.get("warranty").is_none(), "{wipers}");
+}
+
+#[tokio::test]
+async fn list_on_a_missing_vehicle_is_not_found() {
+    let db = test_db().await;
+    let err = list_on(&db, 999, PartFilter::default(), date(WARRANTY_TODAY))
+        .await
+        .unwrap_err();
+    assert_eq!(err.to_string(), "Vehicle 999 not found");
 }

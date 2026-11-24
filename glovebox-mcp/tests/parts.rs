@@ -386,3 +386,98 @@ async fn a_part_is_never_received_before_it_was_bought() {
         "{err}"
     );
 }
+
+#[tokio::test]
+async fn list_parts_reads_each_warranty_and_filters_on_it() {
+    let t = connect().await;
+    let v = t
+        .call(
+            "add_vehicle",
+            json!({ "name": "Daily", "purchase_mileage": 50_000 }),
+        )
+        .await["id"]
+        .clone();
+    for (name, on, miles) in [
+        ("Battery", Some("2099-01-01"), Some(60_000)),
+        ("Wheel bearing", Some("2099-01-01"), Some(40_000)),
+        ("Alternator", Some("2020-01-01"), Some(60_000)),
+        ("Wipers", None, None),
+    ] {
+        t.call(
+            "record_part",
+            json!({
+                "vehicle_id": v,
+                "name": name,
+                "warranty_expires_on": on,
+                "warranty_expires_miles": miles
+            }),
+        )
+        .await;
+    }
+    let names = |listed: &serde_json::Value| -> Vec<String> {
+        let mut names: Vec<String> = listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["name"].as_str().unwrap().to_owned())
+            .collect();
+        names.sort();
+        names
+    };
+
+    let all = t.call("list_parts", json!({ "vehicle_id": v })).await;
+    assert_eq!(all.as_array().map(Vec::len), Some(4));
+    let by_name = |name: &str| {
+        all.as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == name)
+            .unwrap()
+            .clone()
+    };
+    let battery = by_name("Battery");
+    assert_eq!(battery["warranty"]["in_force"], true);
+    assert_eq!(battery["warranty"]["miles_left"], 10_000);
+    assert_eq!(battery["warranty"]["date_passed"], false);
+    // A warranty ends at the first bound passed, here the mileage.
+    let bearing = by_name("Wheel bearing");
+    assert_eq!(bearing["warranty"]["in_force"], false);
+    assert_eq!(bearing["warranty"]["mileage_passed"], true);
+    assert_eq!(bearing["warranty"]["date_passed"], false);
+    let alternator = by_name("Alternator");
+    assert_eq!(alternator["warranty"]["in_force"], false);
+    assert_eq!(alternator["warranty"]["days_left"], 0);
+    assert!(by_name("Wipers").get("warranty").is_none());
+
+    let covered = t
+        .call(
+            "list_parts",
+            json!({ "vehicle_id": v, "under_warranty": true }),
+        )
+        .await;
+    assert_eq!(names(&covered), ["Battery"]);
+    let rest = t
+        .call(
+            "list_parts",
+            json!({ "vehicle_id": v, "under_warranty": false }),
+        )
+        .await;
+    assert_eq!(names(&rest), ["Alternator", "Wheel bearing", "Wipers"]);
+
+    // A part reply outside the list carries no warranty reading.
+    let recorded = t
+        .call(
+            "correct_part",
+            json!({ "vehicle_id": v, "part_id": battery["id"], "notes": "AGM" }),
+        )
+        .await;
+    assert!(recorded.get("warranty").is_none(), "{recorded}");
+
+    common::assert_unknown_field_rejected(
+        &t,
+        "list_parts",
+        json!({ "vehicle_id": v, "in_warranty": true }),
+        "in_warranty",
+    )
+    .await;
+}

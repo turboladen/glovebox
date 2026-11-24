@@ -3,7 +3,10 @@
 use rmcp::{ErrorData as McpError, model::CallToolResult, tool, tool_router};
 
 use super::{GloveboxMcp, Parameters, deleted_result, domain_result};
-use glovebox_shared::{inputs::part::PartFilter, services::part};
+use glovebox_shared::{
+    inputs::part::PartFilter,
+    services::{part, today},
+};
 
 use crate::schemas::{CorrectPartInput, DeletePartInput, ListPartsInput, RecordPartInput};
 
@@ -38,15 +41,27 @@ impl GloveboxMcp {
         description = "The vehicle's parts, newest first: what was bought, what is installed (and \
                        by which service), and what has been replaced. Filter with `status` \
                        (`purchased`, `installed`, `replaced`, `returned`). Each part carries the \
-                       `contents` of a kit. Use this to find the `part_id` for `correct_part` or \
-                       `delete_part`."
+                       `contents` of a kit. A part with a warranty expiry date or expiry odometer \
+                       reading also carries `warranty`: `in_force` (true while none of its bounds \
+                       has passed, because a warranty ends at whichever comes first), \
+                       `date_passed` and `days_left`, `mileage_passed` and `miles_left` (each \
+                       null when the part has no such bound; the mileage is compared with the \
+                       vehicle's estimated mileage today). `warranty` reads the bounds alone, \
+                       whatever the part's status. Pass `under_warranty: true` for the parts a \
+                       warranty claim could still cover, which are the purchased and installed \
+                       ones whose warranty is in force. Use this to find the `part_id` for \
+                       `correct_part` or `delete_part`."
     )]
     async fn list_parts(
         &self,
         params: Parameters<ListPartsInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "list_parts");
-        domain_result(part::list(&*self.db, p.vehicle_id, PartFilter { status: p.status }).await)
+        let filter = PartFilter {
+            status: p.status,
+            under_warranty: p.under_warranty,
+        };
+        domain_result(part::list_on(&*self.db, p.vehicle_id, filter, today()).await)
     }
 
     #[tool(

@@ -360,6 +360,12 @@ edits them by item (`add_contents` appends, `remove_contents` names ids; an id n
 part with its contents (`part::views` loads them for many parts in one query), and the job and
 appointment pages list a kit's items in the need's row.
 `docs/adr/0014-a-kit-lists-its-contents.md` records why.
+A warranty ends at whichever bound comes first (`warranty::read` judges an expiry date and an
+expiry odometer reading against `today` and `reminders::estimate_mileage`; the date and the
+reading themselves are still inside it). `list_parts` goes through `part::list_on`, which takes
+`today` and returns each `part::ListedPart`: the `PartView` plus a derived `warranty` when the part
+has a bound. No other reply that returns a part carries it. `under_warranty: true` keeps the
+purchased and installed parts whose warranty is in force (`part::is_under_warranty`).
 
 **Schedule names** compare through `schedule::name_key` (ASCII case and surrounding spaces do not
 matter), so a vehicle's "Cabin air filter" shadows the inherited "Cabin Air Filter". A new item that shadows an inherited one takes that

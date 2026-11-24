@@ -24,6 +24,7 @@ pub mod vehicle;
 pub mod vehicle_detail;
 pub mod vin_decode;
 pub mod waiting;
+pub mod warranty;
 pub mod work_item;
 pub mod work_sheet;
 
