@@ -2167,3 +2167,172 @@ async fn the_home_service_job_and_appointment_pages_link_to_the_vehicle_page() {
         assert!(body.contains(&labeled), "{path}: {body}");
     }
 }
+
+// The vehicle fixture with a self-performed cabin filter change 300 days ago
+// that records no total, a battery on the car and a wiper set that came off
+// it. Returns (Smith Auto, the Golf, the shop's service, the owner's service).
+async fn history_fixture(db: &DatabaseConnection) -> (i32, i32, i32, i32) {
+    use glovebox_shared::{
+        entities::service_record::Performer,
+        inputs::{
+            part::{Install, NewFitting, NewPart},
+            service_record::NewServiceRecord,
+        },
+        services::{part, service_record},
+    };
+    let (smith, golf, brakes) = vehicle_fixture(db).await;
+    let filter = service_record::create(
+        db,
+        golf,
+        NewServiceRecord {
+            service_date: days_before_today(300),
+            performed_by: Some(Performer::Owner),
+            mileage: Some(55_000),
+            description: Some("Cabin filter".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .record
+    .id;
+    let fitted = |days_ago, odometer| Install {
+        date: Some(days_before_today(days_ago)),
+        odometer: Some(odometer),
+        ..Install::default()
+    };
+    for (name, number, fitting) in [
+        (
+            "Battery",
+            "S5 A11",
+            NewFitting::Installed(fitted(200, 58_000)),
+        ),
+        (
+            "Wiper set",
+            "A297S",
+            NewFitting::Replaced(fitted(400, 50_000)),
+        ),
+    ] {
+        let input = NewPart {
+            name: name.into(),
+            manufacturer: Some("Bosch".into()),
+            part_number: Some(number.into()),
+            fitting,
+            ..Default::default()
+        };
+        part::create(db, golf, input).await.unwrap();
+    }
+    (smith, golf, brakes, filter)
+}
+
+fn history_path(v: i32) -> String {
+    format!("/vehicles/{v}/history")
+}
+
+#[tokio::test]
+async fn a_history_page_lists_every_service_oldest_first_and_the_parts_on_the_car() {
+    let db = db().await;
+    let (smith, golf, brakes, filter) = history_fixture(&db).await;
+    let (status, body) = page(app(db, "test"), get(&history_path(golf))).await;
+    assert_eq!(status, StatusCode::OK);
+    for detail in [
+        "<h1>Service history</h1>".to_owned(),
+        r#"<p class="ws-car">2017 Volkswagen Golf GTI SE</p>"#.to_owned(),
+        r#"<span class="l">VIN</span> 3VW447AU9HM012345"#.to_owned(),
+        r#"<span class="l">Printed</span> 2026-11-13"#.to_owned(),
+        r#"<span class="l">Services</span> 2"#.to_owned(),
+        format!(
+            r#"<span class="l">Dates</span> {} to {}"#,
+            day_label(300),
+            day_label(50)
+        ),
+        r#"<span class="l">Odometer</span> 55,000 mi to 60,500 mi"#.to_owned(),
+        format!(
+            r#"<a href="/vehicles/{golf}/services/{filter}">{}</a><span>Cabin filter</span>"#,
+            day_label(300)
+        ),
+        r#"<span class="l">Odometer</span> 55,000 mi</span>"#.to_owned(),
+        "<span>Self-performed</span>".to_owned(),
+        format!(
+            r#"<a href="/vehicles/{golf}/services/{brakes}">{}</a><span>Brakes &#38; glass</span>"#,
+            day_label(50)
+        ),
+        format!(r#"<span class="l">Shop</span> <a href="/shops/{smith}">Smith Auto</a>"#),
+        r#"<span class="l">Total</span> <span class="price">$500.00</span>"#.to_owned(),
+        r#"<li>Windshield <span class="l">Repair</span></li>"#.to_owned(),
+        format!(
+            r#"<li>Battery<span class="pn">Bosch S5 A11</span> <span class="l">Installed</span> 58,000 mi on {}</li>"#,
+            day_label(200)
+        ),
+    ] {
+        assert!(body.contains(&detail), "missing {detail}: {body}");
+    }
+    let at = |text: &str| {
+        body.find(text)
+            .unwrap_or_else(|| panic!("no {text}: {body}"))
+    };
+    assert!(at("Cabin filter") < at("Brakes &#38; glass"), "{body}");
+    assert!(at("Brakes &#38; glass") < at("Parts on the car"), "{body}");
+    // One service records a total, and only the battery is on the car.
+    assert_eq!(body.matches(r#"<span class="l">Total</span>"#).count(), 1);
+    for absent in ["Wiper set", "<form", "<script", r#"class="pill pill--ok"#] {
+        assert!(!body.contains(absent), "{absent} is shown: {body}");
+    }
+}
+
+// The links that leave the history sit in the strip that paper leaves out.
+#[tokio::test]
+async fn a_vehicle_page_links_to_its_history_and_the_history_links_back_on_screen_only() {
+    let db = db().await;
+    let (_, golf, _, _) = history_fixture(&db).await;
+    let (_, vehicle) = page(app(db.clone(), "test"), get(&format!("/vehicles/{golf}"))).await;
+    assert!(
+        vehicle.contains(&format!(
+            r#"<a href="/vehicles/{golf}/history">Service history</a>"#
+        )),
+        "{vehicle}"
+    );
+    let (_, body) = page(app(db, "test"), get(&history_path(golf))).await;
+    let (strip, sheet) = body.split_once(r#"<article class="ws page">"#).unwrap();
+    let strip = strip.split_once(r#"<div class="noprint page">"#).unwrap().1;
+    for link in [
+        r#"<a href="/">Garage</a>"#.to_owned(),
+        format!(r#"<a href="/vehicles/{golf}">Steve&#39;s Golf</a>"#),
+    ] {
+        assert!(strip.contains(&link), "missing {link}: {strip}");
+    }
+    assert!(strip.contains("use the browser's print command"), "{strip}");
+    assert!(!sheet.contains("Steve&#39;s Golf"), "{sheet}");
+}
+
+#[tokio::test]
+async fn a_history_page_omits_its_empty_sections() {
+    let db = db().await;
+    let v = VehicleFixture::new().name("Golf").insert_id(&db).await;
+    let (status, body) = page(app(db, "test"), get(&history_path(v))).await;
+    assert_eq!(status, StatusCode::OK);
+    for detail in [
+        r#"<p class="ws-car">Golf</p>"#,
+        r#"<span class="l">Services</span> 0"#,
+        "<p>No services recorded.</p>",
+    ] {
+        assert!(body.contains(detail), "missing {detail}: {body}");
+    }
+    for absent in [
+        "Parts on the car",
+        r#"class="ws-job""#,
+        ">VIN<",
+        ">Dates<",
+        ">Odometer<",
+    ] {
+        assert!(!body.contains(absent), "{absent} is shown: {body}");
+    }
+}
+
+#[tokio::test]
+async fn a_missing_vehicles_history_is_the_not_found_page() {
+    let db = db().await;
+    let (status, body) = page(app(db, "test"), get(&history_path(999))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(body.contains("Page not found"), "{body}");
+}

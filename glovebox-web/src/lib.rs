@@ -83,6 +83,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(pages::get_home))
         .route("/vehicles/{vid}", get(pages::get_vehicle))
+        .route("/vehicles/{vid}/history", get(pages::get_history))
         .route(
             "/vehicles/{vid}/appointments/{id}",
             get(pages::get_appointment),

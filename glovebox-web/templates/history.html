@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Service history - {{ v.name }} - Glovebox{% endblock %}
+{% block content %}
+<div class="noprint page">
+  <p><a href="/">Garage</a> <span class="l">· Vehicle</span> <a href="{{ v.vehicle_href }}">{{ v.name }}</a></p>
+  <p>To put this history on paper, use the browser's print command.</p>
+</div>
+<article class="ws page">
+  <header>
+    <h1>Service history</h1>
+    <p class="ws-car">{{ v.car }}</p>
+    <p class="ws-facts">{% for (label, value) in v.facts %}<span><span class="l">{{ label }}</span> {{ value }}</span>{% endfor %}</p>
+  </header>
+  {% if v.services.is_empty() %}
+  <p>No services recorded.</p>
+  {% endif %}
+  {% for s in v.services %}
+  <section class="ws-job">
+    <p class="ws-title"><a href="{{ s.href }}">{{ s.date }}</a>{% if let Some(d) = s.description %}<span>{{ d }}</span>{% endif %}</p>
+    <p class="ws-facts">
+      {% if let Some(o) = s.odometer %}<span><span class="l">Odometer</span> {{ o }}</span>{% endif %}
+      {% if let Some(shop) = s.shop %}<span><span class="l">Shop</span> <a href="{{ shop.href }}">{{ shop.name }}</a></span>{% else if s.self_performed %}<span>Self-performed</span>{% endif %}
+      {% if let Some(t) = s.total %}<span><span class="l">Total</span> <span class="price">{{ t }}</span></span>{% endif %}
+    </p>
+    {% if !s.lines.is_empty() %}
+    <ul>{% for l in s.lines %}<li>{{ l.description }} <span class="l">{{ l.kind }}</span></li>{% endfor %}</ul>
+    {% endif %}
+  </section>
+  {% endfor %}
+  {% if !v.parts.is_empty() %}
+  <section class="ws-job">
+    <p class="ws-title">Parts on the car</p>
+    <ul>{% for p in v.parts %}<li>{{ p.name }}{% if let Some(pn) = p.label %}<span class="pn">{{ pn }}</span>{% endif %}{% if let Some(i) = p.installed %} <span class="l">Installed</span> {{ i }}{% endif %}</li>{% endfor %}</ul>
+  </section>
+  {% endif %}
+</article>
+{% endblock %}

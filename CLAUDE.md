@@ -76,7 +76,7 @@ MCP server, and its `--open` flag opens the browser.
   `reset --env <name>` and `seed --env <name>`, with `run` callable in process from tests. The
   last two refuse `live` and build the file name themselves.
 - **`glovebox-web/`** (lib crate `glovebox_web` plus the `glovebox-web` binary) — an axum and askama
-  server that renders the checklist. `src/pages.rs` holds the eight page handlers (home, a vehicle's page, appointment, job, work sheet, a service's page, the shops list and a shop's page), `src/actions.rs`
+  server that renders the checklist. `src/pages.rs` holds the nine page handlers (home, a vehicle's page, its printable service history, appointment, job, work sheet, a service's page, the shops list and a shop's page), `src/actions.rs`
   the form posts, `src/view.rs` the view structs, `src/guard.rs` the request guard and the content
   security policy, and `templates/` the askama templates.
 - `scripts/check-layering.sh` (run by CI and `just ci`) keeps axum and rmcp out of `glovebox-shared`
@@ -119,7 +119,7 @@ functions.
 `work_item`, `appointment`, `need`, `todo`, `schedule`, `recall`, `research`, `shop`, ...) of free functions taking `db: &impl
 ConnectionTrait` first and returning `DomainResult<T>`. Composite reads: `upcoming` (the
 `whats_coming` answer: reminders, budget, planned work, recalls, open incidents), `reminders`,
-`budget`, `costs`, `activity`, `search`, `work_sheet` (an appointment's sheet for the mechanic), `service_detail` (one service with its schedule items' names and the split of its total, for its page), `vehicle_detail` (one vehicle with its last odometer reading, the estimate for today, its cost summary and its recent activity, for its page), and `checklist` (the checklist for an appointment, an
+`budget`, `costs`, `activity`, `search`, `work_sheet` (an appointment's sheet for the mechanic), `service_detail` (one service with its schedule items' names and the split of its total, for its page), `vehicle_detail` (one vehicle with its last odometer reading, the estimate for today, its cost summary and its recent activity, for its page), `history` (every service of a vehicle oldest first and the parts installed on it, for the printable history), and `checklist` (the checklist for an appointment, an
 unscheduled job or one job, the past decisions across vehicles, and the home page's rows; the MCP
 tools and the web page both render it), and `waiting` (what is not yet on an appointment: due
 maintenance, planned jobs, open recalls and open incidents, for the home page). `whats_coming` lists each open appointment.
@@ -476,6 +476,13 @@ A page is a view of the shared library, and a future page follows the same rules
   out. An archived vehicle's page says so, shows its sale and projects no mileage. The home page
   links each vehicle's name to it, as does the name on a service, job or appointment page
   (`view::VehicleLink`).
+- **A vehicle's service history prints plain** (`/vehicles/{vid}/history` from
+  `history::for_vehicle`). It lists every service oldest first (date, description, odometer, shop
+  or "Self-performed", total, and each line's description and kind), then the parts whose status
+  is `installed`. Its head names the car, the VIN, the day it was printed (the page's clock) and
+  the span of the services. It reuses the work sheet's `ws` classes and print rules; the links
+  out sit in the `noprint` strip, and a link inside the history prints as plain text.
+  `docs/adr/0025-a-vehicle-has-a-printable-history.md` records what it includes and why.
 - **Marking a need ordered has no undo**, because it creates a purchase record. A to-do tick, a
   received date and a deleted to-do show a banner with an undo form. The undo of a delete puts
   the row back through `todo::restore` and lasts until the next delete or a restart of the server.

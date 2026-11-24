@@ -10,7 +10,7 @@ use glovebox_shared::{
         need_option::{self, Fitment},
         part::{self, Supplier},
         part_content,
-        service_record::{Payer, Performer},
+        service_record::{self, Payer, Performer},
         shop, todo,
         work_item::JobStatus,
     },
@@ -20,12 +20,13 @@ use glovebox_shared::{
         appointment::{self, AppointmentPhase},
         checklist::{self, Checklist, HomeAppointment, JobView, NeedView, StepRow},
         date_label,
+        history::VehicleHistory,
         incident::ServiceRef,
         need::{self, Stage},
         part as part_svc,
         reminders::{self, DueStatus},
         service_detail::ServiceDetail,
-        service_record::IncidentRef,
+        service_record::{IncidentRef, ServiceRecordWithLinks},
         shop::{ShopHistory, ShopListing},
         trim_to_none,
         vehicle_detail::VehicleDetail,
@@ -1412,6 +1413,16 @@ fn payer_label(payer: Payer) -> String {
     }
 }
 
+// A service's day, or its first and last day when they differ.
+fn service_dates(r: &service_record::Model) -> String {
+    match r.end_date {
+        Some(end) if end != r.service_date => {
+            format!("{} to {}", date_label(r.service_date), date_label(end))
+        }
+        _ => date_label(r.service_date),
+    }
+}
+
 impl From<&ServiceDetail> for ServicePageView {
     fn from(d: &ServiceDetail) -> Self {
         let s = &d.service;
@@ -1435,12 +1446,7 @@ impl From<&ServiceDetail> for ServicePageView {
                 .and_then(trim_to_none)
                 .unwrap_or_else(|| "Service".to_owned()),
             vehicle: VehicleLink::new(vid, &d.vehicle_name),
-            date: match r.end_date {
-                Some(end) if end != r.service_date => {
-                    format!("{} to {}", date_label(r.service_date), date_label(end))
-                }
-                _ => date_label(r.service_date),
-            },
+            date: service_dates(r),
             shop: ShopLink::of(r.shop_id, s.shop_name.as_deref()),
             self_performed: r.performed_by == Performer::Owner,
             odometer: r.mileage.map(|miles| reminders::judged_at(miles, false)),
@@ -1571,6 +1577,8 @@ pub struct VehiclePageView {
     pub archived: bool,
     pub sold: Option<String>,
     pub sold_mileage: Option<String>,
+    /// The path of the vehicle's printable service history.
+    pub history_href: String,
     /// Empty for a vehicle with no service and no part.
     pub costs: Vec<CostRow>,
     pub activity: Vec<ActivityRow>,
@@ -1630,8 +1638,119 @@ impl From<&VehicleDetail> for VehiclePageView {
             archived: v.archived_at.is_some(),
             sold: v.sold_date.map(date_label),
             sold_mileage: miles(v.sold_mileage),
+            history_href: crate::pages::history_path(v.id),
             costs: cost_rows(d),
             activity: d.recent_activity.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// One line of a service in a vehicle's history.
+pub struct HistoryLine {
+    pub description: String,
+    pub kind: String,
+}
+
+/// One service in a vehicle's history.
+pub struct HistoryServiceCard {
+    /// The path of the service's page.
+    pub href: String,
+    /// The service's day, or its first and last day when they differ.
+    pub date: String,
+    pub description: Option<String>,
+    pub odometer: Option<String>,
+    pub shop: Option<ShopLink>,
+    /// True for a service the owner performed, which names no shop.
+    pub self_performed: bool,
+    /// The invoice's total, when the service records one.
+    pub total: Option<String>,
+    pub lines: Vec<HistoryLine>,
+}
+
+impl From<&ServiceRecordWithLinks> for HistoryServiceCard {
+    fn from(s: &ServiceRecordWithLinks) -> Self {
+        let r = &s.record;
+        Self {
+            href: crate::pages::service_path(r.vehicle_id, r.id),
+            date: service_dates(r),
+            description: r.description.as_deref().and_then(trim_to_none),
+            odometer: r.mileage.map(|miles| reminders::judged_at(miles, false)),
+            shop: ShopLink::of(r.shop_id, s.shop_name.as_deref()),
+            self_performed: r.performed_by == Performer::Owner,
+            total: r.total_cost_cents.map(format_cents),
+            lines: s
+                .line_items
+                .iter()
+                .map(|l| HistoryLine {
+                    description: l.description.clone(),
+                    kind: vocab_label(l.work_kind),
+                })
+                .collect(),
+        }
+    }
+}
+
+/// One part on the car in a vehicle's history.
+pub struct HistoryPartRow {
+    pub name: String,
+    /// The manufacturer and part number.
+    pub label: Option<String>,
+    /// The install date, the odometer at the install, or both.
+    pub installed: Option<String>,
+}
+
+impl From<&part_svc::PartView> for HistoryPartRow {
+    fn from(p: &part_svc::PartView) -> Self {
+        let part = &p.part;
+        Self {
+            name: part.name.clone(),
+            label: part_svc::label(part.manufacturer.as_deref(), part.part_number.as_deref()),
+            installed: match (part.installed_odometer, part.installed_date) {
+                (Some(miles), Some(day)) => Some(reminders::reading_text(miles, day)),
+                (Some(miles), None) => Some(reminders::judged_at(miles, false)),
+                (None, Some(day)) => Some(date_label(day)),
+                (None, None) => None,
+            },
+        }
+    }
+}
+
+/// The head and the lists of a vehicle's printable service history.
+pub struct HistoryPageView {
+    /// The vehicle's name, which only the on-screen strip shows.
+    pub name: String,
+    pub vehicle_href: String,
+    /// The year, make, model and trim, or the vehicle's name when it records
+    /// none of them.
+    pub car: String,
+    /// What the head states about the car and the records, as a label and
+    /// its value.
+    pub facts: Vec<(&'static str, String)>,
+    pub services: Vec<HistoryServiceCard>,
+    pub parts: Vec<HistoryPartRow>,
+}
+
+impl HistoryPageView {
+    /// The history as printed on `today`, a date as a page writes it.
+    pub fn new(h: &VehicleHistory, today: &str) -> Self {
+        let v = &h.vehicle;
+        let facts = [
+            ("VIN", v.vin.as_deref().and_then(trim_to_none)),
+            ("Printed", Some(today.to_owned())),
+            ("Services", Some(h.services.len().to_string())),
+            ("Dates", h.dates_text()),
+            ("Odometer", h.miles_text()),
+        ];
+        Self {
+            name: v.name.clone(),
+            vehicle_href: crate::pages::vehicle_path(v.id),
+            car: h.description.clone().unwrap_or_else(|| v.name.clone()),
+            facts: facts
+                .into_iter()
+                .filter_map(|(label, value)| Some((label, value?)))
+                .collect(),
+            services: h.services.iter().map(Into::into).collect(),
+            parts: h.installed_parts.iter().map(Into::into).collect(),
         }
     }
 }

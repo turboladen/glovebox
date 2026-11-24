@@ -2,7 +2,7 @@
 {% block title %}{{ v.name }} - Glovebox{% endblock %}
 {% block content %}
 <section class="appt page" aria-labelledby="vehicle-title">
-  <p><a href="/">Garage</a></p>
+  <p><a href="/">Garage</a> <span class="l">·</span> <a href="{{ v.history_href }}">Service history</a></p>
   <h1 id="vehicle-title">{{ v.name }}</h1>
   {% if let Some(d) = v.description %}<p>{{ d }}</p>{% endif %}
   <div class="summary">

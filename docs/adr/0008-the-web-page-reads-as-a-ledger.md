@@ -99,6 +99,13 @@ breakdown of the cost summary stays in Claude Desktop, because a row per month w
 totals. The page holds no forms and adds no stylesheet rule. A vehicle's name printed on the
 home, service, job and appointment pages links to it.
 
+**A vehicle's printable history departs from the ledger as the work sheet does (2026-11-24).**
+ADR 0009 sets that look and ADR 0025 sets the content. On screen and on paper the history is
+plain text with no panels and no pills: a heading, the car on one line, labeled facts, then one
+block per service and a list of the parts on the car. It reuses the work sheet's classes and adds
+one print rule, which drops the underline from a link inside the history. On paper every label
+is black, the site header is hidden, and the strip of on-screen links is left out.
+
 **The page has no script.** The content security policy in `glovebox-web/src/guard.rs` allows
 inline styles and fonts from this server, and nothing else loads.
 
