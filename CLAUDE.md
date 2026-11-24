@@ -626,10 +626,9 @@ unavoidable cases, such as a test that tells one long story. A test checks a lis
 `test_support::assert_empty`, which prints the list when it is not, in preference to a bare
 `assert!(… .is_empty())`.
 Pedantic caps a function at 100 lines (`too_many_lines`), and `work_item::update`,
-`vehicle::update` and `budget::forecast_from` sit near it: move a new step into a helper. Five
-functions exceed it under an `#[allow]` (`service_record::update` and `create`,
-`incident::update`, `search::search` and `reminders::calculate_reminders_on`); a new step there
-goes into a helper too.
+`vehicle::update` and `budget::forecast_from` sit near it: move a new step into a helper. No
+service function carries an `#[allow]` for it; `service_record::update` and `incident::update`
+are a sequence of named steps, and a new step is a new helper.
 
 ## Non-Interactive Shell Commands
 

@@ -311,7 +311,6 @@ pub async fn calculate_reminders(
 }
 
 /// [`calculate_reminders`] as of `today`.
-#[allow(clippy::too_many_lines)]
 pub(crate) async fn calculate_reminders_on(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -359,86 +358,20 @@ pub(crate) async fn calculate_reminders_on(
         Vec::new()
     };
 
+    let ctx = ReminderContext {
+        vehicle: &v,
+        links: &all_links,
+        services: &all_services,
+        readings: &readings,
+        avg_daily_miles,
+        estimated_mileage,
+        today,
+    };
     // For each schedule item, find last service and calculate status
-    let mut reminders = Vec::new();
-
-    for item in &effective_items {
-        // Find the most recent service linked to this schedule item
-        let item_service_ids: Vec<i32> = all_links
-            .iter()
-            .filter(|(_, item_id)| *item_id == item.id)
-            .map(|(service_id, _)| *service_id)
-            .collect();
-
-        let last_service = all_services
-            .iter()
-            .filter(|s| item_service_ids.contains(&s.id))
-            .max_by_key(|s| s.service_date);
-
-        // Baseline: last service or vehicle purchase
-        let (baseline_miles, baseline_date) = match &last_service {
-            Some(svc) => {
-                let date = svc.service_date;
-                let miles = svc
-                    .mileage
-                    .or_else(|| odometer_on(date, &readings, avg_daily_miles))
-                    .unwrap_or(v.purchase_mileage.unwrap_or(0));
-                (miles, Some(date))
-            }
-            None => (
-                v.purchase_mileage.unwrap_or(0),
-                v.purchase_date.or_else(|| model_year_start(&v)),
-            ),
-        };
-
-        // Calculate due mileage and date
-        let due_at_miles = item.interval_miles.map(|i| baseline_miles + i);
-        let due_at_date = item
-            .interval_months
-            .zip(baseline_date)
-            .map(|(months, from)| add_months(from, months));
-
-        let miles_remaining = due_at_miles.map(|due| due - estimated_mileage);
-        let days_remaining = due_at_date.map(|due| (due - today).num_days());
-
-        // Determine status based on whichever is closer to due
-        let warning_miles = item.warning_miles.unwrap_or(DEFAULT_WARNING_MILES);
-        let warning_days = item.warning_days.unwrap_or(DEFAULT_WARNING_DAYS);
-
-        let miles_status =
-            miles_remaining.map(|r| DueStatus::judge(i64::from(r), i64::from(warning_miles)));
-        let time_status = days_remaining.map(|r| DueStatus::judge(r, i64::from(warning_days)));
-
-        // Use the more urgent status
-        let status = DueStatus::most_urgent(miles_status.into_iter().chain(time_status));
-
-        let trigger = Trigger::of(miles_status, time_status);
-
-        reminders.push(ReminderStatus {
-            schedule_item: ScheduleItemSummary {
-                id: item.id,
-                name: item.name.clone(),
-            },
-            status,
-            baseline: if last_service.is_some() {
-                Baseline::LastService
-            } else if purchase_gives_baseline(&v, item) {
-                Baseline::Purchase
-            } else {
-                Baseline::None
-            },
-            last_service: last_service.map(|s| LastServiceInfo {
-                id: s.id,
-                date: s.service_date,
-                odometer: s.mileage,
-            }),
-            due_at_miles,
-            due_at_date,
-            miles_remaining,
-            days_remaining,
-            trigger,
-        });
-    }
+    let mut reminders: Vec<ReminderStatus> = effective_items
+        .iter()
+        .map(|item| reminder_for(&ctx, item))
+        .collect();
 
     // Sort: overdue first, then due soon, then ok
     reminders.sort_by(|a, b| {
@@ -460,6 +393,106 @@ pub(crate) async fn calculate_reminders_on(
         reminders,
         bundle_suggestions,
     })
+}
+
+/// What every schedule item of one vehicle is judged against.
+struct ReminderContext<'a> {
+    vehicle: &'a vehicle::Model,
+    /// Pairs of a service id and the schedule item it counts toward.
+    links: &'a [(i32, i32)],
+    services: &'a [service_record::Model],
+    /// Dated odometer readings, oldest first. They are loaded only when a
+    /// linked service has no mileage of its own, and are empty otherwise.
+    readings: &'a [(NaiveDate, i32)],
+    avg_daily_miles: f64,
+    estimated_mileage: i32,
+    today: NaiveDate,
+}
+
+/// The reminder for one schedule item, counted from its latest linked service
+/// or else from the vehicle's purchase.
+fn reminder_for(
+    ctx: &ReminderContext<'_>,
+    item: &maintenance_schedule_item::Model,
+) -> ReminderStatus {
+    let v = ctx.vehicle;
+    // Find the most recent service linked to this schedule item
+    let item_service_ids: Vec<i32> = ctx
+        .links
+        .iter()
+        .filter(|(_, item_id)| *item_id == item.id)
+        .map(|(service_id, _)| *service_id)
+        .collect();
+
+    let last_service = ctx
+        .services
+        .iter()
+        .filter(|s| item_service_ids.contains(&s.id))
+        .max_by_key(|s| s.service_date);
+
+    // Baseline: last service or vehicle purchase
+    let (baseline_miles, baseline_date) = match &last_service {
+        Some(svc) => {
+            let date = svc.service_date;
+            let miles = svc
+                .mileage
+                .or_else(|| odometer_on(date, ctx.readings, ctx.avg_daily_miles))
+                .unwrap_or(v.purchase_mileage.unwrap_or(0));
+            (miles, Some(date))
+        }
+        None => (
+            v.purchase_mileage.unwrap_or(0),
+            v.purchase_date.or_else(|| model_year_start(v)),
+        ),
+    };
+
+    // Calculate due mileage and date
+    let due_at_miles = item.interval_miles.map(|i| baseline_miles + i);
+    let due_at_date = item
+        .interval_months
+        .zip(baseline_date)
+        .map(|(months, from)| add_months(from, months));
+
+    let miles_remaining = due_at_miles.map(|due| due - ctx.estimated_mileage);
+    let days_remaining = due_at_date.map(|due| (due - ctx.today).num_days());
+
+    // Determine status based on whichever is closer to due
+    let warning_miles = item.warning_miles.unwrap_or(DEFAULT_WARNING_MILES);
+    let warning_days = item.warning_days.unwrap_or(DEFAULT_WARNING_DAYS);
+
+    let miles_status =
+        miles_remaining.map(|r| DueStatus::judge(i64::from(r), i64::from(warning_miles)));
+    let time_status = days_remaining.map(|r| DueStatus::judge(r, i64::from(warning_days)));
+
+    // Use the more urgent status
+    let status = DueStatus::most_urgent(miles_status.into_iter().chain(time_status));
+
+    let trigger = Trigger::of(miles_status, time_status);
+
+    ReminderStatus {
+        schedule_item: ScheduleItemSummary {
+            id: item.id,
+            name: item.name.clone(),
+        },
+        status,
+        baseline: if last_service.is_some() {
+            Baseline::LastService
+        } else if purchase_gives_baseline(v, item) {
+            Baseline::Purchase
+        } else {
+            Baseline::None
+        },
+        last_service: last_service.map(|s| LastServiceInfo {
+            id: s.id,
+            date: s.service_date,
+            odometer: s.mileage,
+        }),
+        due_at_miles,
+        due_at_date,
+        miles_remaining,
+        days_remaining,
+        trigger,
+    }
 }
 
 /// Whether the purchase record holds the date and the mileage `item` counts
