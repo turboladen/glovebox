@@ -18,14 +18,23 @@ pub const DEFAULT_LIMIT: usize = 20;
 /// The most items [`recent`] returns, whatever `limit` asks for.
 pub const MAX_LIMIT: usize = 200;
 
+crate::vocab::vocabulary! {
+    /// The kind of record an [`ActivityItem`] stands for.
+    // No column stores these texts.
+    pub enum ActivityKind {
+        Service => "service",
+        Incident => "incident",
+        Mileage => "mileage",
+    }
+}
+
 /// One entry in the merged feed. `date` is the record's own domain date
 /// (`service_date`, `occurred_at`, or `recorded_at`), printed
 /// `YYYY-MM-DD[ HH:MM:SS]`. Granularity is mixed: a service has a day, while
 /// an incident or a reading may carry a time.
 #[derive(Debug, Serialize)]
 pub struct ActivityItem {
-    /// `service`, `incident`, or `mileage`.
-    pub kind: String,
+    pub kind: ActivityKind,
     pub id: i32,
     /// Owning vehicle.
     pub vehicle_id: i32,
@@ -88,7 +97,7 @@ pub async fn recent(
     let mut items: Vec<ActivityItem> = Vec::new();
     for s in services {
         items.push(ActivityItem {
-            kind: "service".into(),
+            kind: ActivityKind::Service,
             id: s.id,
             vehicle_id,
             vehicle_name: vehicle_name.clone(),
@@ -104,7 +113,7 @@ pub async fn recent(
     }
     for i in incidents {
         items.push(ActivityItem {
-            kind: "incident".into(),
+            kind: ActivityKind::Incident,
             id: i.id,
             vehicle_id,
             vehicle_name: vehicle_name.clone(),
@@ -117,7 +126,7 @@ pub async fn recent(
     }
     for m in mileage_logs {
         items.push(ActivityItem {
-            kind: "mileage".into(),
+            kind: ActivityKind::Mileage,
             id: m.id,
             vehicle_id,
             vehicle_name: vehicle_name.clone(),
@@ -147,7 +156,7 @@ fn sort_newest_first(items: &mut [ActivityItem]) {
         b.date
             .or_end_of_day()
             .cmp(&a.date.or_end_of_day())
-            .then_with(|| a.kind.cmp(&b.kind))
+            .then_with(|| a.kind.as_str().cmp(b.kind.as_str()))
             .then_with(|| b.id.cmp(&a.id))
     });
 }
@@ -269,7 +278,7 @@ mod tests {
 
         let items = recent(&db, vid, DEFAULT_LIMIT).await.unwrap();
         assert_eq!(items.len(), 1, "expected only the service item: {items:?}");
-        assert_eq!(items[0].kind, "service");
+        assert_eq!(items[0].kind, ActivityKind::Service);
         assert_eq!(items[0].mileage, Some(48_000));
     }
 
