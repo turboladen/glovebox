@@ -29,7 +29,10 @@ you link.
    fails, its `message` says so and the recalls already known are still listed; carry on with
    those. After that, take recall ids from the open and planned recalls in `whats_coming`, or from
    `list_recalls`, which shows every stored recall with its status (done ones included) and makes no
-   web request. Do not call `check_recalls` again in the same conversation. When a recall plainly
+   web request. Do not call `check_recalls` again in the same conversation. NHTSA lists recalls by
+   model line, so when it does not list the car's own model the reply's `searched_model` names
+   the line it asked about (`Golf` for a Golf GTI), and a recall of that line may not apply to
+   this car. When a recall plainly
    does not apply to this car, for example one limited to internal-use or pre-production vehicles,
    tell Steve and offer to mark it not applicable with `set_recall_status`.
 
