@@ -680,6 +680,7 @@ mod tests {
             &db,
             appointment.vehicle_id,
             appointment.id,
+            services::today(),
         )
         .await
         .unwrap();

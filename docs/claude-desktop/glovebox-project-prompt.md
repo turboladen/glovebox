@@ -195,10 +195,14 @@ need has a decision, every decision has a reason, and every part ordered has arr
     appointment, and tick them off with `update_todo`.
 11. When Steve wants a list to hand the mechanic, call `get_work_sheet` for the appointment. Raise
     each `unsettled` need first and offer to settle it, or to set `supplied_by` to `shop` with
-    `update_need`. Then show each job with a checkbox, the parts he brings with their
-    `part_number`, and the parts the shop supplies by name, with each job's and part's `notes`
-    beneath it, because those notes print for the shop to read. The web page prints the same sheet
-    from the appointment's "Print sheet" link.
+    `update_need`. Then show the car first: `vehicle_description`, `vin`, `license_plate` and
+    `odometer` with `odometer_read_on`, leaving out each one that is null. The odometer is the
+    newest logged reading, so when its date is old, offer to log today's reading with
+    `log_mileage` before he prints. Then show each job with a checkbox, its `symptom` and
+    `symptom_description` when the job was filed from an incident (label them as the reported
+    symptom), the parts he brings with their `label`, and the parts the shop supplies by name,
+    with each job's and part's `notes` beneath it, because those notes print for the shop to
+    read. The web page prints the same sheet from the appointment's "Print sheet" link.
 12. When the trip happens, file the invoice with `record_service`, passing `appointment_id`,
     `work_item_ids` for the jobs it finished and `part_ids` for the parts the shop fitted (see
     "Filing an invoice"). An open appointment's `phase` reads `booked` before its planned date and

@@ -21,9 +21,9 @@ use serde::Deserialize;
 use crate::{
     AppState, DeletedTodo,
     view::{
-        Banner, CardContext, Count, Failure, HomeAppointmentRow, JobCard, SheetJobCard, ShopLink,
-        ShopPageView, ShopRow, Steps, Tag, Target, TodoCard, TodoForm, UnsettledRow, WaitingRows,
-        job_card, sheet_heading, sheet_jobs, steps, unsettled_rows,
+        Banner, CardContext, Count, Failure, HomeAppointmentRow, JobCard, SheetCar, SheetJobCard,
+        ShopLink, ShopPageView, ShopRow, Steps, Tag, Target, TodoCard, TodoForm, UnsettledRow,
+        WaitingRows, job_card, sheet_car, sheet_heading, sheet_jobs, steps, unsettled_rows,
     },
 };
 
@@ -565,6 +565,7 @@ struct SheetPage {
     appointment_href: String,
     shop: Option<ShopLink>,
     heading: String,
+    car: SheetCar,
     jobs: Vec<SheetJobCard>,
     unsettled: Vec<UnsettledRow>,
 }
@@ -597,7 +598,7 @@ async fn sheet_page(
     id: i32,
     failure: Option<&Failure>,
 ) -> DomainResult<SheetPage> {
-    let sheet = work_sheet::for_appointment(&state.db, vid, id).await?;
+    let sheet = work_sheet::for_appointment(&state.db, vid, id, (state.today)()).await?;
     let unsettled = unsettled_rows(&sheet, vid, failure);
     let top_error = top_error(failure, |target| match target {
         Target::Need(need_id) => unsettled.iter().any(|u| u.need_id == need_id),
@@ -611,6 +612,7 @@ async fn sheet_page(
         appointment_href: appointment_path(vid, id),
         shop: ShopLink::of(sheet.shop_id, sheet.shop.as_deref()),
         heading: sheet_heading(&sheet),
+        car: sheet_car(&sheet),
         jobs: sheet_jobs(&sheet),
         unsettled,
     })

@@ -21,6 +21,17 @@ shows a quantity above one. A kit the owner brings lists its contents under it, 
 records why. A job's notes print under its title, and a part's notes print under its line,
 whichever list it is on. A note that is blank prints nothing.
 
+**The sheet names the car and the complaint**, because the mechanic reads it with the owner
+gone and the owner's nickname for the car identifies nothing in a shop's lot. Under the heading
+(the vehicle's name, the shop and the date) it prints the year, make, model and trim on one line,
+then the VIN, the license plate and the odometer, each only when the vehicle has it. The odometer
+is the newest logged reading with the day it was read. The sheet never prints the projected
+mileage the reminders use, because a mechanic would copy it onto the invoice as a reading, and a
+vehicle with no logged reading prints no odometer. A job filed from an incident prints the
+incident's title and description under the job's title, labeled "Reported symptom", so the
+mechanic reads what the owner noticed and not only the job the owner guessed at. Only an incident
+of the same vehicle prints.
+
 **On paper the sheet is black on white.** It departs from ADR 0008's ledger look: it has no
 panels, pills or tints, and the site header is hidden. Every other page prints as it shows. A job does not split across pages unless it
 is longer than one. The browser's own print command prints it, because the page runs no script.

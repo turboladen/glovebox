@@ -240,6 +240,47 @@ async fn earlier_rate_anchor(
     Ok(v.purchase_date.zip(v.purchase_mileage))
 }
 
+// The vehicle's newest readings, newest first, without any dated after `today`.
+async fn recent_readings(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    today: NaiveDate,
+) -> DomainResult<Vec<mileage_log::Model>> {
+    let entries = mileage_log::Entity::find()
+        .filter(mileage_log::Column::VehicleId.eq(vehicle_id))
+        .order_by_desc(mileage_log::Column::RecordedAt)
+        .limit(RATE_WINDOW_READINGS)
+        .all(db)
+        .await?;
+    // A service dated ahead by mistake logs a reading dated ahead, which must
+    // not become the point every estimate starts from.
+    Ok(entries
+        .into_iter()
+        .filter(|e| e.recorded_at.day() <= today)
+        .collect())
+}
+
+// A reading with no time of day counts as the end of its day, as a service's
+// reading is, although its stored text sorts first. Of two at the same moment
+// the higher is the later: an odometer only climbs.
+fn newest_reading(entries: &[mileage_log::Model]) -> Option<&mileage_log::Model> {
+    entries
+        .iter()
+        .max_by_key(|e| (e.recorded_at.or_end_of_day(), e.mileage))
+}
+
+/// The vehicle's newest logged odometer reading dated no later than `today`,
+/// with the day it was taken, or none when no such reading is logged. It is
+/// the reading [`estimate_mileage`] projects forward from.
+pub(crate) async fn last_reading(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    today: NaiveDate,
+) -> DomainResult<Option<(i32, NaiveDate)>> {
+    let entries = recent_readings(db, vehicle_id, today).await?;
+    Ok(newest_reading(&entries).map(|e| (e.mileage, e.recorded_at.day())))
+}
+
 /// Estimate current mileage from `mileage_log` entries.
 ///
 /// The daily rate is measured across the newest 50 readings when they span at
@@ -254,26 +295,8 @@ pub(crate) async fn estimate_mileage(
     v: &vehicle::Model,
     today: NaiveDate,
 ) -> DomainResult<(i32, NaiveDate, f64, bool)> {
-    let entries = mileage_log::Entity::find()
-        .filter(mileage_log::Column::VehicleId.eq(vehicle_id))
-        .order_by_desc(mileage_log::Column::RecordedAt)
-        .limit(RATE_WINDOW_READINGS)
-        .all(db)
-        .await?;
-
-    // A service dated ahead by mistake logs a reading dated ahead, which must
-    // not become the point every estimate starts from.
-    let entries: Vec<_> = entries
-        .into_iter()
-        .filter(|e| e.recorded_at.day() <= today)
-        .collect();
-    // A reading with no time of day counts as the end of its day, as a
-    // service's reading is, although its stored text sorts first. Of two at
-    // the same moment the higher is the later: an odometer only climbs.
-    let Some(latest) = entries
-        .iter()
-        .max_by_key(|e| (e.recorded_at.or_end_of_day(), e.mileage))
-    else {
+    let entries = recent_readings(db, vehicle_id, today).await?;
+    let Some(latest) = newest_reading(&entries) else {
         let mileage = v.purchase_mileage.unwrap_or(0);
         return Ok((mileage, today, 0.0, true));
     };

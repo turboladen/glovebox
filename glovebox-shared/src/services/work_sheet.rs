@@ -1,19 +1,22 @@
 //! The work sheet the owner hands the mechanic for an appointment: each
-//! planned job, the parts the owner brings and the parts the shop supplies,
-//! and the needs not settled enough to print.
+//! planned job with the symptom it answers, the parts the owner brings and the
+//! parts the shop supplies, the car's identity, and the needs not settled
+//! enough to print.
+
+use std::collections::HashMap;
 
 use chrono::NaiveDate;
 use sea_orm::*;
 use serde::Serialize;
 
 use crate::{
-    entities::{part::Supplier, part_content, work_item::JobStatus},
+    entities::{incident, part::Supplier, part_content, vehicle as car, work_item::JobStatus},
     error::{DomainError, DomainResult},
     services::{
         checklist::{self, NeedView},
         need::Stage,
         part::{self as part_svc, PartView},
-        trim_to_none, vehicle,
+        reminders, trim_to_none, vehicle,
     },
 };
 
@@ -27,11 +30,36 @@ pub struct WorkSheet {
     /// The shop's name.
     pub shop: Option<String>,
     pub date: Option<NaiveDate>,
+    /// The car's year, make, model and trim in that order, such as
+    /// `2017 Volkswagen Golf GTI`, with each one the vehicle lacks left out.
+    /// It is none when the vehicle records none of them.
+    pub vehicle_description: Option<String>,
+    pub vin: Option<String>,
+    pub license_plate: Option<String>,
+    /// The newest logged odometer reading, which is never an estimate. It is
+    /// none when no reading is logged.
+    pub odometer: Option<i32>,
+    /// The day `odometer` was read. It is set exactly when `odometer` is.
+    pub odometer_read_on: Option<NaiveDate>,
     /// The appointment's planned jobs, in checklist order.
     pub jobs: Vec<SheetJob>,
     /// The needs of planned jobs that are undecided or not yet ordered. They
     /// are on no job's lists.
     pub unsettled: Vec<Unsettled>,
+}
+
+impl WorkSheet {
+    /// The odometer reading with the day it was read, such as
+    /// `61,000 mi on 2026-11-01`, or none when no reading is logged.
+    #[must_use]
+    pub fn odometer_text(&self) -> Option<String> {
+        let (miles, day) = self.odometer.zip(self.odometer_read_on)?;
+        Some(format!(
+            "{} mi on {}",
+            reminders::miles_label(miles),
+            crate::services::date_label(day)
+        ))
+    }
 }
 
 /// One planned job with the parts each side supplies.
@@ -41,6 +69,13 @@ pub struct SheetJob {
     pub title: String,
     /// The job's notes for the shop, or none when they are blank.
     pub notes: Option<String>,
+    /// The incident the job was filed from, or none when it was filed from
+    /// none.
+    pub incident_id: Option<i32>,
+    /// That incident's title, which is the symptom the owner reported.
+    pub symptom: Option<String>,
+    /// That incident's description, or none when it is blank.
+    pub symptom_description: Option<String>,
     pub owner_supplies: Vec<SheetLine>,
     pub shop_supplies: Vec<SheetLine>,
 }
@@ -101,7 +136,8 @@ pub struct Unsettled {
 }
 
 /// The work sheet of one appointment. Installed needs, and every need of a
-/// done or dropped job, are left off.
+/// done or dropped job, are left off. `today` is the day the sheet is read:
+/// an odometer reading dated after it is not the car's reading.
 ///
 /// # Errors
 /// `NotFound` for an appointment that is not the vehicle's.
@@ -109,25 +145,34 @@ pub async fn for_appointment(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     appointment_id: i32,
+    today: NaiveDate,
 ) -> DomainResult<WorkSheet> {
-    // The sheet keeps only the appointment's row, so the day does not matter.
-    let list = checklist::for_appointment(db, vehicle_id, appointment_id, crate::services::today())
-        .await?;
+    let list = checklist::for_appointment(db, vehicle_id, appointment_id, today).await?;
     let car = vehicle::require(db, vehicle_id).await?;
     let appointment = list
         .appointment
         .ok_or_else(|| DomainError::Internal("an appointment checklist has no appointment".into()))?
         .appointment;
+    let planned: Vec<_> = list
+        .jobs
+        .into_iter()
+        .filter(|view| view.job.status == JobStatus::Planned)
+        .collect();
+    let incident_ids = planned.iter().filter_map(|v| v.job.incident_id).collect();
+    let incidents = incidents_of(db, vehicle_id, incident_ids).await?;
     let mut jobs = Vec::new();
     let mut unsettled = Vec::new();
-    for view in list.jobs {
-        if view.job.status != JobStatus::Planned {
-            continue;
-        }
+    for view in planned {
+        let incident = view.job.incident_id.and_then(|id| incidents.get(&id));
         let mut job = SheetJob {
             job_id: view.job.id,
             title: view.job.title.clone(),
             notes: view.job.notes.as_deref().and_then(trim_to_none),
+            incident_id: incident.map(|i| i.id),
+            symptom: incident.map(|i| i.title.clone()),
+            symptom_description: incident
+                .and_then(|i| i.description.as_deref())
+                .and_then(trim_to_none),
             owner_supplies: Vec::new(),
             shop_supplies: Vec::new(),
         };
@@ -164,8 +209,17 @@ pub async fn for_appointment(
         }
         jobs.push(job);
     }
+    // The sheet prints a reading someone took, with its day, and never the
+    // projected mileage: a mechanic would copy an estimate onto the invoice as
+    // if the odometer showed it. A vehicle with no logged reading prints none.
+    let reading = reminders::last_reading(db, vehicle_id, today).await?;
     Ok(WorkSheet {
         appointment_id,
+        vehicle_description: description(&car),
+        vin: car.vin.as_deref().and_then(trim_to_none),
+        license_plate: car.license_plate.as_deref().and_then(trim_to_none),
+        odometer: reading.map(|(miles, _)| miles),
+        odometer_read_on: reading.map(|(_, day)| day),
         vehicle: car.name,
         shop_id: appointment.shop_id,
         shop: super::shop::name_of(db, appointment.shop_id).await?,
@@ -173,6 +227,33 @@ pub async fn for_appointment(
         jobs,
         unsettled,
     })
+}
+
+fn description(car: &car::Model) -> Option<String> {
+    let year = car.year.map(|y| y.to_string());
+    let words: Vec<String> = [&year, &car.make, &car.model, &car.trim_level]
+        .into_iter()
+        .filter_map(|word| word.as_deref().and_then(trim_to_none))
+        .collect();
+    (!words.is_empty()).then(|| words.join(" "))
+}
+
+// The vehicle's incidents among `ids`, by id. An id that names another
+// vehicle's incident finds nothing, so a job never prints one.
+async fn incidents_of(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    ids: Vec<i32>,
+) -> DomainResult<HashMap<i32, incident::Model>> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let found = incident::Entity::find()
+        .filter(incident::Column::Id.is_in(ids))
+        .filter(incident::Column::VehicleId.eq(vehicle_id))
+        .all(db)
+        .await?;
+    Ok(found.into_iter().map(|i| (i.id, i)).collect())
 }
 
 enum Placement<'a> {
@@ -221,13 +302,19 @@ mod tests {
         entities::{part::Supplier, work_item::JobStatus},
         inputs::{
             appointment::NewAppointment,
+            incident::NewIncident,
             need::{NewNeed, NewOption, OrderDetails, UpdateNeed},
             part::{NewPart, NewPartContent},
-            work_item::UpdateWorkItem,
+            vehicle::NewVehicle,
+            work_item::{NewWorkItem, UpdateWorkItem},
         },
         services::{appointment, checklist, need, need::Stage, part as part_svc, work_item},
         test_support::{VehicleFixture, add_job, assert_empty, date, set_job_status, test_db},
     };
+
+    fn today() -> NaiveDate {
+        date("2026-11-13")
+    }
 
     async fn appointment_on(db: &DatabaseConnection, vehicle_id: i32) -> i32 {
         appointment::create(
@@ -344,7 +431,7 @@ mod tests {
         )
         .await;
 
-        let sheet = for_appointment(&db, v, a).await.unwrap();
+        let sheet = for_appointment(&db, v, a, today()).await.unwrap();
 
         let job = only_job(&sheet);
         assert_eq!(job.owner_supplies.len(), 1);
@@ -381,7 +468,7 @@ mod tests {
         )
         .await;
 
-        let sheet = for_appointment(&db, v, a).await.unwrap();
+        let sheet = for_appointment(&db, v, a, today()).await.unwrap();
 
         let line = &only_job(&sheet).owner_supplies[0];
         assert_eq!(line.name, "Beru spark plugs");
@@ -414,7 +501,7 @@ mod tests {
         )
         .await;
 
-        let sheet = for_appointment(&db, v, a).await.unwrap();
+        let sheet = for_appointment(&db, v, a, today()).await.unwrap();
 
         let line = &only_job(&sheet).owner_supplies[0];
         assert_eq!(line.label.as_deref(), Some("KIT-1"));
@@ -454,7 +541,7 @@ mod tests {
         )
         .await;
 
-        let sheet = for_appointment(&db, v, a).await.unwrap();
+        let sheet = for_appointment(&db, v, a, today()).await.unwrap();
 
         assert_empty(&only_job(&sheet).shop_supplies[0].contents);
     }
@@ -480,7 +567,7 @@ mod tests {
             .unwrap();
         }
 
-        let sheet = for_appointment(&db, v, a).await.unwrap();
+        let sheet = for_appointment(&db, v, a, today()).await.unwrap();
 
         assert_eq!(
             sheet.jobs[0].notes.as_deref(),
@@ -516,7 +603,7 @@ mod tests {
             .await;
         }
 
-        let sheet = for_appointment(&db, v, a).await.unwrap();
+        let sheet = for_appointment(&db, v, a, today()).await.unwrap();
 
         let lines = &only_job(&sheet).owner_supplies;
         assert_eq!(lines[0].notes.as_deref(), Some("Torque to 120 Nm."));
@@ -546,7 +633,7 @@ mod tests {
         )
         .await;
 
-        let sheet = for_appointment(&db, v, a).await.unwrap();
+        let sheet = for_appointment(&db, v, a, today()).await.unwrap();
 
         let lines = &only_job(&sheet).shop_supplies;
         assert_eq!(
@@ -577,7 +664,7 @@ mod tests {
         .await
         .unwrap();
 
-        let sheet = for_appointment(&db, v, a).await.unwrap();
+        let sheet = for_appointment(&db, v, a, today()).await.unwrap();
 
         let job = only_job(&sheet);
         assert_eq!(job.owner_supplies[0].name, "Rotors option");
@@ -609,7 +696,7 @@ mod tests {
             None,
         )
         .await;
-        let sheet = for_appointment(&db, v, a).await.unwrap();
+        let sheet = for_appointment(&db, v, a, today()).await.unwrap();
         only_job(&sheet).owner_supplies[0].label.clone()
     }
 
@@ -631,7 +718,7 @@ mod tests {
             .await
             .unwrap();
 
-        let sheet = for_appointment(&db, v, a).await.unwrap();
+        let sheet = for_appointment(&db, v, a, today()).await.unwrap();
 
         let line = &only_job(&sheet).owner_supplies[0];
         assert_eq!(line.name, "Oil filter option");
@@ -659,7 +746,7 @@ mod tests {
         )
         .await;
 
-        let sheet = for_appointment(&db, v, a).await.unwrap();
+        let sheet = for_appointment(&db, v, a, today()).await.unwrap();
 
         let job = only_job(&sheet);
         assert_empty(&job.owner_supplies);
@@ -676,7 +763,7 @@ mod tests {
         let n = new_need(&db, v, job, "Oil", 6).await;
         set_supplier(&db, v, n, Supplier::Shop).await;
 
-        let sheet = for_appointment(&db, v, a).await.unwrap();
+        let sheet = for_appointment(&db, v, a, today()).await.unwrap();
 
         let job = only_job(&sheet);
         assert_eq!(job.shop_supplies.len(), 1);
@@ -694,7 +781,7 @@ mod tests {
         let undecided = new_need(&db, v, job, "Wiper blades", 1).await;
         let to_order = chosen_need(&db, v, job, "Cabin filter", None, Some("CU 1")).await;
 
-        let sheet = for_appointment(&db, v, a).await.unwrap();
+        let sheet = for_appointment(&db, v, a, today()).await.unwrap();
         let list = checklist::for_appointment(&db, v, a, crate::services::today())
             .await
             .unwrap();
@@ -736,7 +823,7 @@ mod tests {
         )
         .await;
 
-        let sheet = for_appointment(&db, v, a).await.unwrap();
+        let sheet = for_appointment(&db, v, a, today()).await.unwrap();
 
         let job = only_job(&sheet);
         assert_eq!(job.title, "Cabin filter");
@@ -758,7 +845,7 @@ mod tests {
         set_job_status(&db, v, done, JobStatus::Done).await;
         set_job_status(&db, v, dropped, JobStatus::Dropped).await;
 
-        let sheet = for_appointment(&db, v, a).await.unwrap();
+        let sheet = for_appointment(&db, v, a, today()).await.unwrap();
 
         let ids: Vec<i32> = sheet.jobs.iter().map(|j| j.job_id).collect();
         assert_eq!(ids, vec![planned]);
@@ -774,7 +861,7 @@ mod tests {
         let n = new_need(&db, v, job, "Rotors", 2).await;
         set_supplier(&db, v, n, Supplier::Shop).await;
 
-        let sheet = for_appointment(&db, v, a).await.unwrap();
+        let sheet = for_appointment(&db, v, a, today()).await.unwrap();
 
         assert_eq!(only_job(&sheet).shop_supplies[0].quantity, 2);
     }
@@ -798,13 +885,243 @@ mod tests {
         .unwrap()
         .id;
 
-        let sheet = for_appointment(&db, v, a).await.unwrap();
+        let sheet = for_appointment(&db, v, a, today()).await.unwrap();
 
         assert_eq!(sheet.appointment_id, a);
         assert_eq!(sheet.vehicle, "Golf GTI");
         assert_eq!(sheet.shop_id, Some(shop_id));
         assert_eq!(sheet.shop.as_deref(), Some("Smith Auto"));
         assert_eq!(sheet.date, Some(date("2026-11-20")));
+    }
+
+    async fn log_reading(db: &DatabaseConnection, v: i32, day: &str, miles: i32) {
+        crate::entities::mileage_log::ActiveModel {
+            vehicle_id: Set(v),
+            mileage: Set(miles),
+            recorded_at: Set(date::<NaiveDate>(day).into()),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap();
+    }
+
+    async fn car_with(db: &DatabaseConnection, details: NewVehicle) -> i32 {
+        crate::services::vehicle::create(db, details)
+            .await
+            .unwrap()
+            .id
+    }
+
+    #[tokio::test]
+    async fn the_sheet_describes_the_car_and_carries_its_vin_and_plate() {
+        let db = test_db().await;
+        let v = car_with(
+            &db,
+            NewVehicle {
+                name: "Greta".into(),
+                year: Some(2017),
+                make: Some("Volkswagen".into()),
+                model: Some("Golf GTI".into()),
+                trim_level: Some("Autobahn".into()),
+                vin: Some("3VW447AU9HM012345".into()),
+                license_plate: Some(" ABC 1234 ".into()),
+                ..Default::default()
+            },
+        )
+        .await;
+        let a = appointment_on(&db, v).await;
+
+        let sheet = for_appointment(&db, v, a, today()).await.unwrap();
+
+        assert_eq!(sheet.vehicle, "Greta");
+        assert_eq!(
+            sheet.vehicle_description.as_deref(),
+            Some("2017 Volkswagen Golf GTI Autobahn")
+        );
+        assert_eq!(sheet.vin.as_deref(), Some("3VW447AU9HM012345"));
+        assert_eq!(sheet.license_plate.as_deref(), Some("ABC 1234"));
+    }
+
+    #[tokio::test]
+    async fn the_description_leaves_out_what_the_vehicle_lacks() {
+        let db = test_db().await;
+        let v = car_with(
+            &db,
+            NewVehicle {
+                name: "Greta".into(),
+                make: Some("Volkswagen".into()),
+                model: Some("Golf GTI".into()),
+                trim_level: Some("  ".into()),
+                ..Default::default()
+            },
+        )
+        .await;
+        let a = appointment_on(&db, v).await;
+
+        let sheet = for_appointment(&db, v, a, today()).await.unwrap();
+
+        assert_eq!(
+            sheet.vehicle_description.as_deref(),
+            Some("Volkswagen Golf GTI")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_car_with_no_details_has_no_description_vin_plate_or_odometer() {
+        let db = test_db().await;
+        // A purchase mileage is not a logged reading.
+        let v = VehicleFixture::new()
+            .purchase_date("2017-03-05")
+            .purchase_mileage(40)
+            .insert_id(&db)
+            .await;
+        let a = appointment_on(&db, v).await;
+
+        let sheet = for_appointment(&db, v, a, today()).await.unwrap();
+
+        assert_eq!(sheet.vehicle_description, None);
+        assert_eq!(sheet.vin, None);
+        assert_eq!(sheet.license_plate, None);
+        assert_eq!(sheet.odometer, None);
+        assert_eq!(sheet.odometer_read_on, None);
+        assert_eq!(sheet.odometer_text(), None);
+    }
+
+    #[tokio::test]
+    async fn the_odometer_is_the_newest_reading_and_its_day_not_an_estimate() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let a = appointment_on(&db, v).await;
+        log_reading(&db, v, "2026-09-01", 60_000).await;
+        log_reading(&db, v, "2026-11-01", 61_000).await;
+
+        let sheet = for_appointment(&db, v, a, today()).await.unwrap();
+
+        // Twelve days of driving at the measured rate would add miles to an
+        // estimate.
+        assert_eq!(sheet.odometer, Some(61_000));
+        assert_eq!(sheet.odometer_read_on, Some(date("2026-11-01")));
+        assert_eq!(
+            sheet.odometer_text().as_deref(),
+            Some("61,000 mi on 2026-11-01")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_reading_dated_after_today_is_not_the_odometer() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let a = appointment_on(&db, v).await;
+        log_reading(&db, v, "2026-11-01", 61_000).await;
+        log_reading(&db, v, "2026-11-14", 99_000).await;
+
+        let sheet = for_appointment(&db, v, a, today()).await.unwrap();
+
+        assert_eq!(sheet.odometer, Some(61_000));
+        assert_eq!(sheet.odometer_read_on, Some(date("2026-11-01")));
+    }
+
+    async fn incident_on(db: &DatabaseConnection, v: i32, title: &str, text: Option<&str>) -> i32 {
+        crate::services::incident::create(
+            db,
+            v,
+            NewIncident {
+                title: title.into(),
+                description: text.map(Into::into),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .incident
+        .id
+    }
+
+    async fn job_from_incident(db: &DatabaseConnection, v: i32, a: i32, incident: i32) -> i32 {
+        work_item::create(
+            db,
+            v,
+            NewWorkItem {
+                title: "Diagnose the noise".into(),
+                incident_id: Some(incident),
+                appointment_id: Some(a),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .id
+    }
+
+    #[tokio::test]
+    async fn a_job_filed_from_an_incident_carries_the_symptom() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let a = appointment_on(&db, v).await;
+        let rattle = incident_on(
+            &db,
+            v,
+            "Rattle from the front left",
+            Some(" Over bumps below 20 mph. "),
+        )
+        .await;
+        let squeal = incident_on(&db, v, "Squeal when braking", Some("  ")).await;
+        job_from_incident(&db, v, a, rattle).await;
+        job_from_incident(&db, v, a, squeal).await;
+        add_job(&db, v, "Oil change", Some(a)).await;
+
+        let sheet = for_appointment(&db, v, a, today()).await.unwrap();
+
+        let printed: Vec<(Option<i32>, Option<&str>, Option<&str>)> = sheet
+            .jobs
+            .iter()
+            .map(|j| {
+                (
+                    j.incident_id,
+                    j.symptom.as_deref(),
+                    j.symptom_description.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            printed,
+            vec![
+                (
+                    Some(rattle),
+                    Some("Rattle from the front left"),
+                    Some("Over bumps below 20 mph.")
+                ),
+                (Some(squeal), Some("Squeal when braking"), None),
+                (None, None, None),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn another_vehicles_incident_is_never_the_symptom() {
+        let db = test_db().await;
+        let mine = VehicleFixture::new().insert_id(&db).await;
+        let other = VehicleFixture::new().name("Other").insert_id(&db).await;
+        let a = appointment_on(&db, mine).await;
+        let job = add_job(&db, mine, "Diagnose the noise", Some(a)).await;
+        let theirs = incident_on(&db, other, "Their rattle", Some("Their words.")).await;
+        // No service writes this link, so the row is set directly.
+        crate::entities::work_item::ActiveModel {
+            id: Set(job),
+            incident_id: Set(Some(theirs)),
+            ..Default::default()
+        }
+        .update(&db)
+        .await
+        .unwrap();
+
+        let sheet = for_appointment(&db, mine, a, today()).await.unwrap();
+
+        let job = only_job(&sheet);
+        assert_eq!(job.incident_id, None);
+        assert_eq!(job.symptom, None);
+        assert_eq!(job.symptom_description, None);
     }
 
     #[tokio::test]
@@ -814,8 +1131,11 @@ mod tests {
         let other = VehicleFixture::new().name("Other").insert_id(&db).await;
         let a = appointment_on(&db, other).await;
 
-        let wrong = for_appointment(&db, mine, a).await.unwrap_err().to_string();
-        let missing = for_appointment(&db, mine, 9999)
+        let wrong = for_appointment(&db, mine, a, today())
+            .await
+            .unwrap_err()
+            .to_string();
+        let missing = for_appointment(&db, mine, 9999, today())
             .await
             .unwrap_err()
             .to_string()

@@ -1627,6 +1627,105 @@ async fn work_sheet_carries_job_and_part_notes() {
 }
 
 #[tokio::test]
+async fn work_sheet_names_the_car_and_the_symptom() {
+    use glovebox_shared::{inputs::vehicle::NewVehicle, services::vehicle};
+    let t = connect().await;
+    let car = vehicle::create(
+        &t.db,
+        NewVehicle {
+            name: "Greta".into(),
+            year: Some(2017),
+            make: Some("Volkswagen".into()),
+            model: Some("Golf GTI".into()),
+            vin: Some("3VW447AU9HM012345".into()),
+            license_plate: Some("ABC 1234".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let v = i64::from(car.id);
+    t.call(
+        "log_mileage",
+        json!({ "vehicle_id": v, "mileage": 61_000, "recorded_at": "2026-11-01" }),
+    )
+    .await;
+    let appt = plan_appointment(&t, v, "Diagnosis").await;
+    let incident = t
+        .call(
+            "log_incident",
+            json!({
+                "vehicle_id": v,
+                "title": "Rattle from the front left",
+                "description": "Over bumps below 20 mph."
+            }),
+        )
+        .await["id"]
+        .clone();
+    t.call(
+        "plan_work",
+        json!({
+            "vehicle_id": v,
+            "title": "Diagnose the rattle",
+            "incident_id": incident,
+            "appointment_id": appt
+        }),
+    )
+    .await;
+    plan_job(&t, v, "Oil change", Some(appt)).await;
+
+    let sheet = t
+        .call(
+            "get_work_sheet",
+            json!({ "vehicle_id": v, "appointment_id": appt }),
+        )
+        .await;
+
+    assert_eq!(
+        sheet["vehicle_description"], "2017 Volkswagen Golf GTI",
+        "got: {sheet}"
+    );
+    assert_eq!(sheet["vin"], "3VW447AU9HM012345");
+    assert_eq!(sheet["license_plate"], "ABC 1234");
+    assert_eq!(sheet["odometer"], 61_000);
+    assert_eq!(sheet["odometer_read_on"], "2026-11-01");
+    let filed = &sheet["jobs"][0];
+    assert_eq!(filed["incident_id"], incident);
+    assert_eq!(filed["symptom"], "Rattle from the front left");
+    assert_eq!(filed["symptom_description"], "Over bumps below 20 mph.");
+    let plain = &sheet["jobs"][1];
+    assert_eq!(plain["incident_id"], Value::Null);
+    assert_eq!(plain["symptom"], Value::Null);
+    assert_eq!(plain["symptom_description"], Value::Null);
+}
+
+// A vehicle recorded with a name only has none of the car's details, and each
+// key is present and null.
+#[tokio::test]
+async fn work_sheet_of_a_bare_vehicle_has_null_car_details() {
+    let t = connect().await;
+    let (v, appt) = work_sheet_fixture(&t).await;
+
+    let sheet = t
+        .call(
+            "get_work_sheet",
+            json!({ "vehicle_id": v, "appointment_id": appt }),
+        )
+        .await;
+
+    let details = sheet.as_object().unwrap();
+    for key in [
+        "vehicle_description",
+        "vin",
+        "license_plate",
+        "odometer",
+        "odometer_read_on",
+    ] {
+        assert_eq!(details.get(key), Some(&Value::Null), "{key}: {sheet}");
+    }
+}
+
+#[tokio::test]
 async fn work_sheet_lists_a_kits_contents() {
     let t = connect().await;
     let (v, appt) = work_sheet_fixture(&t).await;

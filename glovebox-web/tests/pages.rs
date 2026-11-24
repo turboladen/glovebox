@@ -1008,6 +1008,182 @@ async fn print_sheet_with_no_planned_jobs_says_so() {
     assert!(!body.contains("Everything is settled."), "{body}");
 }
 
+// An appointment with no jobs for a vehicle recorded with `details`.
+async fn sheet_for_car(
+    db: &DatabaseConnection,
+    details: glovebox_shared::inputs::vehicle::NewVehicle,
+) -> (i32, i32) {
+    let v = glovebox_shared::services::vehicle::create(db, details)
+        .await
+        .unwrap()
+        .id;
+    let a = appointment::create(
+        db,
+        v,
+        NewAppointment {
+            purpose: "Brakes".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    (v, a)
+}
+
+#[tokio::test]
+async fn print_sheet_heading_names_the_car() {
+    use glovebox_shared::inputs::vehicle::NewVehicle;
+    let db = db().await;
+    let (v, a) = sheet_for_car(
+        &db,
+        NewVehicle {
+            name: "Greta".into(),
+            year: Some(2017),
+            make: Some("Volkswagen".into()),
+            model: Some("Golf GTI".into()),
+            trim_level: Some("Autobahn".into()),
+            vin: Some("3VW447AU9HM012345".into()),
+            license_plate: Some("ABC 1234".into()),
+            purchase_date: Some(date("2017-03-05")),
+            purchase_mileage: Some(40),
+            ..Default::default()
+        },
+    )
+    .await;
+    for (day, miles) in [("2026-09-01", 60_000), ("2026-11-01", 61_000)] {
+        mileage::create(
+            &db,
+            v,
+            NewMileageEntry {
+                mileage: miles,
+                recorded_at: Some(date::<chrono::NaiveDate>(day).into()),
+                source: None,
+                notes: None,
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    let (_, body) = page(app(db, "test"), get(&sheet_path(v, a))).await;
+
+    assert!(body.contains("<h1>Greta</h1>"), "{body}");
+    assert!(
+        body.contains(r#"<p class="ws-car">2017 Volkswagen Golf GTI Autobahn</p>"#),
+        "{body}"
+    );
+    assert!(
+        body.contains(r#"<span class="l">VIN</span> 3VW447AU9HM012345</span>"#),
+        "{body}"
+    );
+    assert!(
+        body.contains(r#"<span class="l">Plate</span> ABC 1234</span>"#),
+        "{body}"
+    );
+    // The page's day is twelve days after the reading, and the sheet prints
+    // the reading, not a projection from it.
+    assert!(
+        body.contains(r#"<span class="l">Odometer</span> 61,000 mi on 2026-11-01</span>"#),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn print_sheet_heading_omits_what_the_car_lacks() {
+    use glovebox_shared::inputs::vehicle::NewVehicle;
+    let db = db().await;
+    let (bare, bare_sheet) = sheet_for_car(
+        &db,
+        NewVehicle {
+            name: "Greta".into(),
+            purchase_mileage: Some(40),
+            ..Default::default()
+        },
+    )
+    .await;
+    let (plated, plated_sheet) = sheet_for_car(
+        &db,
+        NewVehicle {
+            name: "Otto".into(),
+            make: Some("Audi".into()),
+            license_plate: Some("ABC 1234".into()),
+            ..Default::default()
+        },
+    )
+    .await;
+
+    let (_, body) = page(app(db.clone(), "test"), get(&sheet_path(bare, bare_sheet))).await;
+    assert!(body.contains("<h1>Greta</h1>"), "{body}");
+    for absent in [r#"class="ws-car""#, r#"class="ws-facts""#] {
+        assert!(!body.contains(absent), "{absent}: {body}");
+    }
+
+    let (_, body) = page(app(db, "test"), get(&sheet_path(plated, plated_sheet))).await;
+    assert!(body.contains(r#"<p class="ws-car">Audi</p>"#), "{body}");
+    assert!(
+        body.contains(r#"<span class="l">Plate</span> ABC 1234</span>"#),
+        "{body}"
+    );
+    for absent in [">VIN<", ">Odometer<"] {
+        assert!(!body.contains(absent), "{absent}: {body}");
+    }
+}
+
+#[tokio::test]
+async fn print_sheet_prints_the_symptom_of_a_job_filed_from_an_incident() {
+    let db = db().await;
+    let (v, a, _) = sheet_fixture(&db).await;
+    let rattle = incident::create(
+        &db,
+        v,
+        NewIncident {
+            title: "Rattle from the driver's side".into(),
+            description: Some("Over bumps below 20 mph.".into()),
+            occurred_at: Some(date("2026-11-02")),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .incident
+    .id;
+    work_item::create(
+        &db,
+        v,
+        NewWorkItem {
+            title: "Diagnose the rattle".into(),
+            incident_id: Some(rattle),
+            appointment_id: Some(a),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let (_, body) = page(app(db, "test"), get(&sheet_path(v, a))).await;
+
+    assert!(
+        body.contains(
+            "<p class=\"ws-note\"><b>Reported symptom:</b> Rattle from the driver&#39;s side<span \
+             class=\"ws-note\">Over bumps below 20 mph.</span></p>"
+        ),
+        "{body}"
+    );
+    assert_eq!(body.matches("Reported symptom").count(), 1, "{body}");
+}
+
+#[tokio::test]
+async fn print_sheet_prints_no_symptom_for_a_job_filed_from_no_incident() {
+    let db = db().await;
+    let (v, a, _) = sheet_fixture(&db).await;
+
+    let (_, body) = page(app(db, "test"), get(&sheet_path(v, a))).await;
+
+    assert!(body.contains("Front brakes"), "{body}");
+    assert!(!body.contains("Reported symptom"), "{body}");
+}
+
 #[tokio::test]
 async fn print_sheet_of_another_vehicles_appointment_is_not_found() {
     let db = db().await;

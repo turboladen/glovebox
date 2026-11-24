@@ -135,25 +135,34 @@ impl GloveboxMcp {
 
     #[tool(
         name = "get_work_sheet",
-        description = "The work sheet to hand the mechanic for an appointment: each planned job, \
-                       the parts the owner brings (`owner_supplies`, with `label`, the part's \
-                       manufacturer and number such as \"Akebono ACT1633\", when the part records \
-                       a number) and the parts the shop should supply (`shop_supplies`, by name, \
-                       with no `label` or `contents`; `part_id` is set only when a part is \
-                       linked). A job's `notes` and a linked part's `notes` are the owner's \
-                       instructions for the shop, such as a torque value, and are null when \
-                       blank. `unsettled` lists needs that are undecided or not yet ordered, \
-                       which are not on the sheet. Tell the owner about those first and offer to \
-                       settle them with the existing tools, or set `supplied_by` to `shop` with \
-                       `update_need`. Present the sheet as a plain checklist: a checkbox per job, \
-                       then the two part lists."
+        description = "The work sheet to hand the mechanic for an appointment: the car \
+                       (`vehicle_description`, its year, make, model and trim, with `vin`, \
+                       `license_plate`, and `odometer`, the newest logged reading and never an \
+                       estimate, read on `odometer_read_on`; each is null when the vehicle has \
+                       none), then each planned job. A job filed from an incident carries \
+                       `incident_id`, `symptom` (the incident's title) and `symptom_description` \
+                       (null when blank), which tell the mechanic what the owner noticed; all \
+                       three are null for any other job. Under each job come the parts the owner \
+                       brings (`owner_supplies`, with `label`, the part's manufacturer and number \
+                       such as \"Akebono ACT1633\", when the part records a number) and the parts \
+                       the shop should supply (`shop_supplies`, by name, with no `label` or \
+                       `contents`; `part_id` is set only when a part is linked). A job's `notes` \
+                       and a linked part's `notes` are the owner's instructions for the shop, \
+                       such as a torque value, and are null when blank. `unsettled` lists needs \
+                       that are undecided or not yet ordered, which are not on the sheet. Tell \
+                       the owner about those first and offer to settle them with the existing \
+                       tools, or set `supplied_by` to `shop` with `update_need`. Present the \
+                       sheet as a plain checklist: the car's details first, then a checkbox per \
+                       job with its symptom and the two part lists."
     )]
     async fn get_work_sheet(
         &self,
         params: Parameters<GetWorkSheetInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "get_work_sheet");
-        domain_result(work_sheet::for_appointment(&*self.db, p.vehicle_id, p.appointment_id).await)
+        domain_result(
+            work_sheet::for_appointment(&*self.db, p.vehicle_id, p.appointment_id, today()).await,
+        )
     }
 
     #[tool(
