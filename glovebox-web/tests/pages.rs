@@ -1636,7 +1636,7 @@ async fn a_service_page_lists_its_lines_totals_and_linked_work() {
     for detail in [
         r#"<h1 id="service-title">Brakes &#38; glass</h1>"#.to_owned(),
         r#"<a href="/">Garage</a>"#.to_owned(),
-        r#"<span class="l">Vehicle</span>Golf"#.to_owned(),
+        format!(r#"<span class="l">Vehicle</span><a href="/vehicles/{golf}">Golf</a>"#),
         r#"<span class="l">Date</span>2026-10-01 to 2026-10-03"#.to_owned(),
         format!(r#"<span class="l">Shop</span>{shop_link}"#),
         r#"<span class="l">Odometer</span>61,200 mi"#.to_owned(),
@@ -1911,4 +1911,259 @@ async fn a_completed_jobs_page_links_to_the_service_that_completed_it() {
     );
     let (_, body) = page(app(db, "test"), get(&job(quote))).await;
     assert!(!body.contains("Completed by"), "{body}");
+}
+
+// The day `days` before the page's clock.
+fn days_before_today(days: u64) -> chrono::NaiveDate {
+    common::today() - chrono::Days::new(days)
+}
+
+// The day `days` before the page's clock, as a page prints it.
+fn day_label(days: u64) -> String {
+    days_before_today(days).format("%Y-%m-%d").to_string()
+}
+
+async fn log_reading(db: &DatabaseConnection, vehicle: i32, miles: i32, days_ago: u64) {
+    let entry = NewMileageEntry {
+        mileage: miles,
+        recorded_at: Some(days_before_today(days_ago).into()),
+        source: None,
+        notes: None,
+    };
+    mileage::create(db, vehicle, entry).await.unwrap();
+}
+
+// A 2017 Golf with every fact its page prints, bought 800 days ago. It has a
+// reading 100 days ago and one 10 days ago, a $500.00 service at "Smith Auto"
+// 50 days ago with a $200.00 line insurance paid, and an incident 20 days
+// ago. Returns (Smith Auto, the Golf, the service).
+async fn vehicle_fixture(db: &DatabaseConnection) -> (i32, i32, i32) {
+    use glovebox_shared::{
+        entities::{service_record::Payer, service_record_line_item::WorkKind},
+        inputs::{
+            service_record::{NewLineItem, NewServiceRecord},
+            shop::ShopChoice,
+            vehicle::NewVehicle,
+        },
+        services::{service_record, vehicle},
+        test_support::add_shop,
+    };
+    let smith = add_shop(db, "Smith Auto").await;
+    let golf = vehicle::create(
+        db,
+        NewVehicle {
+            name: "Steve's Golf".into(),
+            year: Some(2017),
+            make: Some("Volkswagen".into()),
+            model: Some("Golf GTI".into()),
+            trim_level: Some("SE".into()),
+            vin: Some("3VW447AU9HM012345".into()),
+            license_plate: Some("ABC 123".into()),
+            color: Some("White".into()),
+            purchase_date: Some(days_before_today(800)),
+            purchase_mileage: Some(40_000),
+            warranty_expires_on: Some(days_before_today(900)),
+            warranty_expires_miles: Some(72_000),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    log_reading(db, golf, 60_000, 100).await;
+    log_reading(db, golf, 61_000, 10).await;
+    let service = service_record::create(
+        db,
+        golf,
+        NewServiceRecord {
+            service_date: days_before_today(50),
+            mileage: Some(60_500),
+            description: Some("Brakes & glass".into()),
+            total_cost_cents: Some(50_000),
+            shop: Some(ShopChoice::Id(smith)),
+            line_items: Some(vec![NewLineItem {
+                description: "Windshield".into(),
+                work_kind: WorkKind::Repair,
+                paid_by: Some(Payer::Insurance),
+                quantity: None,
+                unit_cost_cents: None,
+                cost_cents: Some(20_000),
+            }]),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .record
+    .id;
+    let squeal = NewIncident {
+        category: IncidentCategory::Noise,
+        title: "Squeal".into(),
+        occurred_at: Some(days_before_today(20).into()),
+        ..Default::default()
+    };
+    incident::create(db, golf, squeal).await.unwrap();
+    (smith, golf, service)
+}
+
+#[tokio::test]
+async fn a_vehicle_page_shows_its_facts_costs_and_recent_activity() {
+    let db = db().await;
+    let (_, golf, service) = vehicle_fixture(&db).await;
+    let (status, body) = page(app(db, "test"), get(&format!("/vehicles/{golf}"))).await;
+    assert_eq!(status, StatusCode::OK);
+    for detail in [
+        r#"<h1 id="vehicle-title">Steve&#39;s Golf</h1>"#.to_owned(),
+        "<p>2017 Volkswagen Golf GTI SE</p>".to_owned(),
+        r#"<a href="/">Garage</a>"#.to_owned(),
+        r#"<span class="l">VIN</span><span class="pn">3VW447AU9HM012345</span>"#.to_owned(),
+        r#"<span class="l">Plate</span><span class="pn">ABC 123</span>"#.to_owned(),
+        r#"<span class="l">Color</span>White"#.to_owned(),
+        format!(r#"<span class="l">Purchased</span>{}"#, day_label(800)),
+        r#"<span class="l">Purchased at</span>40,000 mi"#.to_owned(),
+        format!(
+            r#"<span class="l">Odometer</span>61,000 mi on {}"#,
+            day_label(10)
+        ),
+        // The readings climb 1,000 miles in 90 days, and the last is ten
+        // days old.
+        r#"<span class="l">Estimated today</span>about 61,111 mi (estimated)"#.to_owned(),
+        format!(
+            r#"<span class="l">Warranty ends</span>72,000 mi or {}"#,
+            day_label(900)
+        ),
+        format!(r#"<a href="/vehicles/{golf}/services/{service}">Brakes &#38; glass</a>"#),
+    ] {
+        assert!(body.contains(&detail), "missing {detail}: {body}");
+    }
+    assert_eq!(
+        section_rows(&body, "Costs"),
+        [
+            "Total spent $500.00".to_owned(),
+            "Service invoices 1 service $500.00".to_owned(),
+            "Parts bought outside an invoice $0.00".to_owned(),
+            "You paid $300.00".to_owned(),
+            "Paid by others $200.00".to_owned(),
+            format!("Per 1,000 miles 1,000 mi since {} $500.00", day_label(100)),
+        ]
+    );
+    assert_eq!(
+        section_rows(&body, "Recent activity"),
+        [
+            format!(
+                "Odometer reading: 61000 Odometer reading 61,000 mi {}",
+                day_label(10)
+            ),
+            format!("Squeal Incident {}", day_label(20)),
+            format!(
+                "Brakes &#38; glass Service 60,500 mi {} $500.00",
+                day_label(50)
+            ),
+            format!(
+                "Odometer reading: 60000 Odometer reading 60,000 mi {}",
+                day_label(100)
+            ),
+        ]
+    );
+    for absent in ["<form", "<script", ">Garage</span>Archived", ">Sold<"] {
+        assert!(!body.contains(absent), "{absent} is shown: {body}");
+    }
+}
+
+#[tokio::test]
+async fn a_vehicle_page_omits_its_empty_sections() {
+    let db = db().await;
+    let v = VehicleFixture::new().name("Golf").insert_id(&db).await;
+    let (status, body) = page(app(db, "test"), get(&format!("/vehicles/{v}"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains(r#"<h1 id="vehicle-title">Golf</h1>"#),
+        "{body}"
+    );
+    assert!(
+        body.contains(r#"<span class="l">Odometer</span><span class="empty">No reading</span>"#),
+        "{body}"
+    );
+    for absent in [
+        "<h3",
+        ">VIN<",
+        ">Plate<",
+        ">Color<",
+        ">Purchased<",
+        ">Purchased at<",
+        ">Estimated today<",
+        ">Warranty ends<",
+        ">Sold<",
+    ] {
+        assert!(!body.contains(absent), "{absent} is shown: {body}");
+    }
+}
+
+#[tokio::test]
+async fn an_archived_vehicles_page_says_so_with_its_sale() {
+    use glovebox_shared::{inputs::vehicle::VehicleSale, services::vehicle};
+    let db = db().await;
+    let (_, golf, _) = vehicle_fixture(&db).await;
+    let sale = VehicleSale {
+        sold_date: Some(days_before_today(5)),
+        sold_mileage: Some(61_050),
+        ..Default::default()
+    };
+    vehicle::archive(&db, golf, sale).await.unwrap();
+    let (status, body) = page(app(db, "test"), get(&format!("/vehicles/{golf}"))).await;
+    assert_eq!(status, StatusCode::OK);
+    for detail in [
+        r#"<span class="l">Garage</span>Archived"#.to_owned(),
+        format!(r#"<span class="l">Sold</span>{}"#, day_label(5)),
+        r#"<span class="l">Sold at</span>61,050 mi"#.to_owned(),
+        format!(
+            r#"<span class="l">Odometer</span>61,000 mi on {}"#,
+            day_label(10)
+        ),
+    ] {
+        assert!(body.contains(&detail), "missing {detail}: {body}");
+    }
+    // A sold car's mileage is not projected.
+    assert!(!body.contains("Estimated today"), "{body}");
+    assert_eq!(section_rows(&body, "Recent activity").len(), 4);
+}
+
+#[tokio::test]
+async fn a_missing_vehicle_is_the_not_found_page() {
+    let db = db().await;
+    let (status, body) = page(app(db, "test"), get("/vehicles/999")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(body.contains("Page not found"), "{body}");
+}
+
+#[tokio::test]
+async fn the_home_service_job_and_appointment_pages_link_to_the_vehicle_page() {
+    let db = db().await;
+    let (_, golf, service, brakes, _) = service_fixture(&db).await;
+    let planned = appointment::create(
+        &db,
+        golf,
+        NewAppointment {
+            purpose: "Winter tires".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    let (_, home) = page(app(db.clone(), "test"), get("/")).await;
+    assert!(
+        home.contains(&format!(r#"<h2><a href="/vehicles/{golf}">Golf</a></h2>"#)),
+        "{home}"
+    );
+    let labeled = format!(r#"<span class="l">Vehicle</span><a href="/vehicles/{golf}">Golf</a>"#);
+    for path in [
+        service_path(golf, service),
+        format!("/vehicles/{golf}/jobs/{brakes}"),
+        format!("/vehicles/{golf}/appointments/{planned}"),
+    ] {
+        let (status, body) = page(app(db.clone(), "test"), get(&path)).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert!(body.contains(&labeled), "{path}: {body}");
+    }
 }

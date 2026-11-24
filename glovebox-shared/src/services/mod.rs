@@ -20,6 +20,7 @@ pub mod shop;
 pub mod todo;
 pub mod upcoming;
 pub mod vehicle;
+pub mod vehicle_detail;
 pub mod vin_decode;
 pub mod waiting;
 pub mod work_item;

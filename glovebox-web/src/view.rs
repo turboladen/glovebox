@@ -16,6 +16,7 @@ use glovebox_shared::{
     },
     money::format_cents,
     services::{
+        activity::{ActivityItem, ActivityKind},
         appointment::{self, AppointmentPhase},
         checklist::{self, Checklist, HomeAppointment, JobView, NeedView, StepRow},
         date_label,
@@ -27,6 +28,7 @@ use glovebox_shared::{
         service_record::IncidentRef,
         shop::{ShopHistory, ShopListing},
         trim_to_none,
+        vehicle_detail::VehicleDetail,
         waiting::{Waiting, booked_note},
         work_item::WorkItemRef,
         work_sheet::{SheetLine, WorkSheet},
@@ -1369,7 +1371,7 @@ impl ServiceIncidentRow {
 pub struct ServicePageView {
     /// The service's description, or "Service" when it has none or a blank one.
     pub title: String,
-    pub vehicle: String,
+    pub vehicle: VehicleLink,
     /// The service's day, or its first and last day when they differ.
     pub date: String,
     pub shop: Option<ShopLink>,
@@ -1432,7 +1434,7 @@ impl From<&ServiceDetail> for ServicePageView {
                 .as_deref()
                 .and_then(trim_to_none)
                 .unwrap_or_else(|| "Service".to_owned()),
-            vehicle: d.vehicle_name.clone(),
+            vehicle: VehicleLink::new(vid, &d.vehicle_name),
             date: match r.end_date {
                 Some(end) if end != r.service_date => {
                     format!("{} to {}", date_label(r.service_date), date_label(end))
@@ -1490,6 +1492,146 @@ impl From<&ServiceDetail> for ServicePageView {
                 .collect(),
             resolved: incidents(&s.resolved_incidents),
             noticed: incidents(&s.noticed_incidents),
+        }
+    }
+}
+
+/// A vehicle's name linked to its page.
+pub struct VehicleLink {
+    pub name: String,
+    pub href: String,
+}
+
+impl VehicleLink {
+    /// The link to vehicle `id`, named `name`.
+    pub fn new(id: i32, name: &str) -> Self {
+        Self {
+            name: name.to_owned(),
+            href: crate::pages::vehicle_path(id),
+        }
+    }
+}
+
+/// One figure of a vehicle's cost summary.
+pub struct CostRow {
+    pub label: &'static str,
+    /// What the figure counts or covers.
+    pub note: Option<String>,
+    pub amount: String,
+}
+
+/// One recent record on a vehicle's page.
+pub struct ActivityRow {
+    pub summary: String,
+    /// The path of the record's page, which only a service has.
+    pub href: Option<String>,
+    pub kind: &'static str,
+    pub odometer: Option<String>,
+    pub date: String,
+    pub total: Option<String>,
+}
+
+impl From<&ActivityItem> for ActivityRow {
+    fn from(a: &ActivityItem) -> Self {
+        let (kind, href) = match a.kind {
+            ActivityKind::Service => (
+                "Service",
+                Some(crate::pages::service_path(a.vehicle_id, a.id)),
+            ),
+            ActivityKind::Incident => ("Incident", None),
+            ActivityKind::Mileage => ("Odometer reading", None),
+        };
+        Self {
+            summary: a.summary.clone(),
+            href,
+            kind,
+            odometer: a.mileage.map(|miles| reminders::judged_at(miles, false)),
+            date: date_label(a.date.day()),
+            total: a.total_cost_cents.map(format_cents),
+        }
+    }
+}
+
+/// The head and the rows of a vehicle's page.
+pub struct VehiclePageView {
+    pub name: String,
+    /// The year, make, model and trim on one line.
+    pub description: Option<String>,
+    pub vin: Option<String>,
+    pub plate: Option<String>,
+    pub color: Option<String>,
+    pub purchased: Option<String>,
+    pub purchase_mileage: Option<String>,
+    /// The last logged reading with the day it was read.
+    pub odometer: Option<String>,
+    /// The projected mileage, marked as an estimate.
+    pub estimate: Option<String>,
+    /// The date, the mileage or both at which the warranty ends.
+    pub warranty: Option<String>,
+    pub archived: bool,
+    pub sold: Option<String>,
+    pub sold_mileage: Option<String>,
+    /// Empty for a vehicle with no service and no part.
+    pub costs: Vec<CostRow>,
+    pub activity: Vec<ActivityRow>,
+}
+
+fn cost_rows(d: &VehicleDetail) -> Vec<CostRow> {
+    let c = &d.costs;
+    if c.service_count == 0 && c.part_count == 0 {
+        return Vec::new();
+    }
+    let row = |label, note, cents: i64| CostRow {
+        label,
+        note,
+        amount: format_cents(cents),
+    };
+    let services = Count::new(c.service_count, "service", "services");
+    let mut rows = vec![
+        row("Total spent", None, c.total_cost_cents),
+        row(
+            "Service invoices",
+            Some(format!("{} {}", services.n, services.text)),
+            c.service_totals_cents,
+        ),
+        row(
+            "Parts bought outside an invoice",
+            None,
+            c.self_supplied_parts_cents,
+        ),
+        row("You paid", None, c.out_of_pocket_cents),
+    ];
+    if c.covered_cents > 0 {
+        rows.push(row("Paid by others", None, c.covered_cents));
+    }
+    if let Some(rate) = c.cost_per_1000_miles_cents {
+        rows.push(row("Per 1,000 miles", d.records_cover(), rate));
+    }
+    rows
+}
+
+impl From<&VehicleDetail> for VehiclePageView {
+    fn from(d: &VehicleDetail) -> Self {
+        let v = &d.vehicle;
+        let text = |value: &Option<String>| value.as_deref().and_then(trim_to_none);
+        let miles = |value: Option<i32>| value.map(|m| reminders::judged_at(m, false));
+        let warranty = reminders::due_at(v.warranty_expires_miles, v.warranty_expires_on);
+        Self {
+            name: v.name.clone(),
+            description: d.description.clone(),
+            vin: text(&v.vin),
+            plate: text(&v.license_plate),
+            color: text(&v.color),
+            purchased: v.purchase_date.map(date_label),
+            purchase_mileage: miles(v.purchase_mileage),
+            odometer: d.odometer_text(),
+            estimate: d.estimate_text(),
+            warranty: (!warranty.is_empty()).then_some(warranty),
+            archived: v.archived_at.is_some(),
+            sold: v.sold_date.map(date_label),
+            sold_mileage: miles(v.sold_mileage),
+            costs: cost_rows(d),
+            activity: d.recent_activity.iter().map(Into::into).collect(),
         }
     }
 }

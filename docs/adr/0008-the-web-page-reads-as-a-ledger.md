@@ -87,6 +87,18 @@ list at the third waiting column on a wide window. The page holds no forms, beca
 corrected only through Claude Desktop. A job's page links to the service that completed it as a
 labeled value in its head.
 
+**A vehicle's page follows the same rules (2026-11-24).** It heads with the name as the page
+title, the year, make, model and trim on one line, and the car's facts as labeled values, like an
+appointment's head. The VIN and the plate use the part-number style, because each mixes letters
+and digits. The odometer is the last logged reading with its day, "No reading" in gray when
+there is none, and the projected mileage is a separate value labeled "Estimated today" that
+carries the word "estimated". An archived vehicle shows "Archived" as a labeled value and adds no
+pill kind. The costs and the recent activity are two panels that reuse the home page's waiting
+columns, with amounts right aligned as prices, and a panel with no rows is left out. The monthly
+breakdown of the cost summary stays in Claude Desktop, because a row per month would bury the
+totals. The page holds no forms and adds no stylesheet rule. A vehicle's name printed on the
+home, service, job and appointment pages links to it.
+
 **The page has no script.** The content security policy in `glovebox-web/src/guard.rs` allows
 inline styles and fonts from this server, and nothing else loads.
 

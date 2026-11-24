@@ -20,6 +20,19 @@ pub async fn require(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult
         .ok_or_else(|| DomainError::NotFound(format!("Vehicle {vehicle_id} not found")))
 }
 
+/// The car's year, make, model and trim in that order, such as
+/// `2017 Volkswagen Golf GTI`, with each one the vehicle lacks left out. It is
+/// none when the vehicle records none of them.
+#[must_use]
+pub fn description(v: &vehicle::Model) -> Option<String> {
+    let year = v.year.map(|y| y.to_string());
+    let words: Vec<String> = [&year, &v.make, &v.model, &v.trim_level]
+        .into_iter()
+        .filter_map(|word| word.as_deref().and_then(super::trim_to_none))
+        .collect();
+    (!words.is_empty()).then(|| words.join(" "))
+}
+
 /// Verifies a vehicle exists and is in the garage, for a write that adds
 /// open work (a planned job, an appointment or a to-do).
 ///

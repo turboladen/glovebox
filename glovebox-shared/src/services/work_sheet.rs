@@ -10,7 +10,7 @@ use sea_orm::*;
 use serde::Serialize;
 
 use crate::{
-    entities::{incident, part::Supplier, part_content, vehicle as car, work_item::JobStatus},
+    entities::{incident, part::Supplier, part_content, work_item::JobStatus},
     error::{DomainError, DomainResult},
     services::{
         checklist::{self, NeedView},
@@ -56,11 +56,7 @@ impl WorkSheet {
     #[must_use]
     pub fn odometer_text(&self) -> Option<String> {
         let (miles, day) = self.odometer.zip(self.odometer_read_on)?;
-        Some(format!(
-            "{} mi on {}",
-            reminders::miles_label(miles),
-            crate::services::date_label(day)
-        ))
+        Some(reminders::reading_text(miles, day))
     }
 }
 
@@ -223,7 +219,7 @@ pub async fn for_appointment(
     let reading = reminders::last_reading(db, vehicle_id, today).await?;
     Ok(WorkSheet {
         appointment_id,
-        vehicle_description: description(&car),
+        vehicle_description: super::vehicle::description(&car),
         vin: car.vin.as_deref().and_then(trim_to_none),
         license_plate: car.license_plate.as_deref().and_then(trim_to_none),
         odometer: reading.map(|(miles, _)| miles),
@@ -235,15 +231,6 @@ pub async fn for_appointment(
         jobs,
         unsettled,
     })
-}
-
-fn description(car: &car::Model) -> Option<String> {
-    let year = car.year.map(|y| y.to_string());
-    let words: Vec<String> = [&year, &car.make, &car.model, &car.trim_level]
-        .into_iter()
-        .filter_map(|word| word.as_deref().and_then(trim_to_none))
-        .collect();
-    (!words.is_empty()).then(|| words.join(" "))
 }
 
 // The vehicle's incidents among `ids`, by id. An id that names another

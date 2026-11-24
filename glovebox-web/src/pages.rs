@@ -13,7 +13,7 @@ use glovebox_shared::{
         appointment,
         checklist::{self, NeedView, VehicleHome},
         need::{self, Stage},
-        part, service_detail, shop, todo as todo_svc, vehicle, work_sheet,
+        part, service_detail, shop, todo as todo_svc, vehicle, vehicle_detail, work_sheet,
     },
 };
 use serde::Deserialize;
@@ -23,8 +23,8 @@ use crate::{
     view::{
         Banner, CardContext, Count, Failure, HomeAppointmentRow, JobCard, ServicePageView,
         SheetCar, SheetJobCard, ShopLink, ShopPageView, ShopRow, Steps, Tag, Target, TodoCard,
-        TodoForm, UnsettledRow, WaitingRows, job_card, sheet_car, sheet_heading, sheet_jobs, steps,
-        unsettled_rows,
+        TodoForm, UnsettledRow, VehicleLink, VehiclePageView, WaitingRows, job_card, sheet_car,
+        sheet_heading, sheet_jobs, steps, unsettled_rows,
     },
 };
 
@@ -102,7 +102,7 @@ struct AppointmentPage {
     back: String,
     /// The path of the appointment's work sheet.
     sheet_href: String,
-    vehicle: String,
+    vehicle: VehicleLink,
     purpose: String,
     shop: Option<ShopLink>,
     date: Option<String>,
@@ -130,7 +130,7 @@ struct JobPage {
     banner: Option<Banner>,
     top_error: Option<String>,
     vid: i32,
-    vehicle: String,
+    vehicle: VehicleLink,
     appointment: Option<LinkedAppointment>,
     j: JobCard,
 }
@@ -387,6 +387,11 @@ pub fn sheet_path(vid: i32, id: i32) -> String {
     format!("/vehicles/{vid}/appointments/{id}/print")
 }
 
+/// The path of a vehicle's page.
+pub fn vehicle_path(vid: i32) -> String {
+    format!("/vehicles/{vid}")
+}
+
 /// The path of a shop's page.
 pub fn shop_path(id: i32) -> String {
     format!("/shops/{id}")
@@ -474,7 +479,7 @@ async fn appointment_page(
             state,
         ),
         top_error,
-        vehicle: car.name,
+        vehicle: VehicleLink::new(vid, &car.name),
         purpose: summary.appointment.purpose.clone(),
         shop: ShopLink::of(summary.appointment.shop_id, summary.shop_name.as_deref()),
         date: summary
@@ -554,7 +559,7 @@ async fn job_page(state: &AppState, vid: i32, id: i32, view: Page<'_>) -> Domain
         banner: page_banner(vid, &back, done, &view.needs, &[], None, state),
         top_error,
         vid,
-        vehicle: car.name,
+        vehicle: VehicleLink::new(vid, &car.name),
         appointment: linked,
         j: card,
     })
@@ -680,6 +685,26 @@ pub async fn get_service(
             let page = ServicePage {
                 chrome: Chrome::of(&state),
                 v: ServicePageView::from(&detail),
+            };
+            html(StatusCode::OK, page.render())
+        }
+        Err(e) => load_failed(&state, &e),
+    }
+}
+
+#[derive(Template)]
+#[template(path = "vehicle.html")]
+struct VehiclePage {
+    chrome: Chrome,
+    v: VehiclePageView,
+}
+
+pub async fn get_vehicle(State(state): State<AppState>, Path(vid): Path<i32>) -> Response {
+    match vehicle_detail::get(&state.db, vid, (state.today)()).await {
+        Ok(detail) => {
+            let page = VehiclePage {
+                chrome: Chrome::of(&state),
+                v: VehiclePageView::from(&detail),
             };
             html(StatusCode::OK, page.render())
         }

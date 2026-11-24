@@ -5,7 +5,7 @@
   <p><a href="/">Garage</a>{% if let Some(shop) = v.shop %} <span class="l">· Shop</span> <a href="{{ shop.href }}">{{ shop.name }}</a>{% endif %}</p>
   <h1 id="service-title">{{ v.title }}</h1>
   <div class="summary">
-    <div><span class="l">Vehicle</span>{{ v.vehicle }}</div>
+    <div><span class="l">Vehicle</span><a href="{{ v.vehicle.href }}">{{ v.vehicle.name }}</a></div>
     <div><span class="l">Date</span>{{ v.date }}</div>
     <div><span class="l">Shop</span>{% if let Some(shop) = v.shop %}<a href="{{ shop.href }}">{{ shop.name }}</a>{% else if v.self_performed %}Self-performed{% else %}<span class="empty">No shop named</span>{% endif %}</div>
     {% if let Some(o) = v.odometer %}<div><span class="l">Odometer</span>{{ o }}</div>{% endif %}
