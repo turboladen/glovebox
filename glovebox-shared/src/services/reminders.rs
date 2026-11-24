@@ -354,7 +354,7 @@ pub async fn calculate_reminders_on(
     // A service filed without an odometer reading is placed by the readings
     // around its date, which are loaded only when there is such a service.
     let readings = if all_services.iter().any(|s| s.mileage.is_none()) {
-        dated_readings(db, &v).await?
+        dated_readings(db, &v, today).await?
     } else {
         Vec::new()
     };
@@ -477,11 +477,12 @@ fn model_year_start(v: &vehicle::Model) -> Option<NaiveDate> {
 }
 
 /// The vehicle's odometer readings with their dates, oldest first: every
-/// logged reading, and the purchase reading when the vehicle has both a
-/// purchase date and a purchase mileage.
+/// logged reading dated no later than `today`, and the purchase reading when
+/// the vehicle has both a purchase date and a purchase mileage.
 async fn dated_readings(
     db: &impl ConnectionTrait,
     v: &vehicle::Model,
+    today: NaiveDate,
 ) -> DomainResult<Vec<(NaiveDate, i32)>> {
     let mut readings: Vec<(NaiveDate, i32)> = mileage_log::Entity::find()
         .filter(mileage_log::Column::VehicleId.eq(v.id))
@@ -489,6 +490,7 @@ async fn dated_readings(
         .await?
         .into_iter()
         .map(|log| (log.recorded_at.day(), log.mileage))
+        .filter(|(day, _)| *day <= today)
         .collect();
     if let (Some(date), Some(miles)) = (v.purchase_date, v.purchase_mileage) {
         readings.push((date, miles));
@@ -1447,5 +1449,16 @@ mod tests {
         )
         .await;
         assert_eq!(estimate_today(&db, vid).await, 54_000);
+
+        // Nor does it place a service that has no reading of its own.
+        let v = vehicle::Entity::find_by_id(vid)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            dated_readings(&db, &v, today).await.unwrap(),
+            vec![(today, 54_000)]
+        );
     }
 }
