@@ -21,7 +21,12 @@ you link.
 
 1. Call `list_vehicles` to get the vehicle id. When a car is not there yet, call
    `list_model_templates`, then `add_vehicle` with the matching `model_template_id`; the car takes
-   the template's trim, engine, transmission and drivetrain for anything you leave out.
+   the template's trim, engine, transmission and drivetrain for anything you leave out. A `vin`
+   sent with `add_vehicle` is decoded by NHTSA and fills what is still blank. For a car already
+   on file, `decode_vin` does the same: it fills only the empty fields among year, make, model,
+   trim, body style, engine, transmission and drivetrain, and never replaces a value. When
+   either lookup fails, the result carries `vin_decode_error` and nothing else is lost; say so
+   and carry on.
 2. When Steve states a current odometer reading, call `log_mileage` before anything else. A
    reading below zero or dated after today is refused.
 3. For anything about what the car needs, call `whats_coming` before you advise.
@@ -310,7 +315,10 @@ second service to patch the first.
 ## Looking things up
 
 `summarize_recent_activity` gives recent history in one call. `get_vehicle` reads one car's full
-record (VIN, engine, transmission, purchase details, plate). `list_services`, `list_parts` and
+record (VIN, engine, transmission, purchase details, plate). `list_vehicle_attributes` lists
+everything NHTSA decoded from the VIN (plant, doors, airbags, displacement and about 140 more), so
+call it only when a question needs such a detail; an empty list means the car has no stored decode,
+and `decode_vin` fetches one. `list_services`, `list_parts` and
 `list_incidents` list records, and `get_service` and `get_incident` read one in full.
 `search_records` searches everything, and `cost_summary` reports what the car has cost. `save_note`
 keeps a plain fact worth remembering.

@@ -1,7 +1,10 @@
 mod common;
 
 use common::{connect, new_vehicle};
-use glovebox_shared::services::vehicle;
+use glovebox_shared::services::{
+    vehicle,
+    vin_decode::{self, VinDecodeResult},
+};
 use serde_json::json;
 
 #[tokio::test]
@@ -645,4 +648,124 @@ async fn a_sold_car_leaves_the_garage_list_and_keeps_its_records() {
         .call_err("archive_vehicle", json!({ "vehicle_id": sold }))
         .await;
     assert!(err.contains("1 planned job"), "got: {err}");
+}
+
+// A stand-in for an NHTSA answer, since no test makes the request.
+fn decoded(attributes: &[(&str, &str)]) -> VinDecodeResult {
+    VinDecodeResult {
+        year: Some(2018),
+        make: Some("VOLKSWAGEN".into()),
+        model: Some("Golf GTI".into()),
+        trim: None,
+        body_style: None,
+        engine: None,
+        transmission: None,
+        drivetrain: None,
+        all_attributes: attributes
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect(),
+    }
+}
+
+#[tokio::test]
+async fn list_vehicle_attributes_reads_the_stored_decode_sorted_by_key() {
+    let t = connect().await;
+    let car = common::add_vehicle(&t, "Daily").await;
+    let other = common::add_vehicle(&t, "Wagon").await;
+
+    let none = t
+        .call("list_vehicle_attributes", json!({ "vehicle_id": car }))
+        .await;
+    assert_eq!(none, json!([]), "a car with no decode lists nothing");
+
+    let car_id = i32::try_from(car).unwrap();
+    let other_id = i32::try_from(other).unwrap();
+    vin_decode::store_attributes(
+        &t.db,
+        car_id,
+        &decoded(&[("PlantCity", "PUEBLA"), ("Doors", "4")]),
+    )
+    .await
+    .unwrap();
+    vin_decode::store_attributes(&t.db, other_id, &decoded(&[("PlantCity", "ZWICKAU")]))
+        .await
+        .unwrap();
+
+    let listed = t
+        .call("list_vehicle_attributes", json!({ "vehicle_id": car }))
+        .await;
+    assert_eq!(
+        listed,
+        json!([
+            { "key": "Doors", "value": "4", "source": "vin_decode" },
+            { "key": "PlantCity", "value": "PUEBLA", "source": "vin_decode" },
+        ])
+    );
+    let others = t
+        .call("list_vehicle_attributes", json!({ "vehicle_id": other }))
+        .await;
+    assert_eq!(
+        others,
+        json!([{ "key": "PlantCity", "value": "ZWICKAU", "source": "vin_decode" }]),
+        "each car reads only its own attributes"
+    );
+}
+
+#[tokio::test]
+async fn a_missing_vehicle_reads_the_same_from_the_vin_tools_as_from_get_vehicle() {
+    let t = connect().await;
+    common::add_vehicle(&t, "Daily").await;
+    let args = json!({ "vehicle_id": 999 });
+    let plain = t.call_err("get_vehicle", args.clone()).await;
+    assert!(plain.contains("not found"), "got: {plain}");
+    for tool in ["list_vehicle_attributes", "decode_vin"] {
+        assert_eq!(t.call_err(tool, args.clone()).await, plain, "{tool}");
+    }
+}
+
+#[tokio::test]
+async fn decode_vin_refuses_a_car_with_no_vin_and_changes_nothing() {
+    let t = connect().await;
+    let car = common::add_vehicle(&t, "Daily").await;
+    let before = t.call("get_vehicle", json!({ "vehicle_id": car })).await;
+    assert!(before["vin"].is_null(), "the fixture has no VIN: {before}");
+
+    let err = t.call_err("decode_vin", json!({ "vehicle_id": car })).await;
+    assert!(
+        err.contains("no VIN") && err.contains("update_vehicle"),
+        "the refusal must say how to set one; got: {err}"
+    );
+    let after = t.call("get_vehicle", json!({ "vehicle_id": car })).await;
+    assert_eq!(after, before);
+}
+
+#[tokio::test]
+async fn the_vin_tools_reject_unknown_arguments() {
+    let t = connect().await;
+    let car = common::add_vehicle(&t, "Daily").await;
+    for tool in ["list_vehicle_attributes", "decode_vin"] {
+        common::assert_unknown_field_rejected(
+            &t,
+            tool,
+            json!({ "vehicle_id": car, "vin": "3VW447AU9JM000001" }),
+            "vin",
+        )
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn get_vehicle_says_where_the_vin_attributes_are() {
+    let t = connect().await;
+    let tools = t.tools().await;
+    let get_vehicle = tools
+        .iter()
+        .find(|tool| tool["name"] == "get_vehicle")
+        .expect("get_vehicle is advertised");
+    let description = get_vehicle["description"].as_str().unwrap_or_default();
+    assert!(
+        description.contains("list_vehicle_attributes"),
+        "got: {description}"
+    );
 }

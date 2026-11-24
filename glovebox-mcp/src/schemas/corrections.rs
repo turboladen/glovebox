@@ -42,7 +42,7 @@ where
 pub struct AddVehicleInput {
     /// Display name, e.g. 'Daily Golf R'.
     pub name: String,
-    /// Model template id from `list_model_templates`. Gives the car its inherited maintenance schedule and fills year, make, model, trim, body style, engine, transmission and drivetrain left empty (a VIN decode fills first, then the template).
+    /// Model template id from `list_model_templates`. Gives the car its inherited maintenance schedule and fills year, make, model, trim, body style, engine, transmission and drivetrain left empty (what you send wins, then the template, then a VIN decode).
     pub model_template_id: Option<i32>,
     /// VIN. When given, the vehicle's blank year, make, model, trim, body style, engine, transmission and drivetrain are filled from an NHTSA lookup; values sent here and values from the model template win over it. If the lookup fails the vehicle is still created and the result carries `vin_decode_error`.
     pub vin: Option<String>,
@@ -170,7 +170,7 @@ pub struct UpdateVehicleInput {
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<String>")]
     pub drivetrain: Option<Option<String>>,
-    /// VIN. Updating it does not re-run the NHTSA lookup.
+    /// VIN. Setting it runs no NHTSA lookup; call `decode_vin` afterwards to decode it.
     ///
     /// Send `null` to clear it; omit the key to leave it unchanged.
     #[serde(default, deserialize_with = "nullable")]
