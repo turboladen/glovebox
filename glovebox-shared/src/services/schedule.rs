@@ -208,12 +208,12 @@ pub async fn create_for_vehicle<C: ConnectionTrait + TransactionTrait>(
     vehicle_id: i32,
     mut input: NewScheduleItem,
 ) -> DomainResult<maintenance_schedule_item::Model> {
-    if input.name.trim().is_empty() {
-        return Err(DomainError::invalid("name", "must not be blank"));
-    }
     let txn = super::begin_write(db).await?;
     // The vehicle's template decides which inherited item the name shadows.
     let v = crate::services::vehicle::require(&txn, vehicle_id).await?;
+    if input.name.trim().is_empty() {
+        return Err(DomainError::invalid("name", "must not be blank"));
+    }
     if let Some(own) = own_item_named(&txn, vehicle_id, &input.name).await? {
         return Err(DomainError::BadRequest(format!(
             "This vehicle already has a schedule item named '{}' (id {}). Change it with \

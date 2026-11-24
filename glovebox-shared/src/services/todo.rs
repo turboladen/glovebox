@@ -258,8 +258,8 @@ pub async fn restore<C: ConnectionTrait + TransactionTrait>(
     if deleted.vehicle_id != vehicle_id || deleted.id != id {
         return Err(not_found(id));
     }
-    super::vehicle::require(db, vehicle_id).await?;
     let txn = super::begin_write(db).await?;
+    super::vehicle::require(&txn, vehicle_id).await?;
     // A row already at the id makes the insert do nothing instead of failing
     // on the primary key.
     let mut restored = todo::Model {

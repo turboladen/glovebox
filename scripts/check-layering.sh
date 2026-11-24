@@ -62,7 +62,7 @@ case "$status" in
 esac
 
 status=0
-grep -rnE 'ActiveModel|Entity::|EntityTrait|QueryFilter|\.(exec|one|all|insert|save)\(' \
+grep -rnE 'ActiveModel|Entity|QueryFilter|ColumnTrait|ConnectionTrait|TransactionTrait|Statement|execute_unprepared' \
   glovebox-mcp/src/handler || status=$?
 
 case "$status" in

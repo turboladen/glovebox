@@ -614,18 +614,21 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     // it is the owner's word only when no service resolves it, so a read
     // sent back marks nothing.
     let inc = require_incident(&txn, vehicle_id, inc.id).await?;
-    let resolution = match (input.resolved, Resolution::of(&inc)?) {
+    // Reopening does not read the stored pair, so it also repairs a row that
+    // breaks the pair's rule.
+    let resolution = match (input.resolved, Resolution::of(&inc)) {
         (Some(false), _) => Some(Resolution::Open),
-        (Some(true), Resolution::Open) if names_a_service => Some(Resolution::ByService),
-        (Some(true), Resolution::Open) => Some(Resolution::ByHand),
-        (Some(true), Resolution::ByService)
+        (_, Err(broken)) => return Err(broken),
+        (Some(true), Ok(Resolution::Open)) if names_a_service => Some(Resolution::ByService),
+        (Some(true), Ok(Resolution::Open)) => Some(Resolution::ByHand),
+        (Some(true), Ok(Resolution::ByService))
             if resolvers_of_incidents(&txn, &[inc.id]).await?.is_empty() =>
         {
             Some(Resolution::ByHand)
         }
         // Clearing the list takes the services away, and the owner's word
         // still stands.
-        (None, Resolution::ByService) if cleared_all_resolvers => Some(Resolution::Open),
+        (None, Ok(Resolution::ByService)) if cleared_all_resolvers => Some(Resolution::Open),
         _ => None,
     };
     let inc = if let Some(resolution) = resolution {

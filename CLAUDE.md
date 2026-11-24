@@ -404,9 +404,8 @@ A page is a view of the shared library, and a future page follows the same rules
   slot for the last to-do deleted on the page. It holds only a row this server deleted, and it
   does not make the page a store of records, so a future page keeps its records in the database.
   Its accepted limits: one slot serves every vehicle and tab, a double-clicked Delete or Undo can
-  answer with an error page although the action worked, a failed undo keeps its row without
-  showing the banner again, and a vehicle deleted during an undo gives an opaque error and writes
-  nothing.
+  answer with an error page although the action worked, and a failed undo keeps its row without
+  showing the banner again.
 - **No script.** Every action is an HTML form post followed by a redirect back to the page, and a
   failed write renders the page again with the domain error beside the row. That page is served
   at the form's address, so every link on a page names the page's own path. The content security
