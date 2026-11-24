@@ -532,7 +532,7 @@ mod tests {
             service_record::{self as service_svc, ServiceRecordWithLinks},
             work_item as work_item_svc,
         },
-        test_support::{VehicleFixture, set_job_status, test_db},
+        test_support::{set_job_status, test_db},
         vocab::Vocabulary,
     };
 
@@ -550,9 +550,7 @@ mod tests {
         }
     }
 
-    async fn seed_vehicle(db: &DatabaseConnection) -> i32 {
-        VehicleFixture::new().insert_id(db).await
-    }
+    use crate::test_support::seed_vehicle;
 
     async fn plan_work_for_recall(
         db: &DatabaseConnection,
@@ -632,14 +630,7 @@ mod tests {
     }
 
     async fn seed_recall(db: &DatabaseConnection, vehicle_id: i32, campaign: &str) -> i32 {
-        research::record_recalls(db, vehicle_id, &[recall_info(campaign, "Pump")])
-            .await
-            .unwrap()
-            .recalls
-            .into_iter()
-            .find(|r| r.campaign_number.as_deref() == Some(campaign))
-            .unwrap()
-            .finding_id
+        crate::test_support::seed_recall(db, vehicle_id, campaign, "Pump").await
     }
 
     async fn seed_non_recall(db: &DatabaseConnection, vehicle_id: i32) -> i32 {

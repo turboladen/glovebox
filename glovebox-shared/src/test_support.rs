@@ -259,3 +259,54 @@ pub async fn add_shop<C: ConnectionTrait + TransactionTrait>(db: &C, name: &str)
     .expect("insert test shop")
     .id
 }
+
+/// Inserts a vehicle with only a name and returns its id.
+#[cfg(any(test, feature = "test-support"))]
+pub async fn seed_vehicle(db: &impl ConnectionTrait) -> i32 {
+    VehicleFixture::new().insert_id(db).await
+}
+
+/// Inserts a service dated 2024-01-01 with nothing else set and returns its
+/// id.
+#[cfg(any(test, feature = "test-support"))]
+pub async fn seed_service(db: &impl ConnectionTrait, vehicle_id: i32) -> i32 {
+    crate::entities::service_record::ActiveModel {
+        vehicle_id: Set(vehicle_id),
+        service_date: Set(date("2024-01-01")),
+        ..Default::default()
+    }
+    .insert(db)
+    .await
+    .expect("insert test service")
+    .id
+}
+
+/// Stores a recall the way a recall check does and returns its finding id.
+/// The recall's title is `title`, and NHTSA sent nothing else about it.
+#[cfg(any(test, feature = "test-support"))]
+pub async fn seed_recall<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    campaign: &str,
+    title: &str,
+) -> i32 {
+    let found = crate::services::nhtsa::RecallInfo {
+        campaign_number: campaign.into(),
+        manufacturer: None,
+        title: title.into(),
+        summary: None,
+        consequence: None,
+        remedy: None,
+        report_date: None,
+        component: None,
+        action_number: None,
+    };
+    crate::services::research::record_recalls(db, vehicle_id, &[found])
+        .await
+        .expect("store test recall")
+        .recalls
+        .into_iter()
+        .find(|r| r.campaign_number.as_deref() == Some(campaign))
+        .expect("the stored recall is listed")
+        .finding_id
+}

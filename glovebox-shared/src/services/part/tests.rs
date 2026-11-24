@@ -13,25 +13,12 @@ fn label_joins_manufacturer_and_number() {
 use super::*;
 use crate::{
     inputs::part::ReplacePatch,
-    test_support::{VehicleFixture, assert_empty, date, row_count, test_db},
+    test_support::{assert_empty, date, row_count, test_db},
 };
 
-async fn seed_vehicle(db: &impl ConnectionTrait) -> i32 {
-    VehicleFixture::new().insert_id(db).await
-}
+use crate::test_support::seed_vehicle;
 
-async fn seed_service(db: &impl ConnectionTrait, vehicle_id: i32) -> i32 {
-    use crate::entities::service_record;
-    service_record::ActiveModel {
-        vehicle_id: Set(vehicle_id),
-        service_date: Set(date("2024-01-01")),
-        ..Default::default()
-    }
-    .insert(db)
-    .await
-    .unwrap()
-    .id
-}
+use crate::test_support::seed_service;
 
 fn fitting(status: PartStatus) -> Fitting {
     Fitting::from_fields(

@@ -636,9 +636,7 @@ mod tests {
     };
     use chrono::NaiveDate;
 
-    async fn seed_vehicle(db: &impl ConnectionTrait) -> i32 {
-        VehicleFixture::new().insert_id(db).await
-    }
+    use crate::test_support::seed_vehicle;
 
     // Job edits racing on one file from several pools all succeed: each opens
     // with the write lock, which a write to an FTS-indexed table needs.

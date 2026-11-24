@@ -162,12 +162,10 @@ mod tests {
             incident::NewIncident, mileage::NewMileageEntry, service_record::NewServiceRecord,
         },
         services::{incident as incident_svc, mileage as mileage_svc, service_record as svc_svc},
-        test_support::{VehicleFixture, date, test_db},
+        test_support::{date, test_db},
     };
 
-    async fn seed_vehicle(db: &impl ConnectionTrait) -> i32 {
-        VehicleFixture::new().insert_id(db).await
-    }
+    use crate::test_support::seed_vehicle;
 
     fn service(date: &str, description: &str, mileage: Option<i32>) -> NewServiceRecord {
         NewServiceRecord {

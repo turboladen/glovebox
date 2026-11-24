@@ -825,26 +825,13 @@ mod tests {
     use super::*;
     use crate::{
         entities::{incident::IncidentCategory, work_item, work_item::JobStatus},
-        test_support::{VehicleFixture, date, test_db},
+        test_support::{date, test_db},
         vocab::Vocabulary,
     };
 
-    async fn seed_vehicle(db: &impl ConnectionTrait) -> i32 {
-        VehicleFixture::new().insert_id(db).await
-    }
+    use crate::test_support::seed_vehicle;
 
-    async fn seed_service(db: &impl ConnectionTrait, vehicle_id: i32) -> i32 {
-        use crate::entities::service_record;
-        service_record::ActiveModel {
-            vehicle_id: Set(vehicle_id),
-            service_date: Set(date("2024-01-01")),
-            ..Default::default()
-        }
-        .insert(db)
-        .await
-        .unwrap()
-        .id
-    }
+    use crate::test_support::seed_service;
 
     fn new_incident(title: &str, category: IncidentCategory) -> NewIncident {
         NewIncident {
