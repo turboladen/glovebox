@@ -196,7 +196,8 @@ named as things a person would say:
   `correct_service`, `delete_service`
 - `parts.rs`: `record_part`, `list_parts`, `correct_part`, `delete_part`
 - `incidents.rs`: `log_incident`, `save_note`, `list_incidents`, `update_incident`,
-  `add_incident_followup`, `delete_incident`
+  `add_incident_followup`, `update_incident_followup`, `delete_incident_followup`,
+  `delete_incident`
 - `planning.rs`: `plan_work`, `list_planned_work`, `whats_coming`, `update_planned_work`,
   `delete_planned_work`
 - `checklist.rs`: `plan_appointment`, `update_appointment`, `list_appointments`,
@@ -274,6 +275,12 @@ lines. `cost_summary`'s `covered_work` lists the services with covered work, eac
 `covered_cents`). `miles_covered` (the highest odometer reading minus the earliest service or
 reading, dated by `history_starts_on`) is the base of the per-1,000-miles figure, which stays null
 until the records cover 1,000 miles (`costs::MIN_MILES_FOR_COST_PER_1000`).
+
+An incident's followups are added, corrected and deleted one at a time (`incident::create_followup`,
+`update_followup`, `delete_followup`). A correction or a delete names the vehicle, the incident and
+the followup, and a followup of another incident or another vehicle is the same `NotFound` as one
+that does not exist. A followup has no `updated_at`, and the `fts_incident_followups` triggers keep
+search in step with both writes.
 
 **Job checklist.** An appointment groups jobs (`work_items`) and to-dos for one shop trip, a job
 lists needs, and a need lists researched options. A need's stage (`undecided`, `to_order`,

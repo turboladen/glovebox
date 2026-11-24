@@ -551,3 +551,155 @@ async fn resolving_by_hand_shows_in_the_incident_and_reopening_clears_it() {
     let reopened = t.call("update_incident", args(false)).await;
     assert_eq!(reopened["resolved_by_hand"], false, "got: {reopened}");
 }
+
+#[tokio::test]
+async fn a_followup_is_corrected_and_deleted() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let log = |vehicle_id: i32, title: &'static str| {
+        t.call(
+            "log_incident",
+            json!({ "vehicle_id": vehicle_id, "title": title, "category": "noise" }),
+        )
+    };
+    let iid = log(v.id, "Squeak").await["id"].clone();
+    let followup = t
+        .call(
+            "add_incident_followup",
+            json!({
+                "vehicle_id": v.id,
+                "incident_id": iid,
+                "occurred_at": "2026-06-02",
+                "summary": "Shop could not reproduce the squeak",
+                "contact_method": "phone",
+                "notes": "Ask again in winter"
+            }),
+        )
+        .await;
+    let fid = followup["id"].clone();
+
+    let updated = t
+        .call(
+            "update_incident_followup",
+            json!({
+                "vehicle_id": v.id,
+                "incident_id": iid,
+                "followup_id": fid,
+                "summary": "Shop heard the chirp on a cold start",
+                "notes": null
+            }),
+        )
+        .await;
+    assert_eq!(updated["summary"], "Shop heard the chirp on a cold start");
+    assert!(updated["notes"].is_null(), "null clears notes: {updated}");
+    assert_eq!(updated["contact_method"], "phone", "absent keys stay put");
+    assert_eq!(updated["occurred_at"], "2026-06-02");
+
+    let search = |query: &'static str| {
+        t.call(
+            "search_records",
+            json!({ "vehicle_id": v.id, "query": query }),
+        )
+    };
+    assert_eq!(search("reproduce").await, json!([]));
+    assert_eq!(search("chirp").await.as_array().map(Vec::len), Some(1));
+
+    let err = t
+        .call_err(
+            "update_incident_followup",
+            json!({
+                "vehicle_id": v.id,
+                "incident_id": iid,
+                "followup_id": fid,
+                "summary": "x",
+                "bogus": 1
+            }),
+        )
+        .await;
+    assert!(err.contains("bogus"), "got: {err}");
+
+    let deleted = t
+        .call(
+            "delete_incident_followup",
+            json!({ "vehicle_id": v.id, "incident_id": iid, "followup_id": fid }),
+        )
+        .await;
+    assert_eq!(
+        deleted,
+        json!({ "deleted": "incident_followup", "id": fid })
+    );
+    let full = t
+        .call(
+            "get_incident",
+            json!({ "vehicle_id": v.id, "incident_id": iid }),
+        )
+        .await;
+    assert_eq!(full["followups"], json!([]));
+    assert_eq!(search("chirp").await, json!([]));
+}
+
+#[tokio::test]
+async fn a_followup_of_another_parent_reads_like_a_missing_one() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let other = vehicle::create(&t.db, new_vehicle("Other")).await.unwrap();
+    let log = |title: &'static str| {
+        t.call(
+            "log_incident",
+            json!({ "vehicle_id": v.id, "title": title, "category": "noise" }),
+        )
+    };
+    let iid = log("Squeak").await["id"].clone();
+    let sibling = log("Rattle").await["id"].clone();
+    let fid = t
+        .call(
+            "add_incident_followup",
+            json!({
+                "vehicle_id": v.id,
+                "incident_id": iid,
+                "occurred_at": "2026-06-02",
+                "summary": "Shop could not reproduce the squeak"
+            }),
+        )
+        .await["id"]
+        .clone();
+
+    // Another vehicle and another incident of the same vehicle both read
+    // like a followup that does not exist.
+    for (tool, extra) in [
+        ("update_incident_followup", json!({ "summary": "x" })),
+        ("delete_incident_followup", json!({})),
+    ] {
+        let args =
+            |vehicle_id: i32, incident_id: &serde_json::Value, followup_id: &serde_json::Value| {
+                let mut args = json!({
+                    "vehicle_id": vehicle_id,
+                    "incident_id": incident_id,
+                    "followup_id": followup_id
+                });
+                for (k, v) in extra.as_object().unwrap() {
+                    args[k] = v.clone();
+                }
+                args
+            };
+        let missing = t.call_err(tool, args(v.id, &iid, &json!(99999))).await;
+        for wrong in [args(other.id, &iid, &fid), args(v.id, &sibling, &fid)] {
+            let wrong = t.call_err(tool, wrong).await;
+            assert_eq!(
+                wrong.replace(&fid.to_string(), "N"),
+                missing.replace("99999", "N"),
+                "{tool}: a wrong-parent id must read like a nonexistent one"
+            );
+        }
+    }
+    let full = t
+        .call(
+            "get_incident",
+            json!({ "vehicle_id": v.id, "incident_id": iid }),
+        )
+        .await;
+    assert_eq!(
+        full["followups"][0]["summary"],
+        "Shop could not reproduce the squeak"
+    );
+}

@@ -150,8 +150,10 @@ Only a job linked with `incident_id` resolves its incident. Before any `plan_wor
 read the open incidents from `whats_coming`. When the job addresses one, say which and ask Steve
 whether to link it. When a job is already planned without the link, `update_planned_work` sets
 `incident_id`. Use `add_incident_followup` to log a
-phone call or a second opinion, and `update_planned_work` with `status` set to `dropped` when Steve
-decides not to do the work.
+phone call or a second opinion, `update_incident_followup` to correct one already logged (send
+only the fields to change, and `null` clears `contact_method`, `contact_with` or `notes`),
+`delete_incident_followup` to remove one logged by mistake, and `update_planned_work` with
+`status` set to `dropped` when Steve decides not to do the work.
 
 ## Planning a job
 

@@ -14,7 +14,7 @@ use glovebox_shared::{
     },
     error::DomainResult,
     inputs::{
-        incident::{NewFollowup, UpdateIncident},
+        incident::{NewFollowup, UpdateFollowup, UpdateIncident},
         part::{Fitting, InstallPatch, ReplacePatch, UpdatePart},
         schedule::{NewScheduleItem, UpdateScheduleItem},
         service_record::UpdateServiceRecord,
@@ -846,6 +846,69 @@ impl AddIncidentFollowupInput {
             },
         ))
     }
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateIncidentFollowupInput {
+    /// Vehicle id, from `list_vehicles`.
+    pub vehicle_id: i32,
+    /// Id of the incident the followup belongs to, from `list_incidents`.
+    pub incident_id: i32,
+    /// Followup id, from the incident's `followups` in `list_incidents` or `get_incident`.
+    pub followup_id: i32,
+    /// When the contact happened, `YYYY-MM-DD HH:MM:SS` or just `YYYY-MM-DD`.
+    pub occurred_at: Option<String>,
+    /// What happened or was said. A followup always has one, so `null` is the same as leaving it out.
+    pub summary: Option<String>,
+    /// How, e.g. `phone`, `email`.
+    ///
+    /// Send `null` to clear it; omit the key to leave it unchanged.
+    #[serde(default, deserialize_with = "nullable")]
+    #[schemars(with = "Option<String>")]
+    pub contact_method: Option<Option<String>>,
+    /// Who with.
+    ///
+    /// Send `null` to clear it; omit the key to leave it unchanged.
+    #[serde(default, deserialize_with = "nullable")]
+    #[schemars(with = "Option<String>")]
+    pub contact_with: Option<Option<String>>,
+    /// Free-form notes.
+    ///
+    /// Send `null` to clear it; omit the key to leave it unchanged.
+    #[serde(default, deserialize_with = "nullable")]
+    #[schemars(with = "Option<String>")]
+    pub notes: Option<Option<String>>,
+}
+
+impl UpdateIncidentFollowupInput {
+    pub fn into_domain(self) -> DomainResult<(i32, i32, i32, UpdateFollowup)> {
+        Ok((
+            self.vehicle_id,
+            self.incident_id,
+            self.followup_id,
+            UpdateFollowup {
+                occurred_at: dates::parse_optional_day_or_time("occurred_at", self.occurred_at)?,
+                summary: self.summary,
+                contact_method: self.contact_method,
+                contact_with: self.contact_with,
+                notes: self.notes,
+            },
+        ))
+    }
+}
+
+// The field names are the ids the tool accepts.
+#[allow(clippy::struct_field_names)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DeleteIncidentFollowupInput {
+    /// Vehicle id, from `list_vehicles`.
+    pub vehicle_id: i32,
+    /// Id of the incident the followup belongs to, from `list_incidents`.
+    pub incident_id: i32,
+    /// Followup id, from the incident's `followups` in `list_incidents` or `get_incident`.
+    pub followup_id: i32,
 }
 
 #[derive(Deserialize, JsonSchema)]

@@ -96,3 +96,14 @@ pub struct NewFollowup {
     pub summary: String,
     pub notes: Option<String>,
 }
+
+/// A correction to a followup. A field left `None` keeps its stored value, and
+/// `Some(None)` clears a field that may be empty.
+#[derive(Default)]
+pub struct UpdateFollowup {
+    pub occurred_at: Option<crate::dates::DayOrTime>,
+    pub summary: Option<String>,
+    pub contact_method: Option<Option<String>>,
+    pub contact_with: Option<Option<String>>,
+    pub notes: Option<Option<String>>,
+}

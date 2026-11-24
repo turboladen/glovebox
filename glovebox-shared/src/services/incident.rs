@@ -14,7 +14,7 @@ use crate::{
         service_record, work_item,
     },
     error::{DomainError, DomainResult},
-    inputs::incident::{NewFollowup, NewIncident, UpdateIncident},
+    inputs::incident::{NewFollowup, NewIncident, UpdateFollowup, UpdateIncident},
 };
 
 /// Fetch an incident scoped to its owning vehicle. A wrong-vehicle lookup is
@@ -745,6 +745,78 @@ pub async fn create_followup<C: ConnectionTrait + TransactionTrait>(
     let out = model.insert(db).await?;
     txn.commit().await?;
     Ok(out)
+}
+
+/// Fetch a followup scoped to its incident and that incident's vehicle. A
+/// followup of another incident or another vehicle is indistinguishable from
+/// a nonexistent one.
+async fn require_followup(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    incident_id: i32,
+    id: i32,
+) -> DomainResult<incident_followup::Model> {
+    incident_followup::Entity::find_by_id(id)
+        .filter(incident_followup::Column::IncidentId.eq(incident_id))
+        .inner_join(incident::Entity)
+        .filter(incident::Column::VehicleId.eq(vehicle_id))
+        .one(db)
+        .await?
+        .ok_or_else(|| DomainError::NotFound(format!("Followup {id} not found")))
+}
+
+/// Correct a followup of the vehicle's incident and return the stored row.
+/// Only the fields the input carries change.
+pub async fn update_followup<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    incident_id: i32,
+    id: i32,
+    input: UpdateFollowup,
+) -> DomainResult<incident_followup::Model> {
+    let txn = super::begin_write(db).await?;
+    let existing = require_followup(&txn, vehicle_id, incident_id, id).await?;
+
+    let mut active: incident_followup::ActiveModel = existing.clone().into();
+    if let Some(v) = input.occurred_at {
+        active.occurred_at = Set(v);
+    }
+    if let Some(v) = input.summary {
+        active.summary = Set(v);
+    }
+    if let Some(v) = input.contact_method {
+        active.contact_method = Set(v);
+    }
+    if let Some(v) = input.contact_with {
+        active.contact_with = Set(v);
+    }
+    if let Some(v) = input.notes {
+        active.notes = Set(v);
+    }
+    // SeaORM refuses an update that sets no column, so a call that changes
+    // nothing answers with the stored row.
+    let out = if active.is_changed() {
+        active.update(&txn).await?
+    } else {
+        existing
+    };
+    txn.commit().await?;
+    Ok(out)
+}
+
+/// Delete one followup of the vehicle's incident. The incident and its other
+/// followups are kept.
+pub async fn delete_followup<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    incident_id: i32,
+    id: i32,
+) -> DomainResult<()> {
+    let txn = super::begin_write(db).await?;
+    let existing = require_followup(&txn, vehicle_id, incident_id, id).await?;
+    existing.delete(&txn).await?;
+    txn.commit().await?;
+    Ok(())
 }
 
 /// The incidents only this service resolves that still read resolved, oldest
@@ -1624,6 +1696,191 @@ mod tests {
         crate::test_support::assert_empty(
             &get(&db, owner, inc.incident.id).await.unwrap().followups,
         );
+    }
+
+    fn followup(summary: &str) -> NewFollowup {
+        NewFollowup {
+            occurred_at: date("2024-05-02"),
+            contact_method: Some("phone".into()),
+            contact_with: Some("Adjuster".into()),
+            summary: summary.into(),
+            notes: Some("Left a voicemail".into()),
+        }
+    }
+
+    async fn search_hits(db: &DatabaseConnection, vehicle_id: i32, query: &str) -> usize {
+        let scope = crate::services::search::SearchScope::All;
+        crate::services::search::search(db, query, scope, Some(vehicle_id))
+            .await
+            .unwrap()
+            .len()
+    }
+
+    #[tokio::test]
+    async fn update_followup_changes_only_the_fields_sent_and_search_follows() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let inc = create(&db, vid, new_incident("crash", IncidentCategory::Accident))
+            .await
+            .unwrap()
+            .incident
+            .id;
+        let f = create_followup(&db, vid, inc, followup("Filed the claim"))
+            .await
+            .unwrap();
+        assert_eq!(search_hits(&db, vid, "claim").await, 1);
+
+        let updated = update_followup(
+            &db,
+            vid,
+            inc,
+            f.id,
+            UpdateFollowup {
+                occurred_at: Some(date("2024-05-03 09:30:00")),
+                summary: Some("Adjuster approved the estimate".into()),
+                notes: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.summary, "Adjuster approved the estimate");
+        assert_eq!(updated.occurred_at, date("2024-05-03 09:30:00"));
+        assert_eq!(updated.notes, None);
+        assert_eq!(updated.contact_method.as_deref(), Some("phone"));
+        assert_eq!(updated.contact_with.as_deref(), Some("Adjuster"));
+        assert_eq!(updated.created_at, f.created_at);
+
+        let stored = get(&db, vid, inc).await.unwrap().followups;
+        assert_eq!(stored, vec![updated]);
+        assert_eq!(search_hits(&db, vid, "claim").await, 0);
+        assert_eq!(search_hits(&db, vid, "estimate").await, 1);
+    }
+
+    #[tokio::test]
+    async fn update_followup_with_no_fields_returns_the_stored_row() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let inc = create(&db, vid, new_incident("crash", IncidentCategory::Accident))
+            .await
+            .unwrap()
+            .incident
+            .id;
+        let f = create_followup(&db, vid, inc, followup("Filed the claim"))
+            .await
+            .unwrap();
+        let same = update_followup(&db, vid, inc, f.id, UpdateFollowup::default())
+            .await
+            .unwrap();
+        assert_eq!(same, f);
+    }
+
+    #[tokio::test]
+    async fn delete_followup_removes_one_row_and_its_search_entry() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let inc = create(&db, vid, new_incident("crash", IncidentCategory::Accident))
+            .await
+            .unwrap()
+            .incident
+            .id;
+        let doomed = create_followup(&db, vid, inc, followup("Filed the claim"))
+            .await
+            .unwrap();
+        let kept = create_followup(&db, vid, inc, followup("Booked the bodyshop"))
+            .await
+            .unwrap();
+
+        delete_followup(&db, vid, inc, doomed.id).await.unwrap();
+
+        assert_eq!(get(&db, vid, inc).await.unwrap().followups, vec![kept]);
+        assert_eq!(search_hits(&db, vid, "claim").await, 0);
+        assert_eq!(search_hits(&db, vid, "bodyshop").await, 1);
+        assert!(matches!(
+            delete_followup(&db, vid, inc, doomed.id).await.unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+    }
+
+    // A followup named with another vehicle or another incident answers
+    // exactly as a followup that does not exist, and nothing is written.
+    #[tokio::test]
+    async fn a_followup_of_another_parent_is_not_found_and_stays_unchanged() {
+        let db = test_db().await;
+        let owner = seed_vehicle(&db).await;
+        let other = seed_vehicle(&db).await;
+        let inc = create(
+            &db,
+            owner,
+            new_incident("crash", IncidentCategory::Accident),
+        )
+        .await
+        .unwrap()
+        .incident
+        .id;
+        let sibling = create(&db, owner, new_incident("rattle", IncidentCategory::Noise))
+            .await
+            .unwrap()
+            .incident
+            .id;
+        let elsewhere = create(&db, other, new_incident("drip", IncidentCategory::Noise))
+            .await
+            .unwrap()
+            .incident
+            .id;
+        let f = create_followup(&db, owner, inc, followup("Filed the claim"))
+            .await
+            .unwrap();
+        let missing = format!("Followup {} not found", f.id);
+
+        // The wrong vehicle, a sibling incident of the right vehicle, and the
+        // other vehicle's own incident.
+        for (vehicle_id, incident_id) in [(other, inc), (owner, sibling), (other, elsewhere)] {
+            let change = UpdateFollowup {
+                summary: Some("intruder".into()),
+                ..Default::default()
+            };
+            let err = update_followup(&db, vehicle_id, incident_id, f.id, change)
+                .await
+                .unwrap_err();
+            assert_eq!(err.to_string(), missing);
+            let err = delete_followup(&db, vehicle_id, incident_id, f.id)
+                .await
+                .unwrap_err();
+            assert_eq!(err.to_string(), missing);
+        }
+        let err = update_followup(&db, owner, inc, f.id + 1000, UpdateFollowup::default())
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!("Followup {} not found", f.id + 1000)
+        );
+        assert_eq!(get(&db, owner, inc).await.unwrap().followups, vec![f]);
+    }
+
+    // A delete that reads the followup before it holds the write lock lets
+    // every racer see the row and answer `Ok`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn racing_followup_deletes_remove_the_row_once() {
+        let (_dir, pools) = crate::test_support::race_pools().await;
+        let first = &pools[0];
+        let v = seed_vehicle(first).await;
+        let incident = create(first, v, new_incident("Rattle", IncidentCategory::Noise))
+            .await
+            .unwrap()
+            .incident
+            .id;
+        let f = create_followup(first, v, incident, followup("Call"))
+            .await
+            .unwrap()
+            .id;
+        let results = crate::test_support::race(&pools, |_, db| async move {
+            delete_followup(&db, v, incident, f).await
+        })
+        .await;
+        let deleted = results.iter().filter(|r| r.is_ok()).count();
+        assert_eq!(deleted, 1, "{results:?}");
     }
 
     // --- queries over accident-category incidents with links -------------------
