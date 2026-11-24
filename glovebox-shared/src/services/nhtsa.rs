@@ -82,8 +82,9 @@ pub struct RecallCheckResult {
 /// recalls cover every car of that line.
 ///
 /// # Errors
-/// A message for an empty make or model, a model line NHTSA does not list, a
-/// failed request, or a lookup that takes longer than 30 seconds in all.
+/// A message for an empty make or model, a make, model line or year NHTSA
+/// does not list, a failed request, or a lookup that outlasts its time
+/// budget across every name it tries.
 pub async fn check_recalls(
     make: &str,
     model: &str,
@@ -104,29 +105,26 @@ async fn lookup(
         return Err("Make and model are required for recall lookup".to_string());
     }
     let every_name = async {
-        // NHTSA answers 400 for a model it does not list.
+        // NHTSA answers 400 for a model it does not list. It answers 400 for
+        // an unknown make or year as well, and does not say which it refused.
         for end in (1..=words.len()).rev() {
             let name = words[..end].join(" ");
             match fetch_recalls(base_url, make, &name, model_year).await {
                 Ok(result) => return Ok(result),
                 Err(NhtsaError::BadRequest(_)) => {
-                    tracing::warn!("NHTSA does not list model '{name}' for {make} {model_year}");
+                    tracing::debug!("NHTSA does not list model '{name}' for {make} {model_year}");
                 }
                 Err(e) => return Err(e.to_string()),
             }
         }
         Err(format!(
-            "NHTSA Recalls API does not recognize model '{model}' for {make} {model_year}"
+            "NHTSA does not list a {model_year} {make} {model}. Check the vehicle's make, model \
+             and year."
         ))
     };
     tokio::time::timeout(budget, every_name)
         .await
-        .unwrap_or_else(|_| {
-            Err(format!(
-                "NHTSA did not answer within {} seconds",
-                budget.as_secs()
-            ))
-        })
+        .unwrap_or_else(|_| Err(format!("NHTSA did not answer within {budget:?}")))
 }
 
 #[derive(Debug)]
@@ -257,6 +255,8 @@ mod tests {
     // Stands in for NHTSA on a local port. It answers by the `model` in the
     // query: `Golf` has one recall, `Stalls` never answers in time, and any
     // other model is a 400. The returned counter holds the requests seen.
+    // Every reply closes its connection: the shared client outlives a test's
+    // runtime, and a connection kept open by one test would be dead in the next.
     async fn fake_nhtsa() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}/recalls", listener.local_addr().unwrap());
@@ -328,7 +328,8 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             err,
-            "NHTSA Recalls API does not recognize model 'Jetta GLI' for Volkswagen 2017"
+            "NHTSA does not list a 2017 Volkswagen Jetta GLI. Check the vehicle's make, model and \
+             year."
         );
     }
 
@@ -340,7 +341,7 @@ mod tests {
         let err = lookup(&base, budget, "Volkswagen", "Stalls", 2017)
             .await
             .unwrap_err();
-        assert!(err.contains("did not answer"), "got: {err}");
+        assert_eq!(err, "NHTSA did not answer within 200ms");
         assert!(started.elapsed() < std::time::Duration::from_secs(5));
     }
 

@@ -126,7 +126,8 @@ maintenance, planned jobs, open recalls and open incidents, for the home page). 
 `seed::demo` fills an empty database with made-up data that exercises every need stage.
 `vin_decode` and `nhtsa` make the only network calls, through one shared client
 (`nhtsa::get`). A recall lookup drops the model's last word until NHTSA lists the name, within
-30 seconds in all, and `check_recalls` names a broader line it asked about in `searched_model`.
+one time budget for the whole lookup, and `check_recalls` names a broader line it asked about in
+`searched_model` (`docs/adr/0023-recalls-are-looked-up-by-model-line.md`).
 
 **Money** (`money.rs`): `money::parse_dollars` reads a dollar amount the owner typed into whole
 cents, and `money::format_cents` prints cents as dollars. The web forms and the checklist's

@@ -96,6 +96,13 @@ where
             let mut check = record_recalls(db, vehicle_id, &result.recalls).await?;
             let own: Vec<&str> = model.split_whitespace().collect();
             if !result.model.eq_ignore_ascii_case(&own.join(" ")) {
+                if check.recalls.is_empty() {
+                    check.message = Some(format!(
+                        "NHTSA does not list the {model}; it lists no recalls for the {} line of \
+                         this make and year.",
+                        result.model
+                    ));
+                }
                 check.searched_model = Some(result.model);
             }
             Ok(check)
@@ -411,6 +418,18 @@ mod tests {
 
         let by_line = check_recalls_with(&db, vid, answer("Golf")).await.unwrap();
         assert_eq!(by_line.searched_model.as_deref(), Some("Golf"));
+        assert_eq!(
+            by_line.message.as_deref(),
+            Some(
+                "NHTSA does not list the Golf GTI; it lists no recalls for the Golf line of this \
+                 make and year."
+            )
+        );
+        // The tool description and the project prompt promise this key.
+        assert_eq!(
+            serde_json::to_value(&by_line).unwrap()["searched_model"],
+            "Golf"
+        );
         let by_model = check_recalls_with(&db, vid, answer("golf gti"))
             .await
             .unwrap();
