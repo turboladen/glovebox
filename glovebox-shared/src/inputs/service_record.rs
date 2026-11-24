@@ -26,11 +26,8 @@ pub struct NewServiceRecord {
     pub mileage: Option<i32>,
     pub description: Option<String>,
     pub parts_cost_cents: Option<i32>,
-    pub parts_cost_currency: Option<String>,
     pub labor_cost_cents: Option<i32>,
-    pub labor_cost_currency: Option<String>,
     pub total_cost_cents: Option<i32>,
-    pub total_cost_currency: Option<String>,
     /// The shop that did the work; a blank name names none.
     pub shop: Option<ShopChoice>,
     pub notes: Option<String>,
@@ -73,11 +70,8 @@ pub struct UpdateServiceRecord {
     pub mileage: Option<Option<i32>>,
     pub description: Option<Option<String>>,
     pub parts_cost_cents: Option<Option<i32>>,
-    pub parts_cost_currency: Option<Option<String>>,
     pub labor_cost_cents: Option<Option<i32>>,
-    pub labor_cost_currency: Option<Option<String>>,
     pub total_cost_cents: Option<Option<i32>>,
-    pub total_cost_currency: Option<Option<String>>,
     pub shop: Option<Option<ShopChoice>>,
     pub notes: Option<Option<String>>,
     /// Plain option: the column is non-nullable, so there is no "clear" case.

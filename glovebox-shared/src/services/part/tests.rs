@@ -42,7 +42,6 @@ fn minimal_part(name: &str, installed_service_id: Option<i32>) -> NewPart {
         seller: None,
         purchase_date: None,
         cost_cents: None,
-        cost_currency: None,
         manufacturer_url: None,
         retailer_url: None,
         fitting: installed_service_id.map_or(NewFitting::Purchased, |id| {

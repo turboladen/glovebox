@@ -63,7 +63,7 @@ fn validate_mileage(mileage: Option<i32>) -> DomainResult<()> {
 
 /// Who paid for a line: its own `paid_by` when it has one, otherwise the
 /// service's.
-pub fn effective_payer(line_paid_by: Option<Payer>, service_paid_by: Payer) -> Payer {
+pub(crate) fn effective_payer(line_paid_by: Option<Payer>, service_paid_by: Payer) -> Payer {
     line_paid_by.unwrap_or(service_paid_by)
 }
 
@@ -940,11 +940,8 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
         mileage: Set(input.mileage),
         description: Set(input.description),
         parts_cost_cents: Set(input.parts_cost_cents),
-        parts_cost_currency: Set(input.parts_cost_currency),
         labor_cost_cents: Set(input.labor_cost_cents),
-        labor_cost_currency: Set(input.labor_cost_currency),
         total_cost_cents: Set(input.total_cost_cents),
-        total_cost_currency: Set(input.total_cost_currency),
         shop_id: Set(shop_id),
         notes: Set(input.notes),
         paid_by: Set(input.paid_by.unwrap_or(Payer::Owner)),
@@ -1122,20 +1119,11 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     if let Some(v) = input.parts_cost_cents {
         active.parts_cost_cents = Set(v);
     }
-    if let Some(v) = input.parts_cost_currency {
-        active.parts_cost_currency = Set(v);
-    }
     if let Some(v) = input.labor_cost_cents {
         active.labor_cost_cents = Set(v);
     }
-    if let Some(v) = input.labor_cost_currency {
-        active.labor_cost_currency = Set(v);
-    }
     if let Some(v) = input.total_cost_cents {
         active.total_cost_cents = Set(v);
-    }
-    if let Some(v) = input.total_cost_currency {
-        active.total_cost_currency = Set(v);
     }
     if let Some(v) = shop_id {
         active.shop_id = Set(v);

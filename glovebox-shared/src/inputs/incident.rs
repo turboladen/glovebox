@@ -75,11 +75,8 @@ pub struct UpdateIncident {
     pub insurance_adjuster: Option<Option<String>>,
     pub insurance_adjuster_phone: Option<Option<String>>,
     pub total_repair_cost_cents: Option<Option<i32>>,
-    pub total_repair_cost_currency: Option<Option<String>>,
     pub deductible_cents: Option<Option<i32>>,
-    pub deductible_currency: Option<Option<String>>,
     pub insurance_payout_cents: Option<Option<i32>>,
-    pub insurance_payout_currency: Option<Option<String>>,
     pub recurrence_of_id: Option<Option<i32>>,
     /// When present, replaces the services that resolved the incident
     /// wholesale and marks it resolved unless `resolved` says otherwise. An

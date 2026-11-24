@@ -312,7 +312,7 @@ pub async fn calculate_reminders(
 
 /// [`calculate_reminders`] as of `today`.
 #[allow(clippy::too_many_lines)]
-pub async fn calculate_reminders_on(
+pub(crate) async fn calculate_reminders_on(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     today: NaiveDate,
@@ -531,7 +531,7 @@ fn odometer_on(
 
 /// Writes a mileage with a comma between thousands, such as `61,200`.
 #[must_use]
-pub fn miles_label(miles: i32) -> String {
+pub(crate) fn miles_label(miles: i32) -> String {
     let digits = miles.unsigned_abs().to_string();
     let mut out = String::from(if miles < 0 { "-" } else { "" });
     for (i, digit) in digits.chars().enumerate() {

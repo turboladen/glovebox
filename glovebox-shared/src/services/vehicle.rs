@@ -27,7 +27,7 @@ pub async fn require(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult
 /// # Errors
 /// `NotFound` for a missing vehicle; `BadRequest` for an archived one, since
 /// no garage list would show the work.
-pub async fn require_in_garage(
+pub(crate) async fn require_in_garage(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
 ) -> DomainResult<vehicle::Model> {
@@ -121,7 +121,6 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
         color: Set(input.color),
         purchase_date: Set(input.purchase_date),
         purchase_price_cents: Set(input.purchase_price_cents),
-        purchase_price_currency: Set(input.purchase_price_currency),
         purchase_mileage: Set(input.purchase_mileage),
         notes: Set(input.notes),
         warranty_expires_on: Set(input.warranty_expires_on),
@@ -272,9 +271,6 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     if let Some(v) = input.purchase_price_cents {
         active.purchase_price_cents = Set(v);
     }
-    if let Some(v) = input.purchase_price_currency {
-        active.purchase_price_currency = Set(v);
-    }
     if let Some(v) = input.purchase_mileage {
         active.purchase_mileage = Set(v);
     }
@@ -283,9 +279,6 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     }
     if let Some(v) = input.sold_price_cents {
         active.sold_price_cents = Set(v);
-    }
-    if let Some(v) = input.sold_price_currency {
-        active.sold_price_currency = Set(v);
     }
     if let Some(v) = input.sold_mileage {
         active.sold_mileage = Set(v);
@@ -538,7 +531,6 @@ mod tests {
                 color: None,
                 purchase_date: None,
                 purchase_price_cents: None,
-                purchase_price_currency: None,
                 purchase_mileage: None,
                 notes: None,
                 warranty_expires_on: None,
