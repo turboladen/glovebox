@@ -136,6 +136,13 @@ another six months", record it as two linked records.
 2. Call `plan_work` for the fix, with `incident_id` set to that incident and the shop's timeframe as
    `revisit_by_miles` or `revisit_by_date`. Add `est_cost_cents` when you know it.
 
+The appointment's work sheet prints the title and description of an incident a planned job is
+filed from, as the reported symptom for the shop, while the incident is unresolved and its
+category is not `note`. Whenever you log an incident a job may be filed from, or link a job to
+one with `incident_id`, keep the incident's title and description to what the shop may read, and
+put anything private, such as a claim number or what Steve thinks of the shop, in the incident's
+`notes`, which never print.
+
 Later, when the fix is done, file it with `record_service` and put the planned work's id in
 `work_item_ids`. The incident then resolves with that service, and you tell Steve that it did.
 
@@ -199,8 +206,9 @@ need has a decision, every decision has a reason, and every part ordered has arr
     `odometer` with `odometer_read_on`, leaving out each one that is null. The odometer is the
     newest logged reading, so when its date is old, offer to log today's reading with
     `log_mileage` before he prints. Then show each job with a checkbox, its `symptom` and
-    `symptom_description` when the job was filed from an incident (label them as the reported
-    symptom), the parts he brings with their `label`, and the parts the shop supplies by name,
+    `symptom_description` when they are set (label them as the reported symptom; a job filed
+    from an incident carries them only while the incident is unresolved and is not a `note`),
+    the parts he brings with their `label`, and the parts the shop supplies by name,
     with each job's and part's `notes` beneath it, because those notes print for the shop to
     read. The web page prints the same sheet from the appointment's "Print sheet" link.
 12. When the trip happens, file the invoice with `record_service`, passing `appointment_id`,

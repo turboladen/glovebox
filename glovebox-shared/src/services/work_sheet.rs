@@ -36,8 +36,10 @@ pub struct WorkSheet {
     pub vehicle_description: Option<String>,
     pub vin: Option<String>,
     pub license_plate: Option<String>,
-    /// The newest logged odometer reading, which is never an estimate. It is
-    /// none when no reading is logged.
+    /// The latest logged odometer reading, which is never an estimate. A
+    /// reading logged with no time of day counts as the end of its day, and of
+    /// two at the same moment the higher is the later. It is none when no
+    /// reading is logged.
     pub odometer: Option<i32>,
     /// The day `odometer` was read. It is set exactly when `odometer` is.
     pub odometer_read_on: Option<NaiveDate>,
@@ -69,12 +71,14 @@ pub struct SheetJob {
     pub title: String,
     /// The job's notes for the shop, or none when they are blank.
     pub notes: Option<String>,
-    /// The incident the job was filed from, or none when it was filed from
-    /// none.
+    /// The incident the job was filed from. It is none for a job filed from
+    /// no incident, and for an incident of another vehicle.
     pub incident_id: Option<i32>,
-    /// That incident's title, which is the symptom the owner reported.
+    /// That incident's title, which is the symptom the owner reported. It is
+    /// none when the incident is resolved or its category is `note`.
     pub symptom: Option<String>,
-    /// That incident's description, or none when it is blank.
+    /// That incident's description. It is none when `symptom` is, and when
+    /// the description is blank.
     pub symptom_description: Option<String>,
     pub owner_supplies: Vec<SheetLine>,
     pub shop_supplies: Vec<SheetLine>,
@@ -164,13 +168,17 @@ pub async fn for_appointment(
     let mut unsettled = Vec::new();
     for view in planned {
         let incident = view.job.incident_id.and_then(|id| incidents.get(&id));
+        // A resolved incident is not a current complaint, and a note records
+        // a fact, so neither reads as a symptom for the mechanic to chase.
+        let symptom =
+            incident.filter(|i| !i.resolved && i.category != incident::IncidentCategory::Note);
         let mut job = SheetJob {
             job_id: view.job.id,
             title: view.job.title.clone(),
             notes: view.job.notes.as_deref().and_then(trim_to_none),
             incident_id: incident.map(|i| i.id),
-            symptom: incident.map(|i| i.title.clone()),
-            symptom_description: incident
+            symptom: symptom.map(|i| i.title.clone()),
+            symptom_description: symptom
                 .and_then(|i| i.description.as_deref())
                 .and_then(trim_to_none),
             owner_supplies: Vec::new(),
@@ -302,7 +310,7 @@ mod tests {
         entities::{part::Supplier, work_item::JobStatus},
         inputs::{
             appointment::NewAppointment,
-            incident::NewIncident,
+            incident::{NewIncident, UpdateIncident},
             need::{NewNeed, NewOption, OrderDetails, UpdateNeed},
             part::{NewPart, NewPartContent},
             vehicle::NewVehicle,
@@ -1096,6 +1104,62 @@ mod tests {
                 (None, None, None),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn a_resolved_incident_prints_no_symptom() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let a = appointment_on(&db, v).await;
+        let rattle = incident_on(&db, v, "Rattle", Some("Over bumps.")).await;
+        job_from_incident(&db, v, a, rattle).await;
+        crate::services::incident::update(
+            &db,
+            v,
+            rattle,
+            UpdateIncident {
+                resolved: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let sheet = for_appointment(&db, v, a, today()).await.unwrap();
+
+        let job = only_job(&sheet);
+        assert_eq!(job.incident_id, Some(rattle));
+        assert_eq!(job.symptom, None);
+        assert_eq!(job.symptom_description, None);
+    }
+
+    #[tokio::test]
+    async fn a_note_prints_no_symptom() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let a = appointment_on(&db, v).await;
+        let note = crate::services::incident::create(
+            &db,
+            v,
+            NewIncident {
+                category: crate::entities::incident::IncidentCategory::Note,
+                title: "Wheel lock key is in the glovebox".into(),
+                description: Some("Left pocket.".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .incident
+        .id;
+        job_from_incident(&db, v, a, note).await;
+
+        let sheet = for_appointment(&db, v, a, today()).await.unwrap();
+
+        let job = only_job(&sheet);
+        assert_eq!(job.incident_id, Some(note));
+        assert_eq!(job.symptom, None);
+        assert_eq!(job.symptom_description, None);
     }
 
     #[tokio::test]

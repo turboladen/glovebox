@@ -140,9 +140,11 @@ impl GloveboxMcp {
                        `license_plate`, and `odometer`, the newest logged reading and never an \
                        estimate, read on `odometer_read_on`; each is null when the vehicle has \
                        none), then each planned job. A job filed from an incident carries \
-                       `incident_id`, `symptom` (the incident's title) and `symptom_description` \
-                       (null when blank), which tell the mechanic what the owner noticed; all \
-                       three are null for any other job. Under each job come the parts the owner \
+                       `incident_id`, and, when that incident is unresolved and its category is \
+                       not `note`, `symptom` (the incident's title) and `symptom_description` \
+                       (null when blank), which tell the mechanic what the owner noticed. A \
+                       resolved incident and a note print no symptom, and all three are null for \
+                       a job filed from no incident. Under each job come the parts the owner \
                        brings (`owner_supplies`, with `label`, the part's manufacturer and number \
                        such as \"Akebono ACT1633\", when the part records a number) and the parts \
                        the shop should supply (`shop_supplies`, by name, with no `label` or \

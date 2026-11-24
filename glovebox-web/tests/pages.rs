@@ -1051,13 +1051,17 @@ async fn print_sheet_heading_names_the_car() {
         },
     )
     .await;
-    for (day, miles) in [("2026-09-01", 60_000), ("2026-11-01", 61_000)] {
+    let read_on = common::today() - chrono::Days::new(12);
+    for (day, miles) in [
+        (common::today() - chrono::Days::new(73), 60_000),
+        (read_on, 61_000),
+    ] {
         mileage::create(
             &db,
             v,
             NewMileageEntry {
                 mileage: miles,
-                recorded_at: Some(date::<chrono::NaiveDate>(day).into()),
+                recorded_at: Some(day.into()),
                 source: None,
                 notes: None,
             },
@@ -1083,10 +1087,8 @@ async fn print_sheet_heading_names_the_car() {
     );
     // The page's day is twelve days after the reading, and the sheet prints
     // the reading, not a projection from it.
-    assert!(
-        body.contains(r#"<span class="l">Odometer</span> 61,000 mi on 2026-11-01</span>"#),
-        "{body}"
-    );
+    let odometer = format!(r#"<span class="l">Odometer</span> 61,000 mi on {read_on}</span>"#);
+    assert!(body.contains(&odometer), "{body}");
 }
 
 #[tokio::test]
@@ -1140,7 +1142,7 @@ async fn print_sheet_prints_the_symptom_of_a_job_filed_from_an_incident() {
         NewIncident {
             title: "Rattle from the driver's side".into(),
             description: Some("Over bumps below 20 mph.".into()),
-            occurred_at: Some(date("2026-11-02")),
+            occurred_at: Some((common::today() - chrono::Days::new(11)).into()),
             ..Default::default()
         },
     )

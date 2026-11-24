@@ -30,7 +30,10 @@ mileage the reminders use, because a mechanic would copy it onto the invoice as 
 vehicle with no logged reading prints no odometer. A job filed from an incident prints the
 incident's title and description under the job's title, labeled "Reported symptom", so the
 mechanic reads what the owner noticed and not only the job the owner guessed at. Only an incident
-of the same vehicle prints.
+of the same vehicle prints, and only while it is unresolved and its category is not `note`: a
+resolved incident is not a current complaint, and a note records a fact, not a symptom. The
+incident's notes never print. The tool and field descriptions tell Claude Desktop that the title
+and description of an incident a job is filed from are text the shop reads.
 
 **On paper the sheet is black on white.** It departs from ADR 0008's ledger look: it has no
 panels, pills or tints, and the site header is hidden. Every other page prints as it shows. A job does not split across pages unless it
@@ -60,3 +63,8 @@ visit.
 - One more page and template to keep in step with the checklist. The placement rules live in one
   tested shared function, which both the page and the tool read.
 - "Ask the shop" is a real decision. The checklist shows it like any other supplier choice.
+- The symptom is read from incidents recorded before the sheet printed one. In the backup of
+  2026-11-18, five planned jobs name an incident. All five are on an appointment and all five
+  incidents are unresolved (three `shop_observation`, one `noise`, one `performance`), so each
+  prints its incident's title and description on the next sheet. Two done jobs and one dropped
+  job also name an incident and print nothing, because the sheet lists only planned jobs.

@@ -661,7 +661,7 @@ pub struct UpdateIncidentInput {
     pub incident_id: i32,
     /// New category.
     pub category: Option<IncidentCategory>,
-    /// New title.
+    /// New title. When a planned job is filed from the incident, this prints on the appointment's work sheet for the shop, so keep it to what the shop may read.
     pub title: Option<String>,
     /// When it happened, `YYYY-MM-DD HH:MM:SS` or just `YYYY-MM-DD`.
     pub occurred_at: Option<String>,
@@ -669,7 +669,7 @@ pub struct UpdateIncidentInput {
     pub resolved: Option<bool>,
     /// REPLACES the services that fixed it with exactly this list. A non-empty list marks the incident resolved; an empty list removes every fixing service and marks it unresolved, unless the owner resolved it by hand. A service that completed a job filed from the incident stays whatever the list says, and naming it here changes nothing, so the list alone neither resolves nor reopens the incident while only such services are on it; send `resolved`, or take the job off with `correct_service`. A `resolved` sent in the same call wins. Omit to leave the links alone.
     pub resolved_by_service_ids: Option<Vec<i32>>,
-    /// Longer description.
+    /// Longer description. When a planned job is filed from the incident, this prints on the appointment's work sheet for the shop, so keep it to what the shop may read.
     ///
     /// Send `null` to clear it; omit the key to leave it unchanged.
     #[serde(default, deserialize_with = "nullable")]
@@ -886,7 +886,7 @@ pub struct UpdatePlannedWorkInput {
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<i32>")]
     pub research_finding_id: Option<Option<i32>>,
-    /// Incident this fixes.
+    /// Incident this fixes. While the job is planned and the incident is unresolved and not a `note`, the appointment's work sheet prints the incident's title and description for the shop as the reported symptom, so check that both hold only what the shop may read.
     ///
     /// Send `null` to clear it; omit the key to leave it unchanged.
     #[serde(default, deserialize_with = "nullable")]
