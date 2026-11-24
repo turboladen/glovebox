@@ -45,10 +45,13 @@ jobs:
     if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      GLOVEBOX_NIGHTLY: nightly-2026-10-03
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@nightly-2026-10-03
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.GLOVEBOX_NIGHTLY }}
           components: rustfmt
       - uses: taiki-e/install-action@v2
         with:

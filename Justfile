@@ -19,13 +19,17 @@ web env="live":
 # --- CI ---
 # These recipes are what GitHub Actions runs, so `just ci` reproduces CI locally.
 
-# Format check: nightly rustfmt (rustfmt.toml uses nightly-only options)
+# rustfmt.toml uses nightly-only options, so both format recipes run a nightly
+# toolchain. CI sets GLOVEBOX_NIGHTLY to the dated nightly it installs.
+nightly := env("GLOVEBOX_NIGHTLY", "nightly")
+
+# Format check
 fmt-check:
-    cargo +nightly fmt --all --check
+    cargo +{{nightly}} fmt --all --check
 
 # Apply formatting
 fmt:
-    cargo +nightly fmt --all
+    cargo +{{nightly}} fmt --all
 
 # Layering gate: no axum or rmcp in glovebox-shared
 check-layering:
