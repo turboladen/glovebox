@@ -245,6 +245,43 @@ async fn vehicles_tools_reject_unknown_arguments() {
 }
 
 #[tokio::test]
+async fn a_reading_below_zero_or_dated_ahead_is_refused() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+
+    let negative = t
+        .call_err("log_mileage", json!({ "vehicle_id": v.id, "mileage": -5 }))
+        .await;
+    assert!(
+        negative.contains("mileage: must not be negative"),
+        "{negative}"
+    );
+    let ahead = t
+        .call_err(
+            "log_mileage",
+            json!({ "vehicle_id": v.id, "mileage": 48_000, "recorded_at": "2999-01-01" }),
+        )
+        .await;
+    assert!(
+        ahead.contains("recorded_at: must not be after today"),
+        "{ahead}"
+    );
+    let on_service = t
+        .call_err(
+            "record_service",
+            json!({ "vehicle_id": v.id, "service_date": "2026-05-02", "mileage": -5 }),
+        )
+        .await;
+    assert!(
+        on_service.contains("mileage: must not be negative"),
+        "{on_service}"
+    );
+
+    let listed = t.call("list_mileage", json!({ "vehicle_id": v.id })).await;
+    assert_eq!(listed.as_array().map(Vec::len), Some(0), "got: {listed}");
+}
+
+#[tokio::test]
 async fn a_mistyped_reading_can_be_listed_and_deleted() {
     let t = connect().await;
     let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();

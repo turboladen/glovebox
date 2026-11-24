@@ -96,8 +96,10 @@ pub enum Baseline {
     /// stand in. An overdue item with this baseline has no service on record;
     /// the work is not known to be late.
     Purchase,
-    /// No linked service and no purchase date or mileage: the due point
-    /// counts from today and from zero miles.
+    /// No linked service, and the purchase record lacks the date or the
+    /// mileage the item counts from. A missing date counts from the start of
+    /// the model year, and a vehicle with no model year has no due date. A
+    /// missing mileage counts from zero.
     None,
 }
 
@@ -259,16 +261,26 @@ pub(crate) async fn estimate_mileage(
         .all(db)
         .await?;
 
-    if entries.is_empty() {
+    // A service dated ahead by mistake logs a reading dated ahead, which must
+    // not become the point every estimate starts from.
+    let entries: Vec<_> = entries
+        .into_iter()
+        .filter(|e| e.recorded_at.day() <= today)
+        .collect();
+    // A reading with no time of day counts as the end of its day, as a
+    // service's reading is, although its stored text sorts first. Of two at
+    // the same moment the higher is the later: an odometer only climbs.
+    let Some(latest) = entries
+        .iter()
+        .max_by_key(|e| (e.recorded_at.or_end_of_day(), e.mileage))
+    else {
         let mileage = v.purchase_mileage.unwrap_or(0);
         return Ok((mileage, today, 0.0, true));
-    }
-
-    let latest = &entries[0];
+    };
     let latest_date = latest.recorded_at.day();
     let latest_point = (latest_date, latest.mileage);
 
-    let oldest = entries.last().unwrap();
+    let oldest = entries.last().unwrap_or(latest);
     let window_start = (oldest.recorded_at.day(), oldest.mileage);
     let avg_daily = if (latest_date - window_start.0).num_days() >= RATE_MIN_SPAN_DAYS {
         daily_rate(window_start, latest_point)
@@ -342,7 +354,7 @@ pub async fn calculate_reminders_on(
     // A service filed without an odometer reading is placed by the readings
     // around its date, which are loaded only when there is such a service.
     let readings = if all_services.iter().any(|s| s.mileage.is_none()) {
-        dated_readings(db, &v).await?
+        dated_readings(db, &v, today).await?
     } else {
         Vec::new()
     };
@@ -371,17 +383,20 @@ pub async fn calculate_reminders_on(
                     .mileage
                     .or_else(|| odometer_on(date, &readings, avg_daily_miles))
                     .unwrap_or(v.purchase_mileage.unwrap_or(0));
-                (miles, date)
+                (miles, Some(date))
             }
             None => (
                 v.purchase_mileage.unwrap_or(0),
-                v.purchase_date.unwrap_or(today),
+                v.purchase_date.or_else(|| model_year_start(&v)),
             ),
         };
 
         // Calculate due mileage and date
         let due_at_miles = item.interval_miles.map(|i| baseline_miles + i);
-        let due_at_date = item.interval_months.map(|m| add_months(baseline_date, m));
+        let due_at_date = item
+            .interval_months
+            .zip(baseline_date)
+            .map(|(months, from)| add_months(from, months));
 
         let miles_remaining = due_at_miles.map(|due| due - estimated_mileage);
         let days_remaining = due_at_date.map(|due| (due - today).num_days());
@@ -405,10 +420,12 @@ pub async fn calculate_reminders_on(
                 name: item.name.clone(),
             },
             status,
-            baseline: match (&last_service, &v.purchase_date, &v.purchase_mileage) {
-                (Some(_), _, _) => Baseline::LastService,
-                (None, None, None) => Baseline::None,
-                (None, _, _) => Baseline::Purchase,
+            baseline: if last_service.is_some() {
+                Baseline::LastService
+            } else if purchase_gives_baseline(&v, item) {
+                Baseline::Purchase
+            } else {
+                Baseline::None
             },
             last_service: last_service.map(|s| LastServiceInfo {
                 id: s.id,
@@ -445,12 +462,27 @@ pub async fn calculate_reminders_on(
     })
 }
 
+/// Whether the purchase record holds the date and the mileage `item` counts
+/// from, for each of the two the item has an interval in.
+fn purchase_gives_baseline(v: &vehicle::Model, item: &maintenance_schedule_item::Model) -> bool {
+    let date = item.interval_months.is_none() || v.purchase_date.is_some();
+    let miles = item.interval_miles.is_none() || v.purchase_mileage.is_some();
+    (v.purchase_date.is_some() || v.purchase_mileage.is_some()) && date && miles
+}
+
+/// The first day of the vehicle's model year, which stands in for the date
+/// the car was new. A car is often sold some months before it.
+fn model_year_start(v: &vehicle::Model) -> Option<NaiveDate> {
+    v.year.and_then(|year| NaiveDate::from_ymd_opt(year, 1, 1))
+}
+
 /// The vehicle's odometer readings with their dates, oldest first: every
-/// logged reading, and the purchase reading when the vehicle has both a
-/// purchase date and a purchase mileage.
+/// logged reading dated no later than `today`, and the purchase reading when
+/// the vehicle has both a purchase date and a purchase mileage.
 async fn dated_readings(
     db: &impl ConnectionTrait,
     v: &vehicle::Model,
+    today: NaiveDate,
 ) -> DomainResult<Vec<(NaiveDate, i32)>> {
     let mut readings: Vec<(NaiveDate, i32)> = mileage_log::Entity::find()
         .filter(mileage_log::Column::VehicleId.eq(v.id))
@@ -458,6 +490,7 @@ async fn dated_readings(
         .await?
         .into_iter()
         .map(|log| (log.recorded_at.day(), log.mileage))
+        .filter(|(day, _)| *day <= today)
         .collect();
     if let (Some(date), Some(miles)) = (v.purchase_date, v.purchase_mileage) {
         readings.push((date, miles));
@@ -937,6 +970,86 @@ mod tests {
         .unwrap();
     }
 
+    async fn wipers_every_12_months(db: &DatabaseConnection, vehicle_id: i32) {
+        maintenance_schedule_item::ActiveModel {
+            vehicle_id: Set(Some(vehicle_id)),
+            name: Set("Wipers".into()),
+            interval_months: Set(Some(12)),
+            enabled: Set(true),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap();
+    }
+
+    // With no purchase date and no service, the car's model year is the
+    // earliest the work can have been done.
+    #[tokio::test]
+    async fn a_time_item_with_no_purchase_date_is_measured_from_the_model_year() {
+        let db = test_db().await;
+        let vid = VehicleFixture::new().insert_id(&db).await;
+        vehicle::ActiveModel {
+            id: Set(vid),
+            year: Set(Some(2017)),
+            ..Default::default()
+        }
+        .update(&db)
+        .await
+        .unwrap();
+        wipers_every_12_months(&db, vid).await;
+
+        let wipers = &calculate_reminders(&db, vid).await.unwrap().reminders[0];
+        assert_eq!(wipers.due_at_date, Some(day("2018-01-01")));
+        assert_eq!(wipers.status, DueStatus::Overdue);
+        assert_eq!(wipers.baseline, Baseline::None);
+    }
+
+    #[tokio::test]
+    async fn a_time_item_with_no_date_to_measure_from_has_no_due_date() {
+        let db = test_db().await;
+        let vid = VehicleFixture::new().insert_id(&db).await;
+        wipers_every_12_months(&db, vid).await;
+
+        let wipers = &calculate_reminders(&db, vid).await.unwrap().reminders[0];
+        assert_eq!(wipers.due_at_date, None);
+        assert_eq!(wipers.days_remaining, None);
+        assert_eq!(wipers.trigger, None);
+    }
+
+    // A reading with no time of day is stored as text that sorts before a
+    // timed reading of the same day, and the odometer only climbs.
+    #[tokio::test]
+    async fn the_highest_of_a_days_readings_is_the_latest() {
+        let db = test_db().await;
+        let vid = VehicleFixture::new().insert_id(&db).await;
+        let today = crate::services::today();
+        for (recorded_at, miles) in [
+            (
+                crate::dates::DayOrTime::Time(today.and_hms_opt(8, 0, 0).unwrap()),
+                50_000,
+            ),
+            (crate::dates::DayOrTime::Day(today), 50_400),
+        ] {
+            mileage_log::ActiveModel {
+                vehicle_id: Set(vid),
+                mileage: Set(miles),
+                recorded_at: Set(recorded_at),
+                ..Default::default()
+            }
+            .insert(&db)
+            .await
+            .unwrap();
+        }
+        let v = vehicle::Entity::find_by_id(vid)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        let (estimated, ..) = estimate_mileage(&db, vid, &v, today).await.unwrap();
+        assert_eq!(estimated, 50_400);
+    }
+
     async fn vehicle_bought_2017(db: &DatabaseConnection) -> i32 {
         VehicleFixture::new()
             .purchase_date("2017-03-05")
@@ -1251,5 +1364,101 @@ mod tests {
         assert_eq!(resp.reminders[0].baseline, Baseline::None);
         let json = serde_json::to_value(&resp.reminders[0]).unwrap();
         assert_eq!(json["baseline"], "none");
+    }
+
+    // A purchase mileage alone gives a monthly item nothing to count from.
+    #[tokio::test]
+    async fn a_baseline_is_purchase_only_when_the_purchase_gives_what_the_item_counts_from() {
+        let db = test_db().await;
+        let vid = VehicleFixture::new()
+            .purchase_mileage(30_000)
+            .insert_id(&db)
+            .await;
+        seed_monthly_item(&db, vid, "Wipers").await;
+        maintenance_schedule_item::ActiveModel {
+            vehicle_id: Set(Some(vid)),
+            name: Set("Oil".into()),
+            interval_miles: Set(Some(10_000)),
+            enabled: Set(true),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        let resp = calculate_reminders(&db, vid).await.unwrap();
+        let baseline = |name: &str| {
+            resp.reminders
+                .iter()
+                .find(|r| r.schedule_item.name == name)
+                .unwrap()
+                .baseline
+        };
+        assert_eq!(baseline("Wipers"), Baseline::None);
+        assert_eq!(baseline("Oil"), Baseline::Purchase);
+    }
+
+    async fn estimate_today(db: &DatabaseConnection, vid: i32) -> i32 {
+        let v = vehicle::Entity::find_by_id(vid)
+            .one(db)
+            .await
+            .unwrap()
+            .unwrap();
+        estimate_mileage(db, vid, &v, crate::services::today())
+            .await
+            .unwrap()
+            .0
+    }
+
+    async fn log_at(db: &DatabaseConnection, vid: i32, at: crate::dates::DayOrTime, miles: i32) {
+        mileage_log::ActiveModel {
+            vehicle_id: Set(vid),
+            mileage: Set(miles),
+            recorded_at: Set(at),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap();
+    }
+
+    // The owner mistypes a reading and logs the right one a minute later.
+    #[tokio::test]
+    async fn a_later_timed_reading_corrects_an_earlier_one_of_the_same_day() {
+        let db = test_db().await;
+        let vid = VehicleFixture::new().insert_id(&db).await;
+        let today = crate::services::today();
+        let at = |h, m| crate::dates::DayOrTime::Time(today.and_hms_opt(h, m, 0).unwrap());
+        log_at(&db, vid, at(9, 0), 540_000).await;
+        log_at(&db, vid, at(9, 1), 54_000).await;
+        assert_eq!(estimate_today(&db, vid).await, 54_000);
+    }
+
+    // A service whose date was mistyped a year ahead logs such a reading.
+    #[tokio::test]
+    async fn a_reading_dated_after_today_does_not_start_the_estimate() {
+        let db = test_db().await;
+        let vid = VehicleFixture::new().insert_id(&db).await;
+        let today = crate::services::today();
+        log_at(&db, vid, today.into(), 54_000).await;
+        log_at(
+            &db,
+            vid,
+            (today + chrono::Duration::days(300)).into(),
+            61_000,
+        )
+        .await;
+        assert_eq!(estimate_today(&db, vid).await, 54_000);
+
+        // Nor does it place a service that has no reading of its own.
+        let v = vehicle::Entity::find_by_id(vid)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            dated_readings(&db, &v, today).await.unwrap(),
+            vec![(today, 54_000)]
+        );
     }
 }

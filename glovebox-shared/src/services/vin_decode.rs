@@ -33,11 +33,10 @@ fn get_str(map: &HashMap<String, serde_json::Value>, key: &str) -> Option<String
         .filter(|s| !s.is_empty())
 }
 
-#[allow(clippy::cast_possible_truncation)]
 fn get_int(map: &HashMap<String, serde_json::Value>, key: &str) -> Option<i32> {
     map.get(key).and_then(|v| {
         v.as_i64()
-            .map(|n| n as i32)
+            .and_then(|n| i32::try_from(n).ok())
             .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
     })
 }

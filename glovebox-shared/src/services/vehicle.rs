@@ -101,6 +101,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     mut input: NewVehicle,
 ) -> DomainResult<vehicle::Model> {
+    validate_purchase_mileage(input.purchase_mileage)?;
     let txn = super::begin_write(db).await?;
     let db = &txn;
     fill_new_from_template(db, &mut input).await?;
@@ -214,6 +215,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         input.sold_price_cents.flatten(),
         input.sold_mileage.flatten(),
     )?;
+    validate_purchase_mileage(input.purchase_mileage.flatten())?;
     let txn = super::begin_write(db).await?;
     let db = &txn;
     let existing = require(db, id).await?;
@@ -306,6 +308,16 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     }
     txn.commit().await?;
     Ok(out)
+}
+
+fn validate_purchase_mileage(mileage: Option<i32>) -> DomainResult<()> {
+    if mileage.is_some_and(|miles| miles < 0) {
+        return Err(DomainError::invalid(
+            "purchase_mileage",
+            "must not be negative",
+        ));
+    }
+    Ok(())
 }
 
 // A sale price or odometer reading below zero is a typing mistake.

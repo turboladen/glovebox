@@ -22,7 +22,8 @@ you link.
 1. Call `list_vehicles` to get the vehicle id. When a car is not there yet, call
    `list_model_templates`, then `add_vehicle` with the matching `model_template_id`; the car takes
    the template's trim, engine, transmission and drivetrain for anything you leave out.
-2. When Steve states a current odometer reading, call `log_mileage` before anything else.
+2. When Steve states a current odometer reading, call `log_mileage` before anything else. A
+   reading below zero or dated after today is refused.
 3. For anything about what the car needs, call `whats_coming` before you advise.
 4. Call `check_recalls` once per conversation, before the first invoice or recall question. It makes
    a live NHTSA request and stores any recall NHTSA has added since the last check. When the lookup
@@ -216,7 +217,9 @@ need has a decision, every decision has a reason, and every part ordered has arr
    cost forecast and the warranty status. Warranty coverage may apply: remind Steve to check it
    before he pays.
    An overdue item whose `baseline` is `purchase` has no service on record, so say its history is
-   missing rather than that the work is late. The forecast names the items and planned work it
+   missing rather than that the work is late. An item whose `baseline` is `none` has no service and
+   no purchase date or mileage to count from, so a missing date counts from the start of the
+   model year and a missing mileage from zero: ask Steve when the work was last done. The forecast names the items and planned work it
    could not price in `unestimated_items` and `unestimated_planned_work`; when either has entries,
    say the total is a floor.
 2. Group the overdue and due-soon items into one shop trip. Say what each named service includes,

@@ -364,7 +364,9 @@ the id as stored (`docs/adr/0020-schedule-links-resolve-when-read.md`). A vehicl
 created with a `model_template_id` takes the template's year, make, model, trim, body style, engine,
 transmission and drivetrain for each one left empty, with the precedence caller, then template,
 then VIN decode; `update_vehicle` setting a template fills only the empty ones. Each reminder
-carries a `baseline` (`last_service`, `purchase` or `none`), the forecast names the schedule items
+carries a `baseline` (`last_service`, `purchase` or `none`; with no purchase date a time-based
+item counts from the model year, and the mileage estimate ignores a reading dated after today:
+`docs/adr/0022-a-reminder-with-no-purchase-date-counts-from-the-model-year.md`), the forecast names the schedule items
 and planned work it left unpriced, `bundle_suggestions` is one entry listing every overdue or
 due-soon item when there are two or more, and a stored recall title is the NHTSA component in title
 case.

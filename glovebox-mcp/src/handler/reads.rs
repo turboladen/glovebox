@@ -18,8 +18,8 @@ impl GloveboxMcp {
     #[tool(
         name = "summarize_recent_activity",
         description = "The vehicle's recent history in one call: services, incidents, and \
-                       odometer readings merged newest-first. Call at conversation start to get \
-                       context before answering questions about the car."
+                       odometer readings merged newest-first, at most 200. Call at conversation \
+                       start to get context before answering questions about the car."
     )]
     async fn summarize_recent_activity(
         &self,

@@ -70,7 +70,7 @@ pub struct AddVehicleInput {
     pub purchase_date: Option<String>,
     /// Purchase price, integer cents.
     pub purchase_price_cents: Option<i32>,
-    /// Odometer reading at purchase.
+    /// Odometer reading at purchase, zero or more.
     pub purchase_mileage: Option<i32>,
     /// Free-form notes.
     pub notes: Option<String>,
@@ -201,7 +201,7 @@ pub struct UpdateVehicleInput {
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<i32>")]
     pub purchase_price_cents: Option<Option<i32>>,
-    /// Odometer reading at purchase.
+    /// Odometer reading at purchase, zero or more.
     ///
     /// Send `null` to clear it; omit the key to leave it unchanged.
     #[serde(default, deserialize_with = "nullable")]
@@ -335,7 +335,7 @@ pub struct CorrectServiceInput {
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<String>")]
     pub end_date: Option<Option<String>>,
-    /// Odometer reading at service time. Keeps the service's own odometer log in step.
+    /// Odometer reading at service time, zero or more. Keeps the service's own odometer log in step.
     ///
     /// Send `null` to clear it; omit the key to leave it unchanged.
     #[serde(default, deserialize_with = "nullable")]
