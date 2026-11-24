@@ -66,7 +66,7 @@ MCP server, and its `--open` flag opens the browser.
 ### Workspace layout
 
 - **`glovebox-shared/`** (lib crate `glovebox_shared`) — the transport-agnostic domain:
-  `src/{db.rs,env.rs,dates.rs,vocab.rs,seed.rs,entities,migration,services,inputs,error.rs,test_support.rs}`. All SQL, validation
+  `src/{db.rs,backup.rs,env.rs,dates.rs,money.rs,vocab.rs,seed.rs,entities,migration,services,inputs,error.rs,test_support.rs}`. All SQL, validation
   and business logic live here. It never depends on axum or rmcp.
 - **`glovebox-mcp/`** (lib crate `glovebox_mcp` plus the `glovebox-mcp` binary) — the thin MCP
   surface. Every tool body is argument struct → shared-service call → serialize, with one
@@ -123,6 +123,10 @@ tools and the web page both render it), and `waiting` (what is not yet on an app
 maintenance, planned jobs, open recalls and open incidents, for the home page). `whats_coming` lists each open appointment.
 `seed::demo` fills an empty database with made-up data that exercises every need stage.
 `vin_decode` and `nhtsa` make the only network calls.
+
+**Money** (`money.rs`): `money::parse_dollars` reads a dollar amount the owner typed into whole
+cents, and `money::format_cents` prints cents as dollars. The web forms and the checklist's
+sentences use them.
 
 **Errors** (`error.rs`): `DomainError::{NotFound, Invalid{field,message}, BadRequest, Db, Internal}`
 with the `DomainResult<T>` alias.
@@ -207,8 +211,8 @@ the field docs in `src/schemas*`, `docs/claude-desktop/glovebox-project-prompt.m
 them for Desktop) and the ADR that decided it. `rg` the rule's key phrase across `glovebox-mcp/src`
 and `docs/` to find them.
 
-Inputs are schemars-derived structs in `src/schemas.rs`, `src/schemas/corrections.rs` and
-`src/schemas/checklist.rs`; their doc
+Inputs are schemars-derived structs in `src/schemas.rs`, `src/schemas/corrections.rs`,
+`src/schemas/checklist.rs` and `src/schemas/shops.rs`; their doc
 comments become the LLM-visible field descriptions. `Parameters<T>` defers deserialize errors
 so malformed arguments come back as actionable tool errors, not bare JSON-RPC `-32602`s, and
 reads them through `serde_path_to_error`, so the error names the argument at fault. The
@@ -606,15 +610,18 @@ Crate-level `#![allow]`s in `glovebox-shared/src/lib.rs` suppress intentional pe
   `clippy::implicit_hasher`: these target public-API surface, and the rationale is in a comment in
   `lib.rs`
 
-`glovebox-mcp/src/schemas.rs` allows `clippy::option_option` on the corrections module for the same
-reason. `[workspace.lints.clippy]` in the root `Cargo.toml` denies the pedantic group for every
+`glovebox-mcp/src/schemas.rs` allows `clippy::option_option` on its corrections, checklist and
+shops modules for the same reason. `[workspace.lints.clippy]` in the root `Cargo.toml` denies the pedantic group for every
 crate. Run `cargo clippy --workspace --all-targets --locked -- -D warnings` to verify zero
 warnings; it lints test code too. Add a per-function `#[expect(..., reason = "...")]` for
 unavoidable cases, such as a test that tells one long story. A test checks a list is empty with
 `test_support::assert_empty`, which prints the list when it is not, in preference to a bare
 `assert!(… .is_empty())`.
-Pedantic caps a function at 100 lines (`too_many_lines`), and `work_item::update` and
-`service_record::update` sit near it: move a new step into a helper.
+Pedantic caps a function at 100 lines (`too_many_lines`), and `work_item::update`,
+`vehicle::update` and `budget::forecast_from` sit near it: move a new step into a helper. Five
+functions exceed it under an `#[allow]` (`service_record::update` and `create`,
+`incident::update`, `search::search` and `reminders::calculate_reminders_on`); a new step there
+goes into a helper too.
 
 ## Non-Interactive Shell Commands
 

@@ -2,8 +2,10 @@
 
 Glovebox is a personal car maintenance record, and Claude Desktop is its main interface. The owner
 talks to Claude, Claude reads scanned invoices and other sources, and Claude files the facts through
-the MCP tools in `glovebox-mcp`. The full design is in
-`docs/adr/0006-claude-desktop-over-mcp-is-the-main-interface.md`. Setup and the project prompt are in
+the MCP tools in `glovebox-mcp`. A local web page shows the same records where a screen works
+better than a conversation: the checklist for a job and the sheet to hand the mechanic. The design
+is in `docs/adr/0006-claude-desktop-over-mcp-is-the-main-interface.md` and
+`docs/adr/0007-a-jobs-checklist-tracks-every-need.md`. Setup and the project prompt are in
 `docs/claude-desktop/`.
 
 ## The question it answers
@@ -38,18 +40,26 @@ community-recommended preemptive fixes that fit the same shop trip.
 - **Answers "what's coming" in one call** (`whats_coming`): schedule status, planned work, open
   recalls, unresolved incidents, a 12-month cost forecast and warranty status.
 - **Lets every mistake be fixed in the conversation** with correct, update and delete tools.
+- **Tracks what each job needs.** An appointment groups jobs and to-dos for one shop trip, and each
+  job lists its needs with the options researched for them, so the owner can see whether every
+  part has been decided, ordered and received.
+- **Keeps one record per shop**, with the services and appointments that name it.
 
 ## Architecture
 
-A cargo workspace of two crates. `glovebox-shared` is the domain library (SeaORM 2.0 on SQLite, the
+A cargo workspace of four crates. `glovebox-shared` is the domain library (SeaORM 2.0 on SQLite, the
 services, the VIN decoder and the NHTSA recall lookup). `glovebox-mcp` is a thin rmcp stdio server
-over it. Claude Desktop launches the binary, so no server runs between conversations. Money is
-integer cents and dates are `YYYY-MM-DD`. `CLAUDE.md` describes the layout and the conventions.
+over it, which Claude Desktop launches itself. `glovebox-web` is an axum and askama server for the
+local page, with no script, and it runs only while the owner serves it with `just web`.
+`glovebox-cli` is the `glovebox` command for backups and for filling or clearing a test
+environment. Money is integer cents and dates are `YYYY-MM-DD`. `CLAUDE.md` describes the layout
+and the conventions.
 
 ## Not in scope
 
 - Document storage, upload, OCR or file search.
-- A web UI. One may come back later, one screen at a time, each justified by "I need to see X now".
+- A web page that replaces the conversation. The page gains one screen at a time, each justified
+  by "I need to see X now", and the shop directory changes only through Claude Desktop.
 - Integration with financier.
 - Authentication or any non-local deployment. Whoever can run the process owns the data.
 - Named milestone services (VW's 10k to 60k checklists as first-class objects). They are wanted

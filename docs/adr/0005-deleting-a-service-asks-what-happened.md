@@ -76,7 +76,7 @@ performed. A correction that removes none of that work needs no answer.
 - Jobs, parts and recalls each have one release function that takes the answer
   (`work_item::release_completed`, `part::release_from_service`, `recall::release_from_service`),
   which `delete_service` and `correct_service` both call. For incidents both call
-  `incident::reopen_resolved` after `did_not_happen`: `correct_service` for the incidents of the
+  `incident::release_resolved` after `did_not_happen`: `correct_service` for the incidents of the
   jobs it takes off that the invoice did not name, and `delete_service` for every incident the
   service resolved, before it removes the service's incident links (ADR-0018). Each sits in the
   module of the apply it undoes, and
