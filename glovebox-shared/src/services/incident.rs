@@ -537,6 +537,9 @@ fn apply_fields(active: &mut incident::ActiveModel, input: UpdateIncident) {
 
 /// Replaces the incident's stored `resolved` links with one per service in
 /// `sids`, and returns whether no service resolves the incident afterwards.
+/// A service that completes a job filed from the incident is left as it is:
+/// its stored link stays, and none is stored for it. The caller holds the
+/// write transaction.
 async fn replace_resolvers(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -590,8 +593,13 @@ async fn decide_resolution(
     names_a_service: bool,
     cleared_all_resolvers: bool,
 ) -> DomainResult<Option<Resolution>> {
-    // Reopening does not read the stored pair, so it also repairs a row that
-    // breaks the pair's rule.
+    // An explicit `resolved` wins over the flag the links just set. Closing
+    // an open incident is the owner's word unless the call names the service
+    // that fixed it, even while a completed job still names a service, since
+    // the owner reopened the incident after that job. On a resolved incident
+    // it is the owner's word only when no service resolves it, so a read
+    // sent back marks nothing. Reopening does not read the stored pair, so
+    // it also repairs a row that breaks the pair's rule.
     let resolution = match (resolved, Resolution::of(inc)) {
         (Some(false), _) => Some(Resolution::Open),
         (_, Err(broken)) => return Err(broken),
@@ -656,12 +664,6 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         }
     }
 
-    // An explicit `resolved` wins over the flag the links just set. Closing
-    // an open incident is the owner's word unless the call names the service
-    // that fixed it, even while a completed job still names a service, since
-    // the owner reopened the incident after that job. On a resolved incident
-    // it is the owner's word only when no service resolves it, so a read
-    // sent back marks nothing.
     let inc = require_incident(&txn, vehicle_id, inc.id).await?;
     let resolution =
         decide_resolution(&txn, &inc, resolved, names_a_service, cleared_all_resolvers).await?;

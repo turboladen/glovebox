@@ -1054,6 +1054,8 @@ struct Correction {
     /// The recorded work the correction takes off.
     removal: RecordedWork,
     choice: CompletedWork,
+    // The three lists below are read only when the call sends a list of
+    // jobs, parts, recalls or resolved incidents, and are empty otherwise.
     /// The jobs the service keeps or gains.
     kept_jobs: Vec<job::Model>,
     /// Ids of the jobs the service completed before the call.
@@ -1156,11 +1158,11 @@ async fn check_correction(
     Ok((shop_id, invoice_ref))
 }
 
-/// Sets on the record each scalar field the correction sends, taking the
-/// text fields out of `input`, and stamps the record as updated.
+/// Sets on the record each scalar field the correction sends. The caller
+/// stamps `updated_at`.
 fn apply_fields(
     existing: service_record::Model,
-    input: &mut UpdateServiceRecord,
+    input: &UpdateServiceRecord,
     shop_id: Option<Option<i32>>,
     invoice_ref: Option<Option<String>>,
 ) -> service_record::ActiveModel {
@@ -1181,7 +1183,7 @@ fn apply_fields(
     if let Some(v) = input.mileage {
         active.mileage = Set(v);
     }
-    if let Some(v) = input.description.take() {
+    if let Some(v) = input.description.clone() {
         active.description = Set(v);
     }
     if let Some(v) = input.parts_cost_cents {
@@ -1196,20 +1198,19 @@ fn apply_fields(
     if let Some(v) = shop_id {
         active.shop_id = Set(v);
     }
-    if let Some(v) = input.notes.take() {
+    if let Some(v) = input.notes.clone() {
         active.notes = Set(v);
     }
     if let Some(v) = input.paid_by {
         active.paid_by = Set(v);
     }
-    if let Some(v) = input.payer_note.take() {
+    if let Some(v) = input.payer_note.clone() {
         active.payer_note = Set(v);
     }
     if let Some(v) = input.appointment_id {
         active.appointment_id = Set(v);
     }
 
-    active.updated_at = Set(super::now());
     active
 }
 
@@ -1238,8 +1239,6 @@ async fn relink_jobs(
     plan: &Correction,
 ) -> DomainResult<JobChanges> {
     let (removal, choice) = (&plan.removal, plan.choice);
-    // Jobs come first, with the work that hangs off each one; the lists the
-    // call sends then apply as sent.
     let named: Vec<i32> = removal
         .jobs
         .iter()
@@ -1295,7 +1294,7 @@ async fn relink_jobs(
 /// names. With no list, the installed parts follow a change to the service's
 /// date or mileage; `before` is that date and mileage before the call.
 async fn refit_parts(
-    txn: &(impl ConnectionTrait + TransactionTrait),
+    txn: &impl ConnectionTrait,
     vehicle_id: i32,
     record: &service_record::Model,
     removed: Vec<part::Model>,
@@ -1362,24 +1361,27 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
     id: i32,
-    mut input: UpdateServiceRecord,
+    input: UpdateServiceRecord,
 ) -> DomainResult<ServiceRecordWithLinks> {
     let txn = super::begin_write(db).await?;
     let db = &txn;
     let existing = require(db, vehicle_id, id).await?;
     let changes_resolved_work =
         input.work_item_ids.is_some() || input.resolved_incident_ids.is_some();
-    let mut plan = plan_correction(db, vehicle_id, &existing, &input).await?;
+    let plan = plan_correction(db, vehicle_id, &existing, &input).await?;
     let (shop_id, invoice_ref) = check_correction(db, vehicle_id, &existing, &input).await?;
 
     let before = (existing.service_date, existing.mileage);
-    let active = apply_fields(existing, &mut input, shop_id, invoice_ref);
+    let mut active = apply_fields(existing, &input, shop_id, invoice_ref);
+    active.updated_at = Set(super::now());
 
     let record = active.update(&txn).await?;
 
     // Keep the auto-created mileage log in step with the record.
     sync_auto_mileage_log(&txn, vehicle_id, &record).await?;
 
+    // Jobs come first, with the work that hangs off each one; the lists the
+    // call sends then apply as sent.
     let jobs = relink_jobs(&txn, vehicle_id, &record, &input, &plan).await?;
 
     if let Some(item_ids) = input.schedule_item_ids {
@@ -1391,12 +1393,11 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
         schedule::insert_service_links(&txn, record.id, &item_ids, LinkMode::Replace).await?;
     }
 
-    let removed_parts = std::mem::take(&mut plan.removal.parts);
     refit_parts(
         &txn,
         vehicle_id,
         &record,
-        removed_parts,
+        plan.removal.parts.clone(),
         input.part_ids,
         before,
         plan.choice,

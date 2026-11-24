@@ -401,7 +401,8 @@ struct ReminderContext<'a> {
     /// Pairs of a service id and the schedule item it counts toward.
     links: &'a [(i32, i32)],
     services: &'a [service_record::Model],
-    /// Dated odometer readings, oldest first.
+    /// Dated odometer readings, oldest first. They are loaded only when a
+    /// linked service has no mileage of its own, and are empty otherwise.
     readings: &'a [(NaiveDate, i32)],
     avg_daily_miles: f64,
     estimated_mileage: i32,
