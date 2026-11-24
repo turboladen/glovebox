@@ -32,8 +32,6 @@ pub struct Upcoming {
     /// Open to-do items, most urgent revisit first. Items sharing a revisit
     /// status keep creation order, and items with no revisit status come last.
     pub planned_work: Vec<PlannedItem>,
-    /// The sum of the planned items' estimates; an item without one counts as zero.
-    pub planned_work_est_cost_cents: i32,
     /// Recalls that are still `open` or `planned`.
     pub recalls: Vec<RecallWithStatus>,
     /// Unresolved incidents, excluding notes.
@@ -58,10 +56,6 @@ pub async fn upcoming(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResul
     let budget = budget::forecast_from(db, vehicle_id, &reminders, today).await?;
 
     let planned_work = planned_work(db, vehicle_id, today).await?;
-    let planned_work_est_cost_cents = planned_work
-        .iter()
-        .map(|p| p.item.est_cost_cents.unwrap_or(0))
-        .sum();
     let recalls = open_recalls(db, vehicle_id).await?;
     let open_incidents = open_incidents(db, vehicle_id).await?;
 
@@ -71,7 +65,6 @@ pub async fn upcoming(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResul
         reminders,
         budget,
         planned_work,
-        planned_work_est_cost_cents,
         recalls,
         open_incidents,
         appointments,
@@ -352,7 +345,7 @@ mod tests {
         );
         assert_eq!(u.planned_work[0].revisit_status, Some(DueStatus::Overdue));
         assert_eq!(u.planned_work[1].revisit_status, None);
-        assert_eq!(u.planned_work_est_cost_cents, 20500);
+        assert_eq!(u.budget.planned_work_cents, 20500);
         assert_eq!(u.recalls.len(), 1);
         assert_eq!(u.recalls[0].status, super::recall::ShownRecallStatus::Open);
         assert_eq!(u.open_incidents.len(), 1);
@@ -398,7 +391,7 @@ mod tests {
         let u = upcoming(&db, v).await.unwrap();
         assert!(u.reminders.reminders.is_empty());
         assert!(u.planned_work.is_empty() && u.recalls.is_empty() && u.open_incidents.is_empty());
-        assert_eq!(u.planned_work_est_cost_cents, 0);
+        assert_eq!(u.budget.planned_work_cents, 0);
     }
 
     #[tokio::test]

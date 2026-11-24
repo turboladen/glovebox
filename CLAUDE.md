@@ -80,8 +80,9 @@ MCP server, and its `--open` flag opens the browser.
   the form posts, `src/view.rs` the view structs, `src/guard.rs` the request guard and the content
   security policy, and `templates/` the askama templates.
 - `scripts/check-layering.sh` (run by CI and `just ci`) keeps axum and rmcp out of `glovebox-shared`
-  and SeaORM out of `glovebox-web`, and refuses a transaction in `glovebox-shared/src/services`
-  opened any way but `services::begin_write`.
+  and SeaORM out of `glovebox-web`, refuses a transaction in `glovebox-shared/src/services`
+  opened any way but `services::begin_write`, and refuses a query or an `ActiveModel` in
+  `glovebox-mcp/src/handler`.
 
 ### Domain library (`glovebox-shared/src/`)
 
@@ -474,7 +475,9 @@ role per control style, and `YYYY-MM-DD` dates.
   (`todo::delete`), or a step only ever run inside a caller's transaction, which is
   `pub(crate)` when nothing outside the crate calls it.
   `glovebox-mcp/tests` call shared services directly as fixtures (`schedule_svc::create`), so
-  search that directory before narrowing a `pub` service function to `pub(crate)`.
+  search that directory before narrowing a `pub` service function to `pub(crate)`. A function
+  only fixtures call is `pub` under `#[cfg(any(test, feature = "test-support"))]`, as
+  `schedule::create` is.
 - **A list an update REPLACES holds only stored values.** When a read lists derived values beside
   stored ones (a service's `schedule_item_ids` includes its jobs' items), a caller will send the
   read back, so the write ignores the derived ones (`schedule::drop_links_jobs_bring`).
