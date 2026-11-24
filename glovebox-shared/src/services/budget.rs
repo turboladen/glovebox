@@ -108,7 +108,7 @@ fn planned_work_cost(backlog: &[work_item::Model]) -> (i64, Vec<UnestimatedWork>
 /// no projectable due date (e.g. mileage-only interval on a vehicle with no
 /// mileage history) are skipped unless overdue.
 #[expect(clippy::cast_possible_truncation, reason = "day counts, not money")]
-pub async fn forecast_from(
+pub(crate) async fn forecast_from(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     rems: &RemindersResponse,

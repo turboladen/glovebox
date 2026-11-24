@@ -98,7 +98,6 @@ impl AddVehicleInput {
             color: self.color,
             purchase_date: dates::parse_optional_date("purchase_date", self.purchase_date)?,
             purchase_price_cents: self.purchase_price_cents,
-            purchase_price_currency: None,
             purchase_mileage: self.purchase_mileage,
             notes: self.notes,
             warranty_expires_on: dates::parse_optional_date(
@@ -275,7 +274,6 @@ impl UpdateVehicleInput {
                     self.warranty_expires_on,
                 )?,
                 warranty_expires_miles: self.warranty_expires_miles,
-                ..Default::default()
             },
         ))
     }
@@ -442,7 +440,6 @@ impl CorrectServiceInput {
                 line_items: self
                     .line_items
                     .map(|items| items.into_iter().map(LineItemInput::into_domain).collect()),
-                ..Default::default()
             },
         ))
     }
@@ -811,7 +808,6 @@ impl UpdateIncidentInput {
                 insurance_payout_cents: self.insurance_payout_cents,
                 recurrence_of_id: self.recurrence_of_id,
                 noticed_during_service_id: self.noticed_during_service_id,
-                ..Default::default()
             },
         ))
     }

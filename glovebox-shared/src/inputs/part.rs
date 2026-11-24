@@ -171,7 +171,6 @@ pub struct NewPart {
     pub seller: Option<String>,
     pub purchase_date: Option<chrono::NaiveDate>,
     pub cost_cents: Option<i32>,
-    pub cost_currency: Option<String>,
     pub manufacturer_url: Option<String>,
     pub retailer_url: Option<String>,
     /// The status and install details it starts with.
@@ -213,7 +212,6 @@ pub struct UpdatePart {
     pub seller: Option<Option<String>>,
     pub purchase_date: Option<Option<chrono::NaiveDate>>,
     pub cost_cents: Option<Option<i32>>,
-    pub cost_currency: Option<Option<String>>,
     pub manufacturer_url: Option<Option<String>>,
     pub retailer_url: Option<Option<String>>,
     /// The status and the install and replacement details.

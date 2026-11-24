@@ -526,20 +526,11 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     if let Some(v) = input.total_repair_cost_cents {
         active.total_repair_cost_cents = Set(v);
     }
-    if let Some(v) = input.total_repair_cost_currency {
-        active.total_repair_cost_currency = Set(v);
-    }
     if let Some(v) = input.deductible_cents {
         active.deductible_cents = Set(v);
     }
-    if let Some(v) = input.deductible_currency {
-        active.deductible_currency = Set(v);
-    }
     if let Some(v) = input.insurance_payout_cents {
         active.insurance_payout_cents = Set(v);
-    }
-    if let Some(v) = input.insurance_payout_currency {
-        active.insurance_payout_currency = Set(v);
     }
     if let Some(v) = input.recurrence_of_id {
         active.recurrence_of_id = Set(v);

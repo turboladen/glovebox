@@ -75,7 +75,7 @@ impl Stage {
 /// open: the stage is open and the job is still planned. Every count of open
 /// needs uses this.
 #[must_use]
-pub fn counts_as_open(job_status: JobStatus, stage: Stage) -> bool {
+pub(crate) fn counts_as_open(job_status: JobStatus, stage: Stage) -> bool {
     !job_status.is_finished() && stage.is_open()
 }
 

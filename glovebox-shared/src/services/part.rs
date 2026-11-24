@@ -587,7 +587,9 @@ async fn insert_part(
         seller: Set(input.seller),
         purchase_date: Set(input.purchase_date),
         cost_cents: Set(input.cost_cents),
-        cost_currency: Set(input.cost_currency),
+        // The column defaults to 'USD'. No input names a currency, and every
+        // other currency column holds NULL, so a part's does too.
+        cost_currency: Set(None),
         manufacturer_url: Set(input.manufacturer_url),
         retailer_url: Set(input.retailer_url),
         notes: Set(input.notes),
@@ -689,9 +691,6 @@ async fn apply_update(
     }
     if let Some(v) = input.cost_cents {
         active.cost_cents = Set(v);
-    }
-    if let Some(v) = input.cost_currency {
-        active.cost_currency = Set(v);
     }
     if let Some(v) = input.manufacturer_url {
         active.manufacturer_url = Set(v);
