@@ -1,0 +1,10 @@
+# `just audit` and CI run `cargo audit --deny warnings` with this file.
+# Each ignored advisory is an "unmaintained" notice with no fix available.
+[advisories]
+ignore = [
+    # chrono is the date type SeaORM 2.0 reads and writes. SeaORM has no jiff
+    # support, and sea-orm-migration, sqlx and schemars build chrono anyway.
+    "RUSTSEC-2026-0543",
+    # basic-toml comes from askama_derive, which is at its latest release.
+    "RUSTSEC-2026-0374",
+]

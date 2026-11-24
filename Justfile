@@ -44,9 +44,13 @@ ci-backend:
 typos:
     typos
 
-# Run all CI gates locally
-ci: fmt-check check-layering typos ci-backend
+# Fail on any RustSec advisory for a locked dependency (`cargo install
+# cargo-audit`). `.cargo/audit.toml` lists the advisories that are accepted.
+audit:
+    cargo audit --deny warnings
 
+# Run all CI gates locally
+ci: fmt-check check-layering typos audit ci-backend
 
 # --- Install ---
 
