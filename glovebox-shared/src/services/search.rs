@@ -254,7 +254,6 @@ fn subquery(
 /// part's number, its replaced OE number or a kit item's number, ignoring case,
 /// spacing and punctuation, also finds that part, and such a hit ranks ahead of
 /// every text match.
-#[allow(clippy::too_many_lines)]
 pub async fn search(
     db: &impl ConnectionTrait,
     query: &str,
@@ -271,8 +270,17 @@ pub async fn search(
         return Ok(Vec::new());
     };
 
+    let mut subs = text_arms(scope, vehicle_id.is_some());
+    if scope == SearchScope::All || scope == SearchScope::Parts {
+        subs.extend(number_arms(db, query, vehicle_id).await?);
+    }
+    ranked_hits(db, &subs, match_expr, vehicle_id).await
+}
+
+/// The text-match UNION ALL arms of every kind `scope` covers; `filt` adds the
+/// vehicle filter to each.
+fn text_arms(scope: SearchScope, filt: bool) -> Vec<String> {
     let want = |s: SearchScope| scope == SearchScope::All || scope == s;
-    let filt = vehicle_id.is_some();
     let mut subs: Vec<String> = Vec::new();
 
     if want(SearchScope::Vehicles) {
@@ -287,46 +295,7 @@ pub async fn search(
         ));
     }
     if want(SearchScope::Services) {
-        let service_title = "COALESCE(s.description, 'Service on ' || s.service_date)";
-        subs.push(subquery(
-            "service",
-            "fts_service_records",
-            "JOIN service_records s ON s.id = fts_service_records.rowid",
-            "s.id",
-            "s.vehicle_id",
-            service_title,
-            filt,
-        ));
-        // Line-item hits fold into their parent service record.
-        subs.push(subquery(
-            "service",
-            "fts_service_record_line_items",
-            "JOIN service_record_line_items li ON li.id = fts_service_record_line_items.rowid \
-             JOIN service_records s ON s.id = li.service_record_id",
-            "s.id",
-            "s.vehicle_id",
-            service_title,
-            filt,
-        ));
-        // A hit on a shop's name, address or notes finds the newest services
-        // it did. Every one of them shares the shop's rank, so a shop with a
-        // long history would otherwise fill the results.
-        // The vehicle filter goes inside the cap, so it picks that car's newest.
-        let shop_services = format!(
-            "JOIN service_records s ON s.shop_id = fts_shops.rowid AND s.id IN (SELECT r.id FROM \
-             service_records r WHERE r.shop_id = fts_shops.rowid{} ORDER BY r.service_date DESC, \
-             r.id DESC LIMIT 5)",
-            if filt { " AND r.vehicle_id = ?2" } else { "" }
-        );
-        subs.push(subquery(
-            "service",
-            "fts_shops",
-            &shop_services,
-            "s.id",
-            "s.vehicle_id",
-            service_title,
-            filt,
-        ));
+        subs.extend(service_arms(filt));
     }
     if want(SearchScope::Incidents) {
         subs.push(subquery(
@@ -362,25 +331,7 @@ pub async fn search(
         ));
     }
     if want(SearchScope::Maintenance) {
-        // A schedule item is owned by exactly one of platform, model template or
-        // vehicle, and applies to every vehicle that resolves it, so the join
-        // fans out to one hit per applicable vehicle. Override and dismissal
-        // are not resolved here: an overridden or dismissed item is still
-        // found, and `list_schedule` with `include_dismissed` shows it. Items
-        // whose platform or template has no vehicles drop out of the inner join.
-        subs.push(subquery(
-            "schedule_item",
-            "fts_maintenance_schedule_items",
-            "JOIN maintenance_schedule_items msi ON msi.id = fts_maintenance_schedule_items.rowid \
-             JOIN vehicles v ON v.id = msi.vehicle_id OR (msi.model_template_id IS NOT NULL AND \
-             v.model_template_id = msi.model_template_id) OR (msi.platform_id IS NOT NULL AND \
-             msi.platform_id = (SELECT mt.platform_id FROM model_templates mt WHERE mt.id = \
-             v.model_template_id))",
-            "msi.id",
-            "v.id",
-            "msi.name",
-            filt,
-        ));
+        subs.push(schedule_item_arm(filt));
     }
     if want(SearchScope::Todo) {
         subs.push(subquery(
@@ -393,9 +344,85 @@ pub async fn search(
             filt,
         ));
     }
-
     if want(SearchScope::Parts) {
-        subs.push(subquery(
+        subs.extend(part_text_arms(filt));
+    }
+    subs
+}
+
+/// The arms that find a service by its own text, a line item's or its shop's.
+fn service_arms(filt: bool) -> Vec<String> {
+    let mut subs: Vec<String> = Vec::new();
+    let service_title = "COALESCE(s.description, 'Service on ' || s.service_date)";
+    subs.push(subquery(
+        "service",
+        "fts_service_records",
+        "JOIN service_records s ON s.id = fts_service_records.rowid",
+        "s.id",
+        "s.vehicle_id",
+        service_title,
+        filt,
+    ));
+    // Line-item hits fold into their parent service record.
+    subs.push(subquery(
+        "service",
+        "fts_service_record_line_items",
+        "JOIN service_record_line_items li ON li.id = fts_service_record_line_items.rowid JOIN \
+         service_records s ON s.id = li.service_record_id",
+        "s.id",
+        "s.vehicle_id",
+        service_title,
+        filt,
+    ));
+    // A hit on a shop's name, address or notes finds the newest services
+    // it did. Every one of them shares the shop's rank, so a shop with a
+    // long history would otherwise fill the results.
+    // The vehicle filter goes inside the cap, so it picks that car's newest.
+    let shop_services = format!(
+        "JOIN service_records s ON s.shop_id = fts_shops.rowid AND s.id IN (SELECT r.id FROM \
+         service_records r WHERE r.shop_id = fts_shops.rowid{} ORDER BY r.service_date DESC, r.id \
+         DESC LIMIT 5)",
+        if filt { " AND r.vehicle_id = ?2" } else { "" }
+    );
+    subs.push(subquery(
+        "service",
+        "fts_shops",
+        &shop_services,
+        "s.id",
+        "s.vehicle_id",
+        service_title,
+        filt,
+    ));
+    subs
+}
+
+/// The arm that finds a schedule item, once for each vehicle it applies to.
+fn schedule_item_arm(filt: bool) -> String {
+    // A schedule item is owned by exactly one of platform, model template or
+    // vehicle, and applies to every vehicle that resolves it, so the join
+    // fans out to one hit per applicable vehicle. Override and dismissal
+    // are not resolved here: an overridden or dismissed item is still
+    // found, and `list_schedule` with `include_dismissed` shows it. Items
+    // whose platform or template has no vehicles drop out of the inner join.
+    subquery(
+        "schedule_item",
+        "fts_maintenance_schedule_items",
+        "JOIN maintenance_schedule_items msi ON msi.id = fts_maintenance_schedule_items.rowid \
+         JOIN vehicles v ON v.id = msi.vehicle_id OR (msi.model_template_id IS NOT NULL AND \
+         v.model_template_id = msi.model_template_id) OR (msi.platform_id IS NOT NULL AND \
+         msi.platform_id = (SELECT mt.platform_id FROM model_templates mt WHERE mt.id = \
+         v.model_template_id))",
+        "msi.id",
+        "v.id",
+        "msi.name",
+        filt,
+    )
+}
+
+/// The arms that find a part by its own text or a kit item's.
+fn part_text_arms(filt: bool) -> Vec<String> {
+    vec![
+        subquery(
             "part",
             "fts_parts",
             "JOIN parts p ON p.id = fts_parts.rowid",
@@ -403,10 +430,10 @@ pub async fn search(
             "p.vehicle_id",
             "p.name",
             filt,
-        ));
+        ),
         // A kit item's hit folds into its kit, as a line item's does into its
         // service.
-        subs.push(subquery(
+        subquery(
             "part",
             "fts_part_contents",
             "JOIN part_contents pc ON pc.id = fts_part_contents.rowid JOIN parts p ON p.id = \
@@ -415,10 +442,18 @@ pub async fn search(
             "p.vehicle_id",
             "p.name",
             filt,
-        ));
-        subs.extend(number_arms(db, query, vehicle_id).await?);
-    }
+        ),
+    ]
+}
 
+/// Runs the arms as one query and returns the best-ranked hit of each record,
+/// capped at [`LIMIT`].
+async fn ranked_hits(
+    db: &impl ConnectionTrait,
+    subs: &[String],
+    match_expr: String,
+    vehicle_id: Option<i32>,
+) -> DomainResult<Vec<SearchHit>> {
     // Dedupe by (kind, id, vehicle_id) in SQL, before the LIMIT: a service
     // matching in its own text and in several line items is one record, and
     // duplicate raw rows must not starve other records out of the capped
