@@ -13,7 +13,7 @@ use glovebox_shared::{
         appointment,
         checklist::{self, NeedView, VehicleHome},
         need::{self, Stage},
-        part, shop, todo as todo_svc, vehicle, work_sheet,
+        part, service_detail, shop, todo as todo_svc, vehicle, work_sheet,
     },
 };
 use serde::Deserialize;
@@ -21,9 +21,10 @@ use serde::Deserialize;
 use crate::{
     AppState, DeletedTodo,
     view::{
-        Banner, CardContext, Count, Failure, HomeAppointmentRow, JobCard, SheetCar, SheetJobCard,
-        ShopLink, ShopPageView, ShopRow, Steps, Tag, Target, TodoCard, TodoForm, UnsettledRow,
-        WaitingRows, job_card, sheet_car, sheet_heading, sheet_jobs, steps, unsettled_rows,
+        Banner, CardContext, Count, Failure, HomeAppointmentRow, JobCard, ServicePageView,
+        SheetCar, SheetJobCard, ShopLink, ShopPageView, ShopRow, Steps, Tag, Target, TodoCard,
+        TodoForm, UnsettledRow, WaitingRows, job_card, sheet_car, sheet_heading, sheet_jobs, steps,
+        unsettled_rows,
     },
 };
 
@@ -391,6 +392,11 @@ pub fn shop_path(id: i32) -> String {
     format!("/shops/{id}")
 }
 
+/// The path of a service's page.
+pub fn service_path(vid: i32, id: i32) -> String {
+    format!("/vehicles/{vid}/services/{id}")
+}
+
 /// The path of a job's page.
 pub fn job_path(vid: i32, id: i32) -> String {
     format!("/vehicles/{vid}/jobs/{id}")
@@ -651,6 +657,29 @@ pub async fn get_shop(State(state): State<AppState>, Path(id): Path<i32>) -> Res
             let page = ShopPage {
                 chrome: Chrome::of(&state),
                 v: ShopPageView::from(&history),
+            };
+            html(StatusCode::OK, page.render())
+        }
+        Err(e) => load_failed(&state, &e),
+    }
+}
+
+#[derive(Template)]
+#[template(path = "service.html")]
+struct ServicePage {
+    chrome: Chrome,
+    v: ServicePageView,
+}
+
+pub async fn get_service(
+    State(state): State<AppState>,
+    Path((vid, id)): Path<(i32, i32)>,
+) -> Response {
+    match service_detail::get(&state.db, vid, id).await {
+        Ok(detail) => {
+            let page = ServicePage {
+                chrome: Chrome::of(&state),
+                v: ServicePageView::from(&detail),
             };
             html(StatusCode::OK, page.render())
         }

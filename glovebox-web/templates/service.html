@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block title %}{{ v.title }} - Glovebox{% endblock %}
+{% block content %}
+<section class="appt page" aria-labelledby="service-title">
+  <p><a href="/">Garage</a>{% if let Some(shop) = v.shop %} <span class="l">· Shop</span> <a href="{{ shop.href }}">{{ shop.name }}</a>{% endif %}</p>
+  <h1 id="service-title">{{ v.title }}</h1>
+  <div class="summary">
+    <div><span class="l">Vehicle</span>{{ v.vehicle }}</div>
+    <div><span class="l">Date</span>{{ v.date }}</div>
+    <div><span class="l">Shop</span>{% if let Some(shop) = v.shop %}<a href="{{ shop.href }}">{{ shop.name }}</a>{% else if v.self_performed %}Self-performed{% else %}<span class="empty">No shop named</span>{% endif %}</div>
+    {% if let Some(o) = v.odometer %}<div><span class="l">Odometer</span>{{ o }}</div>{% endif %}
+    {% if let Some(i) = v.invoice %}<div><span class="l">Invoice</span><span class="pn">{{ i }}</span></div>{% endif %}
+    {% if let Some(p) = v.paid_by %}<div><span class="l">Paid by</span>{{ p }}</div>{% endif %}
+    {% if let Some(n) = v.payer_note %}<div><span class="l">Payer note</span>{{ n }}</div>{% endif %}
+    <div><span class="l">Total</span>{% if let Some(t) = v.total %}<span class="price">{{ t }}</span>{% else %}<span class="empty">No total</span>{% endif %}</div>
+    {% if let Some(t) = v.lines_total %}<div><span class="l">Lines</span><span class="price">{{ t }}</span></div>{% endif %}
+    {% if let Some(p) = v.paid %}<div><span class="l">You paid</span><span class="price">{{ p }}</span></div>{% endif %}
+    {% if let Some(c) = v.covered %}<div><span class="l">Paid by others</span><span class="price">{{ c }}</span></div>{% endif %}
+  </div>
+  {% if let Some(n) = v.lines_note %}<p>{{ n }}</p>{% endif %}
+  {% if let Some(n) = v.notes %}<p class="shop-notes"><span class="l">Notes </span>{{ n }}</p>{% endif %}
+</section>
+
+<section class="section page">
+  {% if !v.lines.is_empty() %}
+  <section class="sheet" aria-labelledby="service-lines">
+    <div class="sheet-head"><h3 id="service-lines">Lines</h3><span class="n">{{ v.lines.len() }}</span></div>
+    <div class="cols cols--wait" aria-hidden="true"><span class="at-key">Line</span><span class="at-wide">Kind</span><span>Paid by</span><span class="at-job num">Cost</span></div>
+    <ul class="needs">
+      {% for l in v.lines %}
+      <li class="row row--wait">
+        <span class="key at-key">{{ l.description }}</span>
+        <span class="at-wide" data-l="Kind">{{ l.kind }}</span>
+        <span data-l="Paid by">{% if let Some(p) = l.paid_by %}{{ p }}{% endif %}</span>
+        <span class="at-job num price" data-l="Cost">{% if let Some(c) = l.cost %}{{ c }}{% endif %}</span>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  {% if !v.jobs.is_empty() %}
+  <section class="sheet" aria-labelledby="service-jobs">
+    <div class="sheet-head"><h3 id="service-jobs">Jobs completed</h3><span class="n">{{ v.jobs.len() }}</span></div>
+    <ul class="needs">
+      {% for j in v.jobs %}
+      <li class="row row--wait"><span class="key at-key"><a href="{{ j.href }}">{{ j.title }}</a></span></li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  {% if !v.quotes.is_empty() %}
+  <section class="sheet" aria-labelledby="service-quotes">
+    <div class="sheet-head"><h3 id="service-quotes">Quotes</h3><span class="n">{{ v.quotes.len() }}</span></div>
+    <ul class="needs">
+      {% for j in v.quotes %}
+      <li class="row row--wait"><span class="key at-key"><a href="{{ j.href }}">{{ j.title }}</a></span></li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  {% if !v.parts.is_empty() %}
+  <section class="sheet" aria-labelledby="service-parts">
+    <div class="sheet-head"><h3 id="service-parts">Parts installed</h3><span class="n">{{ v.parts.len() }}</span></div>
+    <div class="cols cols--wait" aria-hidden="true"><span class="at-key">Part</span><span class="at-wide">Part number</span></div>
+    <ul class="needs">
+      {% for p in v.parts %}
+      <li class="row row--wait">
+        <span class="key at-key">{{ p.name }}</span>
+        <span class="at-wide pn" data-l="Part number">{% if let Some(pn) = p.label %}{{ pn }}{% endif %}</span>
+        {% if !p.kit.is_empty() %}<span class="memo"><span class="line kit"><span class="l">In the kit</span>{% for k in p.kit %}<span class="kit-item">{{ k.text }}{% if let Some(pn) = k.label %}<span class="pn">{{ pn }}</span>{% endif %}</span>{% endfor %}</span></span>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  {% if !v.schedule.is_empty() %}
+  <section class="sheet" aria-labelledby="service-schedule">
+    <div class="sheet-head"><h3 id="service-schedule">Maintenance it counts toward</h3><span class="n">{{ v.schedule.len() }}</span></div>
+    <ul class="needs">
+      {% for name in v.schedule %}
+      <li class="row row--wait"><span class="key at-key">{{ name }}</span></li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  {% if !v.recalls.is_empty() %}
+  <section class="sheet" aria-labelledby="service-recalls">
+    <div class="sheet-head"><h3 id="service-recalls">Recalls performed</h3><span class="n">{{ v.recalls.len() }}</span></div>
+    <div class="cols cols--wait" aria-hidden="true"><span class="at-key">Recall</span><span class="at-wide">Campaign</span></div>
+    <ul class="needs">
+      {% for r in v.recalls %}
+      <li class="row row--wait">
+        <span class="key at-key">{{ r.title }}</span>
+        <span class="at-wide" data-l="Campaign">{% if let Some(c) = r.campaign %}{{ c }}{% endif %}</span>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  {% if !v.resolved.is_empty() %}
+  <section class="sheet" aria-labelledby="service-resolved">
+    <div class="sheet-head"><h3 id="service-resolved">Incidents resolved</h3><span class="n">{{ v.resolved.len() }}</span></div>
+    <div class="cols cols--wait" aria-hidden="true"><span class="at-key">Incident</span><span class="at-wide">Kind</span><span>Noticed during</span><span>Status</span></div>
+    <ul class="needs">
+      {% for i in v.resolved %}
+      <li class="row row--wait">
+        <span class="key at-key">{{ i.title }}</span>
+        <span class="at-wide" data-l="Kind">{{ i.category }}</span>
+        <span data-l="Noticed during">{% if let Some(o) = i.other %}<a href="{{ o.href }}">{{ o.date }}</a>{% endif %}</span>
+        <span data-l="Status"><span class="pill pill--{{ i.status.kind }}">{{ i.status.text }}</span></span>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  {% if !v.noticed.is_empty() %}
+  <section class="sheet" aria-labelledby="service-noticed">
+    <div class="sheet-head"><h3 id="service-noticed">Incidents noticed</h3><span class="n">{{ v.noticed.len() }}</span></div>
+    <div class="cols cols--wait" aria-hidden="true"><span class="at-key">Incident</span><span class="at-wide">Kind</span><span>Resolved by</span><span>Status</span></div>
+    <ul class="needs">
+      {% for i in v.noticed %}
+      <li class="row row--wait">
+        <span class="key at-key">{{ i.title }}</span>
+        <span class="at-wide" data-l="Kind">{{ i.category }}</span>
+        <span data-l="Resolved by">{% if let Some(o) = i.other %}<a href="{{ o.href }}">{{ o.date }}</a>{% endif %}</span>
+        <span data-l="Status"><span class="pill pill--{{ i.status.kind }}">{{ i.status.text }}</span></span>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+</section>
+{% endblock %}
