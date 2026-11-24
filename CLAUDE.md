@@ -26,12 +26,13 @@ cargo test --workspace    # Unit tests live in glovebox-shared services; MCP tes
 cargo test -p glovebox-shared test_name           # One service-level test
 cargo test -p glovebox-mcp --test rehearsal       # One MCP integration test file
 
-just ci                   # Everything CI runs: nightly fmt-check, layering, typos, clippy, docs, build, test
+just ci                   # Everything CI runs: nightly fmt-check, layering, typos, audit, clippy, docs, build, test
                           # (often over 2 minutes: give the Bash call a 600000 ms timeout)
                           # the docs step denies warnings: a public doc linking to a private item fails it
 just fmt                  # cargo +nightly fmt — rustfmt.toml uses nightly-only options (it also rewraps `///` text, so run it after editing docs); plain `cargo fmt` passes locally but CI's format job will fail
                           # it rewraps long string literals too (`format_strings`): re-read a tool `description` before editing it again
 just check-layering       # Layering gate only (scripts/check-layering.sh)
+just audit                # RustSec advisories for the locked dependencies; .cargo/audit.toml lists the accepted ones
 just backup               # Copy the current environment's database to data/backups/ now (glovebox backup)
 just reset-env test       # Delete the named non-live environment's database files (glovebox reset --env test)
 just seed test            # Fill the named non-live environment with made-up demo data (glovebox seed --env test)

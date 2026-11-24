@@ -38,16 +38,20 @@ jobs:
               - '!.gitignore'
 
   # rustfmt uses nightly-only options (see rustfmt.toml), so the format gate runs
-  # on the nightly toolchain.
+  # on a nightly toolchain. The date is pinned so a rustfmt change cannot turn an
+  # unchanged tree red; move it when the local nightly that `just fmt` uses moves.
   format:
     needs: changes
     if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      GLOVEBOX_NIGHTLY: nightly-2026-10-03
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.GLOVEBOX_NIGHTLY }}
           components: rustfmt
       - uses: taiki-e/install-action@v2
         with:
@@ -88,10 +92,24 @@ jobs:
           tool: typos@1.50.3
       - run: typos
 
+  # RustSec advisories for the locked dependencies. `.cargo/audit.toml` lists
+  # the accepted ones.
+  audit:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,cargo-audit
+      - run: just audit
+
   # Single required status check for branch protection. Passes when every needed
   # job succeeded or was skipped (docs-only change); fails if any failed/cancelled.
   all-checks:
-    needs: [changes, format, backend, typos]
+    needs: [changes, format, backend, typos, audit]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
