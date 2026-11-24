@@ -182,13 +182,13 @@ where
     // checks again inside its own.
     validate_purchase_mileage(input.purchase_mileage)?;
     require_template(db, input.model_template_id).await?;
-    let vin = input
+    let mut input = input;
+    input.vin = input
         .vin
-        .as_deref()
-        .map(str::trim)
+        .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty());
-    let (decoded, vin_decode_error) = match vin {
-        Some(vin) => match lookup(vin.to_string()).await {
+    let (decoded, vin_decode_error) = match input.vin.clone() {
+        Some(vin) => match lookup(vin).await {
             Ok(d) => (Some(d), None),
             Err(e) => (None, Some(e)),
         },
@@ -1007,12 +1007,23 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(made.vin_decode_error, None);
+        assert_eq!(
+            made.vehicle.vin.as_deref(),
+            Some("WVWZZZAUZKW000001"),
+            "the VIN is stored without its surrounding spaces"
+        );
         assert_eq!(made.vehicle.make.as_deref(), Some("VW"));
         assert_eq!(made.vehicle.model.as_deref(), Some("Golf R"));
         assert_eq!(attribute_count(&db, made.vehicle.id).await, 1);
         // The reply is the vehicle's own keys, with no error key on success.
         let json = serde_json::to_value(&made).unwrap();
         assert_eq!(json["name"], "Daily");
+        assert_eq!(json["id"], made.vehicle.id);
+        assert_eq!(json["vin"], "WVWZZZAUZKW000001");
+        assert!(
+            json.get("vehicle").is_none(),
+            "the vehicle's keys are flattened: {json}"
+        );
         assert!(json.get("vin_decode_error").is_none(), "{json}");
     }
 
@@ -1034,6 +1045,8 @@ mod tests {
         assert_eq!(made.vehicle.make, None);
         assert_eq!(attribute_count(&db, made.vehicle.id).await, 0);
         let json = serde_json::to_value(&made).unwrap();
+        assert_eq!(json["id"], made.vehicle.id);
+        assert!(json.get("vehicle").is_none(), "{json}");
         assert_eq!(
             json["vin_decode_error"],
             "NHTSA API request failed: offline"
@@ -1056,6 +1069,7 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(made.vin_decode_error, None);
+            assert_eq!(made.vehicle.vin, None, "a blank VIN is stored as none");
         }
     }
 

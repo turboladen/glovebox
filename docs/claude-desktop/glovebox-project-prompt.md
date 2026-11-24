@@ -316,7 +316,7 @@ second service to patch the first.
 
 `summarize_recent_activity` gives recent history in one call. `get_vehicle` reads one car's full
 record (VIN, engine, transmission, purchase details, plate). `list_vehicle_attributes` lists
-everything NHTSA decoded from the VIN (plant, doors, airbags, displacement and about 140 more), so
+everything NHTSA decoded from the VIN (plant, doors, airbags, displacement and the rest, about 140 values in all), so
 call it only when a question needs such a detail; an empty list means the car has no stored decode,
 and `decode_vin` fetches one. `list_services`, `list_parts` and
 `list_incidents` list records, and `get_service` and `get_incident` read one in full.

@@ -33,7 +33,16 @@ carries the `vehicle`, `filled_fields` and `attributes_stored`.
 
 **A failed lookup is a reply, not an error.** As in `add_vehicle`, the reply carries
 `vin_decode_error`, and the vehicle and its stored attributes stay as they were. A vehicle with
-no VIN is refused with a message that names `update_vehicle`.
+no VIN is refused, and the tool description tells the client to set one with `update_vehicle`.
+
+**An answer that names neither a make nor a model year is a failed lookup.** NHTSA answers 200
+for a VIN it cannot decode, with an `ErrorText` and mostly empty values, and storing that answer
+would replace a good decode with a few error rows. `vin_decode::decode_vin` returns an error that
+carries NHTSA's `ErrorText` when one is present. `ErrorCode` does not decide it, because a usable
+decode with a check-digit warning carries a non-zero code and still names the make and year.
+
+**A blank counts as empty.** `decode_vin` fills a field whose stored text is blank, and
+`vehicle::create_with_vin` stores the VIN without surrounding spaces and a blank VIN as none.
 
 **The shared library owns the whole sequence.** `vehicle::create_with_vin` and
 `vin_decode::decode_for_vehicle` check what can be refused, make the request, and then open their

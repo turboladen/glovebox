@@ -63,7 +63,13 @@ pub async fn decode_vin(vin: &str) -> Result<VinDecodeResult, String> {
         .json()
         .await
         .map_err(|e| format!("Failed to parse NHTSA response: {e}"))?;
+    parse_response(data)
+}
 
+/// Reads NHTSA's answer into a decode. An answer that names neither a make
+/// nor a model year is an `Err` that carries NHTSA's `ErrorText` when it
+/// sent one.
+fn parse_response(data: NhtsaResponse) -> Result<VinDecodeResult, String> {
     let result = data
         .results
         .into_iter()
@@ -111,6 +117,18 @@ pub async fn decode_vin(vin: &str) -> Result<VinDecodeResult, String> {
     let body_style = get_str(&result, "BodyClass");
     let transmission = get_str(&result, "TransmissionStyle");
     let drivetrain = get_str(&result, "DriveType");
+
+    // NHTSA answers 200 for a VIN it cannot decode, with an error text and
+    // mostly empty values. `ErrorCode` alone does not tell the two apart: a
+    // usable decode with a check-digit warning carries a non-zero code too.
+    if make.is_none() && year.is_none() {
+        return Err(match get_str(&result, "ErrorText") {
+            Some(text) => format!("NHTSA could not decode the VIN: {text}"),
+            None => {
+                "NHTSA could not decode the VIN: the answer names no make or model year".to_string()
+            }
+        });
+    }
 
     // Collect all non-empty attributes (consumes result)
     let all_attributes: HashMap<String, String> = result
@@ -179,7 +197,7 @@ pub async fn store_attributes<C: ConnectionTrait + TransactionTrait>(
     Ok(())
 }
 
-/// One stored fact about a vehicle, such as `Plant City`.
+/// One stored fact about a vehicle, such as `PlantCity`.
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct VehicleAttribute {
     pub key: String,
@@ -253,6 +271,8 @@ pub async fn decode_for_vehicle<C: ConnectionTrait + TransactionTrait>(
     decode_for_vehicle_with(db, vehicle_id, |vin| async move { decode_vin(&vin).await }).await
 }
 
+// `vehicle::create` and `vehicle::update` store a VIN as sent, so a stored one
+// can hold surrounding spaces or be blank.
 fn stored_vin(v: &vehicle::Model) -> Option<&str> {
     v.vin
         .as_deref()
@@ -275,7 +295,7 @@ where
     let before = super::vehicle::require(db, vehicle_id).await?;
     let Some(vin) = stored_vin(&before).map(str::to_string) else {
         return Err(DomainError::BadRequest(format!(
-            "Vehicle {vehicle_id} has no VIN to decode. Set one with update_vehicle first."
+            "Vehicle {vehicle_id} has no VIN to decode."
         )));
     };
 
@@ -326,6 +346,8 @@ async fn fill_empty_fields(
         id: Unchanged(current.id),
         ..Default::default()
     };
+    // A stored text that is blank counts as empty, like a missing one.
+    let blank = |stored: Option<&String>| stored.is_none_or(|s| s.trim().is_empty());
     if let (None, Some(year)) = (current.year, decoded.year) {
         active.year = Set(Some(year));
         filled.push("year");
@@ -375,7 +397,7 @@ async fn fill_empty_fields(
         ),
     ];
     for (name, slot, stored, found) in texts {
-        if let (None, Some(value)) = (stored, found) {
+        if let (true, Some(value)) = (blank(stored), found) {
             *slot = Set(Some(value.clone()));
             filled.push(name);
         }
@@ -541,6 +563,14 @@ mod tests {
         );
         assert_eq!(out.attributes_stored, 3);
         assert_eq!(out.vin_decode_error, None);
+        let json = serde_json::to_value(&out).unwrap();
+        assert_eq!(
+            reply_keys(&json),
+            ["attributes_stored", "filled_fields", "vehicle"]
+        );
+        assert_eq!(json["vehicle"]["id"], v.id);
+        assert_eq!(json["filled_fields"][0], "year");
+        assert_eq!(json["attributes_stored"], 3);
         assert_eq!(out.vehicle.make.as_deref(), Some("VW"));
         assert_eq!(out.vehicle.engine.as_deref(), Some("EA888 Gen 3"));
         assert_eq!(out.vehicle.year, Some(2018));
@@ -550,6 +580,110 @@ mod tests {
         let stored = crate::services::vehicle::get(&db, v.id).await.unwrap();
         assert_eq!(stored, out.vehicle);
         assert_eq!(list_attributes(&db, v.id).await.unwrap().len(), 3);
+    }
+
+    // The top-level keys of a serialized reply, sorted.
+    fn reply_keys(json: &serde_json::Value) -> Vec<&str> {
+        let mut keys: Vec<&str> = json
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        keys
+    }
+
+    #[tokio::test]
+    async fn a_blank_stored_field_counts_as_empty_and_is_filled() {
+        let db = test_db().await;
+        let v = vehicle_with(
+            &db,
+            NewVehicle {
+                vin: Some(VIN.into()),
+                make: Some("  ".into()),
+                model: Some(String::new()),
+                trim_level: Some("Autobahn".into()),
+                ..Default::default()
+            },
+        )
+        .await;
+
+        let out = decode_for_vehicle_with(&db, v.id, |_| async { Ok(full_decode()) })
+            .await
+            .unwrap();
+
+        assert_eq!(out.vehicle.make.as_deref(), Some("VOLKSWAGEN"));
+        assert_eq!(out.vehicle.model.as_deref(), Some("Golf GTI"));
+        assert_eq!(out.vehicle.trim_level.as_deref(), Some("Autobahn"));
+        assert!(out.filled_fields.contains(&"make") && out.filled_fields.contains(&"model"));
+        assert!(!out.filled_fields.contains(&"trim_level"));
+    }
+
+    fn answer(row: &serde_json::Value) -> NhtsaResponse {
+        serde_json::from_value(serde_json::json!({ "Results": [row] })).unwrap()
+    }
+
+    #[test]
+    fn a_clean_answer_parses_into_a_decode() {
+        let out = parse_response(answer(&serde_json::json!({
+            "ErrorCode": "0",
+            "ErrorText": "0 - VIN decoded clean. Check Digit (9th position) is correct",
+            "Make": "VOLKSWAGEN",
+            "Model": "Golf GTI",
+            "ModelYear": "2018",
+            "DisplacementL": "2.0",
+            "EngineCylinders": "4",
+            "PlantCity": "PUEBLA",
+            "Trim": "",
+        })))
+        .unwrap();
+        assert_eq!(out.year, Some(2018));
+        assert_eq!(out.make.as_deref(), Some("VOLKSWAGEN"));
+        assert_eq!(out.model.as_deref(), Some("Golf GTI"));
+        assert_eq!(out.engine.as_deref(), Some("2.0L 4-cyl"));
+        assert_eq!(out.trim, None);
+        assert_eq!(
+            out.all_attributes.get("PlantCity").map(String::as_str),
+            Some("PUEBLA")
+        );
+        assert!(
+            !out.all_attributes.contains_key("Trim"),
+            "an empty value is left out"
+        );
+    }
+
+    #[test]
+    fn an_answer_with_no_make_or_year_is_an_error_that_carries_nhtsas_text() {
+        let err = parse_response(answer(&serde_json::json!({
+            "ErrorCode": "7",
+            "ErrorText": "7 - Manufacturer is not registered with NHTSA",
+            "Make": "",
+            "ModelYear": "",
+            "VIN": "ZZZZZZZZZZZZZZZZZ",
+        })))
+        .unwrap_err();
+        assert!(
+            err.contains("7 - Manufacturer is not registered with NHTSA"),
+            "{err}"
+        );
+
+        let bare = parse_response(answer(&serde_json::json!({ "Make": null }))).unwrap_err();
+        assert!(bare.contains("no make or model year"), "{bare}");
+    }
+
+    #[test]
+    fn a_partial_answer_with_a_make_and_year_is_a_decode_despite_its_error_code() {
+        let out = parse_response(answer(&serde_json::json!({
+            "ErrorCode": "1",
+            "ErrorText": "1 - Check Digit (9th position) does not calculate properly",
+            "Make": "VOLKSWAGEN",
+            "ModelYear": "2018",
+        })))
+        .unwrap();
+        assert_eq!(out.make.as_deref(), Some("VOLKSWAGEN"));
+        assert_eq!(out.year, Some(2018));
+        assert_eq!(out.model, None);
     }
 
     #[tokio::test]
@@ -606,6 +740,21 @@ mod tests {
         );
         crate::test_support::assert_empty(&out.filled_fields);
         assert_eq!(out.attributes_stored, 1, "the stored decode stays");
+        let json = serde_json::to_value(&out).unwrap();
+        assert_eq!(
+            reply_keys(&json),
+            [
+                "attributes_stored",
+                "filled_fields",
+                "vehicle",
+                "vin_decode_error"
+            ]
+        );
+        assert_eq!(
+            json["vin_decode_error"],
+            "NHTSA API request failed: offline"
+        );
+        assert_eq!(json["filled_fields"], serde_json::json!([]));
         assert_eq!(out.vehicle, v);
         assert_eq!(crate::services::vehicle::get(&db, v.id).await.unwrap(), v);
     }
@@ -628,7 +777,7 @@ mod tests {
             .await
             .unwrap_err();
             assert!(
-                matches!(&err, DomainError::BadRequest(m) if m.contains("update_vehicle")),
+                matches!(&err, DomainError::BadRequest(m) if m.ends_with("has no VIN to decode.")),
                 "{err:?}"
             );
         }

@@ -733,8 +733,8 @@ async fn decode_vin_refuses_a_car_with_no_vin_and_changes_nothing() {
 
     let err = t.call_err("decode_vin", json!({ "vehicle_id": car })).await;
     assert!(
-        err.contains("no VIN") && err.contains("update_vehicle"),
-        "the refusal must say how to set one; got: {err}"
+        err.contains("has no VIN to decode"),
+        "the refusal must say why; got: {err}"
     );
     let after = t.call("get_vehicle", json!({ "vehicle_id": car })).await;
     assert_eq!(after, before);

@@ -159,9 +159,10 @@ impl GloveboxMcp {
                        engine, transmission and drivetrain for every one of them you leave out. \
                        Pass `vin` to fill what is still blank from NHTSA; the order is what you \
                        send, then the template, then the VIN decode, and if the lookup fails \
-                       (offline, invalid VIN) the car is still added and the result carries \
-                       `vin_decode_error`. Use `update_vehicle` to change a car that already \
-                       exists, and `decode_vin` to decode the VIN of one."
+                       (offline, a malformed VIN, or one NHTSA cannot decode) the car is still \
+                       added and the result carries `vin_decode_error`. Use `update_vehicle` to \
+                       change a car that already exists, and `decode_vin` to decode the VIN of \
+                       one."
     )]
     async fn add_vehicle(
         &self,
@@ -196,10 +197,11 @@ impl GloveboxMcp {
                        style, engine, transmission and drivetrain; a field that holds a value \
                        keeps it, so change one with `update_vehicle`. The result carries the \
                        `vehicle`, `filled_fields` (the names of the fields it filled) and \
-                       `attributes_stored`. If the lookup fails (offline, invalid VIN) nothing \
-                       changes and the result carries `vin_decode_error`. A car with no VIN is \
-                       refused: set one with `update_vehicle` first. `add_vehicle` with a `vin` \
-                       already decodes a new car."
+                       `attributes_stored`. If the lookup fails (offline, a malformed VIN, or a \
+                       VIN NHTSA answers with no make and no model year) nothing changes and the \
+                       result carries `vin_decode_error`, with NHTSA's own error text when it \
+                       sent one. A car with no VIN is refused: set one with `update_vehicle` \
+                       first. `add_vehicle` with a `vin` already decodes a new car."
     )]
     async fn decode_vin(
         &self,
