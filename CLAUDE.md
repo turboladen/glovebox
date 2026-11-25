@@ -123,7 +123,10 @@ ConnectionTrait` first and returning `DomainResult<T>`. Composite reads: `upcomi
 unscheduled job or one job, the past decisions across vehicles, and the home page's rows; the MCP
 tools and the web page both render it), and `waiting` (what is not yet on an appointment: due
 maintenance, planned jobs, open recalls and open incidents, for the home page). `whats_coming` lists each open appointment.
-`seed::demo` fills an empty database with made-up data that exercises every need stage.
+`seed::demo` fills an empty database with made-up data that exercises every need stage and every
+section of the pages: a purchase date and a year of odometer readings (so reminders are a mix and
+the mileage is an estimate), a shop invoice with a covered line, open and resolved incidents, a
+note and an open recall. Its dates count back from the day it runs.
 `vin_decode` and `nhtsa` make the only network calls, through one shared client
 (`nhtsa::get`). A recall lookup drops the model's last word until NHTSA lists the name, within
 one time budget for the whole lookup, and `check_recalls` names a broader line it asked about in

@@ -5,21 +5,32 @@ use sea_orm::*;
 use serde::Serialize;
 
 use crate::{
-    entities::{self, job_need::Approach, need_option::Fitment, part::Supplier},
+    entities::{
+        self,
+        incident::IncidentCategory,
+        job_need::Approach,
+        need_option::Fitment,
+        part::Supplier,
+        service_record::{Payer, Performer},
+        service_record_line_item::WorkKind,
+    },
     error::{DomainError, DomainResult},
     inputs::{
         appointment::NewAppointment,
+        incident::NewIncident,
+        mileage::NewMileageEntry,
         need::{NewNeed, NewOption, OrderDetails, ReturnInput, UpdateOption},
         part::{NewPartContent, UpdatePart},
-        service_record::NewServiceRecord,
+        schedule::NewScheduleItem,
+        service_record::{NewLineItem, NewServiceRecord},
         shop::{NewShop, ShopChoice},
         todo::NewTodo,
         vehicle::NewVehicle,
         work_item::NewWorkItem,
     },
     services::{
-        self, appointment, model_template, need, part, service_record, shop, todo, vehicle,
-        work_item,
+        self, appointment, incident, mileage, model_template, need, nhtsa::RecallInfo, part,
+        research, schedule, service_record, shop, todo, vehicle, work_item,
     },
 };
 
@@ -33,13 +44,23 @@ pub struct SeedSummary {
     pub options: u64,
     pub parts: u64,
     pub todos: u64,
+    pub services: u64,
+    /// Counts every odometer reading, the ones the services logged included.
+    pub readings: u64,
+    /// Counts the incidents that are not notes.
+    pub incidents: u64,
+    pub notes: u64,
+    pub recalls: u64,
 }
 
-/// Fills an empty non-live database with made-up data: one vehicle, one
-/// appointment with three jobs, one unscheduled job, and needs in all six
-/// stages. Everything is written in one transaction through the same
-/// services the tools use, so a failure leaves the database empty. The
-/// caller is responsible for never pointing this at the live database.
+/// Fills an empty non-live database with made-up data: one vehicle with a
+/// year of odometer readings, one appointment with four jobs, two
+/// unscheduled jobs, needs in all six stages, two services, incidents that
+/// are open and resolved, a note and an open recall. Every date counts back
+/// from the day the seed runs. Everything is written in one transaction
+/// through the same services the tools use, so a failure leaves the database
+/// empty. The caller is responsible for never pointing this at the live
+/// database.
 ///
 /// # Errors
 ///
@@ -52,6 +73,10 @@ pub async fn demo<C: ConnectionTrait + TransactionTrait>(db: &C) -> DomainResult
         ));
     }
     build(&txn).await?;
+    let notes = entities::incident::Entity::find()
+        .filter(entities::incident::Column::Category.eq(IncidentCategory::Note))
+        .count(&txn)
+        .await?;
     let summary = SeedSummary {
         vehicles: entities::vehicle::Entity::find().count(&txn).await?,
         appointments: entities::appointment::Entity::find().count(&txn).await?,
@@ -60,6 +85,14 @@ pub async fn demo<C: ConnectionTrait + TransactionTrait>(db: &C) -> DomainResult
         options: entities::need_option::Entity::find().count(&txn).await?,
         parts: entities::part::Entity::find().count(&txn).await?,
         todos: entities::todo::Entity::find().count(&txn).await?,
+        services: entities::service_record::Entity::find().count(&txn).await?,
+        readings: entities::mileage_log::Entity::find().count(&txn).await?,
+        incidents: entities::incident::Entity::find().count(&txn).await? - notes,
+        notes,
+        recalls: entities::research_finding::Entity::find()
+            .filter(entities::research_finding::Column::Category.eq("recall"))
+            .count(&txn)
+            .await?,
     };
     txn.commit().await?;
     Ok(summary)
@@ -78,34 +111,17 @@ fn option(description: &str, manufacturer: &str, part_number: &str, price_cents:
     }
 }
 
+// The day `days` before the seed runs, so the demo never ages.
+fn days_ago(days: i64) -> chrono::NaiveDate {
+    services::today() - chrono::Duration::days(days)
+}
+
 async fn job(
     db: &(impl ConnectionTrait + TransactionTrait),
     vehicle_id: i32,
-    appointment_id: Option<i32>,
-    title: &str,
+    input: NewWorkItem,
 ) -> DomainResult<i32> {
-    job_with_notes(db, vehicle_id, appointment_id, title, None).await
-}
-
-async fn job_with_notes(
-    db: &(impl ConnectionTrait + TransactionTrait),
-    vehicle_id: i32,
-    appointment_id: Option<i32>,
-    title: &str,
-    notes: Option<&str>,
-) -> DomainResult<i32> {
-    let created = work_item::create(
-        db,
-        vehicle_id,
-        NewWorkItem {
-            title: title.into(),
-            notes: notes.map(Into::into),
-            appointment_id,
-            ..Default::default()
-        },
-    )
-    .await?;
-    Ok(created.id)
+    Ok(work_item::create(db, vehicle_id, input).await?.id)
 }
 
 async fn self_need(
@@ -192,12 +208,17 @@ async fn build(db: &(impl ConnectionTrait + TransactionTrait)) -> DomainResult<(
         .into_iter()
         .find(|t| t.model.as_deref() == Some("Golf GTI"))
         .ok_or_else(|| DomainError::Internal("the Golf GTI template is not seeded".into()))?;
+    // Bought just under two years back, so the 24-month items are due soon,
+    // the 12-month items are overdue and the rest are not due. The odometer
+    // on the day the seed runs is about 60,050 miles: the last reading is
+    // 59,900 miles twelve days back, at 13 or so miles a day.
     let car = vehicle::create(
         db,
         NewVehicle {
             name: "Demo GTI".into(),
             model_template_id: Some(template.id),
             color: Some("Demo gray".into()),
+            purchase_date: Some(days_ago(710)),
             purchase_mileage: Some(52_000),
             notes: Some("Made-up vehicle for trying out the checklist.".into()),
             ..Default::default()
@@ -205,32 +226,13 @@ async fn build(db: &(impl ConnectionTrait + TransactionTrait)) -> DomainResult<(
     )
     .await?;
     let v = car.id;
-    // The shop directory is not per vehicle, so an earlier demo car may have
-    // left its shop behind.
-    let existing = shop::list(db)
-        .await?
-        .into_iter()
-        .find(|s| s.shop.name == "Demo Auto Works");
-    let shop = match existing {
-        Some(listed) => listed.shop,
-        None => {
-            shop::create(
-                db,
-                NewShop {
-                    name: "Demo Auto Works".into(),
-                    address: Some("1 Example Way".into()),
-                    ..Default::default()
-                },
-            )
-            .await?
-        }
-    };
+    let shop = demo_shop(db).await?;
     let visit = appointment::create(
         db,
         v,
         NewAppointment {
             purpose: "60k service + loose ends".into(),
-            shop: Some(ShopChoice::Id(shop.id)),
+            shop: Some(ShopChoice::Id(shop)),
             planned_date: Some(services::today() + chrono::Duration::days(14)),
             ..Default::default()
         },
@@ -240,11 +242,230 @@ async fn build(db: &(impl ConnectionTrait + TransactionTrait)) -> DomainResult<(
         vehicle: v,
         appointment: visit.id,
     };
+    price_schedule(db, v).await?;
+    readings(db, v).await?;
+    shop_service(db, v, shop).await?;
     brakes(db, &at).await?;
     oil_change(db, &at).await?;
     small_jobs(db, &at).await?;
+    incidents(db, &at).await?;
+    recall(db, v).await?;
     todos(db, &at).await?;
     unscheduled(db, v).await
+}
+
+// The shop directory is not per vehicle, so an earlier demo car may have left
+// its shop behind.
+async fn demo_shop(db: &(impl ConnectionTrait + TransactionTrait)) -> DomainResult<i32> {
+    let existing = shop::list(db)
+        .await?
+        .into_iter()
+        .find(|s| s.shop.name == "Demo Auto Works");
+    if let Some(listed) = existing {
+        return Ok(listed.shop.id);
+    }
+    let created = shop::create(
+        db,
+        NewShop {
+            name: "Demo Auto Works".into(),
+            address: Some("1 Example Way".into()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    Ok(created.id)
+}
+
+// The template's items carry no cost, so the car gets its own priced copy of
+// three of them and the forecast has both priced and unpriced maintenance.
+async fn price_schedule(
+    db: &(impl ConnectionTrait + TransactionTrait),
+    v: i32,
+) -> DomainResult<()> {
+    for (name, cents) in [
+        ("Oil & Filter Change", 9_500),
+        ("Tire Rotation", 4_000),
+        ("Brake Fluid Flush", 14_000),
+    ] {
+        schedule::create_for_vehicle(
+            db,
+            v,
+            NewScheduleItem {
+                name: name.into(),
+                est_cost_cents: Some(cents),
+                ..Default::default()
+            },
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+// The id of the schedule item the car tracks under `name`.
+async fn schedule_item(db: &impl ConnectionTrait, v: i32, name: &str) -> DomainResult<i32> {
+    schedule::resolve(db, v)
+        .await?
+        .into_iter()
+        .find(|r| r.effective_item.name == name)
+        .map(|r| r.effective_item.id)
+        .ok_or_else(|| DomainError::Internal(format!("the demo car has no {name} item")))
+}
+
+// Readings the owner logged by hand. The two services log one each, and
+// together they give the daily rate behind the page's mileage estimate.
+async fn readings(db: &(impl ConnectionTrait + TransactionTrait), v: i32) -> DomainResult<()> {
+    for (age, miles, notes) in [
+        (330, 55_600, None),
+        (240, 56_500, Some("Before the road trip")),
+        (90, 58_300, None),
+        (35, 59_500, None),
+    ] {
+        mileage::create(
+            db,
+            v,
+            NewMileageEntry {
+                mileage: miles,
+                recorded_at: Some(days_ago(age).into()),
+                source: None,
+                notes: notes.map(Into::into),
+            },
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+// An invoice from the demo shop with lines of three kinds, one of them paid
+// by the manufacturer, which resolves an incident reported before it.
+async fn shop_service(
+    db: &(impl ConnectionTrait + TransactionTrait),
+    v: i32,
+    shop: i32,
+) -> DomainResult<()> {
+    let smell = incident::create(
+        db,
+        v,
+        NewIncident {
+            category: IncidentCategory::Leak,
+            title: "Coolant smell after a long drive".into(),
+            description: Some("Sweet smell from the engine bay, no puddle under the car.".into()),
+            occurred_at: Some(days_ago(175).into()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let line = |description: &str, work_kind, cost_cents, paid_by| NewLineItem {
+        description: description.into(),
+        work_kind,
+        paid_by,
+        quantity: None,
+        unit_cost_cents: None,
+        cost_cents: Some(cost_cents),
+    };
+    service_record::create(
+        db,
+        v,
+        NewServiceRecord {
+            service_date: days_ago(160),
+            performed_by: Some(Performer::Shop),
+            shop: Some(ShopChoice::Id(shop)),
+            mileage: Some(57_400),
+            description: Some("Coolant leak repair and state inspection".into()),
+            invoice_ref: Some("DAW-2291".into()),
+            total_cost_cents: Some(45_500),
+            line_items: Some(vec![
+                line(
+                    "Replace the coolant hose clamp",
+                    WorkKind::Repair,
+                    18_000,
+                    None,
+                ),
+                line("State inspection", WorkKind::Inspection, 3_500, None),
+                line(
+                    "Rear wiper motor, replaced under warranty",
+                    WorkKind::Repair,
+                    24_000,
+                    Some(Payer::Manufacturer),
+                ),
+            ]),
+            resolved_incident_ids: Some(vec![smell.incident.id]),
+            ..Default::default()
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+// Two open incidents and a note. The clunk has a job on the appointment, so
+// the work sheet prints it as the reported symptom, and the rock chip has no
+// job, so the home page lists it.
+async fn incidents(db: &(impl ConnectionTrait + TransactionTrait), at: &Visit) -> DomainResult<()> {
+    let v = at.vehicle;
+    let clunk = incident::create(
+        db,
+        v,
+        NewIncident {
+            category: IncidentCategory::Noise,
+            title: "Clunk over bumps, front left".into(),
+            description: Some(
+                "Loudest over speed bumps taken slowly with the wheel turned.".into(),
+            ),
+            occurred_at: Some(days_ago(9).into()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    job(
+        db,
+        v,
+        NewWorkItem {
+            title: "Find the front-end clunk".into(),
+            incident_id: Some(clunk.incident.id),
+            est_cost_cents: Some(15_000),
+            appointment_id: Some(at.appointment),
+            ..Default::default()
+        },
+    )
+    .await?;
+    for (category, title, age) in [
+        (IncidentCategory::Damage, "Rock chip in the windshield", 40),
+        (
+            IncidentCategory::Note,
+            "Winter wheels are in the garage loft",
+            60,
+        ),
+    ] {
+        incident::create(
+            db,
+            v,
+            NewIncident {
+                category,
+                title: title.into(),
+                occurred_at: Some(days_ago(age).into()),
+                ..Default::default()
+            },
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+// A recall stored the way a recall check stores what NHTSA lists. The
+// campaign number is made up.
+async fn recall(db: &(impl ConnectionTrait + TransactionTrait), v: i32) -> DomainResult<()> {
+    let found = RecallInfo {
+        campaign_number: "00V000000".into(),
+        manufacturer: Some("Demo Motors".into()),
+        title: "Fuel System, Gasoline: Delivery: Fuel Pump".into(),
+        summary: Some("The fuel pump control module may fail (made-up recall).".into()),
+        consequence: Some("The engine may stall.".into()),
+        remedy: Some("The dealer replaces the module at no charge.".into()),
+        report_date: None,
+        component: Some("FUEL SYSTEM, GASOLINE:DELIVERY:FUEL PUMP".into()),
+        action_number: None,
+    };
+    research::record_recalls(db, v, &[found]).await?;
+    Ok(())
 }
 
 // A pair, with three candidates: one chosen, one that does not fit and one
@@ -326,12 +547,16 @@ async fn rear_rotors(
 async fn brakes(db: &(impl ConnectionTrait + TransactionTrait), at: &Visit) -> DomainResult<()> {
     let (v, a) = (at.vehicle, Some(at.appointment));
 
-    let brakes = job_with_notes(
+    let brakes = job(
         db,
         v,
-        a,
-        "Brakes",
-        Some("Check the pad wear sensors while the wheels are off."),
+        NewWorkItem {
+            title: "Brakes".into(),
+            notes: Some("Check the pad wear sensors while the wheels are off.".into()),
+            est_cost_cents: Some(65_000),
+            appointment_id: a,
+            ..Default::default()
+        },
     )
     .await?;
     rear_rotors(db, v, brakes).await?;
@@ -429,7 +654,19 @@ async fn oil_change(
     at: &Visit,
 ) -> DomainResult<()> {
     let (v, a) = (at.vehicle, Some(at.appointment));
-    let oil = job(db, v, a, "Oil change").await?;
+    // The job names the schedule item, so the service that completes it is
+    // the item's last service and the item is not due.
+    let oil = job(
+        db,
+        v,
+        NewWorkItem {
+            title: "Oil change".into(),
+            schedule_item_id: Some(schedule_item(db, v, "Oil & Filter Change").await?),
+            appointment_id: a,
+            ..Default::default()
+        },
+    )
+    .await?;
     let filter = self_need(db, v, oil, "Oil filter").await?;
     order_and_receive(
         db,
@@ -445,8 +682,8 @@ async fn oil_change(
         db,
         v,
         NewServiceRecord {
-            service_date: services::today(),
-            performed_by: Some(entities::service_record::Performer::Owner),
+            service_date: days_ago(12),
+            performed_by: Some(Performer::Owner),
             mileage: Some(59_900),
             description: Some("Oil and filter change".into()),
             part_ids: filter_part.map(|id| vec![id]),
@@ -464,7 +701,19 @@ async fn small_jobs(
     at: &Visit,
 ) -> DomainResult<()> {
     let (v, a) = (at.vehicle, Some(at.appointment));
-    let small = job(db, v, a, "Cabin filter and wipers").await?;
+    // The cabin filter is due and its job is on the appointment, so the home
+    // page counts the item as booked. The job has no estimate.
+    let small = job(
+        db,
+        v,
+        NewWorkItem {
+            title: "Cabin filter and wipers".into(),
+            schedule_item_id: Some(schedule_item(db, v, "Cabin Air Filter").await?),
+            appointment_id: a,
+            ..Default::default()
+        },
+    )
+    .await?;
     let cabin = self_need(db, v, small, "Cabin air filter").await?;
     choose(
         db,
@@ -509,16 +758,17 @@ async fn small_jobs(
 
 async fn todos(db: &(impl ConnectionTrait + TransactionTrait), at: &Visit) -> DomainResult<()> {
     let (v, a) = (at.vehicle, Some(at.appointment));
-    for (title, done) in [
-        ("Ask the shop about the clunk over bumps", false),
-        ("Bring the locking wheel nut key", true),
+    for (title, appointment_id, done) in [
+        ("Ask the shop to save the old rotors", a, false),
+        ("Bring the locking wheel nut key", a, true),
+        ("Renew the registration", None, false),
     ] {
         let created = todo::add(
             db,
             v,
             NewTodo {
                 title: title.into(),
-                appointment_id: a,
+                appointment_id,
                 ..Default::default()
             },
         )
@@ -532,7 +782,27 @@ async fn todos(db: &(impl ConnectionTrait + TransactionTrait), at: &Visit) -> Do
 }
 
 async fn unscheduled(db: &(impl ConnectionTrait + TransactionTrait), v: i32) -> DomainResult<()> {
-    let washer = job(db, v, None, "Washer pump").await?;
+    job(
+        db,
+        v,
+        NewWorkItem {
+            title: "Air filter".into(),
+            schedule_item_id: Some(schedule_item(db, v, "Air Filter").await?),
+            est_cost_cents: Some(6_000),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let washer = job(
+        db,
+        v,
+        NewWorkItem {
+            title: "Washer pump".into(),
+            est_cost_cents: Some(9_000),
+            ..Default::default()
+        },
+    )
+    .await?;
     let pump = need::add(
         db,
         v,
@@ -558,9 +828,154 @@ mod tests {
     use super::*;
     use crate::{
         error::DomainError,
-        services::{appointment, checklist, need::Stage},
+        services::{
+            appointment, checklist, need::Stage, reminders::DueStatus, service_detail,
+            vehicle_detail, waiting,
+        },
         test_support::{VehicleFixture, test_db},
     };
+
+    async fn seeded_vehicle(db: &DatabaseConnection) -> i32 {
+        demo(db).await.unwrap();
+        entities::vehicle::Entity::find()
+            .one(db)
+            .await
+            .unwrap()
+            .unwrap()
+            .id
+    }
+
+    // The home page's maintenance list is a mix, and no item reads overdue
+    // only because the car has no purchase date.
+    #[tokio::test]
+    async fn demo_seed_shows_a_mix_of_due_maintenance() {
+        let db = test_db().await;
+        let v = seeded_vehicle(&db).await;
+
+        let waiting = waiting::waiting(&db, v, services::today()).await.unwrap();
+
+        let listed: Vec<(&str, DueStatus, bool)> = waiting
+            .maintenance
+            .iter()
+            .map(|m| (m.name.as_str(), m.status, m.job_id.is_some()))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                ("Tire Rotation", DueStatus::Overdue, false),
+                ("Wiper Blades", DueStatus::Overdue, false),
+                ("Air Filter", DueStatus::DueSoon, true),
+                ("Brake Fluid Flush", DueStatus::DueSoon, false),
+            ]
+        );
+        // The cabin filter's job is on the appointment.
+        assert_eq!(waiting.maintenance_booked, 1);
+        assert!(waiting.mileage_is_estimate);
+        assert!(
+            (60_000..60_200).contains(&waiting.estimated_mileage),
+            "{}",
+            waiting.estimated_mileage
+        );
+    }
+
+    #[tokio::test]
+    async fn demo_seed_fills_the_recall_incident_and_job_lists() {
+        let db = test_db().await;
+        let v = seeded_vehicle(&db).await;
+
+        let waiting = waiting::waiting(&db, v, services::today()).await.unwrap();
+
+        assert_eq!(waiting.recalls.len(), 1);
+        assert_eq!(
+            waiting.recalls[0].campaign_number.as_deref(),
+            Some("00V000000")
+        );
+        let incidents: Vec<&str> = waiting.incidents.iter().map(|i| i.title.as_str()).collect();
+        assert_eq!(incidents, ["Rock chip in the windshield"]);
+        assert_eq!(waiting.incidents_booked, 1);
+        let jobs: Vec<&str> = waiting.jobs.iter().map(|j| j.title.as_str()).collect();
+        assert_eq!(jobs, ["Air filter", "Washer pump"]);
+    }
+
+    #[tokio::test]
+    async fn demo_seed_gives_the_vehicle_page_an_estimate_and_a_history() {
+        let db = test_db().await;
+        let v = seeded_vehicle(&db).await;
+
+        let detail = vehicle_detail::get(&db, v, services::today())
+            .await
+            .unwrap();
+
+        assert_eq!(detail.odometer, Some(59_900));
+        assert!(detail.estimated_mileage.is_some(), "{detail:?}");
+        let kinds: std::collections::HashSet<&str> = detail
+            .recent_activity
+            .iter()
+            .map(|a| a.kind.as_str())
+            .collect();
+        assert_eq!(kinds.len(), 3, "{kinds:?}");
+    }
+
+    #[tokio::test]
+    async fn demo_seed_records_a_shop_invoice_with_a_covered_line() {
+        let db = test_db().await;
+        let v = seeded_vehicle(&db).await;
+        let shop = entities::shop::Entity::find()
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        let invoice = entities::service_record::Entity::find()
+            .filter(entities::service_record::Column::ShopId.eq(shop.id))
+            .one(&db)
+            .await
+            .unwrap()
+            .expect("a service at the demo shop");
+
+        let read = service_detail::get(&db, v, invoice.id).await.unwrap();
+
+        let value = serde_json::to_value(&read).unwrap();
+        let text = value.to_string();
+        assert!(text.contains("\"manufacturer\""), "{text}");
+        assert!(text.contains("\"inspection\""), "{text}");
+        assert!(text.contains("Coolant smell after a long drive"), "{text}");
+        assert_eq!(invoice.total_cost_cents, Some(45_500));
+    }
+
+    #[tokio::test]
+    async fn demo_seed_prints_a_reported_symptom_on_the_work_sheet() {
+        let db = test_db().await;
+        let v = seeded_vehicle(&db).await;
+        let appointment = entities::appointment::Entity::find()
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let sheet =
+            crate::services::work_sheet::for_appointment(&db, v, appointment.id, services::today())
+                .await
+                .unwrap();
+
+        let symptoms: Vec<&str> = sheet
+            .jobs
+            .iter()
+            .filter_map(|j| j.symptom.as_deref())
+            .collect();
+        assert_eq!(symptoms, ["Clunk over bumps, front left"]);
+    }
+
+    #[tokio::test]
+    async fn demo_seed_counts_the_records_beside_the_checklist() {
+        let db = test_db().await;
+        let summary = demo(&db).await.unwrap();
+        assert_eq!(summary.services, 2);
+        assert_eq!(summary.readings, 6);
+        assert_eq!(summary.incidents, 3);
+        assert_eq!(summary.notes, 1);
+        assert_eq!(summary.recalls, 1);
+        assert_eq!(summary.todos, 4);
+    }
 
     #[tokio::test]
     async fn demo_seed_covers_every_stage() {
@@ -568,7 +983,7 @@ mod tests {
         let summary = demo(&db).await.unwrap();
         assert_eq!(summary.vehicles, 1);
         assert_eq!(summary.appointments, 1);
-        assert_eq!(summary.jobs, 4);
+        assert_eq!(summary.jobs, 6);
 
         let vehicle = crate::entities::vehicle::Entity::find()
             .one(&db)
@@ -654,6 +1069,8 @@ mod tests {
                 .iter()
                 .any(|t| t.done_on.is_none() && !t.title.starts_with("Return "))
         );
+        // The air filter job has no needs, so the unscheduled checklist
+        // leaves it out.
         assert_eq!(unscheduled.jobs.len(), 1);
         assert_eq!(unscheduled.jobs[0].needs.len(), 1);
         // A need for two shows its count on the page.
