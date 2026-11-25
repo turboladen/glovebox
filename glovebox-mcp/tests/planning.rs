@@ -18,6 +18,8 @@ async fn whats_coming_returns_every_section_for_a_bare_vehicle() {
         "budget",
         "planned_work",
         "recalls",
+        "open_findings",
+        "open_findings_total",
         "open_incidents",
     ] {
         assert!(due.get(key).is_some(), "missing {key}; got: {due}");

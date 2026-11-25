@@ -23,6 +23,7 @@ use crate::{
     error::{DomainError, DomainResult},
     inputs::finding::{FindingFilter, NewFinding, UpdateFinding},
     services::incident::ServiceRef,
+    vocab::Vocabulary,
 };
 
 crate::vocab::vocabulary! {
@@ -132,7 +133,33 @@ impl FindingView {
             .as_ref()
             .is_some_and(|job| job.status == JobStatus::Planned)
     }
+
+    /// Whether the finding still waits for the owner: it reads `open`, or it
+    /// reads `planned` and its job is on no appointment.
+    fn is_waiting(&self) -> bool {
+        match self.status {
+            ShownFindingStatus::Open => true,
+            ShownFindingStatus::Planned => self
+                .work_item
+                .as_ref()
+                .is_none_or(|job| job.appointment_id.is_none()),
+            ShownFindingStatus::Done | ShownFindingStatus::Dismissed => false,
+        }
+    }
 }
+
+/// The findings still waiting on one vehicle, as [`open`] returns them.
+#[derive(Debug)]
+pub struct OpenFindings {
+    /// The most pressing findings, at most [`OPEN_FINDINGS_SHOWN`].
+    pub findings: Vec<FindingView>,
+    /// How many findings are waiting, the ones left out of `findings`
+    /// included.
+    pub total: usize,
+}
+
+/// The most findings [`open`] returns.
+pub const OPEN_FINDINGS_SHOWN: usize = 10;
 
 /// What [`delete`] removed and what it changed besides.
 #[derive(Debug, Serialize)]
@@ -524,6 +551,38 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         id: finding.id,
         title: finding.title,
         unlinked_work_items: jobs.into_iter().map(FindingJob::from).collect(),
+    })
+}
+
+// Where a severity sorts: in the order of its list, and none after them all.
+fn severity_rank(severity: Option<FindingSeverity>) -> usize {
+    severity
+        .and_then(|s| FindingSeverity::ALL.iter().position(|listed| *listed == s))
+        .unwrap_or(FindingSeverity::ALL.len())
+}
+
+/// The vehicle's findings that still wait for the owner: each reads `open`,
+/// or reads `planned` with its job on no appointment. They are ordered by
+/// severity, a finding with none last, and then newest first. No recall is
+/// among them.
+pub async fn open(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult<OpenFindings> {
+    let findings = filed(vehicle_id).all(db).await?;
+    let mut waiting: Vec<FindingView> = with_views(db, findings)
+        .await?
+        .into_iter()
+        .filter(FindingView::is_waiting)
+        .collect();
+    waiting.sort_by_key(|v| {
+        (
+            severity_rank(v.severity),
+            std::cmp::Reverse((v.created_at, v.id)),
+        )
+    });
+    let total = waiting.len();
+    waiting.truncate(OPEN_FINDINGS_SHOWN);
+    Ok(OpenFindings {
+        findings: waiting,
+        total,
     })
 }
 
@@ -1160,6 +1219,88 @@ mod tests {
             report_of(&db, again).await.report_type,
             Some(ReportType::ExternalResearch)
         );
+    }
+
+    #[tokio::test]
+    async fn the_waiting_findings_are_open_or_planned_off_an_appointment_most_severe_first() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let with = async |title: &str, severity| {
+            let filed = NewFinding {
+                severity,
+                ..new_finding(FindingCategory::KnownIssue, title)
+            };
+            file(&db, vid, filed).await.unwrap().id
+        };
+        let critical = Some(FindingSeverity::Critical);
+        with("Older critical", critical).await;
+        with("No severity", None).await;
+        let planned = with("Planned", Some(FindingSeverity::Recommended)).await;
+        let booked = with("Booked", critical).await;
+        let dismissed = with("Dismissed", critical).await;
+        let marked_done = with("Marked done", critical).await;
+        with("Informational", Some(FindingSeverity::Informational)).await;
+        with("Optional", Some(FindingSeverity::Optional)).await;
+        with("Newer critical", critical).await;
+        seed_recall(&db, vid, "24V110000", "Fuel pump").await;
+        seed(&db, seed_vehicle(&db).await, "Other car").await;
+
+        let job = plan_job(&db, vid, planned, None).await;
+        let visit = appointment::create(
+            &db,
+            vid,
+            NewAppointment {
+                purpose: "60k service".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+        plan_job(&db, vid, booked, Some(visit)).await;
+        update(&db, vid, dismissed, mark(FiledFindingStatus::Dismissed))
+            .await
+            .unwrap();
+        update(&db, vid, marked_done, mark(FiledFindingStatus::Done))
+            .await
+            .unwrap();
+
+        let waiting = open(&db, vid).await.unwrap();
+
+        assert_eq!(
+            titles(&waiting.findings),
+            vec![
+                "Newer critical",
+                "Older critical",
+                "Planned",
+                "Optional",
+                "Informational",
+                "No severity"
+            ]
+        );
+        assert_eq!(waiting.total, 6);
+        let shown = waiting.findings[2].work_item.as_ref().unwrap();
+        assert_eq!((shown.id, shown.status), (job, JobStatus::Planned));
+
+        // A finding whose job is done by hand has stopped waiting.
+        set_job_status(&db, vid, job, JobStatus::Done).await;
+        assert_eq!(open(&db, vid).await.unwrap().total, 5);
+    }
+
+    #[tokio::test]
+    async fn the_waiting_list_holds_the_first_ten_and_counts_them_all() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        for n in 0..OPEN_FINDINGS_SHOWN + 2 {
+            seed(&db, vid, &format!("Finding {n}")).await;
+        }
+
+        let waiting = open(&db, vid).await.unwrap();
+
+        assert_eq!(waiting.total, OPEN_FINDINGS_SHOWN + 2);
+        assert_eq!(waiting.findings.len(), OPEN_FINDINGS_SHOWN);
+        assert_eq!(waiting.findings[0].title, "Finding 11");
+        assert_eq!(waiting.findings[9].title, "Finding 2");
     }
 
     // Deletes racing on one file from several pools all succeed: each opens
