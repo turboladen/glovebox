@@ -1261,7 +1261,6 @@ async fn a_shop_name_must_match_one_shop_in_the_directory() {
         got.shop.as_ref().map(|s| s.name.as_str()),
         Some("KW Automotive")
     );
-    assert_eq!(got.record.shop_name, None);
     let listed = list_between(&db, vid, None, None).await.unwrap();
     assert_eq!(
         listed[0].shop.as_ref().map(|s| s.name.as_str()),
@@ -1474,7 +1473,7 @@ async fn a_self_performed_service_records_an_ecu_flash() {
     .await
     .unwrap();
     assert_eq!(got.record.performed_by, Performer::Owner);
-    assert!(got.record.shop_name.is_none());
+    assert_eq!((got.record.shop_id, got.shop), (None, None));
 }
 
 #[tokio::test]

@@ -184,6 +184,19 @@ pub(super) async fn scalar<T: sea_orm::TryGetable>(
     row.try_get_by_index::<T>(0)
 }
 
+/// Returns whether `table` has a column named `column`.
+pub(super) async fn has_column(
+    db: &impl ConnectionTrait,
+    table: &str,
+    column: &str,
+) -> Result<bool, DbErr> {
+    scalar::<bool>(
+        db,
+        &format!("SELECT count(*) > 0 FROM pragma_table_info('{table}') WHERE name = '{column}'"),
+    )
+    .await
+}
+
 /// A rule one row of `table` must keep, added as the table constraint
 /// `CONSTRAINT "name" CHECK (holds)`.
 pub(super) struct Check {
@@ -201,19 +214,29 @@ const IDS_SHOWN: usize = 10;
 ///
 /// # Errors
 /// `DbErr::Migration`, with nothing changed, while a stored row breaks a
-/// check (the message names the table, the check, the count and the first
-/// ids), when a definition does not end in `)`, or when the soundness checks
-/// of [`edit_definitions`] differ afterwards.
+/// check the table lacks (the message names the table, the check, the count
+/// and the first ids), when a definition does not end in `)`, or when the
+/// soundness checks of [`edit_definitions`] differ afterwards.
 pub(super) async fn add_checks<C: ConnectionTrait>(
     txn: &C,
     what: &str,
     checks: &[Check],
 ) -> Result<(), DbErr> {
+    // A constraint the table has is found by its name and left alone. Its
+    // rows are not tested, because SQLite keeps them to the stored rule, and
+    // a later migration may have dropped a column that `holds` names.
+    let mut missing = Vec::new();
+    for check in checks {
+        if !has_check(txn, check).await? {
+            missing.push(check);
+        }
+    }
+
     // SQLite does not test stored rows against a constraint added to the
     // definition, so they are tested here. A CHECK fails only when its
     // expression is false, which is exactly when `NOT (holds)` is true.
     let mut broken = Vec::new();
-    for check in checks {
+    for check in &missing {
         let ids: Vec<i64> = rows(
             txn,
             &format!(
@@ -250,12 +273,6 @@ pub(super) async fn add_checks<C: ConnectionTrait>(
         )));
     }
 
-    let mut missing = Vec::new();
-    for check in checks {
-        if !has_check(txn, check).await? {
-            missing.push(check);
-        }
-    }
     if missing.is_empty() {
         return Ok(());
     }

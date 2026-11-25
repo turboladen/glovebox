@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use sea_orm::{DatabaseBackend, Statement, Value};
 use sea_orm_migration::prelude::*;
 
-use super::schema::{Check, add_checks};
+use super::schema::{Check, add_checks, has_column};
 
 // The rules as this migration adds them. A rule changes only through a new
 // migration, because `has_check` finds a constraint by its name and a fresh
@@ -114,6 +114,16 @@ fn plan_shops(texts: &[ShopText]) -> Vec<ShopText> {
             }
         })
         .collect()
+}
+
+// Returns whether both tables hold a `shop_name` column.
+async fn tables_hold_names(db: &impl ConnectionTrait) -> Result<bool, DbErr> {
+    for table in TABLES {
+        if !has_column(db, table, "shop_name").await? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 struct Named {
@@ -238,6 +248,12 @@ impl MigrationTrait for Migration {
         // One transaction moves every row and adds the checks, so a failure
         // leaves the names where they were and a rerun starts from them.
         let txn = crate::services::begin_write(manager.get_connection()).await?;
+        // `m20261124_000001_drop_unused_columns` drops the columns, and a
+        // rerun over a database without them has no name to move or to hold
+        // empty.
+        if !tables_hold_names(&txn).await? {
+            return Ok(());
+        }
         let stamp = Value::from(crate::services::now());
         // A row that already names a shop keeps it, and a blank name names
         // none, so each of those only loses its text.

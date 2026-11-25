@@ -176,7 +176,11 @@ adds `incidents.resolved_by_hand`, marks each resolved incident that no service 
 CHECK that only a resolved incident carries it, and `m20261121_000001_shops_search`, which adds
 the FTS5 index `fts_shops`, and `m20261121_000002_shops_from_names`, which moves every stored
 `shop_name` into the shop directory (a trailing `(…)` holding a digit is the address), sets each row's `shop_id`
-and adds a CHECK that `shop_name` stays NULL on services and appointments. They run on startup.
+and adds a CHECK that `shop_name` stays NULL on services and appointments, and
+`m20261124_000001_drop_unused_columns`, which drops both `shop_name` columns with those checks,
+`research_reports.summary`, `raw_data` and `notes`, and `vehicle_attributes.superseded_by` with
+its foreign key, builds `fts_service_records` again over `description` and `notes`, and adds
+`idx_service_records_shop`. They run on startup.
 
 **Test harness** (`test_support.rs`): `test_db()` is an in-memory SQLite database with migrations
 applied. It is compiled under `#[cfg(any(test, feature = "test-support"))]`; `glovebox-mcp` uses it
@@ -426,8 +430,8 @@ Platforms and model templates are written only by migrations; `model_template::l
 name (ASCII case and surrounding spaces aside) is refused unless both carry different
 addresses, `merge` moves every service and appointment to the kept shop and reports in
 `discarded` each detail it did not take, and `delete` refuses a shop any record names. A
-service or appointment names its shop only by `shop_id`: its `shop_name` column stays NULL (a
-CHECK holds it), and every read prints the shop's name from the directory under `shop_name`
+service or appointment names its shop only by `shop_id`: neither table stores a name, and every
+read prints the shop's name from the directory under `shop_name`
 (`shop::refs`). A read struct holds its shop as one `Option<shop::ShopRef>` (the id with the
 name), which serializes to the flat `shop_id` and `shop_name` keys (the work sheet prints the
 name under `shop`), and the web page builds a `ShopLink` from it in `ShopLink::of`. A write takes a `ShopChoice`, and `shop::resolve` turns a name into the one shop
@@ -655,19 +659,26 @@ role per control style, and `YYYY-MM-DD` dates.
   `research_finding::FindingStatus`, `service_record::CompletedWork`, `schedule::LinkMode` and `search::SearchScope`. A
   filter on a column never takes one of these.
   `docs/adr/0004-typed-vocabularies.md` records why.
-- **Migrations**: new migrations go after `m20261121_000002_shops_from_names`; the
+- **Migrations**: new migrations go after `m20261124_000001_drop_unused_columns`; the
   `new-migration` skill has the templates. Use `Expr::cust()` for expressions inside builder queries; raw
   `execute_unprepared` only where no builder form exists (FTS5 DDL, cross-table copies). A delete
   by a correlated subquery has one: `Query::delete().cond_where(Expr::exists(subquery))`, as
   `m20261120_000001_job_schedule_links` shows.
 - **Migrations are not transactional on SQLite** (sea-orm-migration only wraps Postgres), so write
   them rerun-safe: `IF NOT EXISTS` DDL, `INSERT OR IGNORE` or `NOT EXISTS`-gated DML,
-  pragma-guarded ALTERs.
+  pragma-guarded ALTERs. `db::tests::migrations_rerun_without_duplicating_the_seed` runs every
+  migration again over the finished schema (`migration_is_rerun_safe` runs every one after the
+  seed), so a migration that drops a column also makes each earlier migration that names the
+  column skip when it is gone; `schema::has_column` is the test for one.
 - **Migration tests** start from `schema::testing::migrated_to(N)` (the N migrations before the one
   under test), insert rows, then run `Migrator::up`; `count` and `fts_integrity` live there too.
 - **A change to a shared builder in `migration/schema.rs`** must leave the SQL of migrations that
   already ran unchanged: compare `sqlite_schema` from a fresh database with a backup's.
-- **SQLite cannot `DROP COLUMN` named in an FK clause**; use the table-rebuild pattern. To add a
+- **SQLite cannot `DROP COLUMN` a column that a foreign key, CHECK, index or trigger names.**
+  Take the constraint out of the stored definition with `schema::edit_definitions` and drop the
+  triggers, then `ALTER TABLE … DROP COLUMN`, as `m20261124_000001_drop_unused_columns` does;
+  a table with children is never rebuilt, because `DROP TABLE` runs each key's action
+  (`docs/adr/0027-unused-columns-are-dropped.md`). To add a
   foreign key to an existing column, edit the stored table definition as
   `docs/adr/0003-foreign-keys-by-editing-the-table-definition.md` describes. For FTS5,
   build the index and its triggers with `schema::create_fts` (and `drop_fts` in `down`), then fill
@@ -691,7 +702,8 @@ role per control style, and `YYYY-MM-DD` dates.
 - **`tokio::fs::File` buffers**: always `.flush().await` before the handle drops, or a pending write
   can be silently lost under load.
 - **Entity field order**: must match physical DB column order. ALTER TABLE appends columns to the
-  end, so new fields go after `created_at`/`updated_at` in the entity struct.
+  end, so new fields go after `created_at`/`updated_at` in the entity struct. A dropped column
+  leaves the others in place.
 - **N+1 queries**: List functions that load related data must batch with `is_in()` queries, not
   query per record in a loop.
 - **Imports**: Use `sea_orm::*` glob imports. Explicit imports create unused-import churn.

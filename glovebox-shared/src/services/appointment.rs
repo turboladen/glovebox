@@ -845,7 +845,6 @@ mod tests {
             id: 1,
             vehicle_id: 1,
             purpose: "p".into(),
-            shop_name: None,
             shop_id: None,
             planned_date: None,
             notes: None,
