@@ -14,7 +14,7 @@ use crate::{
         service_record, work_item,
     },
     error::{DomainError, DomainResult},
-    inputs::incident::{NewFollowup, NewIncident, UpdateFollowup, UpdateIncident},
+    inputs::incident::{IncidentFilter, NewFollowup, NewIncident, UpdateFollowup, UpdateIncident},
 };
 
 /// Fetch an incident scoped to its owning vehicle. A wrong-vehicle lookup is
@@ -288,15 +288,15 @@ pub(crate) async fn keep_resolver(
     Ok(())
 }
 
-/// Lists a vehicle's incidents newest first, keeping only resolved ones for
-/// `Some(true)`, only unresolved ones for `Some(false)`, and all for `None`.
+/// Lists a vehicle's incidents, the latest `occurred_at` first, keeping those
+/// the filter names and at most `filter.limit` of them.
 pub async fn list_filtered(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
-    resolved: Option<bool>,
+    filter: IncidentFilter,
 ) -> DomainResult<Vec<IncidentWithDetails>> {
     super::vehicle::require(db, vehicle_id).await?;
-    let incidents = list_rows(db, vehicle_id, resolved).await?;
+    let incidents = rows(db, vehicle_id, &filter).await?;
     with_details(db, incidents).await
 }
 
@@ -308,13 +308,29 @@ pub(crate) async fn list_rows(
     vehicle_id: i32,
     resolved: Option<bool>,
 ) -> DomainResult<Vec<incident::Model>> {
+    let filter = IncidentFilter {
+        resolved,
+        ..Default::default()
+    };
+    rows(db, vehicle_id, &filter).await
+}
+
+async fn rows(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    filter: &IncidentFilter,
+) -> DomainResult<Vec<incident::Model>> {
     let mut query = incident::Entity::find().filter(incident::Column::VehicleId.eq(vehicle_id));
-    if let Some(resolved) = resolved {
+    if let Some(resolved) = filter.resolved {
         query = query.filter(incident::Column::Resolved.eq(resolved));
+    }
+    if let Some(category) = filter.category {
+        query = query.filter(incident::Column::Category.eq(category));
     }
     Ok(query
         .order_by_desc(incident::Column::OccurredAt)
         .order_by_desc(incident::Column::Id)
+        .limit(filter.limit.map(u64::from))
         .all(db)
         .await?)
 }
@@ -1016,7 +1032,9 @@ mod tests {
             .await
             .unwrap();
         }
-        let listed = list_filtered(&db, vid, None).await.unwrap();
+        let listed = list_filtered(&db, vid, IncidentFilter::default())
+            .await
+            .unwrap();
         assert_eq!(listed.len(), 2);
         assert_eq!(listed[0].incident.title, "newer");
         assert_eq!(listed[1].incident.title, "older");
@@ -1057,7 +1075,10 @@ mod tests {
             assert_eq!(made.incident.category, *category);
         }
         assert_eq!(
-            list_filtered(&db, vid, None).await.unwrap().len(),
+            list_filtered(&db, vid, IncidentFilter::default())
+                .await
+                .unwrap()
+                .len(),
             IncidentCategory::ALL.len()
         );
     }
@@ -1183,7 +1204,11 @@ mod tests {
             .unwrap_err(),
             DomainError::NotFound(_)
         ));
-        crate::test_support::assert_empty(&list_filtered(&db, owner, None).await.unwrap());
+        crate::test_support::assert_empty(
+            &list_filtered(&db, owner, IncidentFilter::default())
+                .await
+                .unwrap(),
+        );
     }
 
     #[tokio::test]
@@ -1529,7 +1554,11 @@ mod tests {
             .unwrap_err(),
             DomainError::NotFound(_)
         ));
-        crate::test_support::assert_empty(&list_filtered(&db, owner, None).await.unwrap());
+        crate::test_support::assert_empty(
+            &list_filtered(&db, owner, IncidentFilter::default())
+                .await
+                .unwrap(),
+        );
 
         // Update referencing a foreign incident must 404 and mutate nothing.
         let mine = create(&db, owner, new_incident("mine", IncidentCategory::Noise))
@@ -1607,6 +1636,53 @@ mod tests {
                 .recurrence_of_id,
             None
         );
+    }
+
+    #[tokio::test]
+    async fn list_filtered_keeps_a_category_and_the_newest_up_to_a_limit() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        for (title, category, occurred_at) in [
+            ("Old squeak", IncidentCategory::Noise, "2026-01-05"),
+            ("Drip", IncidentCategory::Leak, "2026-03-05"),
+            ("New squeak", IncidentCategory::Noise, "2026-05-05"),
+            ("Rattle", IncidentCategory::Noise, "2026-04-05"),
+        ] {
+            let input = NewIncident {
+                occurred_at: Some(date(occurred_at)),
+                ..new_incident(title, category)
+            };
+            create(&db, vid, input).await.unwrap();
+        }
+        let titles = |filter: IncidentFilter| {
+            let db = &db;
+            async move {
+                list_filtered(db, vid, filter)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|i| i.incident.title)
+                    .collect::<Vec<_>>()
+            }
+        };
+
+        let noises = IncidentFilter {
+            category: Some(IncidentCategory::Noise),
+            ..Default::default()
+        };
+        assert_eq!(titles(noises).await, ["New squeak", "Rattle", "Old squeak"]);
+        let newest_two = IncidentFilter {
+            limit: Some(2),
+            ..Default::default()
+        };
+        assert_eq!(titles(newest_two).await, ["New squeak", "Rattle"]);
+        let one_noise = IncidentFilter {
+            category: Some(IncidentCategory::Noise),
+            resolved: Some(false),
+            limit: Some(1),
+        };
+        assert_eq!(titles(one_noise).await, ["New squeak"]);
+        assert_eq!(titles(IncidentFilter::default()).await.len(), 4);
     }
 
     // --- followups ------------------------------------------------------------
@@ -1917,7 +1993,9 @@ mod tests {
         .await
         .unwrap();
 
-        let listed = list_filtered(&db, vid, None).await.unwrap();
+        let listed = list_filtered(&db, vid, IncidentFilter::default())
+            .await
+            .unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].followups.len(), 1);
         assert_eq!(listed[0].resolved_by[0].id, svc);

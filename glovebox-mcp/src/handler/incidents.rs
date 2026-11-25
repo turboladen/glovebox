@@ -3,7 +3,7 @@
 use rmcp::{ErrorData as McpError, model::CallToolResult, tool, tool_router};
 
 use super::{GloveboxMcp, Parameters, deleted_result, domain_result};
-use glovebox_shared::services::incident;
+use glovebox_shared::{inputs::incident::IncidentFilter, services::incident};
 
 use crate::schemas::{
     AddIncidentFollowupInput, DeleteIncidentFollowupInput, DeleteIncidentInput, ListIncidentsInput,
@@ -50,17 +50,24 @@ impl GloveboxMcp {
     #[tool(
         name = "list_incidents",
         description = "The vehicle's incidents (noises, leaks, warning lights, damage, accidents, \
-                       shop observations, notes), newest first, each with its followups and the \
-                       services that noticed or fixed it. Pass `resolved: false` for what is \
-                       still open. Use `get_incident` for one in full and this tool to find an \
-                       `incident_id` for `update_incident`."
+                       shop observations, notes), the latest `occurred_at` first, each with its \
+                       followups and the services that noticed or fixed it. Pass `resolved: \
+                       false` for what is still open and `category` for one kind. `limit` keeps \
+                       that many from the top of the list, after the other filters. Use \
+                       `get_incident` for one in full and this tool to find an `incident_id` for \
+                       `update_incident`."
     )]
     async fn list_incidents(
         &self,
         params: Parameters<ListIncidentsInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "list_incidents");
-        domain_result(incident::list_filtered(&*self.db, p.vehicle_id, p.resolved).await)
+        let filter = IncidentFilter {
+            resolved: p.resolved,
+            category: p.category,
+            limit: p.limit,
+        };
+        domain_result(incident::list_filtered(&*self.db, p.vehicle_id, filter).await)
     }
 
     #[tool(

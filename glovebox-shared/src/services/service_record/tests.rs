@@ -1714,7 +1714,11 @@ async fn incident_and_service_ids_from_another_vehicle_are_not_found() {
         wrong.to_string().replace(&foreign_service.to_string(), "N"),
         missing.to_string().replace("9999", "N")
     );
-    crate::test_support::assert_empty(&incident::list_filtered(&db, v1, None).await.unwrap());
+    crate::test_support::assert_empty(
+        &incident::list_filtered(&db, v1, crate::inputs::incident::IncidentFilter::default())
+            .await
+            .unwrap(),
+    );
 
     // Foreign incident ids on record_service leave no footprint at all.
     let sched = seed_schedule_item(&db, v1, "Oil change").await;
@@ -5136,4 +5140,147 @@ mod corrections {
         assert_eq!(stored_incident_links(&db).await, 0);
         assert!(!resolved(&db, other, theirs).await);
     }
+}
+
+async fn listed_descriptions(
+    db: &DatabaseConnection,
+    vehicle_id: i32,
+    filter: ServiceFilter,
+) -> Vec<String> {
+    list_filtered(db, vehicle_id, filter)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|s| s.record.description.unwrap_or_default())
+        .collect()
+}
+
+// Four services: two at each shop, with repair lines on the first and the
+// last by date.
+async fn seed_filterable_services(db: &DatabaseConnection) -> (i32, i32, i32) {
+    let v = seed_vehicle(db).await;
+    let dealer = crate::test_support::add_shop(db, "Dealer").await;
+    let indie = crate::test_support::add_shop(db, "Indie").await;
+    for (day, description, shop, lines) in [
+        (
+            "2026-01-10",
+            "Oil change",
+            dealer,
+            vec![line("Oil", WorkKind::Maintenance)],
+        ),
+        (
+            "2026-03-10",
+            "Coil pack",
+            indie,
+            vec![line("Coil", WorkKind::Repair)],
+        ),
+        (
+            "2026-05-10",
+            "Brakes and a hose",
+            dealer,
+            vec![
+                line("Pads", WorkKind::Maintenance),
+                line("Hose", WorkKind::Repair),
+            ],
+        ),
+        ("2026-07-10", "Inspection", indie, Vec::new()),
+    ] {
+        let input = NewServiceRecord {
+            service_date: date(day),
+            description: Some(description.into()),
+            shop: Some(ShopChoice::Id(shop)),
+            line_items: Some(lines),
+            ..minimal_record(None)
+        };
+        create(db, v, input).await.unwrap();
+    }
+    (v, dealer, indie)
+}
+
+#[tokio::test]
+async fn list_filtered_keeps_a_shop_a_work_kind_and_a_date_range() {
+    let db = test_db().await;
+    let (v, dealer, _) = seed_filterable_services(&db).await;
+
+    let all = listed_descriptions(&db, v, ServiceFilter::default()).await;
+    assert_eq!(
+        all,
+        ["Inspection", "Brakes and a hose", "Coil pack", "Oil change"]
+    );
+
+    let at_dealer = ServiceFilter {
+        shop_id: Some(dealer),
+        ..Default::default()
+    };
+    assert_eq!(
+        listed_descriptions(&db, v, at_dealer).await,
+        ["Brakes and a hose", "Oil change"]
+    );
+
+    // A service matches when any one of its lines has the kind.
+    let repairs = ServiceFilter {
+        work_kind: Some(WorkKind::Repair),
+        ..Default::default()
+    };
+    assert_eq!(
+        listed_descriptions(&db, v, repairs).await,
+        ["Brakes and a hose", "Coil pack"]
+    );
+
+    let dealer_repairs_in_spring = ServiceFilter {
+        from: Some(date("2026-03-10")),
+        to: Some(date("2026-05-10")),
+        shop_id: Some(dealer),
+        work_kind: Some(WorkKind::Repair),
+        limit: None,
+    };
+    assert_eq!(
+        listed_descriptions(&db, v, dealer_repairs_in_spring).await,
+        ["Brakes and a hose"]
+    );
+
+    let recalls = ServiceFilter {
+        work_kind: Some(WorkKind::Recall),
+        ..Default::default()
+    };
+    crate::test_support::assert_empty(&listed_descriptions(&db, v, recalls).await);
+}
+
+#[tokio::test]
+async fn list_filtered_limit_keeps_the_newest_and_each_keeps_its_own_lines() {
+    let db = test_db().await;
+    let (v, ..) = seed_filterable_services(&db).await;
+    let newest = ServiceFilter {
+        limit: Some(2),
+        ..Default::default()
+    };
+    let listed = list_filtered(&db, v, newest).await.unwrap();
+    let described: Vec<_> = listed
+        .iter()
+        .map(|s| (s.record.description.as_deref().unwrap(), s.line_items.len()))
+        .collect();
+    assert_eq!(described, [("Inspection", 0), ("Brakes and a hose", 2)]);
+
+    // The limit counts the services the other filters keep.
+    let newest_repair = ServiceFilter {
+        work_kind: Some(WorkKind::Repair),
+        limit: Some(1),
+        ..Default::default()
+    };
+    assert_eq!(
+        listed_descriptions(&db, v, newest_repair).await,
+        ["Brakes and a hose"]
+    );
+}
+
+#[tokio::test]
+async fn list_filtered_by_a_missing_shop_is_not_found() {
+    let db = test_db().await;
+    let (v, ..) = seed_filterable_services(&db).await;
+    let filter = ServiceFilter {
+        shop_id: Some(9999),
+        ..Default::default()
+    };
+    let err = list_filtered(&db, v, filter).await.err().unwrap();
+    assert_eq!(err.to_string(), "Shop 9999 not found");
 }

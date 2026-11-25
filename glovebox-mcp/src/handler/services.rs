@@ -3,10 +3,7 @@
 use rmcp::{ErrorData as McpError, model::CallToolResult, tool, tool_router};
 
 use super::{GloveboxMcp, Parameters, domain_result};
-use glovebox_shared::{
-    dates,
-    services::service_record::{self, LinkMode},
-};
+use glovebox_shared::services::service_record::{self, LinkMode};
 
 use crate::schemas::{
     CorrectServiceInput, DeleteServiceInput, LinkServiceToMaintenanceInput, ListServicesInput,
@@ -127,21 +124,24 @@ impl GloveboxMcp {
 
     #[tool(
         name = "list_services",
-        description = "The vehicle's service history, newest first, each with its line items, \
-                       parts, schedule links, the to-do items it completed and the incidents and \
-                       recalls it handled. Narrow with `from` and `to` dates (`YYYY-MM-DD`, \
-                       inclusive). Use `get_service` for one record, `summarize_recent_activity` \
-                       for a short mixed feed, and this tool to find the `service_id` for \
-                       `correct_service` or `delete_service`."
+        description = "The vehicle's service history, the latest service date first, each with \
+                       its line items, parts, schedule links, the to-do items it completed and \
+                       the incidents and recalls it handled. Narrow with `from` and `to` dates \
+                       (`YYYY-MM-DD`, inclusive), `shop_id` (a shop from `list_shops`; an id that \
+                       names no shop is an error) and `work_kind` (a service matches when any of \
+                       its lines has that kind). `limit` keeps that many from the top of the \
+                       list, after the other filters, so `limit: 5` is the five most recent. Use \
+                       `get_service` for one record, `summarize_recent_activity` for a short \
+                       mixed feed, and this tool to find the `service_id` for `correct_service` \
+                       or `delete_service`."
     )]
     async fn list_services(
         &self,
         params: Parameters<ListServicesInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "list_services");
-        let from = domain_input!(dates::parse_optional_date("from", p.from));
-        let to = domain_input!(dates::parse_optional_date("to", p.to));
-        domain_result(service_record::list_between(&*self.db, p.vehicle_id, from, to).await)
+        let (vehicle_id, filter) = domain_input!(p.into_domain());
+        domain_result(service_record::list_filtered(&*self.db, vehicle_id, filter).await)
     }
 
     #[tool(

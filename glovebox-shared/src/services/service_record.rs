@@ -16,7 +16,7 @@ use crate::{
     error::{DomainError, DomainResult},
     inputs::{
         part::{Install, NewFitting, NewPart},
-        service_record::{NewLineItem, NewServiceRecord, UpdateServiceRecord},
+        service_record::{NewLineItem, NewServiceRecord, ServiceFilter, UpdateServiceRecord},
         shop::ShopChoice,
     },
     services::{
@@ -623,6 +623,7 @@ async fn sync_auto_mileage_log(
     Ok(())
 }
 
+/// Lists every service of a vehicle, the latest service date first.
 pub async fn list(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -630,28 +631,74 @@ pub async fn list(
     list_between(db, vehicle_id, None, None).await
 }
 
-/// Lists a vehicle's services newest first, keeping those whose service date
-/// falls on or after `from` and on or before `to` (either bound may be
-/// omitted).
+/// Lists a vehicle's services, the latest service date first, keeping those
+/// whose service date falls on or after `from` and on or before `to` (either
+/// bound may be omitted).
 pub async fn list_between(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     from: Option<chrono::NaiveDate>,
     to: Option<chrono::NaiveDate>,
 ) -> DomainResult<Vec<ServiceRecordWithLinks>> {
+    let filter = ServiceFilter {
+        from,
+        to,
+        ..Default::default()
+    };
+    list_filtered(db, vehicle_id, filter).await
+}
+
+/// The services of a vehicle that `filter` keeps, the latest service date
+/// first and the later-recorded first within a day.
+///
+/// # Errors
+/// `NotFound` for a missing vehicle or a `shop_id` that names no shop.
+async fn filtered_rows(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    filter: &ServiceFilter,
+) -> DomainResult<Vec<service_record::Model>> {
     super::vehicle::require(db, vehicle_id).await?;
     let mut query =
         service_record::Entity::find().filter(service_record::Column::VehicleId.eq(vehicle_id));
-    if let Some(from) = from {
+    if let Some(from) = filter.from {
         query = query.filter(service_record::Column::ServiceDate.gte(from));
     }
-    if let Some(to) = to {
+    if let Some(to) = filter.to {
         query = query.filter(service_record::Column::ServiceDate.lte(to));
     }
-    let records = query
+    if let Some(shop_id) = filter.shop_id {
+        super::shop::get(db, shop_id).await?;
+        query = query.filter(service_record::Column::ShopId.eq(shop_id));
+    }
+    if let Some(kind) = filter.work_kind {
+        let with_kind = sea_query::Query::select()
+            .column(service_record_line_item::Column::ServiceRecordId)
+            .from(service_record_line_item::Entity)
+            .and_where(service_record_line_item::Column::WorkKind.eq(kind))
+            .to_owned();
+        query = query.filter(service_record::Column::Id.in_subquery(with_kind));
+    }
+    Ok(query
         .order_by_desc(service_record::Column::ServiceDate)
+        .order_by_desc(service_record::Column::Id)
+        .limit(filter.limit.map(u64::from))
         .all(db)
-        .await?;
+        .await?)
+}
+
+/// Lists a vehicle's services, the latest service date first, keeping those
+/// the filter names and at most `filter.limit` of them. A service matches
+/// `work_kind` when any of its lines has that kind.
+///
+/// # Errors
+/// `NotFound` for a missing vehicle or a `shop_id` that names no shop.
+pub async fn list_filtered(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    filter: ServiceFilter,
+) -> DomainResult<Vec<ServiceRecordWithLinks>> {
+    let records = filtered_rows(db, vehicle_id, &filter).await?;
 
     // Batch-load all schedule links, parts, and line items for these records (avoids N+1)
     let record_ids: Vec<i32> = records.iter().map(|r| r.id).collect();

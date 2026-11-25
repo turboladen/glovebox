@@ -276,6 +276,17 @@ lines. `cost_summary`'s `covered_work` lists the services with covered work, eac
 reading, dated by `history_starts_on`) is the base of the per-1,000-miles figure, which stays null
 until the records cover 1,000 miles (`costs::MIN_MILES_FOR_COST_PER_1000`).
 
+`list_services`, `list_parts` and `list_incidents` answer with a bare array, newest first
+(service date, `created_at` and `occurred_at`, each with the id as the tiebreak), and take
+`limit`, which is applied after the other filters. Their filters are `inputs` structs
+(`ServiceFilter`, `PartFilter`, `IncidentFilter`); `ServiceFilter::work_kind` keeps a service with
+any line of that kind, and a `shop_id` that names no shop is `NotFound`. `cost_summary` takes an
+inclusive `from` and `to` (`costs::summary_in` with a `costs::CostRange`; `from` after `to` is
+`Invalid`). A ranged summary counts the services dated inside the range and the parts whose
+purchase date, else install date, falls inside it, and measures `miles_covered` from the services
+and readings dated inside it. `by_work_kind` sums the counted lines per `WorkKind`, each line
+judged by `service_record::effective_payer`.
+
 An incident's followups are added, corrected and deleted one at a time (`incident::create_followup`,
 `update_followup`, `delete_followup`). A correction or a delete names the vehicle, the incident and
 the followup, and a followup of another incident or another vehicle is the same `NotFound` as one

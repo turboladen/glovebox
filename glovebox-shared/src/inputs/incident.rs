@@ -107,3 +107,14 @@ pub struct UpdateFollowup {
     pub contact_with: Option<Option<String>>,
     pub notes: Option<Option<String>>,
 }
+
+/// Which of a vehicle's incidents a list keeps. An empty field keeps all.
+#[derive(Default)]
+pub struct IncidentFilter {
+    /// `Some(true)` keeps the resolved incidents and `Some(false)` the
+    /// unresolved ones.
+    pub resolved: Option<bool>,
+    pub category: Option<IncidentCategory>,
+    /// The most incidents returned, counted from the newest.
+    pub limit: Option<u32>,
+}

@@ -10,7 +10,7 @@ use glovebox_shared::services::{
 };
 
 use crate::schemas::{
-    GetIncidentInput, GetServiceInput, SearchRecordsInput, SummarizeActivityInput, VehicleParams,
+    CostSummaryInput, GetIncidentInput, GetServiceInput, SearchRecordsInput, SummarizeActivityInput,
 };
 
 #[tool_router(router = reads_router, vis = "pub(super)")]
@@ -85,14 +85,29 @@ impl GloveboxMcp {
                        until the records cover at least 1,000 miles; `miles_covered` and \
                        `history_starts_on` are still reported. `monthly_costs` plus \
                        `unbucketed_parts_cents` (self-supplied parts with neither a purchase nor \
-                       an install date) add up to the total."
+                       an install date) add up to the total. `by_work_kind` splits the counted \
+                       services' lines by kind (`maintenance`, `mod`, `repair`, `inspection`, \
+                       `recall`, `fee`): `line_count`, `cost_cents`, and that amount split into \
+                       `out_of_pocket_cents` and `covered_cents` by each line's payer. A kind \
+                       with no line is left out, and the figures are the lines' own amounts, so \
+                       they add up to the service totals only when every invoice's lines do. \
+                       `from` and `to` (`YYYY-MM-DD`, inclusive; `from` after `to` is an error) \
+                       restrict every figure to one span, such as a calendar year: the services \
+                       dated inside it, and the parts bought inside it (by install date when a \
+                       part has no purchase date; a part with neither is left out of a ranged \
+                       summary). With a range, `miles_covered` and `history_starts_on` count only \
+                       the services and odometer readings dated inside it, so \
+                       `cost_per_1000_miles_cents` is the range's cost over the range's miles and \
+                       is null when those readings cover under 1,000 miles. The reply repeats \
+                       `from` and `to`, null for an open end."
     )]
     async fn cost_summary(
         &self,
-        params: Parameters<VehicleParams>,
+        params: Parameters<CostSummaryInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "cost_summary");
-        domain_result(costs::summary(&*self.db, p.vehicle_id).await)
+        let (vehicle_id, range) = domain_input!(p.into_domain());
+        domain_result(costs::summary_in(&*self.db, vehicle_id, range).await)
     }
 
     #[tool(

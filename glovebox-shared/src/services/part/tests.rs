@@ -1640,3 +1640,37 @@ async fn list_on_a_missing_vehicle_is_not_found() {
         .unwrap_err();
     assert_eq!(err.to_string(), "Vehicle 999 not found");
 }
+
+#[tokio::test]
+async fn list_limit_keeps_the_most_recently_recorded_after_the_other_filters() {
+    let db = test_db().await;
+    let v = seed_vehicle(&db).await;
+    let ahead = Some("2027-11-24");
+    part_with_warranty(&db, v, "first", ahead, None).await;
+    part_with_warranty(&db, v, "second", None, None).await;
+    part_with_warranty(&db, v, "third", ahead, None).await;
+    part_with_warranty(&db, v, "fourth", None, None).await;
+    let names = |filter: PartFilter| {
+        let db = &db;
+        async move {
+            list_on(db, v, filter, date(WARRANTY_TODAY))
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|p| p.view.part.name)
+                .collect::<Vec<_>>()
+        }
+    };
+
+    let newest_two = PartFilter {
+        limit: Some(2),
+        ..Default::default()
+    };
+    assert_eq!(names(newest_two).await, ["fourth", "third"]);
+    let newest_covered = PartFilter {
+        under_warranty: Some(true),
+        limit: Some(1),
+        ..Default::default()
+    };
+    assert_eq!(names(newest_covered).await, ["third"]);
+}

@@ -389,8 +389,9 @@ pub async fn list(
     Ok(listed.into_iter().map(|p| p.view).collect())
 }
 
-/// The vehicle's parts, newest first, each with its kit contents and its
-/// warranty as of `today`. A mileage bound is compared with the vehicle's
+/// The vehicle's parts, most recently recorded first, each with its kit
+/// contents and its warranty as of `today`. `filter.limit` keeps that many
+/// from the top of the filtered list. A mileage bound is compared with the vehicle's
 /// estimated mileage on that day.
 pub async fn list_on(
     db: &impl ConnectionTrait,
@@ -432,6 +433,10 @@ pub async fn list_on(
         .collect();
     if let Some(wanted) = filter.under_warranty {
         judged.retain(|(p, bounds)| is_under_warranty(p, bounds.as_ref()) == wanted);
+    }
+    // The warranty filter is judged in memory, so the limit is applied after it.
+    if let Some(limit) = filter.limit {
+        judged.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
     }
 
     let (parts, warranties): (Vec<_>, Vec<_>) = judged.into_iter().unzip();

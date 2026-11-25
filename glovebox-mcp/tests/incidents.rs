@@ -703,3 +703,67 @@ async fn a_followup_of_another_parent_reads_like_a_missing_one() {
         "Shop could not reproduce the squeak"
     );
 }
+
+#[tokio::test]
+async fn list_incidents_filters_by_category_and_keeps_the_newest() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    for (title, category, occurred_at) in [
+        ("Old squeak", "noise", "2026-01-05"),
+        ("Drip", "leak", "2026-03-05"),
+        ("New squeak", "noise", "2026-05-05"),
+    ] {
+        t.call(
+            "log_incident",
+            json!({
+                "vehicle_id": v.id,
+                "title": title,
+                "category": category,
+                "occurred_at": occurred_at
+            }),
+        )
+        .await;
+    }
+    let list = |extra: serde_json::Value| {
+        let mut args = json!({ "vehicle_id": v.id });
+        for (k, value) in extra.as_object().unwrap() {
+            args[k] = value.clone();
+        }
+        let t = &t;
+        async move {
+            let listed = t.call("list_incidents", args).await;
+            listed
+                .as_array()
+                .expect("list_incidents answers with a bare array")
+                .iter()
+                .map(|i| i["title"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        }
+    };
+
+    assert_eq!(list(json!({})).await, ["New squeak", "Drip", "Old squeak"]);
+    assert_eq!(list(json!({ "limit": 2 })).await, ["New squeak", "Drip"]);
+    assert_eq!(
+        list(json!({ "category": "noise" })).await,
+        ["New squeak", "Old squeak"]
+    );
+    assert_eq!(
+        list(json!({ "category": "noise", "resolved": false, "limit": 1 })).await,
+        ["New squeak"]
+    );
+    assert_eq!(
+        t.call(
+            "list_incidents",
+            json!({ "vehicle_id": v.id, "category": "accident" })
+        )
+        .await,
+        json!([])
+    );
+    let err = t
+        .call_err(
+            "list_incidents",
+            json!({ "vehicle_id": v.id, "category": "bang" }),
+        )
+        .await;
+    assert!(err.contains("category"), "got: {err}");
+}

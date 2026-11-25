@@ -338,12 +338,21 @@ everything NHTSA decoded from the VIN (plant, doors, airbags, displacement and t
 call it only when a question needs such a detail; an empty list means the car has no stored decode,
 and `decode_vin` fetches one. `list_services`, `list_parts` and
 `list_incidents` list records, and `get_service` and `get_incident` read one in full.
+Each list is newest first (services by service date, incidents by when they happened, parts by
+when they were recorded) and takes `limit`, so ask for what the question needs: "the last three
+services" is `limit: 3`. `list_services` also narrows by `from` and `to`, by `shop_id` and by
+`work_kind`, which matches a service with any line of that kind, and `list_incidents` by
+`category` and `resolved`.
 When a part fails or Steve asks what a warranty still covers, call `list_parts` with
 `under_warranty: true`. It lists the purchased and installed parts whose warranty is in force. A
 part's `warranty` in any `list_parts` reply gives `in_force`, `days_left` and `miles_left`; a
 warranty with both a date and a mileage ends at whichever comes first, so report `in_force` and
 never the more generous bound.
-`search_records` searches everything, and `cost_summary` reports what the car has cost. `save_note`
+`search_records` searches everything, and `cost_summary` reports what the car has cost. For
+"what did I spend this year", pass `from` and `to` (inclusive dates); the reply then counts only
+the services and parts dated inside the range, and its cost per 1,000 miles is the range's cost
+over the miles driven inside it. `by_work_kind` splits the lines into maintenance, repairs, mods
+and the rest, each with what Steve paid and what someone else covered. `save_note`
 keeps a plain fact worth remembering.
 
 ## The shop directory

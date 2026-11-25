@@ -10,6 +10,7 @@ use glovebox_shared::{
         incident::IncidentCategory,
         part::{PartStatus, Supplier},
         service_record::{Payer, Performer},
+        service_record_line_item::WorkKind,
         work_item::JobStatus,
     },
     error::DomainResult,
@@ -17,10 +18,11 @@ use glovebox_shared::{
         incident::{NewFollowup, UpdateFollowup, UpdateIncident},
         part::{Fitting, InstallPatch, ReplacePatch, UpdatePart},
         schedule::{NewScheduleItem, UpdateScheduleItem},
-        service_record::UpdateServiceRecord,
+        service_record::{ServiceFilter, UpdateServiceRecord},
         vehicle::{NewVehicle, UpdateVehicle},
         work_item::UpdateWorkItem,
     },
+    services::costs::CostRange,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer};
@@ -288,6 +290,27 @@ pub struct ListServicesInput {
     pub from: Option<String>,
     /// Latest service date to include, `YYYY-MM-DD`.
     pub to: Option<String>,
+    /// Only services at this shop, by id from `list_shops`. An id that names no shop is an error.
+    pub shop_id: Option<i32>,
+    /// Only services with at least one line of this kind.
+    pub work_kind: Option<WorkKind>,
+    /// The most services to return, counted from the newest service date after the other filters. Omit for all.
+    pub limit: Option<u32>,
+}
+
+impl ListServicesInput {
+    pub fn into_domain(self) -> DomainResult<(i32, ServiceFilter)> {
+        Ok((
+            self.vehicle_id,
+            ServiceFilter {
+                from: dates::parse_optional_date("from", self.from)?,
+                to: dates::parse_optional_date("to", self.to)?,
+                shop_id: self.shop_id,
+                work_kind: self.work_kind,
+                limit: self.limit,
+            },
+        ))
+    }
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -299,6 +322,8 @@ pub struct ListPartsInput {
     pub status: Option<PartStatus>,
     /// `true` for the parts still under warranty: purchased or installed, with a warranty expiry date or expiry odometer reading, and no bound passed (a part with both is under warranty only while neither has passed). `false` for every other part. Omit for all.
     pub under_warranty: Option<bool>,
+    /// The most parts to return, counted from the most recently recorded after the other filters. Omit for all.
+    pub limit: Option<u32>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -308,6 +333,33 @@ pub struct ListIncidentsInput {
     pub vehicle_id: i32,
     /// `true` for resolved incidents only, `false` for unresolved only. Omit for all.
     pub resolved: Option<bool>,
+    /// Only incidents of this category.
+    pub category: Option<IncidentCategory>,
+    /// The most incidents to return, counted from the newest `occurred_at` after the other filters. Omit for all.
+    pub limit: Option<u32>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CostSummaryInput {
+    /// Vehicle id, from `list_vehicles`.
+    pub vehicle_id: i32,
+    /// First date to count, `YYYY-MM-DD`, inclusive. Omit to count from the first record.
+    pub from: Option<String>,
+    /// Last date to count, `YYYY-MM-DD`, inclusive. Omit to count through the latest record. A `from` after `to` is an error.
+    pub to: Option<String>,
+}
+
+impl CostSummaryInput {
+    pub fn into_domain(self) -> DomainResult<(i32, CostRange)> {
+        Ok((
+            self.vehicle_id,
+            CostRange {
+                from: dates::parse_optional_date("from", self.from)?,
+                to: dates::parse_optional_date("to", self.to)?,
+            },
+        ))
+    }
 }
 
 #[derive(Deserialize, JsonSchema)]

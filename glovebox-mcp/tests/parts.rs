@@ -481,3 +481,23 @@ async fn list_parts_reads_each_warranty_and_filters_on_it() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn list_parts_limit_keeps_the_most_recently_recorded() {
+    let t = connect().await;
+    let v = common::add_vehicle(&t, "Daily").await;
+    for name in ["First", "Second", "Third"] {
+        t.call("record_part", json!({ "vehicle_id": v, "name": name }))
+            .await;
+    }
+    let listed = t
+        .call("list_parts", json!({ "vehicle_id": v, "limit": 2 }))
+        .await;
+    let names: Vec<&str> = listed
+        .as_array()
+        .expect("list_parts answers with a bare array")
+        .iter()
+        .map(|p| p["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Third", "Second"]);
+}

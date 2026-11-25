@@ -239,4 +239,6 @@ pub struct PartFilter {
     /// `services::part::is_under_warranty` judges them, and `Some(false)`
     /// keeps every other part.
     pub under_warranty: Option<bool>,
+    /// The most parts returned, counted from the newest.
+    pub limit: Option<u32>,
 }
