@@ -1196,9 +1196,9 @@ async fn home_view_groups_by_vehicle() {
     let shops: Vec<_> = g
         .appointments
         .iter()
-        .map(|a| (a.shop_id, a.shop_name.as_deref()))
+        .map(|a| a.shop.as_ref().map(|s| (s.id, s.name.as_str())))
         .collect();
-    assert_eq!(shops, [(Some(shop), Some("Smith Auto")), (None, None)]);
+    assert_eq!(shops, [Some((shop, "Smith Auto")), None]);
     let state: Vec<_> = g.appointments.iter().map(|a| (a.phase, a.jobs)).collect();
     assert_eq!(
         state,

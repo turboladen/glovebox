@@ -27,7 +27,7 @@ use glovebox_shared::{
         reminders::{self, DueStatus},
         service_detail::ServiceDetail,
         service_record::{IncidentRef, ServiceRecordWithLinks},
-        shop::{ShopHistory, ShopListing},
+        shop::{ShopHistory, ShopListing, ShopRef},
         trim_to_none,
         vehicle_detail::VehicleDetail,
         waiting::{Waiting, booked_note},
@@ -442,7 +442,7 @@ impl From<&HomeAppointment> for HomeAppointmentRow {
         Self {
             id: a.id,
             purpose: a.purpose.clone(),
-            shop: ShopLink::of(a.shop_id, a.shop_name.as_deref()),
+            shop: ShopLink::of(a.shop.as_ref()),
             when: a.when.clone(),
             dated: a.dated,
             status: Tag::of_phase(a.phase),
@@ -1057,7 +1057,7 @@ pub struct UnsettledRow {
 /// appointment has them.
 pub fn sheet_heading(sheet: &WorkSheet) -> String {
     let mut parts = vec![sheet.vehicle.clone()];
-    parts.extend(sheet.shop.clone());
+    parts.extend(sheet.shop.as_ref().map(|s| s.name.clone()));
     parts.extend(sheet.date.map(date_label));
     parts.join(" \u{2014} ")
 }
@@ -1140,10 +1140,9 @@ impl ShopLink {
         }
     }
 
-    /// The link for a record that names shop `id` as `name`, or `None` when it
-    /// names no shop.
-    pub fn of(id: Option<i32>, name: Option<&str>) -> Option<Self> {
-        Some(Self::new(id?, name?))
+    /// The link to the shop a record names, or `None` when it names no shop.
+    pub fn of(shop: Option<&ShopRef>) -> Option<Self> {
+        shop.map(|s| Self::new(s.id, &s.name))
     }
 }
 
@@ -1447,7 +1446,7 @@ impl From<&ServiceDetail> for ServicePageView {
                 .unwrap_or_else(|| "Service".to_owned()),
             vehicle: VehicleLink::new(vid, &d.vehicle_name),
             date: service_dates(r),
-            shop: ShopLink::of(r.shop_id, s.shop_name.as_deref()),
+            shop: ShopLink::of(s.shop.as_ref()),
             self_performed: r.performed_by == Performer::Owner,
             odometer: r.mileage.map(|miles| reminders::judged_at(miles, false)),
             invoice: r.invoice_ref.clone(),
@@ -1679,7 +1678,7 @@ impl From<&ServiceRecordWithLinks> for HistoryServiceCard {
             date: service_dates(r),
             description: r.description.as_deref().and_then(trim_to_none),
             odometer: r.mileage.map(|miles| reminders::judged_at(miles, false)),
-            shop: ShopLink::of(r.shop_id, s.shop_name.as_deref()),
+            shop: ShopLink::of(s.shop.as_ref()),
             self_performed: r.performed_by == Performer::Owner,
             total: r.total_cost_cents.map(format_cents),
             lines: s

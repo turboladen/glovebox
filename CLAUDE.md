@@ -421,7 +421,9 @@ addresses, `merge` moves every service and appointment to the kept shop and repo
 `discarded` each detail it did not take, and `delete` refuses a shop any record names. A
 service or appointment names its shop only by `shop_id`: its `shop_name` column stays NULL (a
 CHECK holds it), and every read prints the shop's name from the directory under `shop_name`
-(`shop::names`). A write takes a `ShopChoice`, and `shop::resolve` turns a name into the one shop
+(`shop::refs`). A read struct holds its shop as one `Option<shop::ShopRef>` (the id with the
+name), which serializes to the flat `shop_id` and `shop_name` keys (the work sheet prints the
+name under `shop`), and the web page builds a `ShopLink` from it in `ShopLink::of`. A write takes a `ShopChoice`, and `shop::resolve` turns a name into the one shop
 it matches or refuses it, so a new spelling never creates a shop; a self-performed service names
 no shop. `docs/adr/0021-a-shop-is-one-record.md` records why.
 

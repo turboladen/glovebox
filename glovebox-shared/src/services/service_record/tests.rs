@@ -1214,7 +1214,7 @@ async fn a_self_performed_service_names_no_shop() {
     let got = update(&db, vid, at_shop.record.id, self_done_elsewhere)
         .await
         .unwrap();
-    assert_eq!((got.record.shop_id, got.shop_name), (None, None));
+    assert_eq!((got.record.shop_id, got.shop), (None, None));
 }
 
 #[tokio::test]
@@ -1257,10 +1257,16 @@ async fn a_shop_name_must_match_one_shop_in_the_directory() {
 
     let got = create(&db, vid, at(" kw automotive ")).await.unwrap();
     assert_eq!(got.record.shop_id, Some(kw));
-    assert_eq!(got.shop_name.as_deref(), Some("KW Automotive"));
+    assert_eq!(
+        got.shop.as_ref().map(|s| s.name.as_str()),
+        Some("KW Automotive")
+    );
     assert_eq!(got.record.shop_name, None);
     let listed = list_between(&db, vid, None, None).await.unwrap();
-    assert_eq!(listed[0].shop_name.as_deref(), Some("KW Automotive"));
+    assert_eq!(
+        listed[0].shop.as_ref().map(|s| s.name.as_str()),
+        Some("KW Automotive")
+    );
 
     let err = create(&db, vid, at("Clovis VW")).await.unwrap_err();
     assert!(

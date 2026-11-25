@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use sea_orm::{sea_query::Expr, *};
-use serde::Serialize;
+use serde::{Serialize, Serializer, ser::SerializeMap};
 
 use crate::{
     entities::{appointment, service_record, shop, vehicle},
@@ -18,6 +18,66 @@ use super::{appointment::AppointmentSummary, trim_to_none};
 /// case and surrounding whitespace do not matter.
 fn text_key(text: &str) -> String {
     text.trim().to_ascii_lowercase()
+}
+
+/// The shop a record names: its id in the shop directory and its name there.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShopRef {
+    pub id: i32,
+    pub name: String,
+}
+
+#[expect(
+    clippy::ref_option,
+    reason = "serde hands a `serialize_with` function a reference to the field"
+)]
+impl ShopRef {
+    /// Serializes a record's shop as the keys `shop_id` and `shop_name` of the
+    /// record itself, both null when it names no shop. Use it on a field that also carries
+    /// `#[serde(flatten)]`.
+    ///
+    /// # Errors
+    /// Whatever the serializer returns.
+    pub(crate) fn id_and_shop_name<S: Serializer>(
+        shop: &Option<Self>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        Self::flat(shop.as_ref(), "shop_name", serializer)
+    }
+
+    /// Serializes like [`Self::id_and_shop_name`] with the name under `shop`.
+    ///
+    /// # Errors
+    /// Whatever the serializer returns.
+    pub(crate) fn id_and_shop<S: Serializer>(
+        shop: &Option<Self>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        Self::flat(shop.as_ref(), "shop", serializer)
+    }
+
+    /// Serializes a record's shop as its name alone, or null, for a record
+    /// that prints the id from its own `shop_id` column.
+    ///
+    /// # Errors
+    /// Whatever the serializer returns.
+    pub(crate) fn name_only<S: Serializer>(
+        shop: &Option<Self>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        shop.as_ref().map(|s| s.name.as_str()).serialize(serializer)
+    }
+
+    fn flat<S: Serializer>(
+        shop: Option<&Self>,
+        name_key: &'static str,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(2))?;
+        map.serialize_entry("shop_id", &shop.map(|s| s.id))?;
+        map.serialize_entry(name_key, &shop.map(|s| s.name.as_str()))?;
+        map.end()
+    }
 }
 
 /// A shop with how much of the records names it.
@@ -175,19 +235,19 @@ async fn same_name(
         .collect())
 }
 
-/// The name of the shop `shop_id` names, for a read that prints one record.
-pub(crate) async fn name_of(
+/// The shop `shop_id` names, for a read that prints one record.
+pub(crate) async fn ref_of(
     db: &impl ConnectionTrait,
     shop_id: Option<i32>,
-) -> DomainResult<Option<String>> {
-    Ok(names(db, shop_id).await?.into_values().next())
+) -> DomainResult<Option<ShopRef>> {
+    Ok(refs(db, shop_id).await?.into_values().next())
 }
 
-/// The names of the shops `ids` name, for a read that prints a record's shop.
-pub(crate) async fn names(
+/// The shops `ids` name, by id, for a read that prints a record's shop.
+pub(crate) async fn refs(
     db: &impl ConnectionTrait,
     ids: impl IntoIterator<Item = i32>,
-) -> DomainResult<HashMap<i32, String>> {
+) -> DomainResult<HashMap<i32, ShopRef>> {
     let ids: std::collections::BTreeSet<i32> = ids.into_iter().collect();
     if ids.is_empty() {
         return Ok(HashMap::new());
@@ -201,6 +261,7 @@ pub(crate) async fn names(
         .all(db)
         .await?
         .into_iter()
+        .map(|(id, name)| (id, ShopRef { id, name }))
         .collect())
 }
 

@@ -9,6 +9,8 @@ use chrono::NaiveDate;
 use sea_orm::*;
 use serde::Serialize;
 
+use super::shop::ShopRef;
+
 use crate::{
     entities::{incident, part::Supplier, part_content, work_item::JobStatus},
     error::{DomainError, DomainResult},
@@ -26,9 +28,10 @@ pub struct WorkSheet {
     pub appointment_id: i32,
     /// The vehicle's name.
     pub vehicle: String,
-    pub shop_id: Option<i32>,
-    /// The shop's name.
-    pub shop: Option<String>,
+    /// The appointment's shop. It prints as `shop_id` and, for the name,
+    /// `shop`, both null when the appointment names no shop.
+    #[serde(flatten, serialize_with = "ShopRef::id_and_shop")]
+    pub shop: Option<ShopRef>,
     pub date: Option<NaiveDate>,
     /// The car's year, make, model and trim in that order, such as
     /// `2017 Volkswagen Golf GTI`, with each one the vehicle lacks left out.
@@ -225,8 +228,7 @@ pub async fn for_appointment(
         odometer: reading.map(|(miles, _)| miles),
         odometer_read_on: reading.map(|(_, day)| day),
         vehicle: car.name,
-        shop_id: appointment.shop_id,
-        shop: super::shop::name_of(db, appointment.shop_id).await?,
+        shop: super::shop::ref_of(db, appointment.shop_id).await?,
         date: appointment.planned_date,
         jobs,
         unsettled,
@@ -884,8 +886,10 @@ mod tests {
 
         assert_eq!(sheet.appointment_id, a);
         assert_eq!(sheet.vehicle, "Golf GTI");
-        assert_eq!(sheet.shop_id, Some(shop_id));
-        assert_eq!(sheet.shop.as_deref(), Some("Smith Auto"));
+        assert_eq!(
+            sheet.shop.as_ref().map(|s| (s.id, s.name.as_str())),
+            Some((shop_id, "Smith Auto"))
+        );
         assert_eq!(sheet.date, Some(date("2026-11-20")));
     }
 

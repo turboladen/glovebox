@@ -6,6 +6,8 @@ use std::collections::HashMap;
 use sea_orm::{sea_query::Expr, *};
 use serde::Serialize;
 
+use super::shop::ShopRef;
+
 use crate::{
     entities::{
         appointment, job_need, part, todo,
@@ -24,8 +26,10 @@ use crate::{
 pub struct AppointmentSummary {
     #[serde(flatten)]
     pub appointment: appointment::Model,
-    /// The name of the shop `shop_id` names, read from the shop directory.
-    pub shop_name: Option<String>,
+    /// The shop `shop_id` names, read from the shop directory. It prints as
+    /// its name under `shop_name`.
+    #[serde(rename = "shop_name", serialize_with = "ShopRef::name_only")]
+    pub shop: Option<ShopRef>,
     pub status: AppointmentStatus,
     /// Where the appointment stands, as [`phase`] reads it from the status,
     /// the planned date and today's date.
@@ -439,7 +443,7 @@ pub async fn summary(
 }
 
 /// The summary of `appointment` on `today` from the statuses of its jobs, its
-/// counts of open needs and open to-dos, and the name of its shop.
+/// counts of open needs and open to-dos, and its shop.
 ///
 /// # Errors
 /// `Internal` for an appointment that holds both a closed and a cancelled
@@ -449,13 +453,13 @@ pub(crate) fn summarize(
     job_statuses: &[JobStatus],
     needs_open: usize,
     todos_open: usize,
-    shop_name: Option<String>,
+    shop: Option<ShopRef>,
     today: chrono::NaiveDate,
 ) -> DomainResult<AppointmentSummary> {
     let ending = Ending::of(&appointment)?;
     let status = status(ending, job_statuses);
     Ok(AppointmentSummary {
-        shop_name,
+        shop,
         status,
         ending,
         phase: phase(status, appointment.planned_date, today),
@@ -474,7 +478,7 @@ async fn summaries(
     today: chrono::NaiveDate,
 ) -> DomainResult<Vec<AppointmentSummary>> {
     let appointments = appointment::Entity::find().filter(filter).all(db).await?;
-    let shop_names = super::shop::names(db, appointments.iter().filter_map(|a| a.shop_id)).await?;
+    let shops = super::shop::refs(db, appointments.iter().filter_map(|a| a.shop_id)).await?;
     let ids: Vec<i32> = appointments.iter().map(|a| a.id).collect();
     let jobs = work_item::Entity::find()
         .filter(work_item::Column::AppointmentId.is_in(ids.clone()))
@@ -531,8 +535,8 @@ async fn summaries(
             let job_statuses = statuses.get(&a.id).map_or(&[][..], Vec::as_slice);
             let needs = needs_open.get(&a.id).copied().unwrap_or(0);
             let todos = todos_open.get(&a.id).copied().unwrap_or(0);
-            let shop_name = a.shop_id.and_then(|id| shop_names.get(&id).cloned());
-            summarize(a, job_statuses, needs, todos, shop_name, today)
+            let shop = a.shop_id.and_then(|id| shops.get(&id).cloned());
+            summarize(a, job_statuses, needs, todos, shop, today)
         })
         .collect::<DomainResult<_>>()?;
     out.sort_by(|a, b| {
@@ -944,7 +948,10 @@ mod tests {
         .unwrap();
         assert_eq!(made.shop_id, Some(shop_id));
         let read = summary(&db, v, made.id, date("2026-11-13")).await.unwrap();
-        assert_eq!(read.shop_name.as_deref(), Some("Example VW"));
+        assert_eq!(
+            read.shop.as_ref().map(|s| (s.id, s.name.as_str())),
+            Some((shop_id, "Example VW"))
+        );
         let missing_shop = create(
             &db,
             v,
