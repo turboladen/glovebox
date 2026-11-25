@@ -1229,6 +1229,40 @@ async fn home_view_groups_by_vehicle() {
     assert_eq!(a.todos.len(), 1);
 }
 
+#[tokio::test]
+async fn a_home_appointment_serializes_its_shop_as_shop_id_and_shop_name() {
+    let db = test_db().await;
+    let v = VehicleFixture::new().insert_id(&db).await;
+    let shop = crate::test_support::add_shop(&db, "Smith Auto").await;
+    let with_shop = NewAppointment {
+        purpose: "Brakes".into(),
+        shop: Some(crate::inputs::shop::ShopChoice::Id(shop)),
+        planned_date: Some(date("2026-12-01")),
+        ..Default::default()
+    };
+    let without = NewAppointment {
+        purpose: "Tires".into(),
+        ..Default::default()
+    };
+    appointment::create(&db, v, with_shop).await.unwrap();
+    appointment::create(&db, v, without).await.unwrap();
+
+    let home = home(&db, date("2026-11-18")).await.unwrap();
+
+    let [named, bare] = &home[0].appointments[..] else {
+        panic!(
+            "two appointments are listed; got: {:?}",
+            home[0].appointments
+        );
+    };
+    assert_eq!(
+        (named.purpose.as_str(), bare.purpose.as_str()),
+        ("Brakes", "Tires")
+    );
+    crate::test_support::assert_shop_keys(named, "shop_name", Some((shop, "Smith Auto")));
+    crate::test_support::assert_shop_keys(bare, "shop_name", None);
+}
+
 #[test]
 fn scope_reads_at_most_one_id() {
     assert_eq!(

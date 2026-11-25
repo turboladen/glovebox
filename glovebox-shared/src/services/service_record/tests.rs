@@ -1282,6 +1282,33 @@ async fn a_shop_name_must_match_one_shop_in_the_directory() {
 }
 
 #[tokio::test]
+async fn a_service_serializes_its_shop_as_shop_id_and_shop_name() {
+    let db = test_db().await;
+    let vid = seed_vehicle(&db).await;
+    let kw = add_shop(&db, "KW Automotive", None).await;
+    let on = |day: &str, shop: Option<ShopChoice>| NewServiceRecord {
+        service_date: date(day),
+        shop,
+        ..Default::default()
+    };
+    let named = create(&db, vid, on("2025-03-24", Some(ShopChoice::Id(kw))))
+        .await
+        .unwrap();
+    let bare = create(&db, vid, on("2025-04-24", None)).await.unwrap();
+
+    crate::test_support::assert_shop_keys(&named, "shop_name", Some((kw, "KW Automotive")));
+    crate::test_support::assert_shop_keys(&bare, "shop_name", None);
+    let read = get(&db, vid, named.record.id).await.unwrap();
+    crate::test_support::assert_shop_keys(&read, "shop_name", Some((kw, "KW Automotive")));
+    let listed = list_between(&db, vid, None, None).await.unwrap();
+    for service in &listed {
+        let shop = (service.record.id == named.record.id).then_some((kw, "KW Automotive"));
+        crate::test_support::assert_shop_keys(service, "shop_name", shop);
+    }
+    assert_eq!(listed.len(), 2);
+}
+
+#[tokio::test]
 async fn inline_parts_are_installed_by_the_service_and_keep_their_supplier() {
     let db = test_db().await;
     let vid = seed_vehicle(&db).await;

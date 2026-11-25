@@ -893,6 +893,29 @@ mod tests {
         assert_eq!(sheet.date, Some(date("2026-11-20")));
     }
 
+    #[tokio::test]
+    async fn the_sheet_serializes_its_shop_as_shop_id_and_shop() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let shop_id = crate::test_support::add_shop(&db, "Smith Auto").await;
+        let with_shop = NewAppointment {
+            purpose: "Brakes".into(),
+            shop: Some(crate::inputs::shop::ShopChoice::Id(shop_id)),
+            ..Default::default()
+        };
+        let without = NewAppointment {
+            purpose: "Tires".into(),
+            ..Default::default()
+        };
+        let named = appointment::create(&db, v, with_shop).await.unwrap().id;
+        let bare = appointment::create(&db, v, without).await.unwrap().id;
+
+        let sheet = for_appointment(&db, v, named, today()).await.unwrap();
+        crate::test_support::assert_shop_keys(&sheet, "shop", Some((shop_id, "Smith Auto")));
+        let sheet = for_appointment(&db, v, bare, today()).await.unwrap();
+        crate::test_support::assert_shop_keys(&sheet, "shop", None);
+    }
+
     async fn log_reading(db: &DatabaseConnection, v: i32, day: &str, miles: i32) {
         crate::entities::mileage_log::ActiveModel {
             vehicle_id: Set(v),

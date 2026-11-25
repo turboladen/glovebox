@@ -930,6 +930,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_summary_serializes_its_shop_as_shop_id_and_shop_name() {
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        let shop_id = crate::test_support::add_shop(&db, "Example VW").await;
+        let with_shop = NewAppointment {
+            purpose: "Brakes".into(),
+            shop: Some(crate::inputs::shop::ShopChoice::Id(shop_id)),
+            ..Default::default()
+        };
+        let named = create(&db, v, with_shop).await.unwrap().id;
+        let bare = create(&db, v, appt("Tires")).await.unwrap().id;
+        let today = date("2026-11-13");
+
+        let read = summary(&db, v, named, today).await.unwrap();
+        crate::test_support::assert_shop_keys(&read, "shop_name", Some((shop_id, "Example VW")));
+        let read = summary(&db, v, bare, today).await.unwrap();
+        crate::test_support::assert_shop_keys(&read, "shop_name", None);
+    }
+
+    #[tokio::test]
     async fn create_and_update_round_trip() {
         let db = test_db().await;
         let v = VehicleFixture::new().insert_id(&db).await;

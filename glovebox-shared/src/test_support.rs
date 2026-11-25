@@ -246,6 +246,32 @@ impl VehicleFixture {
     }
 }
 
+/// Asserts that `record` serializes its shop as exactly the keys `shop_id`
+/// and `name_key`: the id and name in `shop`, or JSON null in both when
+/// `shop` is none. No other key of the record may contain `shop`.
+///
+/// # Panics
+/// When `record` does not serialize to an object, or a key or value differs.
+pub fn assert_shop_keys<T: serde::Serialize>(
+    record: &T,
+    name_key: &str,
+    shop: Option<(i32, &str)>,
+) {
+    let json = serde_json::to_value(record).expect("serialize the record");
+    let object = json.as_object().expect("the record is a JSON object");
+    let mut keys: Vec<&str> = object
+        .keys()
+        .map(String::as_str)
+        .filter(|k| k.contains("shop"))
+        .collect();
+    keys.sort_unstable();
+    let mut expected = ["shop_id", name_key];
+    expected.sort_unstable();
+    assert_eq!(keys, expected, "got: {json}");
+    assert_eq!(object["shop_id"], serde_json::json!(shop.map(|s| s.0)));
+    assert_eq!(object[name_key], serde_json::json!(shop.map(|s| s.1)));
+}
+
 /// Adds a shop with no address to the directory and returns its id.
 pub async fn add_shop<C: ConnectionTrait + TransactionTrait>(db: &C, name: &str) -> i32 {
     crate::services::shop::create(
