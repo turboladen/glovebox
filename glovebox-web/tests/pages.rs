@@ -127,13 +127,13 @@ async fn home_lists_open_appointments_and_jobs_not_scheduled() {
     );
     assert!(
         body.contains(
-            r#"<span data-l="Status"><span class="pill pill--wait">Booked</span></span>"#
+            r#"<span data-l="Status"><span class="vh">Status </span><span class="pill pill--wait">Booked</span></span>"#
         ),
         "the dated appointment reads booked: {body}"
     );
     assert!(
         body.contains(
-            r#"<span data-l="Status"><span class="pill pill--plain">Planning</span></span>"#
+            r#"<span data-l="Status"><span class="vh">Status </span><span class="pill pill--plain">Planning</span></span>"#
         ),
         "the undated one reads planning: {body}"
     );
@@ -160,7 +160,7 @@ async fn home_lists_open_appointments_and_jobs_not_scheduled() {
     );
     assert!(body.contains("Winter tires"), "{body}");
     assert!(
-        body.contains(r#"<span data-l="Date"><span class="empty cap">not booked</span></span>"#),
+        body.contains(r#"<span data-l="Date"><span class="vh">Date </span><span class="empty cap">not booked</span></span>"#),
         "{body}"
     );
     assert!(body.contains("Jobs not scheduled"), "{body}");
@@ -174,7 +174,7 @@ async fn home_lists_open_appointments_and_jobs_not_scheduled() {
     );
     assert!(body.contains("Wash the car"), "{body}");
     assert!(
-        body.contains(r#"<span data-l="Date">2026-12-01</span>"#),
+        body.contains(r#"<span data-l="Date"><span class="vh">Date </span>2026-12-01</span>"#),
         "{body}"
     );
     assert_eq!(body.matches(">Add a to-do<").count(), 2, "{body}");
@@ -1323,9 +1323,21 @@ async fn shop_fixture(db: &DatabaseConnection) -> (i32, i32, i32) {
 
 // The rows of the section headed `heading`, each with its tags stripped and
 // its whitespace collapsed.
+// `html` without its visually hidden label spans.
+fn without_hidden_labels(html: &str) -> String {
+    let mut out = String::new();
+    let mut rest = html;
+    while let Some((before, after)) = rest.split_once(r#"<span class="vh">"#) {
+        out.push_str(before);
+        rest = after.split_once("</span>").map_or("", |(_, tail)| tail);
+    }
+    out.push_str(rest);
+    out
+}
+
 fn section_rows(body: &str, heading: &str) -> Vec<String> {
     let section = body
-        .split(&format!(">{heading}</h3>"))
+        .split(&format!(">{heading}</h2>"))
         .nth(1)
         .unwrap_or_else(|| panic!("no {heading} section: {body}"));
     let section = section.split("</section>").next().unwrap_or_default();
@@ -1335,6 +1347,9 @@ fn section_rows(body: &str, heading: &str) -> Vec<String> {
         .map(|row| {
             let row = row.split("</li>").next().unwrap_or_default();
             let row = row.split_once('>').map_or("", |(_, rest)| rest);
+            // The hidden labels have their own test, so a row reads here
+            // as it does on a wide window.
+            let row = without_hidden_labels(row);
             let mut text = String::new();
             let mut in_tag = false;
             for c in row.chars() {
@@ -1366,8 +1381,8 @@ async fn shops_page_lists_each_shop_with_its_counts() {
     assert_eq!(
         section_rows(&body, "Directory"),
         [
-            "Acme Tires Services 0 Appointments 0 No services",
-            "Smith Auto 1 Main St Services 3 Appointments 2 2026-11-01",
+            "Acme Tires 0 0 No services",
+            "Smith Auto 1 Main St 3 2 2026-11-01",
         ]
     );
 }
@@ -1704,7 +1719,7 @@ async fn a_service_page_omits_its_empty_sections() {
         "{body}"
     );
     for absent in [
-        "<h3",
+        "<h2",
         ">Odometer<",
         ">Invoice<",
         ">Lines<",
@@ -2126,7 +2141,7 @@ async fn a_vehicle_page_omits_its_empty_sections() {
         "{body}"
     );
     for absent in [
-        "<h3",
+        "<h2",
         ">VIN<",
         ">Plate<",
         ">Color<",

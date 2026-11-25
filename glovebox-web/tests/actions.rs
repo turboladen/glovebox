@@ -2339,11 +2339,11 @@ async fn a_linked_part_with_no_chosen_option_fills_the_part_columns() {
 
     let row = need_summary(&body, need_id);
     for cell in [
-        r#"<span data-l="Brand">Zimmermann</span>"#,
-        r#"<span class="pn" data-l="Part number">1K0615301AD</span>"#,
-        r#"<span data-l="Description">Coat Z front rotors 340x30</span>"#,
-        r#"<span data-l="Seller">FCP Euro</span>"#,
-        r#"<span class="num price" data-l="Price">$191.98</span>"#,
+        r#"<span data-l="Brand"><span class="vh">Brand </span>Zimmermann</span>"#,
+        r#"<span class="pn" data-l="Part number"><span class="vh">Part number </span>1K0615301AD</span>"#,
+        r#"<span data-l="Description"><span class="vh">Description </span>Coat Z front rotors 340x30</span>"#,
+        r#"<span data-l="Seller"><span class="vh">Seller </span>FCP Euro</span>"#,
+        r#"<span class="num price" data-l="Price"><span class="vh">Price </span>$191.98</span>"#,
     ] {
         assert!(row.contains(cell), "{cell}: {row}");
     }
@@ -2391,7 +2391,7 @@ async fn a_need_row_lists_its_kits_items_on_the_job_and_appointment_pages() {
         let row = need_summary(&body, w.need);
         assert!(
             row.contains(
-                r#"<span class="line kit"><span class="l">In the kit</span><span class="kit-item">Pads × 4<span class="pn">Akebono ACT1633A</span></span><span class="kit-item">Shims</span></span>"#
+                r#"<span class="line kit"><span class="l">In the kit</span><span class="kit-item">Pads × 4 <span class="pn">Akebono ACT1633A</span></span><span class="kit-item">Shims</span></span>"#
             ),
             "{path}: {row}"
         );
@@ -2485,7 +2485,7 @@ async fn a_linked_part_with_no_number_shows_its_name_as_the_part() {
 
     let row = need_summary(&body, need_id);
     assert!(
-        row.contains(r#"<span class="pn span2" data-l="Part">ESI6-32N brake fluid</span>"#),
+        row.contains(r#"<span class="pn span2" data-l="Part"><span class="vh">Part </span>ESI6-32N brake fluid</span>"#),
         "{row}"
     );
 }
@@ -2514,19 +2514,21 @@ async fn a_job_shows_one_header_line_and_each_part_in_its_own_columns() {
         "{body}"
     );
     assert!(
-        body.contains(r#"<span data-l="Brand">Akebono</span>"#),
+        body.contains(r#"<span data-l="Brand"><span class="vh">Brand </span>Akebono</span>"#),
         "{body}"
     );
     assert!(
-        body.contains(r#"<span class="pn" data-l="Part number">ACT1633</span>"#),
+        body.contains(r#"<span class="pn" data-l="Part number"><span class="vh">Part number </span>ACT1633</span>"#),
         "{body}"
     );
     assert!(
-        body.contains(r#"<span class="num price" data-l="Price">$74.99</span>"#),
+        body.contains(
+            r#"<span class="num price" data-l="Price"><span class="vh">Price </span>$74.99</span>"#
+        ),
         "{body}"
     );
     assert!(
-        body.contains(r#"<span class="l">Reason</span>Quiet and low dust."#),
+        body.contains(r#"<span class="l">Reason </span>Quiet and low dust."#),
         "{body}"
     );
 }
@@ -2549,11 +2551,13 @@ async fn an_option_without_a_part_number_spans_the_number_and_description_column
     let (_, body) = w.get(&w.page_path()).await;
 
     assert!(
-        body.contains(r#"<span class="pn span2" data-l="Part">Pollen cabin air filter</span>"#),
+        body.contains(r#"<span class="pn span2" data-l="Part"><span class="vh">Part </span>Pollen cabin air filter</span>"#),
         "{body}"
     );
     assert!(
-        !body.contains(r#"data-l="Description">Pollen cabin air filter"#),
+        !body.contains(
+            r#"data-l="Description"><span class="vh">Description </span>Pollen cabin air filter"#
+        ),
         "{body}"
     );
 }

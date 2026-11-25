@@ -536,6 +536,16 @@ A page is a view of the shared library, and a future page follows the same rules
   back on no appointment, so its undo redirects to the home page, which lists it. MCP deletes get
   no undo.
 
+- **A page reads the same to a screen reader at every width.** A ledger cell that shows its
+  column's name only on a narrow window (`data-l`) starts with the same name in a `.vh` span,
+  inside the `if` when the value is optional, so a cell with no value stays empty and the narrow
+  layout hides it. A need's `<summary>` is named by its name and stage (`aria-labelledby`) and
+  described by the whole row (`aria-describedby` naming itself). A page has one `<h1>`, a
+  panel's heading is the next level down, a field sits inside its `<label>`, and a pointer
+  target is at least 24 by 24 CSS pixels. `tests/accessibility.rs` follows every link from the
+  home page over the demo seed and checks these on each page, so a new template is covered
+  once the seed reaches it.
+
 The look lives in one inline stylesheet in `templates/base.html`, with the typeface served by
 `src/assets.rs`, and `docs/adr/0008-the-web-page-reads-as-a-ledger.md` states every visual rule:
 panels on a tinted ground, one sticky header line per job, gray labels and dark values, five pill

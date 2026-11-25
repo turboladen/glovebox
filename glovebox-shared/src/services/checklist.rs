@@ -764,7 +764,8 @@ pub async fn home(
     // The appointments and the to-dos of every vehicle come from one batched
     // query each. The rest is read per vehicle, through the functions the
     // tools use, so the page and the tools agree: the reminders and the
-    // planned jobs are read once and judged three ways.
+    // planned jobs are read once, and both the waiting lists and the forecast
+    // are judged from them.
     let vehicles = super::vehicle::list(db, false).await?;
     let ids: Vec<i32> = vehicles.iter().map(|v| v.id).collect();
     let mut appointments = appointment::open_by_vehicle(db, &ids, today).await?;
