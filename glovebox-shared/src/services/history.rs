@@ -207,7 +207,10 @@ mod tests {
             ["First oil change", "Alignment", "Tires", "Brakes"]
         );
         let brakes = &got.services[3];
-        assert_eq!(brakes.shop_name.as_deref(), Some("Smith Auto"));
+        assert_eq!(
+            brakes.shop.as_ref().map(|s| s.name.as_str()),
+            Some("Smith Auto")
+        );
         assert_eq!(brakes.record.total_cost_cents, Some(50_000));
         assert_eq!(brakes.line_items.len(), 1);
         assert_eq!(brakes.line_items[0].description, "Rear pads");
@@ -236,7 +239,7 @@ mod tests {
         let got = for_vehicle(&db, v).await.unwrap();
         let only = &got.services[0];
         assert_eq!(only.record.performed_by, Performer::Owner);
-        assert_eq!(only.shop_name, None);
+        assert_eq!(only.shop, None);
         assert_eq!(only.record.total_cost_cents, None);
         assert_empty(&only.line_items);
         // One service spans one day and one reading.

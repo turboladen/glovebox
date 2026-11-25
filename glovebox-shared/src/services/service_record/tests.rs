@@ -1214,7 +1214,7 @@ async fn a_self_performed_service_names_no_shop() {
     let got = update(&db, vid, at_shop.record.id, self_done_elsewhere)
         .await
         .unwrap();
-    assert_eq!((got.record.shop_id, got.shop_name), (None, None));
+    assert_eq!((got.record.shop_id, got.shop), (None, None));
 }
 
 #[tokio::test]
@@ -1257,10 +1257,16 @@ async fn a_shop_name_must_match_one_shop_in_the_directory() {
 
     let got = create(&db, vid, at(" kw automotive ")).await.unwrap();
     assert_eq!(got.record.shop_id, Some(kw));
-    assert_eq!(got.shop_name.as_deref(), Some("KW Automotive"));
+    assert_eq!(
+        got.shop.as_ref().map(|s| s.name.as_str()),
+        Some("KW Automotive")
+    );
     assert_eq!(got.record.shop_name, None);
     let listed = list_between(&db, vid, None, None).await.unwrap();
-    assert_eq!(listed[0].shop_name.as_deref(), Some("KW Automotive"));
+    assert_eq!(
+        listed[0].shop.as_ref().map(|s| s.name.as_str()),
+        Some("KW Automotive")
+    );
 
     let err = create(&db, vid, at("Clovis VW")).await.unwrap_err();
     assert!(
@@ -1273,6 +1279,33 @@ async fn a_shop_name_must_match_one_shop_in_the_directory() {
         "{err}"
     );
     assert_eq!(row_count::<service_record::Entity>(&db).await, 1);
+}
+
+#[tokio::test]
+async fn a_service_serializes_its_shop_as_shop_id_and_shop_name() {
+    let db = test_db().await;
+    let vid = seed_vehicle(&db).await;
+    let kw = add_shop(&db, "KW Automotive", None).await;
+    let on = |day: &str, shop: Option<ShopChoice>| NewServiceRecord {
+        service_date: date(day),
+        shop,
+        ..Default::default()
+    };
+    let named = create(&db, vid, on("2025-03-24", Some(ShopChoice::Id(kw))))
+        .await
+        .unwrap();
+    let bare = create(&db, vid, on("2025-04-24", None)).await.unwrap();
+
+    crate::test_support::assert_shop_keys(&named, "shop_name", Some((kw, "KW Automotive")));
+    crate::test_support::assert_shop_keys(&bare, "shop_name", None);
+    let read = get(&db, vid, named.record.id).await.unwrap();
+    crate::test_support::assert_shop_keys(&read, "shop_name", Some((kw, "KW Automotive")));
+    let listed = list_between(&db, vid, None, None).await.unwrap();
+    for service in &listed {
+        let shop = (service.record.id == named.record.id).then_some((kw, "KW Automotive"));
+        crate::test_support::assert_shop_keys(service, "shop_name", shop);
+    }
+    assert_eq!(listed.len(), 2);
 }
 
 #[tokio::test]

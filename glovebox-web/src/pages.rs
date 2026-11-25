@@ -487,7 +487,7 @@ async fn appointment_page(
         top_error,
         vehicle: VehicleLink::new(vid, &car.name),
         purpose: summary.appointment.purpose.clone(),
-        shop: ShopLink::of(summary.appointment.shop_id, summary.shop_name.as_deref()),
+        shop: ShopLink::of(summary.shop.as_ref()),
         date: summary
             .appointment
             .planned_date
@@ -627,7 +627,7 @@ async fn sheet_page(
         vid,
         back: sheet_path(vid, id),
         appointment_href: appointment_path(vid, id),
-        shop: ShopLink::of(sheet.shop_id, sheet.shop.as_deref()),
+        shop: ShopLink::of(sheet.shop.as_ref()),
         heading: sheet_heading(&sheet),
         car: sheet_car(&sheet),
         jobs: sheet_jobs(&sheet),

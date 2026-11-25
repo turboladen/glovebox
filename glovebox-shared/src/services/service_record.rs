@@ -1,6 +1,8 @@
 use sea_orm::*;
 use serde::Serialize;
 
+use super::shop::ShopRef;
+
 use crate::dates::DayOrTime;
 
 use crate::{
@@ -71,8 +73,10 @@ pub(crate) fn effective_payer(line_paid_by: Option<Payer>, service_paid_by: Paye
 pub struct ServiceRecordWithLinks {
     #[serde(flatten)]
     pub record: service_record::Model,
-    /// The name of the shop `shop_id` names, read from the shop directory.
-    pub shop_name: Option<String>,
+    /// The shop `shop_id` names, read from the shop directory. It prints as
+    /// its name under `shop_name`.
+    #[serde(rename = "shop_name", serialize_with = "ShopRef::name_only")]
+    pub shop: Option<ShopRef>,
     pub schedule_item_ids: Vec<i32>,
     pub part_ids: Vec<i32>,
     /// The full rows behind `part_ids`, each with its kit contents.
@@ -414,7 +418,7 @@ impl ServiceRecordWithLinks {
             lines_total_cents,
             note,
             record,
-            shop_name: None,
+            shop: None,
             schedule_item_ids,
             part_ids: parts.iter().map(|p| p.part.id).collect(),
             parts,
@@ -520,7 +524,7 @@ async fn load_service_links(
 
     let mut jobs = work_item::load_by_service(db, &[record.id]).await?;
 
-    let shop_name = super::shop::name_of(db, record.shop_id).await?;
+    let shop = super::shop::ref_of(db, record.shop_id).await?;
     let mut links = ServiceRecordWithLinks::assemble(
         record,
         schedule_item_ids,
@@ -532,7 +536,7 @@ async fn load_service_links(
     );
     links.completed_work_items = jobs.completed.remove(&links.record.id).unwrap_or_default();
     links.quoted_work_items = jobs.quoted.remove(&links.record.id).unwrap_or_default();
-    links.shop_name = shop_name;
+    links.shop = shop;
     Ok(links)
 }
 
@@ -729,7 +733,7 @@ pub async fn list_filtered(
     let mut incident_links = load_incident_links(db, &record_ids).await?;
     let mut performed = recall::load_performed(db, &record_ids).await?;
     let mut jobs = work_item::load_by_service(db, &record_ids).await?;
-    let shop_names = super::shop::names(db, records.iter().filter_map(|r| r.shop_id)).await?;
+    let shops = super::shop::refs(db, records.iter().filter_map(|r| r.shop_id)).await?;
 
     let all_line_items = if record_ids.is_empty() {
         vec![]
@@ -766,7 +770,7 @@ pub async fn list_filtered(
             let performed_recalls = performed.remove(&record.id).unwrap_or_default();
             let completed_work_items = jobs.completed.remove(&record.id).unwrap_or_default();
             let quoted_work_items = jobs.quoted.remove(&record.id).unwrap_or_default();
-            let shop_name = record.shop_id.and_then(|id| shop_names.get(&id).cloned());
+            let shop = record.shop_id.and_then(|id| shops.get(&id).cloned());
             let mut links = ServiceRecordWithLinks::assemble(
                 record,
                 schedule_item_ids,
@@ -778,7 +782,7 @@ pub async fn list_filtered(
             );
             links.completed_work_items = completed_work_items;
             links.quoted_work_items = quoted_work_items;
-            links.shop_name = shop_name;
+            links.shop = shop;
             links
         })
         .collect();

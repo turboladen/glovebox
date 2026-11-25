@@ -10,6 +10,8 @@ use sea_orm::{
 };
 use serde::Serialize;
 
+use super::shop::ShopRef;
+
 use crate::{
     entities::{
         job_need,
@@ -209,15 +211,9 @@ pub async fn for_appointment(
     let job_statuses: Vec<JobStatus> = views.iter().map(|j| j.job.status).collect();
     let needs_open = views.iter().map(JobView::open_needs).sum();
     let todos_open = todos.iter().filter(|t| t.done_on.is_none()).count();
-    let shop_name = super::shop::name_of(db, found.shop_id).await?;
-    let summary = appointment::summarize(
-        found,
-        &job_statuses,
-        needs_open,
-        todos_open,
-        shop_name,
-        today,
-    )?;
+    let shop = super::shop::ref_of(db, found.shop_id).await?;
+    let summary =
+        appointment::summarize(found, &job_statuses, needs_open, todos_open, shop, today)?;
     Ok(assemble(Some(summary), views, todos))
 }
 
@@ -724,8 +720,10 @@ pub struct VehicleHome {
 pub struct HomeAppointment {
     pub id: i32,
     pub purpose: String,
-    pub shop_id: Option<i32>,
-    pub shop_name: Option<String>,
+    /// Names the appointment's shop. It prints as `shop_id` and `shop_name`,
+    /// both null when the appointment names no shop.
+    #[serde(flatten, serialize_with = "ShopRef::id_and_shop_name")]
+    pub shop: Option<ShopRef>,
     /// Holds the planned date, or `not booked` when there is none.
     pub when: String,
     /// True when the appointment has a planned date.
@@ -781,8 +779,7 @@ fn home_appointment(s: AppointmentSummary) -> HomeAppointment {
     HomeAppointment {
         id: s.appointment.id,
         purpose: s.appointment.purpose,
-        shop_id: s.appointment.shop_id,
-        shop_name: s.shop_name,
+        shop: s.shop,
         when: super::appointment::when(s.appointment.planned_date),
         dated: s.appointment.planned_date.is_some(),
         phase: s.phase,
