@@ -110,7 +110,9 @@ fn planned_work_cost(backlog: &[PlannedItem]) -> (i64, Vec<UnestimatedWork>) {
         .filter_map(|p| p.item.est_cost_cents)
         .map(i64::from)
         .sum();
-    let unestimated = backlog
+    // The backlog arrives most urgent revisit first, and this list is in the
+    // order the jobs were planned.
+    let mut unestimated: Vec<UnestimatedWork> = backlog
         .iter()
         .filter(|p| p.item.est_cost_cents.is_none())
         .map(|p| UnestimatedWork {
@@ -118,6 +120,7 @@ fn planned_work_cost(backlog: &[PlannedItem]) -> (i64, Vec<UnestimatedWork>) {
             title: p.item.title.clone(),
         })
         .collect();
+    unestimated.sort_by_key(|work| work.id);
     (cents, unestimated)
 }
 
@@ -347,6 +350,46 @@ mod tests {
             Some("2 items have no estimate")
         );
         assert_eq!(two.total_cents, 7_500);
+    }
+
+    // The planned jobs reach the forecast most urgent first, and the list of
+    // unpriced ones stays in the order they were planned.
+    #[tokio::test]
+    async fn unpriced_planned_work_is_listed_in_id_order() {
+        let db = test_db().await;
+        let vid = VehicleFixture::new().insert_id(&db).await;
+        let first = work_item_svc::create(
+            &db,
+            vid,
+            NewWorkItem {
+                title: "No revisit".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let second = work_item_svc::create(
+            &db,
+            vid,
+            NewWorkItem {
+                title: "Overdue revisit".into(),
+                revisit_by_date: Some(days_ago(10)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let today = crate::services::today();
+        let backlog = crate::services::upcoming::planned_work(&db, vid, today)
+            .await
+            .unwrap();
+        let by_urgency: Vec<i32> = backlog.iter().map(|p| p.item.id).collect();
+        assert_eq!(by_urgency, [second.id, first.id]);
+
+        let f = forecast(&db, vid).await.unwrap();
+
+        let listed: Vec<i32> = f.unestimated_planned_work.iter().map(|w| w.id).collect();
+        assert_eq!(listed, [first.id, second.id]);
     }
 
     // A vehicle whose only forecast content is unpriced still has something

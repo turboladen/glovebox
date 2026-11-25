@@ -1321,8 +1321,6 @@ async fn shop_fixture(db: &DatabaseConnection) -> (i32, i32, i32) {
     (smith, golf, planning)
 }
 
-// The rows of the section headed `heading`, each with its tags stripped and
-// its whitespace collapsed.
 // `html` without its visually hidden label spans.
 fn without_hidden_labels(html: &str) -> String {
     let mut out = String::new();
@@ -1335,6 +1333,8 @@ fn without_hidden_labels(html: &str) -> String {
     out
 }
 
+// The rows of the section headed `heading`, each with its tags stripped and
+// its whitespace collapsed.
 fn section_rows(body: &str, heading: &str) -> Vec<String> {
     let section = body
         .split(&format!(">{heading}</h2>"))

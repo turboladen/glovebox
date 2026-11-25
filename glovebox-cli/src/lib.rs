@@ -70,7 +70,7 @@ pub async fn run(
             let name = env::test_name(&env)?;
             let path = data_dir.join(format!("glovebox-{name}.db"));
             let conn = db::connect_as(&path.to_string_lossy(), db::Program::Cli).await?;
-            let summary = seed::demo(&conn).await?;
+            let summary = seed::demo(&conn, glovebox_shared::services::today()).await?;
             conn.close().await?;
             Ok(format!(
                 "Seeded environment {name} at {}: {}.",

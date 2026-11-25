@@ -29,8 +29,8 @@ use crate::{
         work_item::NewWorkItem,
     },
     services::{
-        self, appointment, incident, mileage, model_template, need, nhtsa::RecallInfo, part,
-        research, schedule, service_record, shop, todo, vehicle, work_item,
+        appointment, incident, mileage, model_template, need, nhtsa::RecallInfo, part, research,
+        schedule, service_record, shop, todo, vehicle, work_item,
     },
 };
 
@@ -56,23 +56,28 @@ pub struct SeedSummary {
 /// Fills an empty non-live database with made-up data: one vehicle with a
 /// year of odometer readings, one appointment with four jobs, two
 /// unscheduled jobs, needs in all six stages, two services, incidents that
-/// are open and resolved, a note and an open recall. Every date counts back
-/// from the day the seed runs. Everything is written in one transaction
+/// are open and resolved, a note and an open recall. Every date counts from
+/// `today`, and no part of the demo reads the clock, so two runs given the
+/// same day write the same records. Everything is written in one transaction
 /// through the same services the tools use, so a failure leaves the database
 /// empty. The caller is responsible for never pointing this at the live
 /// database.
 ///
 /// # Errors
 ///
-/// `BadRequest` when any vehicle exists.
-pub async fn demo<C: ConnectionTrait + TransactionTrait>(db: &C) -> DomainResult<SeedSummary> {
+/// `BadRequest` when any vehicle exists. `Invalid` when `today` is after the
+/// current day, because an odometer reading dated ahead is refused.
+pub async fn demo<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    today: chrono::NaiveDate,
+) -> DomainResult<SeedSummary> {
     let txn = crate::services::begin_write(db).await?;
     if entities::vehicle::Entity::find().count(&txn).await? > 0 {
         return Err(DomainError::BadRequest(
             "this database already has a vehicle; seed an empty environment".into(),
         ));
     }
-    build(&txn).await?;
+    build(&txn, today).await?;
     let notes = entities::incident::Entity::find()
         .filter(entities::incident::Column::Category.eq(IncidentCategory::Note))
         .count(&txn)
@@ -111,11 +116,6 @@ fn option(description: &str, manufacturer: &str, part_number: &str, price_cents:
     }
 }
 
-// The day `days` before the seed runs, so the demo never ages.
-fn days_ago(days: i64) -> chrono::NaiveDate {
-    services::today() - chrono::Duration::days(days)
-}
-
 async fn job(
     db: &(impl ConnectionTrait + TransactionTrait),
     vehicle_id: i32,
@@ -145,21 +145,38 @@ async fn self_need(
     Ok(created.id)
 }
 
-// Adds `candidate` to the need and chooses it.
+// Adds `candidate` to the need and chooses it on `on`.
 async fn choose(
     db: &(impl ConnectionTrait + TransactionTrait),
     vehicle_id: i32,
     need_id: i32,
     candidate: NewOption,
     reason: &str,
+    on: chrono::NaiveDate,
 ) -> DomainResult<i32> {
     let added = need::add_option(db, vehicle_id, need_id, candidate).await?;
-    need::decide(db, vehicle_id, need_id, Some(added.id), Some(reason.into())).await?;
+    need::decide_on(
+        db,
+        vehicle_id,
+        need_id,
+        Some(added.id),
+        Some(reason.into()),
+        on,
+    )
+    .await?;
     Ok(added.id)
 }
 
-// Chooses `candidate`, orders it from FCP Euro and records its arrival. The
-// result is the id of the part the order created.
+// The days of one purchase, in the order they must fall.
+#[derive(Clone, Copy)]
+struct Bought {
+    decided: chrono::NaiveDate,
+    ordered: chrono::NaiveDate,
+    received: chrono::NaiveDate,
+}
+
+// Chooses `candidate`, orders it from FCP Euro and records its arrival, each
+// on its day of `days`. The result is the id of the part the order created.
 async fn order_and_receive(
     db: &(impl ConnectionTrait + TransactionTrait),
     vehicle_id: i32,
@@ -167,6 +184,7 @@ async fn order_and_receive(
     candidate: NewOption,
     order_ref: &str,
     contents: Vec<NewPartContent>,
+    days: Bought,
 ) -> DomainResult<i32> {
     choose(
         db,
@@ -174,10 +192,11 @@ async fn order_and_receive(
         need_id,
         candidate,
         "Matches the original part.",
+        days.decided,
     )
     .await?;
-    order(db, vehicle_id, need_id, order_ref, contents).await?;
-    let received = need::mark_received(db, vehicle_id, need_id, None).await?;
+    order(db, vehicle_id, need_id, order_ref, contents, days.ordered).await?;
+    let received = need::mark_received(db, vehicle_id, need_id, Some(days.received)).await?;
     Ok(received.part.part.id)
 }
 
@@ -187,9 +206,11 @@ async fn order(
     need_id: i32,
     order_ref: &str,
     contents: Vec<NewPartContent>,
+    on: chrono::NaiveDate,
 ) -> DomainResult<()> {
     let details = OrderDetails {
         order_ref: Some(order_ref.into()),
+        purchase_date: Some(on),
         contents,
         ..Default::default()
     };
@@ -197,12 +218,24 @@ async fn order(
     Ok(())
 }
 
+// The demo car, its appointment and the day every date counts from.
 struct Visit {
     vehicle: i32,
     appointment: i32,
+    today: chrono::NaiveDate,
 }
 
-async fn build(db: &(impl ConnectionTrait + TransactionTrait)) -> DomainResult<()> {
+impl Visit {
+    // The day `days` before the demo's day.
+    fn days_ago(&self, days: i64) -> chrono::NaiveDate {
+        self.today - chrono::Duration::days(days)
+    }
+}
+
+async fn build(
+    db: &(impl ConnectionTrait + TransactionTrait),
+    today: chrono::NaiveDate,
+) -> DomainResult<()> {
     let template = model_template::list(db)
         .await?
         .into_iter()
@@ -210,7 +243,7 @@ async fn build(db: &(impl ConnectionTrait + TransactionTrait)) -> DomainResult<(
         .ok_or_else(|| DomainError::Internal("the Golf GTI template is not seeded".into()))?;
     // Bought just under two years back, so the 24-month items are due soon,
     // the 12-month items are overdue and the rest are not due. The odometer
-    // on the day the seed runs is about 60,050 miles: the last reading is
+    // on the demo's day is about 60,050 miles: the last reading is
     // 59,900 miles twelve days back, at 13 or so miles a day.
     let car = vehicle::create(
         db,
@@ -218,7 +251,7 @@ async fn build(db: &(impl ConnectionTrait + TransactionTrait)) -> DomainResult<(
             name: "Demo GTI".into(),
             model_template_id: Some(template.id),
             color: Some("Demo gray".into()),
-            purchase_date: Some(days_ago(710)),
+            purchase_date: Some(today - chrono::Duration::days(710)),
             purchase_mileage: Some(52_000),
             notes: Some("Made-up vehicle for trying out the checklist.".into()),
             ..Default::default()
@@ -233,7 +266,7 @@ async fn build(db: &(impl ConnectionTrait + TransactionTrait)) -> DomainResult<(
         NewAppointment {
             purpose: "60k service + loose ends".into(),
             shop: Some(ShopChoice::Id(shop)),
-            planned_date: Some(services::today() + chrono::Duration::days(14)),
+            planned_date: Some(today + chrono::Duration::days(14)),
             ..Default::default()
         },
     )
@@ -241,10 +274,11 @@ async fn build(db: &(impl ConnectionTrait + TransactionTrait)) -> DomainResult<(
     let at = Visit {
         vehicle: v,
         appointment: visit.id,
+        today,
     };
     price_schedule(db, v).await?;
-    readings(db, v).await?;
-    shop_service(db, v, shop).await?;
+    readings(db, &at).await?;
+    shop_service(db, &at, shop).await?;
     brakes(db, &at).await?;
     oil_change(db, &at).await?;
     small_jobs(db, &at).await?;
@@ -313,7 +347,7 @@ async fn schedule_item(db: &impl ConnectionTrait, v: i32, name: &str) -> DomainR
 
 // Readings the owner logged by hand. The two services log one each, and
 // together they give the daily rate behind the page's mileage estimate.
-async fn readings(db: &(impl ConnectionTrait + TransactionTrait), v: i32) -> DomainResult<()> {
+async fn readings(db: &(impl ConnectionTrait + TransactionTrait), at: &Visit) -> DomainResult<()> {
     for (age, miles, notes) in [
         (330, 55_600, None),
         (240, 56_500, Some("Before the road trip")),
@@ -322,10 +356,10 @@ async fn readings(db: &(impl ConnectionTrait + TransactionTrait), v: i32) -> Dom
     ] {
         mileage::create(
             db,
-            v,
+            at.vehicle,
             NewMileageEntry {
                 mileage: miles,
-                recorded_at: Some(days_ago(age).into()),
+                recorded_at: Some(at.days_ago(age).into()),
                 source: None,
                 notes: notes.map(Into::into),
             },
@@ -339,9 +373,10 @@ async fn readings(db: &(impl ConnectionTrait + TransactionTrait), v: i32) -> Dom
 // by the manufacturer, which resolves an incident reported before it.
 async fn shop_service(
     db: &(impl ConnectionTrait + TransactionTrait),
-    v: i32,
+    at: &Visit,
     shop: i32,
 ) -> DomainResult<()> {
+    let v = at.vehicle;
     let smell = incident::create(
         db,
         v,
@@ -349,7 +384,7 @@ async fn shop_service(
             category: IncidentCategory::Leak,
             title: "Coolant smell after a long drive".into(),
             description: Some("Sweet smell from the engine bay, no puddle under the car.".into()),
-            occurred_at: Some(days_ago(175).into()),
+            occurred_at: Some(at.days_ago(175).into()),
             ..Default::default()
         },
     )
@@ -366,7 +401,7 @@ async fn shop_service(
         db,
         v,
         NewServiceRecord {
-            service_date: days_ago(160),
+            service_date: at.days_ago(160),
             performed_by: Some(Performer::Shop),
             shop: Some(ShopChoice::Id(shop)),
             mileage: Some(57_400),
@@ -410,7 +445,7 @@ async fn incidents(db: &(impl ConnectionTrait + TransactionTrait), at: &Visit) -
             description: Some(
                 "Loudest over speed bumps taken slowly with the wheel turned.".into(),
             ),
-            occurred_at: Some(days_ago(9).into()),
+            occurred_at: Some(at.days_ago(9).into()),
             ..Default::default()
         },
     )
@@ -441,7 +476,7 @@ async fn incidents(db: &(impl ConnectionTrait + TransactionTrait), at: &Visit) -
             NewIncident {
                 category,
                 title: title.into(),
-                occurred_at: Some(days_ago(age).into()),
+                occurred_at: Some(at.days_ago(age).into()),
                 ..Default::default()
             },
         )
@@ -472,9 +507,10 @@ async fn recall(db: &(impl ConnectionTrait + TransactionTrait), v: i32) -> Domai
 // rejected.
 async fn rear_rotors(
     db: &(impl ConnectionTrait + TransactionTrait),
-    v: i32,
+    at: &Visit,
     brakes: i32,
 ) -> DomainResult<()> {
+    let v = at.vehicle;
     let rear_rotors = need::add(
         db,
         v,
@@ -533,12 +569,13 @@ async fn rear_rotors(
         },
     )
     .await?;
-    need::decide(
+    need::decide_on(
         db,
         v,
         rear_rotors,
         Some(chosen.id),
         Some("Coated hats resist rust.".into()),
+        at.days_ago(2),
     )
     .await?;
     Ok(())
@@ -559,7 +596,7 @@ async fn brakes(db: &(impl ConnectionTrait + TransactionTrait), at: &Visit) -> D
         },
     )
     .await?;
-    rear_rotors(db, v, brakes).await?;
+    rear_rotors(db, at, brakes).await?;
 
     let rear_pads = need::add(
         db,
@@ -590,6 +627,7 @@ async fn brakes(db: &(impl ConnectionTrait + TransactionTrait), at: &Visit) -> D
         front_pads,
         option("Ceramic front pads", "Akebono", "ACT1633", 7_499),
         "Quiet and low dust.",
+        at.days_ago(3),
     )
     .await?;
 
@@ -607,20 +645,12 @@ async fn brakes(db: &(impl ConnectionTrait + TransactionTrait), at: &Visit) -> D
             16_200,
         ),
         "FCP-10458",
-        vec![
-            NewPartContent {
-                name: "Front rotor".into(),
-                manufacturer: Some("Zimmermann".into()),
-                part_number: Some("100.3367.20".into()),
-                quantity: Some(2),
-            },
-            NewPartContent {
-                name: "Rotor retaining screw".into(),
-                manufacturer: Some("Volkswagen".into()),
-                part_number: Some("N 911 568 01".into()),
-                quantity: Some(2),
-            },
-        ],
+        rotor_kit_contents(),
+        Bought {
+            decided: at.days_ago(6),
+            ordered: at.days_ago(5),
+            received: at.days_ago(2),
+        },
     )
     .await?;
     part::update(
@@ -649,6 +679,24 @@ async fn brakes(db: &(impl ConnectionTrait + TransactionTrait), at: &Visit) -> D
     Ok(())
 }
 
+// What is in the box of the front rotor kit.
+fn rotor_kit_contents() -> Vec<NewPartContent> {
+    vec![
+        NewPartContent {
+            name: "Front rotor".into(),
+            manufacturer: Some("Zimmermann".into()),
+            part_number: Some("100.3367.20".into()),
+            quantity: Some(2),
+        },
+        NewPartContent {
+            name: "Rotor retaining screw".into(),
+            manufacturer: Some("Volkswagen".into()),
+            part_number: Some("N 911 568 01".into()),
+            quantity: Some(2),
+        },
+    ]
+}
+
 async fn oil_change(
     db: &(impl ConnectionTrait + TransactionTrait),
     at: &Visit,
@@ -675,6 +723,12 @@ async fn oil_change(
         option("Oil filter cartridge", "Mann", "HU 7008 z", 1_299),
         "FCP-10459",
         Vec::new(),
+        // The filter arrived before the service that fitted it.
+        Bought {
+            decided: at.days_ago(22),
+            ordered: at.days_ago(20),
+            received: at.days_ago(15),
+        },
     )
     .await?;
     let filter_part = need::require(db, v, filter).await?.part_id;
@@ -682,7 +736,7 @@ async fn oil_change(
         db,
         v,
         NewServiceRecord {
-            service_date: days_ago(12),
+            service_date: at.days_ago(12),
             performed_by: Some(Performer::Owner),
             mileage: Some(59_900),
             description: Some("Oil and filter change".into()),
@@ -721,9 +775,10 @@ async fn small_jobs(
         cabin,
         option("Pollen cabin air filter", "Mann", "CUK 26 009", 2_150),
         "Matches the original part.",
+        at.days_ago(4),
     )
     .await?;
-    order(db, v, cabin, "FCP-10460", Vec::new()).await?;
+    order(db, v, cabin, "FCP-10460", Vec::new(), at.days_ago(3)).await?;
     let wipers = self_need(db, v, small, "Wiper blades").await?;
     choose(
         db,
@@ -739,10 +794,11 @@ async fn small_jobs(
             )
         },
         "Best reviews for this car.",
+        at.days_ago(8),
     )
     .await?;
-    order(db, v, wipers, "AMZ-77120", Vec::new()).await?;
-    need::return_part(
+    order(db, v, wipers, "AMZ-77120", Vec::new(), at.days_ago(7)).await?;
+    need::return_part_on(
         db,
         v,
         wipers,
@@ -750,6 +806,7 @@ async fn small_jobs(
             reason: "The driver-side blade is 2 in. too long.".into(),
             option_was_wrong: true,
         },
+        at.days_ago(1),
     )
     .await?;
 
@@ -774,7 +831,7 @@ async fn todos(db: &(impl ConnectionTrait + TransactionTrait), at: &Visit) -> Do
         )
         .await?;
         if done {
-            todo::complete(db, v, created.id, None).await?;
+            todo::complete(db, v, created.id, Some(at.days_ago(1))).await?;
         }
     }
 
@@ -835,8 +892,14 @@ mod tests {
         test_support::{VehicleFixture, test_db},
     };
 
+    // The day the tests seed for. It is fixed, so the real clock decides
+    // nothing the tests assert.
+    fn day() -> chrono::NaiveDate {
+        crate::test_support::date("2026-11-13")
+    }
+
     async fn seeded_vehicle(db: &DatabaseConnection) -> i32 {
-        demo(db).await.unwrap();
+        demo(db, day()).await.unwrap();
         entities::vehicle::Entity::find()
             .one(db)
             .await
@@ -852,7 +915,7 @@ mod tests {
         let db = test_db().await;
         let v = seeded_vehicle(&db).await;
 
-        let waiting = waiting::waiting(&db, v, services::today()).await.unwrap();
+        let waiting = waiting::waiting(&db, v, day()).await.unwrap();
 
         let listed: Vec<(&str, DueStatus, bool)> = waiting
             .maintenance
@@ -883,7 +946,7 @@ mod tests {
         let db = test_db().await;
         let v = seeded_vehicle(&db).await;
 
-        let waiting = waiting::waiting(&db, v, services::today()).await.unwrap();
+        let waiting = waiting::waiting(&db, v, day()).await.unwrap();
 
         assert_eq!(waiting.recalls.len(), 1);
         assert_eq!(
@@ -902,9 +965,7 @@ mod tests {
         let db = test_db().await;
         let v = seeded_vehicle(&db).await;
 
-        let detail = vehicle_detail::get(&db, v, services::today())
-            .await
-            .unwrap();
+        let detail = vehicle_detail::get(&db, v, day()).await.unwrap();
 
         assert_eq!(detail.odometer, Some(59_900));
         assert!(detail.estimated_mileage.is_some(), "{detail:?}");
@@ -952,10 +1013,9 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let sheet =
-            crate::services::work_sheet::for_appointment(&db, v, appointment.id, services::today())
-                .await
-                .unwrap();
+        let sheet = crate::services::work_sheet::for_appointment(&db, v, appointment.id, day())
+            .await
+            .unwrap();
 
         let symptoms: Vec<&str> = sheet
             .jobs
@@ -965,10 +1025,115 @@ mod tests {
         assert_eq!(symptoms, ["Clunk over bumps, front left"]);
     }
 
+    // No part is ordered before it was chosen, received before it was
+    // ordered or fitted before it arrived, and no service fixes an incident
+    // reported after it.
+    #[tokio::test]
+    async fn demo_seed_dates_every_record_in_a_possible_order() {
+        let db = test_db().await;
+        demo(&db, day()).await.unwrap();
+
+        let parts = entities::part::Entity::find().all(&db).await.unwrap();
+        let installed: Vec<_> = parts
+            .iter()
+            .filter(|p| p.status == entities::part::PartStatus::Installed)
+            .collect();
+        assert_eq!(installed.len(), 1, "{parts:?}");
+        for p in &parts {
+            let bought = p
+                .purchase_date
+                .expect("every demo part has a purchase date");
+            assert!(bought <= day(), "{p:?}");
+            if let Some(received) = p.received_on {
+                assert!(bought <= received && received <= day(), "{p:?}");
+            }
+            if let Some(fitted) = p.installed_date {
+                let received = p.received_on.expect("a fitted demo part was received");
+                assert!(received <= fitted && fitted <= day(), "{p:?}");
+            }
+            if let Some(returned) = p.returned_on {
+                assert!(bought <= returned && returned <= day(), "{p:?}");
+            }
+        }
+        for n in entities::job_need::Entity::find().all(&db).await.unwrap() {
+            let Some(decided) = n.decided_on else {
+                continue;
+            };
+            assert!(decided <= day(), "{n:?}");
+            if let Some(part) = parts.iter().find(|p| Some(p.id) == n.part_id) {
+                assert!(Some(decided) <= part.purchase_date, "{n:?} {part:?}");
+            }
+        }
+        let vehicle = entities::vehicle::Entity::find()
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        for service in entities::service_record::Entity::find()
+            .all(&db)
+            .await
+            .unwrap()
+        {
+            assert!(vehicle.purchase_date <= Some(service.service_date));
+            assert!(service.service_date <= day(), "{service:?}");
+        }
+        let fixed = entities::incident::Entity::find()
+            .filter(entities::incident::Column::Resolved.eq(true))
+            .one(&db)
+            .await
+            .unwrap()
+            .expect("a resolved incident");
+        let shop_service = entities::service_record::Entity::find()
+            .filter(entities::service_record::Column::ShopId.is_not_null())
+            .one(&db)
+            .await
+            .unwrap()
+            .expect("the shop's service");
+        assert!(fixed.occurred_at.day() <= shop_service.service_date);
+    }
+
+    // The same day gives the same dates, whatever the real clock says.
+    #[tokio::test]
+    async fn demo_seed_dates_everything_from_the_day_it_is_given() {
+        let db = test_db().await;
+        let long_ago = crate::test_support::date::<chrono::NaiveDate>("2020-03-01");
+        demo(&db, long_ago).await.unwrap();
+
+        let latest_part_day = entities::part::Entity::find()
+            .all(&db)
+            .await
+            .unwrap()
+            .into_iter()
+            .flat_map(|p| {
+                [
+                    p.purchase_date,
+                    p.received_on,
+                    p.installed_date,
+                    p.returned_on,
+                ]
+            })
+            .flatten()
+            .max();
+        assert!(latest_part_day <= Some(long_ago), "{latest_part_day:?}");
+        let needs = entities::job_need::Entity::find().all(&db).await.unwrap();
+        assert!(needs.iter().all(|n| n.decided_on <= Some(long_ago)));
+        let todos = entities::todo::Entity::find().all(&db).await.unwrap();
+        assert!(todos.iter().all(|t| t.done_on <= Some(long_ago)));
+        let appointment = entities::appointment::Entity::find()
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            appointment.planned_date,
+            Some(long_ago + chrono::Duration::days(14))
+        );
+    }
+
     #[tokio::test]
     async fn demo_seed_counts_the_records_beside_the_checklist() {
         let db = test_db().await;
-        let summary = demo(&db).await.unwrap();
+        let summary = demo(&db, day()).await.unwrap();
         assert_eq!(summary.services, 2);
         assert_eq!(summary.readings, 6);
         assert_eq!(summary.incidents, 3);
@@ -980,7 +1145,7 @@ mod tests {
     #[tokio::test]
     async fn demo_seed_covers_every_stage() {
         let db = test_db().await;
-        let summary = demo(&db).await.unwrap();
+        let summary = demo(&db, day()).await.unwrap();
         assert_eq!(summary.vehicles, 1);
         assert_eq!(summary.appointments, 1);
         assert_eq!(summary.jobs, 6);
@@ -992,7 +1157,7 @@ mod tests {
             .unwrap();
         assert_eq!(vehicle.name, "Demo GTI");
         assert!(vehicle.vin.is_none() && vehicle.license_plate.is_none());
-        let appointments = appointment::list(&db, vehicle.id, true, crate::services::today())
+        let appointments = appointment::list(&db, vehicle.id, true, day())
             .await
             .unwrap();
         assert_eq!(appointments.len(), 1);
@@ -1001,14 +1166,10 @@ mod tests {
             "60k service + loose ends"
         );
 
-        let list = checklist::for_appointment(
-            &db,
-            vehicle.id,
-            appointments[0].appointment.id,
-            crate::services::today(),
-        )
-        .await
-        .unwrap();
+        let list =
+            checklist::for_appointment(&db, vehicle.id, appointments[0].appointment.id, day())
+                .await
+                .unwrap();
         let mut stages: Vec<Stage> = list
             .jobs
             .iter()
@@ -1086,7 +1247,7 @@ mod tests {
     #[tokio::test]
     async fn demo_seed_shows_a_kits_contents_on_the_work_sheet() {
         let db = test_db().await;
-        demo(&db).await.unwrap();
+        demo(&db, day()).await.unwrap();
         let appointment = crate::entities::appointment::Entity::find()
             .one(&db)
             .await
@@ -1097,7 +1258,7 @@ mod tests {
             &db,
             appointment.vehicle_id,
             appointment.id,
-            services::today(),
+            day(),
         )
         .await
         .unwrap();
@@ -1124,12 +1285,12 @@ mod tests {
     #[tokio::test]
     async fn demo_seed_reuses_the_shop_an_earlier_demo_left() {
         let db = test_db().await;
-        demo(&db).await.unwrap();
+        demo(&db, day()).await.unwrap();
         entities::vehicle::Entity::delete_many()
             .exec(&db)
             .await
             .unwrap();
-        demo(&db).await.unwrap();
+        demo(&db, day()).await.unwrap();
         assert_eq!(
             crate::test_support::row_count::<entities::shop::Entity>(&db).await,
             1
@@ -1140,7 +1301,7 @@ mod tests {
     async fn demo_seed_refuses_a_database_with_a_vehicle() {
         let db = test_db().await;
         VehicleFixture::new().insert(&db).await;
-        let err = demo(&db).await.unwrap_err();
+        let err = demo(&db, day()).await.unwrap_err();
         assert!(matches!(err, DomainError::BadRequest(_)), "{err:?}");
         assert_eq!(
             crate::test_support::row_count::<crate::entities::vehicle::Entity>(&db).await,

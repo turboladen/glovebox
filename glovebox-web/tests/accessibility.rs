@@ -9,7 +9,9 @@ use common::{app, db, get, page};
 // keyed by its path.
 async fn demo_pages() -> BTreeMap<String, String> {
     let db = db().await;
-    glovebox_shared::seed::demo(&db).await.unwrap();
+    glovebox_shared::seed::demo(&db, common::today())
+        .await
+        .unwrap();
     let mut pages = BTreeMap::new();
     let mut queue = vec!["/".to_owned()];
     while let Some(path) = queue.pop() {
@@ -226,20 +228,30 @@ async fn every_form_control_has_a_label() {
     assert!(fields > 20, "only {fields} fields were checked");
 }
 
-// The to-do tick is a 24 by 24 pixel target, and the focus ring uses the
-// token that stands out on both themes.
+// The to-do tick is a 24 by 24 pixel target, an underlined control is as
+// tall whether or not its drawer is open, and the focus ring uses the token
+// that stands out on both themes.
 #[tokio::test]
 async fn the_tick_is_a_24_pixel_target_and_focus_has_its_own_token() {
     let pages = demo_pages().await;
     let body = &pages["/"];
     for rule in [
         ".tick { display: block; position: relative; width: 1.5rem; height: 1.5rem;",
+        ".btn--quiet, .drawer--quiet > summary { min-height: 1.5rem;",
+        ".drawer--quiet[open] > summary { min-height: 1.5rem; }",
         ":focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }",
         "--focus: var(--ink);",
         "--focus: var(--accent);",
     ] {
         assert!(body.contains(rule), "missing {rule}");
     }
+    // The rule for any open drawer sets no minimum height, and the two have
+    // the same weight, so the quiet drawer's rule has to come second.
+    let at = |rule: &str| body.find(rule).unwrap_or_else(|| panic!("missing {rule}"));
+    assert!(
+        at(".drawer[open] > summary {") < at(".drawer--quiet[open] > summary {"),
+        "the open quiet drawer's height is overridden"
+    );
     for absent in ["outline: none", "outline: 0"] {
         assert!(!body.contains(absent), "{absent}");
     }

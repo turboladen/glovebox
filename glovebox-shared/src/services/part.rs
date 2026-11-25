@@ -42,17 +42,18 @@ pub(crate) fn was_fitted(p: &part::Model) -> bool {
     matches!(p.status, PartStatus::Installed | PartStatus::Replaced)
 }
 
-/// Marks `p` returned today for `reason`, remembering the need it was
+/// Marks `p` returned on `on` for `reason`, remembering the need it was
 /// returned from.
 pub(crate) async fn mark_returned(
     db: &impl ConnectionTrait,
     p: part::Model,
     reason: String,
     need_id: i32,
+    on: NaiveDate,
 ) -> DomainResult<part::Model> {
     let mut active: part::ActiveModel = p.into();
     PartState::Returned {
-        on: super::today(),
+        on,
         reason,
         need_id: Some(need_id),
     }
