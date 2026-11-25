@@ -15,7 +15,8 @@ existed with no write path (ADR-0013).
 ## Decision
 
 **A shop is a row of the shop directory, and a service or appointment names it by `shop_id`.**
-`shop_name` stays as a column, always NULL, and a CHECK on each table keeps it so. Every read
+`shop_name` stays as a column, always NULL, and a CHECK on each table keeps it so (ADR-0027
+drops the column and the CHECK). Every read
 prints the name of the shop `shop_id` names, under the same `shop_name` key clients already read.
 A search finds a service by its shop's name, address or notes through an FTS index on `shops`,
 up to the shop's newest five services, since they all share the shop's rank and a long history

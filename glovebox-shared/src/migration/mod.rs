@@ -20,6 +20,7 @@ mod m20261120_000002_job_incident_links;
 mod m20261120_000003_incident_resolved_by_hand;
 mod m20261121_000001_shops_search;
 mod m20261121_000002_shops_from_names;
+mod m20261124_000001_drop_unused_columns;
 mod schema;
 
 pub struct Migrator;
@@ -48,6 +49,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261120_000003_incident_resolved_by_hand::Migration),
             Box::new(m20261121_000001_shops_search::Migration),
             Box::new(m20261121_000002_shops_from_names::Migration),
+            Box::new(m20261124_000001_drop_unused_columns::Migration),
         ]
     }
 }

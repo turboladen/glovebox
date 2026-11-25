@@ -168,8 +168,8 @@ manager
 ```
 
 **IMPORTANT**: ALTER TABLE appends columns to the end. Update the entity struct to place new fields
-AFTER `created_at`/`updated_at`. A column named in an FK clause cannot be dropped; rebuild the table
-instead.
+AFTER `created_at`/`updated_at`. A column that a foreign key, CHECK, index or trigger names cannot
+be dropped as it stands; see "To drop a column" below.
 
 ## Critical SQLite Rules
 
@@ -221,6 +221,13 @@ To add a foreign key to an existing column, follow `add_foreign_keys` in
 `docs/adr/0003-foreign-keys-by-editing-the-table-definition.md` first. SQLite does not check the
 stored rows against a key added this way, so clear the dangling ids before the edit and confirm
 the key with `pragma_foreign_key_list` after it.
+
+To drop a column, follow `m20261124_000001_drop_unused_columns.rs` and read
+`docs/adr/0027-unused-columns-are-dropped.md` first. `ALTER TABLE … DROP COLUMN` works when nothing
+names the column. When a constraint or trigger does, take the constraint out of the stored
+definition with `schema::edit_definitions` and drop the triggers in the same transaction, then drop
+the column. Do not rebuild a table that has children: `DROP TABLE` runs each foreign key's action.
+Remove the field from the entity and leave the other fields in their order.
 
 To add a CHECK constraint to an existing table, list each rule as a `schema::Check` and call
 `schema::add_checks` in a transaction that holds the write lock, as

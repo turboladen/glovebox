@@ -241,18 +241,9 @@ async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
     }
     let count = new_findings.len();
 
-    let summary = format!(
-        "Found {} new recall{} from NHTSA.",
-        count,
-        if count == 1 { "" } else { "s" }
-    );
-    let raw_data = serde_json::to_string(&new_findings).ok();
-
     let report = research_report::ActiveModel {
         vehicle_id: Set(vehicle_id),
         report_type: Set(Some("recalls_only".to_string())),
-        summary: Set(Some(summary)),
-        raw_data: Set(raw_data),
         ..Default::default()
     };
     let report = report.insert(&txn).await?;
@@ -309,7 +300,6 @@ pub async fn file_finding<C: ConnectionTrait + TransactionTrait>(
             research_report::ActiveModel {
                 vehicle_id: Set(vehicle_id),
                 report_type: Set(Some("external_research".to_string())),
-                summary: Set(Some("Findings filed via MCP".to_string())),
                 ..Default::default()
             }
             .insert(db)

@@ -8,9 +8,6 @@ pub struct Model {
     pub id: i32,
     pub vehicle_id: i32,
     pub report_type: Option<String>,
-    pub summary: Option<String>,
-    pub raw_data: Option<String>,
-    pub notes: Option<String>,
     pub generated_at: DateTimeUtc,
     pub created_at: DateTimeUtc,
 }

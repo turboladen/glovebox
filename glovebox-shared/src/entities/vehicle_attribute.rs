@@ -10,7 +10,6 @@ pub struct Model {
     pub key: String,
     pub value: String,
     pub source: Option<String>,
-    pub superseded_by: Option<i32>,
     pub created_at: DateTimeUtc,
 }
 

@@ -10,10 +10,6 @@ pub struct Model {
     pub id: i32,
     pub vehicle_id: i32,
     pub purpose: String,
-    // Always NULL: a CHECK keeps it empty, and reads print the name of the
-    // shop `shop_id` names instead.
-    #[serde(skip_serializing)]
-    pub shop_name: Option<String>,
     pub shop_id: Option<i32>,
     pub planned_date: Option<chrono::NaiveDate>,
     pub notes: Option<String>,
