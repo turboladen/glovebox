@@ -9,7 +9,7 @@
 
 use sea_orm_migration::prelude::*;
 
-use super::schema::{FtsSpec, create_fts, drop_fts, edit_definitions, index, scalar};
+use super::schema::{FtsSpec, create_fts, drop_fts, edit_definitions, has_column, index, scalar};
 
 #[derive(DeriveMigrationName)]
 pub struct Migration;
@@ -25,8 +25,8 @@ const DROPPED: &[(&str, &str)] = &[
     ("vehicle_attributes", "superseded_by"),
 ];
 
-/// Text of a stored table definition that names a dropped column outside the
-/// column's own declaration, and what replaces it.
+/// A rewrite replaces text of a stored table definition that names a dropped
+/// column outside the column's own declaration.
 struct Rewrite {
     table: &'static str,
     from: &'static str,
@@ -68,15 +68,7 @@ const FTS: &[FtsSpec] = &[FtsSpec {
     cols: &["description", "notes"],
 }];
 
-async fn has_column(db: &impl ConnectionTrait, table: &str, column: &str) -> Result<bool, DbErr> {
-    scalar::<bool>(
-        db,
-        &format!("SELECT count(*) > 0 FROM pragma_table_info('{table}') WHERE name = '{column}'"),
-    )
-    .await
-}
-
-// How many times the stored definition of `table` holds `text`.
+// Counts how many times the stored definition of `table` holds `text`.
 async fn occurrences(db: &impl ConnectionTrait, table: &str, text: &str) -> Result<i64, DbErr> {
     let text = text.replace('\'', "''");
     scalar::<i64>(
@@ -156,8 +148,11 @@ impl MigrationTrait for Migration {
             // DROP COLUMN rewrites the rows in place, so every rowid stays
             // and no foreign key action runs, which a `DROP TABLE` of a
             // parent table would set off.
-            txn.execute_unprepared(&format!("ALTER TABLE {table} DROP COLUMN {column}"))
-                .await?;
+            let drop = Table::alter()
+                .table(Alias::new(*table))
+                .drop_column(Alias::new(*column))
+                .to_owned();
+            schema.alter_table(drop).await?;
         }
 
         create_fts(&schema, FTS).await?;
@@ -208,9 +203,9 @@ mod tests {
         "vehicle_attributes",
     ];
 
-    // A database as the previous migration leaves it. Each table that loses
-    // a column holds two rows with a gap between their ids, and one row of
-    // each parent table has a child.
+    // Returns a database as the previous migration leaves it. Each table
+    // that loses a column holds two rows with a gap between their ids, and
+    // one row of each parent table has a child.
     async fn db_before() -> DatabaseConnection {
         let db = migrated_to(BEFORE).await;
         db.execute_unprepared(&format!(
@@ -252,7 +247,7 @@ mod tests {
         db
     }
 
-    // The columns each table keeps, in the order the migrated table holds
+    // Lists the columns a table keeps, in the order the migrated table holds
     // them.
     fn kept(table: &str) -> Vec<&'static str> {
         match table {
@@ -268,8 +263,8 @@ mod tests {
         C::iter().map(|column| column.as_str()).collect()
     }
 
-    // Every row of each changed table, by id, with the value of every kept
-    // column.
+    // Returns every row of each changed table, ordered by id, with the value
+    // of every kept column.
     async fn rows(db: &DatabaseConnection) -> String {
         let mut out = Vec::new();
         for table in TABLES {

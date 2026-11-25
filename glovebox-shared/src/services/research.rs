@@ -1,5 +1,5 @@
 use sea_orm::*;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::{
     entities::{
@@ -13,7 +13,7 @@ use crate::{
     },
 };
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 struct NewFinding {
     category: String,
     title: String,

@@ -8,7 +8,7 @@
 // `up` is one linear list of table definitions.
 #![allow(clippy::too_many_lines)]
 
-use sea_orm_migration::{prelude::*, sea_orm::Statement};
+use sea_orm_migration::prelude::*;
 
 use super::schema::*;
 
@@ -25,13 +25,7 @@ pub(super) async fn add_column(
     definition: &str,
 ) -> Result<(), DbErr> {
     let db = manager.get_connection();
-    let present = db
-        .query_one_raw(Statement::from_string(
-            manager.get_database_backend(),
-            format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name = '{column}'"),
-        ))
-        .await?;
-    if present.is_none() {
+    if !has_column(db, table, column).await? {
         db.execute_unprepared(&format!(
             "ALTER TABLE {table} ADD COLUMN {column} {definition}"
         ))

@@ -73,7 +73,10 @@ A new version can change the database's structure, and a program older than the 
 to open it. The Claude Desktop server only checks when it starts, so one that is already running
 keeps going after the page has updated the file, and it then works against a structure it does
 not know: adding a record can fail, and an edit can store a value in the form the older version
-used. Upgrade in this order:
+used. When the new version removes a column, as the one that drops `shop_name` does, the running
+server fails every read and write of services and appointments, because its queries name a column
+that is gone. Quit Claude Desktop, run `just install` and start it again, before or right after
+any other glovebox program has opened the database. Upgrade in this order:
 
 1. Stop the page if it is running.
 2. Run `just install`, then quit and reopen Claude Desktop, so the server it starts is the new one.

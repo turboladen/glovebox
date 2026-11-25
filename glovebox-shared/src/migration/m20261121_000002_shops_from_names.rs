@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use sea_orm::{DatabaseBackend, Statement, Value};
 use sea_orm_migration::prelude::*;
 
-use super::schema::{Check, add_checks, scalar};
+use super::schema::{Check, add_checks, has_column};
 
 // The rules as this migration adds them. A rule changes only through a new
 // migration, because `has_check` finds a constraint by its name and a fresh
@@ -116,17 +116,10 @@ fn plan_shops(texts: &[ShopText]) -> Vec<ShopText> {
         .collect()
 }
 
-// Whether both tables hold a `shop_name` column.
+// Returns whether both tables hold a `shop_name` column.
 async fn tables_hold_names(db: &impl ConnectionTrait) -> Result<bool, DbErr> {
     for table in TABLES {
-        let held = scalar::<bool>(
-            db,
-            &format!(
-                "SELECT count(*) > 0 FROM pragma_table_info('{table}') WHERE name = 'shop_name'"
-            ),
-        )
-        .await?;
-        if !held {
+        if !has_column(db, table, "shop_name").await? {
             return Ok(false);
         }
     }

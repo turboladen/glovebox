@@ -184,6 +184,19 @@ pub(super) async fn scalar<T: sea_orm::TryGetable>(
     row.try_get_by_index::<T>(0)
 }
 
+/// Returns whether `table` has a column named `column`.
+pub(super) async fn has_column(
+    db: &impl ConnectionTrait,
+    table: &str,
+    column: &str,
+) -> Result<bool, DbErr> {
+    scalar::<bool>(
+        db,
+        &format!("SELECT count(*) > 0 FROM pragma_table_info('{table}') WHERE name = '{column}'"),
+    )
+    .await
+}
+
 /// A rule one row of `table` must keep, added as the table constraint
 /// `CONSTRAINT "name" CHECK (holds)`.
 pub(super) struct Check {

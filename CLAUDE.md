@@ -666,9 +666,10 @@ role per control style, and `YYYY-MM-DD` dates.
   `m20261120_000001_job_schedule_links` shows.
 - **Migrations are not transactional on SQLite** (sea-orm-migration only wraps Postgres), so write
   them rerun-safe: `IF NOT EXISTS` DDL, `INSERT OR IGNORE` or `NOT EXISTS`-gated DML,
-  pragma-guarded ALTERs. `db::tests::migration_is_rerun_safe` runs every migration again over
-  the finished schema, so a migration that drops a column also makes each earlier migration
-  that names the column skip when it is gone.
+  pragma-guarded ALTERs. `db::tests::migrations_rerun_without_duplicating_the_seed` runs every
+  migration again over the finished schema (`migration_is_rerun_safe` runs every one after the
+  seed), so a migration that drops a column also makes each earlier migration that names the
+  column skip when it is gone; `schema::has_column` is the test for one.
 - **Migration tests** start from `schema::testing::migrated_to(N)` (the N migrations before the one
   under test), insert rows, then run `Migrator::up`; `count` and `fts_integrity` live there too.
 - **A change to a shared builder in `migration/schema.rs`** must leave the SQL of migrations that
