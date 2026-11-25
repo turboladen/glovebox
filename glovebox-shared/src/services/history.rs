@@ -33,7 +33,9 @@ pub struct VehicleHistory {
     pub installed_parts: Vec<PartView>,
     /// The day of the first service, or none when there is no service.
     pub first_service_on: Option<NaiveDate>,
-    /// The day of the last service, or none when there is no service.
+    /// The latest day any service ran to, which is its `end_date` when it
+    /// has one and its `service_date` otherwise. It is none when there is no
+    /// service.
     pub last_service_on: Option<NaiveDate>,
     /// The lowest odometer reading any service records.
     pub lowest_mileage: Option<i32>,
@@ -96,7 +98,10 @@ pub async fn for_vehicle(
     Ok(VehicleHistory {
         description: vehicle_svc::description(&vehicle),
         first_service_on: services.first().map(|s| s.record.service_date),
-        last_service_on: services.last().map(|s| s.record.service_date),
+        last_service_on: services
+            .iter()
+            .map(|s| s.record.end_date.unwrap_or(s.record.service_date))
+            .max(),
         lowest_mileage: miles().min(),
         highest_mileage: miles().max(),
         vehicle,
@@ -236,6 +241,29 @@ mod tests {
         // One service spans one day and one reading.
         assert_eq!(got.dates_text().as_deref(), Some("2026-05-02"));
         assert_eq!(got.miles_text().as_deref(), Some("58,000 mi"));
+    }
+
+    #[tokio::test]
+    async fn the_span_ends_on_the_last_day_a_service_ran_to() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        service(&db, v, on("2026-10-03", "Tires")).await;
+        service(
+            &db,
+            v,
+            NewServiceRecord {
+                end_date: Some(date("2026-10-05")),
+                ..on("2026-10-01", "Body work")
+            },
+        )
+        .await;
+        let got = for_vehicle(&db, v).await.unwrap();
+        assert_eq!(descriptions(&got), ["Body work", "Tires"]);
+        assert_eq!(got.last_service_on, Some(date("2026-10-05")));
+        assert_eq!(
+            got.dates_text().as_deref(),
+            Some("2026-10-01 to 2026-10-05")
+        );
     }
 
     #[tokio::test]

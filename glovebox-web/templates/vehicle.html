@@ -43,7 +43,7 @@
     <ul class="needs">
       {% for a in v.activity %}
       <li class="row row--wait">
-        <span class="key at-key">{% if let Some(href) = a.href %}<a href="{{ href }}">{{ a.summary }}</a>{% else %}{{ a.summary }}{% endif %}</span>
+        <span class="key at-key">{% if let Some(s) = a.summary %}{% if let Some(href) = a.href %}<a href="{{ href }}">{{ s }}</a>{% else %}{{ s }}{% endif %}{% else %}<span class="empty">No note</span>{% endif %}</span>
         <span class="at-wide" data-l="Kind">{{ a.kind }}</span>
         <span data-l="Odometer">{% if let Some(o) = a.odometer %}{{ o }}{% endif %}</span>
         <span class="at-date" data-l="Date">{{ a.date }}</span>

@@ -94,7 +94,9 @@ and digits. The odometer is the last logged reading with its day, "No reading" i
 there is none, and the projected mileage is a separate value labeled "Estimated today" that
 carries the word "estimated". An archived vehicle shows "Archived" as a labeled value and adds no
 pill kind. The costs and the recent activity are two panels that reuse the home page's waiting
-columns, with amounts right aligned as prices, and a panel with no rows is left out. The monthly
+columns, with amounts right aligned as prices, and a panel with no rows is left out. An odometer
+reading's row shows its notes, or "No note" in gray, because its kind and odometer columns
+already state the reading. The monthly
 breakdown of the cost summary stays in Claude Desktop, because a row per month would bury the
 totals. The page holds no forms and adds no stylesheet rule. A vehicle's name printed on the
 home, service, job and appointment pages links to it.
@@ -102,9 +104,11 @@ home, service, job and appointment pages links to it.
 **A vehicle's printable history departs from the ledger as the work sheet does (2026-11-24).**
 ADR 0009 sets that look and ADR 0025 sets the content. On screen and on paper the history is
 plain text with no panels and no pills: a heading, the car on one line, labeled facts, then one
-block per service and a list of the parts on the car. It reuses the work sheet's classes and adds
-one print rule, which drops the underline from a link inside the history. On paper every label
-is black, the site header is hidden, and the strip of on-screen links is left out.
+block per service and a list of the parts on the car. It reuses the work sheet's classes and
+changes two print rules in `templates/base.html`: `.ws a` drops the underline from a link, and
+`.ws .l` prints every label black, where the rule covered only the labels of the car's facts.
+Both apply to every page printed this way, the work sheet included. On paper the site header is
+hidden and the strip of on-screen links is left out.
 
 **The page has no script.** The content security policy in `glovebox-web/src/guard.rs` allows
 inline styles and fonts from this server, and nothing else loads.

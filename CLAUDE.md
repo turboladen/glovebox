@@ -473,7 +473,8 @@ A page is a view of the shared library, and a future page follows the same rules
   with the car's facts, the last logged odometer reading with its day, and the projected mileage
   labeled as an estimate. Then come the cost summary (`costs::summary`) and the latest 20 records
   (`activity::recent`), each service linking to its page; a section with nothing in it is left
-  out. An archived vehicle's page says so, shows its sale and projects no mileage. The home page
+  out. An odometer reading's row prints its notes (`ActivityItem::reading_notes`, which is not
+  serialized) or a gray "No note". An archived vehicle's page says so, shows its sale and projects no mileage. The home page
   links each vehicle's name to it, as does the name on a service, job or appointment page
   (`view::VehicleLink`).
 - **A vehicle's service history prints plain** (`/vehicles/{vid}/history` from

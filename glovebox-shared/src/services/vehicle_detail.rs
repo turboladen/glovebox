@@ -29,8 +29,8 @@ pub struct VehicleDetail {
     /// The day `odometer` was read. It is set exactly when `odometer` is.
     pub odometer_read_on: Option<NaiveDate>,
     /// The mileage projected from `odometer` to the day asked about. It is
-    /// none for an archived vehicle, for one with no logged reading and for
-    /// one read that day.
+    /// none for an archived vehicle, for one with no logged reading, for one
+    /// read that day and when the projection equals `odometer`.
     pub estimated_mileage: Option<i32>,
     pub costs: CostSummary,
     /// The latest [`activity::DEFAULT_LIMIT`] services, incidents and
@@ -82,13 +82,16 @@ pub async fn get(
     let vehicle = vehicle_svc::require(db, vehicle_id).await?;
     let reading = reminders::last_reading(db, vehicle_id, today).await?;
     // A sold car is driven by someone else, so a projection of its mileage
-    // says nothing about the records. A reading taken today needs none.
-    let estimated_mileage = if vehicle.archived_at.is_none() && reading.is_some() {
-        let (miles, _, _, is_estimate) =
-            reminders::estimate_mileage(db, vehicle_id, &vehicle, today).await?;
-        is_estimate.then_some(miles)
-    } else {
-        None
+    // says nothing about the records. A reading taken today needs none, and
+    // a projection equal to the reading (one reading gives no rate) adds
+    // nothing to it.
+    let estimated_mileage = match reading {
+        Some((read, _)) if vehicle.archived_at.is_none() => {
+            let (miles, _, _, is_estimate) =
+                reminders::estimate_mileage(db, vehicle_id, &vehicle, today).await?;
+            (is_estimate && miles != read).then_some(miles)
+        }
+        _ => None,
     };
     Ok(VehicleDetail {
         description: vehicle_svc::description(&vehicle),
@@ -205,6 +208,21 @@ mod tests {
         let got = get(&db, v, today()).await.unwrap();
         assert_eq!(got.odometer, Some(61_000));
         assert_eq!(got.estimated_mileage, None);
+    }
+
+    // One reading and no purchase mileage give no rate to project at.
+    #[tokio::test]
+    async fn one_old_reading_has_no_estimate() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        log(&db, v, 61_000, "2026-11-03").await;
+        let got = get(&db, v, today()).await.unwrap();
+        assert_eq!(
+            got.odometer_text().as_deref(),
+            Some("61,000 mi on 2026-11-03")
+        );
+        assert_eq!(got.estimated_mileage, None);
+        assert_eq!(got.estimate_text(), None);
     }
 
     #[tokio::test]

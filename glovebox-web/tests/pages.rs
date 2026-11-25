@@ -2050,24 +2050,65 @@ async fn a_vehicle_page_shows_its_facts_costs_and_recent_activity() {
     assert_eq!(
         section_rows(&body, "Recent activity"),
         [
-            format!(
-                "Odometer reading: 61000 Odometer reading 61,000 mi {}",
-                day_label(10)
-            ),
+            format!("No note Odometer reading 61,000 mi {}", day_label(10)),
             format!("Squeal Incident {}", day_label(20)),
             format!(
                 "Brakes &#38; glass Service 60,500 mi {} $500.00",
                 day_label(50)
             ),
-            format!(
-                "Odometer reading: 60000 Odometer reading 60,000 mi {}",
-                day_label(100)
-            ),
+            format!("No note Odometer reading 60,000 mi {}", day_label(100)),
         ]
     );
     for absent in ["<form", "<script", ">Garage</span>Archived", ">Sold<"] {
         assert!(!body.contains(absent), "{absent} is shown: {body}");
     }
+}
+
+// A service with a blank description still has text to click, and a reading
+// with notes shows them where one without shows "No note".
+#[tokio::test]
+async fn a_vehicle_pages_activity_names_a_blank_service_and_shows_a_readings_notes() {
+    use glovebox_shared::{inputs::service_record::NewServiceRecord, services::service_record};
+    let db = db().await;
+    let v = VehicleFixture::new().name("Golf").insert_id(&db).await;
+    let blank = NewServiceRecord {
+        service_date: days_before_today(30),
+        description: Some("  ".into()),
+        ..Default::default()
+    };
+    let service = service_record::create(&db, v, blank).await.unwrap();
+    let entry = NewMileageEntry {
+        mileage: 61_000,
+        recorded_at: Some(days_before_today(10).into()),
+        source: None,
+        notes: Some("After the trip".into()),
+    };
+    mileage::create(&db, v, entry).await.unwrap();
+    log_reading(&db, v, 60_000, 60).await;
+    let (_, body) = page(app(db, "test"), get(&format!("/vehicles/{v}"))).await;
+    assert!(
+        body.contains(&format!(
+            r#"<a href="/vehicles/{v}/services/{}">Service on {}</a>"#,
+            service.record.id,
+            day_label(30)
+        )),
+        "{body}"
+    );
+    assert!(
+        body.contains(r#"<span class="key at-key"><span class="empty">No note</span></span>"#),
+        "{body}"
+    );
+    assert_eq!(
+        section_rows(&body, "Recent activity"),
+        [
+            format!(
+                "After the trip Odometer reading 61,000 mi {}",
+                day_label(10)
+            ),
+            format!("Service on {} Service {}", day_label(30), day_label(30)),
+            format!("No note Odometer reading 60,000 mi {}", day_label(60)),
+        ]
+    );
 }
 
 #[tokio::test]

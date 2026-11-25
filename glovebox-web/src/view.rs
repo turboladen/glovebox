@@ -1528,7 +1528,9 @@ pub struct CostRow {
 
 /// One recent record on a vehicle's page.
 pub struct ActivityRow {
-    pub summary: String,
+    /// The record's text, or none for an odometer reading with no notes,
+    /// whose kind and odometer columns say everything it records.
+    pub summary: Option<String>,
     /// The path of the record's page, which only a service has.
     pub href: Option<String>,
     pub kind: &'static str,
@@ -1539,16 +1541,18 @@ pub struct ActivityRow {
 
 impl From<&ActivityItem> for ActivityRow {
     fn from(a: &ActivityItem) -> Self {
-        let (kind, href) = match a.kind {
+        let summary = Some(a.summary.clone());
+        let (kind, summary, href) = match a.kind {
             ActivityKind::Service => (
                 "Service",
+                summary,
                 Some(crate::pages::service_path(a.vehicle_id, a.id)),
             ),
-            ActivityKind::Incident => ("Incident", None),
-            ActivityKind::Mileage => ("Odometer reading", None),
+            ActivityKind::Incident => ("Incident", summary, None),
+            ActivityKind::Mileage => ("Odometer reading", a.reading_notes.clone(), None),
         };
         Self {
-            summary: a.summary.clone(),
+            summary,
             href,
             kind,
             odometer: a.mileage.map(|miles| reminders::judged_at(miles, false)),
