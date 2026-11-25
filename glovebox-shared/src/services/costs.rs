@@ -17,7 +17,7 @@ use crate::{
     },
 };
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct CostSummary {
     pub vehicle_id: i32,
     /// The sum of every service's `total_cost_cents`. Parts the shop supplied
@@ -74,7 +74,7 @@ pub struct CostSummary {
 pub const MIN_MILES_FOR_COST_PER_1000: i64 = 1_000;
 
 /// A service with work someone other than the owner paid for.
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct CoveredWork {
     pub service_id: i32,
     pub service_date: chrono::NaiveDate,
@@ -95,7 +95,7 @@ pub struct CoveredWork {
     pub lines: Vec<CoveredLine>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct CoveredLine {
     pub description: String,
     pub work_kind: WorkKind,
@@ -104,7 +104,7 @@ pub struct CoveredLine {
     pub cost_cents: Option<i32>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct MonthlyCost {
     pub month: String,
     pub service_cost_cents: i64,

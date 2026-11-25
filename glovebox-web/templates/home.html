@@ -12,7 +12,7 @@
 {% for hv in vehicles %}
 {% let v = hv.home %}
 <section class="section page">
-  <h2>{{ v.vehicle.name }}</h2>
+  <h2><a href="/vehicles/{{ v.vehicle.id }}">{{ v.vehicle.name }}</a></h2>
 
   <section class="sheet">
     <div class="sheet-head"><h3>Maintenance due</h3><span class="n">{{ hv.waiting.due.len() }}</span>{% if let Some(note) = hv.waiting.due_note %}<span class="l">{{ note }}</span>{% endif %}<span class="aside l">Judged at {{ hv.waiting.judged_at }}</span></div>

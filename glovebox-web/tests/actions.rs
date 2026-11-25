@@ -235,7 +235,8 @@ async fn appointment_page_shows_next_steps_then_jobs() {
             && body.contains(r#"">Demo Auto Works</a></div>"#),
         "{body}"
     );
-    for (label, value) in [("Vehicle", "Golf GTI"), ("Date", "2026-12-01")] {
+    let vehicle_link = format!(r#"<a href="/vehicles/{}">Golf GTI</a>"#, w.vehicle);
+    for (label, value) in [("Vehicle", vehicle_link.as_str()), ("Date", "2026-12-01")] {
         assert!(
             body.contains(&format!(r#"<span class="l">{label}</span>{value}</div>"#)),
             "{label}: {body}"
@@ -294,7 +295,10 @@ async fn appointment_header_omits_a_missing_shop_and_date() {
 
     assert_eq!(status, StatusCode::OK);
     assert!(
-        body.contains(r#"<span class="l">Vehicle</span>Golf GTI</div>"#),
+        body.contains(&format!(
+            r#"<span class="l">Vehicle</span><a href="/vehicles/{}">Golf GTI</a></div>"#,
+            w.vehicle
+        )),
         "{body}"
     );
     assert!(!body.contains(r#"<span class="l">Shop</span>"#), "{body}");

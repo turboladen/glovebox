@@ -600,6 +600,13 @@ pub(crate) fn miles_label(miles: i32) -> String {
     out
 }
 
+/// Writes an odometer reading with the day it was read, such as
+/// `61,000 mi on 2026-11-01`.
+#[must_use]
+pub fn reading_text(miles: i32, day: NaiveDate) -> String {
+    format!("{} mi on {}", miles_label(miles), super::date_label(day))
+}
+
 /// Says how far past or short of due a schedule item is, from its
 /// `miles_remaining` and `days_remaining`: `1,200 mi over`, `in 800 mi`,
 /// `45 days over`, `in 1 day`, and `due now` or `due today` at exactly zero.

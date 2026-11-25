@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}{{ v.name }} - Glovebox{% endblock %}
+{% block content %}
+<section class="appt page" aria-labelledby="vehicle-title">
+  <p><a href="/">Garage</a> <span class="l">·</span> <a href="{{ v.history_href }}">Service history</a></p>
+  <h1 id="vehicle-title">{{ v.name }}</h1>
+  {% if let Some(d) = v.description %}<p>{{ d }}</p>{% endif %}
+  <div class="summary">
+    {% if v.archived %}<div><span class="l">Garage</span>Archived</div>{% endif %}
+    {% if let Some(d) = v.sold %}<div><span class="l">Sold</span>{{ d }}</div>{% endif %}
+    {% if let Some(m) = v.sold_mileage %}<div><span class="l">Sold at</span>{{ m }}</div>{% endif %}
+    {% if let Some(vin) = v.vin %}<div><span class="l">VIN</span><span class="pn">{{ vin }}</span></div>{% endif %}
+    {% if let Some(p) = v.plate %}<div><span class="l">Plate</span><span class="pn">{{ p }}</span></div>{% endif %}
+    {% if let Some(c) = v.color %}<div><span class="l">Color</span>{{ c }}</div>{% endif %}
+    {% if let Some(d) = v.purchased %}<div><span class="l">Purchased</span>{{ d }}</div>{% endif %}
+    {% if let Some(m) = v.purchase_mileage %}<div><span class="l">Purchased at</span>{{ m }}</div>{% endif %}
+    <div><span class="l">Odometer</span>{% if let Some(o) = v.odometer %}{{ o }}{% else %}<span class="empty">No reading</span>{% endif %}</div>
+    {% if let Some(e) = v.estimate %}<div><span class="l">Estimated today</span>{{ e }}</div>{% endif %}
+    {% if let Some(w) = v.warranty %}<div><span class="l">Warranty ends</span>{{ w }}</div>{% endif %}
+  </div>
+</section>
+
+<section class="section page">
+  {% if !v.costs.is_empty() %}
+  <section class="sheet" aria-labelledby="vehicle-costs">
+    <div class="sheet-head"><h3 id="vehicle-costs">Costs</h3></div>
+    <ul class="needs">
+      {% for c in v.costs %}
+      <li class="row row--wait">
+        <span class="key at-key">{{ c.label }}</span>
+        <span class="at-wide" data-l="Covers">{% if let Some(n) = c.note %}{{ n }}{% endif %}</span>
+        <span class="at-job num price" data-l="Amount">{{ c.amount }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  {% if !v.activity.is_empty() %}
+  <section class="sheet" aria-labelledby="vehicle-activity">
+    <div class="sheet-head"><h3 id="vehicle-activity">Recent activity</h3><span class="n">{{ v.activity.len() }}</span></div>
+    <div class="cols cols--wait" aria-hidden="true"><span class="at-key">Record</span><span class="at-wide">Kind</span><span>Odometer</span><span class="at-date">Date</span><span class="at-job num">Total</span></div>
+    <ul class="needs">
+      {% for a in v.activity %}
+      <li class="row row--wait">
+        <span class="key at-key">{% if let Some(s) = a.summary %}{% if let Some(href) = a.href %}<a href="{{ href }}">{{ s }}</a>{% else %}{{ s }}{% endif %}{% else %}<span class="empty">No note</span>{% endif %}</span>
+        <span class="at-wide" data-l="Kind">{{ a.kind }}</span>
+        <span data-l="Odometer">{% if let Some(o) = a.odometer %}{{ o }}{% endif %}</span>
+        <span class="at-date" data-l="Date">{{ a.date }}</span>
+        <span class="at-job num price" data-l="Total">{% if let Some(t) = a.total %}{{ t }}{% endif %}</span>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+</section>
+{% endblock %}

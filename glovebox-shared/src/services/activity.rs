@@ -49,6 +49,11 @@ pub struct ActivityItem {
     pub mileage: Option<i32>,
     /// Present on `service` items only. Integer cents.
     pub total_cost_cents: Option<i32>,
+    /// The notes of an odometer reading, or none when they are blank and on
+    /// every other kind. `summary` already carries them, so they are left
+    /// out of the serialized item.
+    #[serde(skip)]
+    pub reading_notes: Option<String>,
 }
 
 /// The `limit` most recent services + incidents + mileage logs for a
@@ -103,12 +108,14 @@ pub async fn recent(
             vehicle_name: vehicle_name.clone(),
             summary: s
                 .description
-                .clone()
+                .as_deref()
+                .and_then(super::trim_to_none)
                 .unwrap_or_else(|| format!("Service on {}", s.service_date)),
             date: s.service_date.into(),
             created_at: s.created_at,
             mileage: s.mileage,
             total_cost_cents: s.total_cost_cents,
+            reading_notes: None,
         });
     }
     for i in incidents {
@@ -122,9 +129,11 @@ pub async fn recent(
             summary: i.title,
             mileage: i.odometer,
             total_cost_cents: None,
+            reading_notes: None,
         });
     }
     for m in mileage_logs {
+        let reading_notes = m.notes.as_deref().and_then(super::trim_to_none);
         items.push(ActivityItem {
             kind: ActivityKind::Mileage,
             id: m.id,
@@ -132,12 +141,12 @@ pub async fn recent(
             vehicle_name: vehicle_name.clone(),
             date: m.recorded_at,
             created_at: m.created_at,
-            summary: m
-                .notes
+            summary: reading_notes
                 .clone()
                 .unwrap_or_else(|| format!("Odometer reading: {}", m.mileage)),
             mileage: Some(m.mileage),
             total_cost_cents: None,
+            reading_notes,
         });
     }
 
@@ -243,6 +252,45 @@ mod tests {
         assert_eq!(items[2].summary, "Oil change");
         assert_eq!(items[2].total_cost_cents, Some(12_345));
         assert_eq!(items[0].mileage, Some(50_000));
+    }
+
+    // Text that is blank names nothing, so the item reads as one with no
+    // text does, and the serialized item carries no notes of its own.
+    #[tokio::test]
+    async fn a_blank_description_or_note_reads_as_none() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        svc_svc::create(&db, vid, service("2026-01-10", "  ", None))
+            .await
+            .unwrap();
+        for (mileage, day, notes) in [
+            (50_000, "2026-03-01", "   "),
+            (50_500, "2026-04-01", " After the trip "),
+        ] {
+            let entry = NewMileageEntry {
+                mileage,
+                recorded_at: Some(date(day)),
+                source: None,
+                notes: Some(notes.into()),
+            };
+            mileage_svc::create(&db, vid, entry).await.unwrap();
+        }
+
+        let items = recent(&db, vid, DEFAULT_LIMIT).await.unwrap();
+        let summaries: Vec<&str> = items.iter().map(|i| i.summary.as_str()).collect();
+        assert_eq!(
+            summaries,
+            [
+                "After the trip",
+                "Odometer reading: 50000",
+                "Service on 2026-01-10"
+            ]
+        );
+        let notes: Vec<Option<&str>> = items.iter().map(|i| i.reading_notes.as_deref()).collect();
+        assert_eq!(notes, [Some("After the trip"), None, None]);
+        let json = serde_json::to_value(&items[0]).unwrap();
+        assert_eq!(json.get("reading_notes"), None);
+        assert_eq!(json["summary"], "After the trip");
     }
 
     #[tokio::test]
