@@ -138,8 +138,10 @@ pub struct DeleteAppointmentInput {
     pub appointment_id: i32,
 }
 
-// The field names are the ids the tool accepts.
-#[allow(clippy::struct_field_names)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "the field names are the ids the tool accepts"
+)]
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GetChecklistInput {

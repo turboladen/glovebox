@@ -24,6 +24,7 @@ pub mod vehicle;
 pub mod vehicle_detail;
 pub mod vin_decode;
 pub mod waiting;
+pub mod warranty;
 pub mod work_item;
 pub mod work_sheet;
 
@@ -78,6 +79,18 @@ pub(crate) fn validate_not_blank(field: &str, value: &str) -> crate::error::Doma
         return Err(crate::error::DomainError::invalid(
             field,
             "must not be blank",
+        ));
+    }
+    Ok(())
+}
+
+/// Checks that a list's `limit`, when given, asks for at least one row. An
+/// empty reply would read the same as a vehicle with no records.
+pub(crate) fn validate_limit(limit: Option<u32>) -> crate::error::DomainResult<()> {
+    if limit == Some(0) {
+        return Err(crate::error::DomainError::invalid(
+            "limit",
+            "must be at least 1",
         ));
     }
     Ok(())

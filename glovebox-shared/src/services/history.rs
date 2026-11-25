@@ -88,6 +88,7 @@ pub async fn for_vehicle(
     services.sort_by_key(|s| (s.record.service_date, s.record.id));
     let filter = PartFilter {
         status: Some(PartStatus::Installed),
+        ..Default::default()
     };
     let mut installed_parts = part::list(db, vehicle_id, filter).await?;
     installed_parts.sort_by_key(|p| {

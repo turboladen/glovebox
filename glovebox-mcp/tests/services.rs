@@ -2058,3 +2058,85 @@ async fn correct_service_ignores_a_jobs_incident_sent_with_the_call_that_takes_t
         .await;
     assert_eq!(read["resolved"], false, "got: {read}");
 }
+
+#[tokio::test]
+async fn list_services_filters_by_shop_and_work_kind_and_keeps_the_newest() {
+    let t = connect().await;
+    let v = common::add_vehicle(&t, "Daily").await;
+    let shop = |name: &'static str| t.call("add_shop", json!({ "name": name }));
+    let dealer = shop("Dealer").await["id"].clone();
+    let indie = shop("Indie").await["id"].clone();
+    for (day, description, shop_id, kind) in [
+        ("2026-01-10", "Oil change", &dealer, "maintenance"),
+        ("2026-03-10", "Coil pack", &indie, "repair"),
+        ("2026-05-10", "Hose", &dealer, "repair"),
+    ] {
+        t.call(
+            "record_service",
+            json!({
+                "vehicle_id": v,
+                "service_date": day,
+                "description": description,
+                "performed_by": "shop",
+                "shop_id": shop_id,
+                "line_items": [{ "description": description, "work_kind": kind }]
+            }),
+        )
+        .await;
+    }
+    let list = |extra: serde_json::Value| {
+        let mut args = json!({ "vehicle_id": v });
+        for (k, value) in extra.as_object().unwrap() {
+            args[k] = value.clone();
+        }
+        let t = &t;
+        async move {
+            let listed = t.call("list_services", args).await;
+            listed
+                .as_array()
+                .expect("list_services answers with a bare array")
+                .iter()
+                .map(|s| s["description"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        }
+    };
+
+    assert_eq!(list(json!({})).await, ["Hose", "Coil pack", "Oil change"]);
+    assert_eq!(list(json!({ "limit": 2 })).await, ["Hose", "Coil pack"]);
+    assert_eq!(
+        list(json!({ "shop_id": dealer })).await,
+        ["Hose", "Oil change"]
+    );
+    assert_eq!(
+        list(json!({ "work_kind": "repair" })).await,
+        ["Hose", "Coil pack"]
+    );
+    assert_eq!(
+        list(json!({ "work_kind": "repair", "shop_id": indie, "from": "2026-01-01", "limit": 5 }))
+            .await,
+        ["Coil pack"]
+    );
+
+    let err = t
+        .call_err("list_services", json!({ "vehicle_id": v, "shop_id": 9999 }))
+        .await;
+    assert!(err.contains("Shop 9999 not found"), "got: {err}");
+    let err = t
+        .call_err(
+            "list_services",
+            json!({ "vehicle_id": v, "work_kind": "tune" }),
+        )
+        .await;
+    assert!(err.contains("work_kind"), "got: {err}");
+    let err = t
+        .call_err("list_services", json!({ "vehicle_id": v, "limit": -1 }))
+        .await;
+    assert!(err.contains("limit"), "got: {err}");
+    common::assert_unknown_field_rejected(
+        &t,
+        "list_services",
+        json!({ "vehicle_id": v, "shop": "Dealer" }),
+        "shop",
+    )
+    .await;
+}

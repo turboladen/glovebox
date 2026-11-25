@@ -3,11 +3,11 @@
 use rmcp::{ErrorData as McpError, model::CallToolResult, tool, tool_router};
 
 use super::{GloveboxMcp, Parameters, deleted_result, domain_result};
-use glovebox_shared::services::incident;
+use glovebox_shared::{inputs::incident::IncidentFilter, services::incident};
 
 use crate::schemas::{
-    AddIncidentFollowupInput, DeleteIncidentInput, ListIncidentsInput, LogIncidentInput,
-    SaveNoteInput, UpdateIncidentInput,
+    AddIncidentFollowupInput, DeleteIncidentFollowupInput, DeleteIncidentInput, ListIncidentsInput,
+    LogIncidentInput, SaveNoteInput, UpdateIncidentFollowupInput, UpdateIncidentInput,
 };
 
 #[tool_router(router = incidents_router, vis = "pub(super)")]
@@ -50,17 +50,25 @@ impl GloveboxMcp {
     #[tool(
         name = "list_incidents",
         description = "The vehicle's incidents (noises, leaks, warning lights, damage, accidents, \
-                       shop observations, notes), newest first, each with its followups and the \
-                       services that noticed or fixed it. Pass `resolved: false` for what is \
-                       still open. Use `get_incident` for one in full and this tool to find an \
-                       `incident_id` for `update_incident`."
+                       shop observations, notes), newest first (an incident dated only to the day \
+                       counts as the end of that day, and the later-logged of two at the same \
+                       moment comes first), each with its followups and the services that noticed \
+                       or fixed it. Pass `resolved: false` for what is still open and `category` \
+                       for one kind. `limit` keeps that many from the top of the list, after the \
+                       other filters, and must be at least 1. Use `get_incident` for one in full \
+                       and this tool to find an `incident_id` for `update_incident`."
     )]
     async fn list_incidents(
         &self,
         params: Parameters<ListIncidentsInput>,
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "list_incidents");
-        domain_result(incident::list_filtered(&*self.db, p.vehicle_id, p.resolved).await)
+        let filter = IncidentFilter {
+            resolved: p.resolved,
+            category: p.category,
+            limit: p.limit,
+        };
+        domain_result(incident::list_filtered(&*self.db, p.vehicle_id, filter).await)
     }
 
     #[tool(
@@ -93,9 +101,11 @@ impl GloveboxMcp {
     #[tool(
         name = "add_incident_followup",
         description = "Add a dated followup to an incident: a call with the adjuster, an email to \
-                       the shop, what was learned. Give `occurred_at`, a `summary`, and \
-                       optionally `contact_method`, `contact_with` and `notes`. Use \
-                       `update_incident` to change the incident's own fields."
+                       the shop, what was learned. Give `occurred_at`, a `summary` (blank text is \
+                       an error), and optionally `contact_method`, `contact_with` and `notes`, \
+                       where blank text is stored as none. Use `update_incident` to change the \
+                       incident's own fields, and `update_incident_followup` or \
+                       `delete_incident_followup` to correct or remove a followup already added."
     )]
     async fn add_incident_followup(
         &self,
@@ -104,6 +114,48 @@ impl GloveboxMcp {
         let p = tool_input!(params, "add_incident_followup");
         let (vehicle_id, incident_id, input) = domain_input!(p.into_domain());
         domain_result(incident::create_followup(&*self.db, vehicle_id, incident_id, input).await)
+    }
+
+    #[tool(
+        name = "update_incident_followup",
+        description = "Correct a followup already on an incident: when it happened, the summary, \
+                       `contact_method`, `contact_with` or `notes`. Send only the fields to \
+                       change; null or blank text clears `contact_method`, `contact_with` or \
+                       `notes`, a blank `summary` is an error, and a field left out is untouched. \
+                       `followup_id` comes from the incident's `followups` in `list_incidents` or \
+                       `get_incident`, and `incident_id` must be the incident that followup \
+                       belongs to. Returns the followup as stored. Use `add_incident_followup` \
+                       for a new contact."
+    )]
+    async fn update_incident_followup(
+        &self,
+        params: Parameters<UpdateIncidentFollowupInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = tool_input!(params, "update_incident_followup");
+        let (vehicle_id, incident_id, followup_id, input) = domain_input!(p.into_domain());
+        domain_result(
+            incident::update_followup(&*self.db, vehicle_id, incident_id, followup_id, input).await,
+        )
+    }
+
+    #[tool(
+        name = "delete_incident_followup",
+        description = "Permanently delete one followup that was added to an incident by mistake. \
+                       The incident and its other followups stay. `followup_id` comes from the \
+                       incident's `followups` in `list_incidents` or `get_incident`, and \
+                       `incident_id` must be the incident that followup belongs to. To fix a \
+                       detail of a followup, use `update_incident_followup`."
+    )]
+    async fn delete_incident_followup(
+        &self,
+        params: Parameters<DeleteIncidentFollowupInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = tool_input!(params, "delete_incident_followup");
+        deleted_result(
+            "incident_followup",
+            p.followup_id,
+            incident::delete_followup(&*self.db, p.vehicle_id, p.incident_id, p.followup_id).await,
+        )
     }
 
     #[tool(

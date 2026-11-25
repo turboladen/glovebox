@@ -101,3 +101,18 @@ pub struct UpdateServiceRecord {
     /// rules as `NewServiceRecord::appointment_id` apply to a new value.
     pub appointment_id: Option<Option<i32>>,
 }
+
+/// Which of a vehicle's services a list keeps. An empty field keeps all.
+#[derive(Default)]
+pub struct ServiceFilter {
+    /// The earliest service date kept.
+    pub from: Option<chrono::NaiveDate>,
+    /// The latest service date kept.
+    pub to: Option<chrono::NaiveDate>,
+    /// Keeps the services at this shop. The id must name a shop.
+    pub shop_id: Option<i32>,
+    /// Keeps the services with at least one line of this kind.
+    pub work_kind: Option<WorkKind>,
+    /// The most services returned, counted from the newest.
+    pub limit: Option<u32>,
+}

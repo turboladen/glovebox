@@ -10,17 +10,19 @@ use glovebox_shared::{
         incident::IncidentCategory,
         part::{PartStatus, Supplier},
         service_record::{Payer, Performer},
+        service_record_line_item::WorkKind,
         work_item::JobStatus,
     },
     error::DomainResult,
     inputs::{
-        incident::{NewFollowup, UpdateIncident},
+        incident::{NewFollowup, UpdateFollowup, UpdateIncident},
         part::{Fitting, InstallPatch, ReplacePatch, UpdatePart},
         schedule::{NewScheduleItem, UpdateScheduleItem},
-        service_record::UpdateServiceRecord,
+        service_record::{ServiceFilter, UpdateServiceRecord},
         vehicle::{NewVehicle, UpdateVehicle},
         work_item::UpdateWorkItem,
     },
+    services::costs::CostRange,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer};
@@ -288,6 +290,27 @@ pub struct ListServicesInput {
     pub from: Option<String>,
     /// Latest service date to include, `YYYY-MM-DD`.
     pub to: Option<String>,
+    /// Only services at this shop, by id from `list_shops`. An id that names no shop is an error.
+    pub shop_id: Option<i32>,
+    /// Only services with at least one line of this kind.
+    pub work_kind: Option<WorkKind>,
+    /// The most services to return, counted from the newest service date after the other filters. At least 1; 0 is an error. Omit for all.
+    pub limit: Option<u32>,
+}
+
+impl ListServicesInput {
+    pub fn into_domain(self) -> DomainResult<(i32, ServiceFilter)> {
+        Ok((
+            self.vehicle_id,
+            ServiceFilter {
+                from: dates::parse_optional_date("from", self.from)?,
+                to: dates::parse_optional_date("to", self.to)?,
+                shop_id: self.shop_id,
+                work_kind: self.work_kind,
+                limit: self.limit,
+            },
+        ))
+    }
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -297,6 +320,10 @@ pub struct ListPartsInput {
     pub vehicle_id: i32,
     /// Only parts with this status.
     pub status: Option<PartStatus>,
+    /// `true` for the parts still under warranty: purchased or installed, with a warranty expiry date or expiry odometer reading, and no bound passed (a part with both is under warranty only while neither has passed). `false` for every other part. Omit for all.
+    pub under_warranty: Option<bool>,
+    /// The most parts to return, counted from the most recently recorded after the other filters. At least 1; 0 is an error. Omit for all.
+    pub limit: Option<u32>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -306,6 +333,33 @@ pub struct ListIncidentsInput {
     pub vehicle_id: i32,
     /// `true` for resolved incidents only, `false` for unresolved only. Omit for all.
     pub resolved: Option<bool>,
+    /// Only incidents of this category.
+    pub category: Option<IncidentCategory>,
+    /// The most incidents to return, counted from the newest after the other filters. At least 1; 0 is an error. Omit for all.
+    pub limit: Option<u32>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CostSummaryInput {
+    /// Vehicle id, from `list_vehicles`.
+    pub vehicle_id: i32,
+    /// First date to count, `YYYY-MM-DD`, inclusive. Omit to count from the first record.
+    pub from: Option<String>,
+    /// Last date to count, `YYYY-MM-DD`, inclusive. Omit to count through the latest record. A `from` after `to` is an error.
+    pub to: Option<String>,
+}
+
+impl CostSummaryInput {
+    pub fn into_domain(self) -> DomainResult<(i32, CostRange)> {
+        Ok((
+            self.vehicle_id,
+            CostRange {
+                from: dates::parse_optional_date("from", self.from)?,
+                to: dates::parse_optional_date("to", self.to)?,
+            },
+        ))
+    }
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -822,13 +876,13 @@ pub struct AddIncidentFollowupInput {
     pub incident_id: i32,
     /// When the contact happened, `YYYY-MM-DD HH:MM:SS` or just `YYYY-MM-DD`.
     pub occurred_at: String,
-    /// What happened or was said, e.g. 'Adjuster approved the estimate'.
+    /// What happened or was said, e.g. 'Adjuster approved the estimate'. Blank text is an error.
     pub summary: String,
-    /// How, e.g. `phone`, `email`.
+    /// How, e.g. `phone`, `email`. Blank text is stored as none.
     pub contact_method: Option<String>,
-    /// Who with.
+    /// Who with. Blank text is stored as none.
     pub contact_with: Option<String>,
-    /// Free-form notes.
+    /// Free-form notes. Blank text is stored as none.
     pub notes: Option<String>,
 }
 
@@ -846,6 +900,71 @@ impl AddIncidentFollowupInput {
             },
         ))
     }
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateIncidentFollowupInput {
+    /// Vehicle id, from `list_vehicles`.
+    pub vehicle_id: i32,
+    /// Id of the incident the followup belongs to, from `list_incidents`.
+    pub incident_id: i32,
+    /// Followup id, from the incident's `followups` in `list_incidents` or `get_incident`.
+    pub followup_id: i32,
+    /// When the contact happened, `YYYY-MM-DD HH:MM:SS` or just `YYYY-MM-DD`.
+    pub occurred_at: Option<String>,
+    /// What happened or was said. A followup always has one, so blank text is an error and `null` is the same as leaving it out.
+    pub summary: Option<String>,
+    /// How, e.g. `phone`, `email`.
+    ///
+    /// Send `null` or blank text to clear it; omit the key to leave it unchanged.
+    #[serde(default, deserialize_with = "nullable")]
+    #[schemars(with = "Option<String>")]
+    pub contact_method: Option<Option<String>>,
+    /// Who with.
+    ///
+    /// Send `null` or blank text to clear it; omit the key to leave it unchanged.
+    #[serde(default, deserialize_with = "nullable")]
+    #[schemars(with = "Option<String>")]
+    pub contact_with: Option<Option<String>>,
+    /// Free-form notes.
+    ///
+    /// Send `null` or blank text to clear it; omit the key to leave it unchanged.
+    #[serde(default, deserialize_with = "nullable")]
+    #[schemars(with = "Option<String>")]
+    pub notes: Option<Option<String>>,
+}
+
+impl UpdateIncidentFollowupInput {
+    pub fn into_domain(self) -> DomainResult<(i32, i32, i32, UpdateFollowup)> {
+        Ok((
+            self.vehicle_id,
+            self.incident_id,
+            self.followup_id,
+            UpdateFollowup {
+                occurred_at: dates::parse_optional_day_or_time("occurred_at", self.occurred_at)?,
+                summary: self.summary,
+                contact_method: self.contact_method,
+                contact_with: self.contact_with,
+                notes: self.notes,
+            },
+        ))
+    }
+}
+
+#[expect(
+    clippy::struct_field_names,
+    reason = "the field names are the ids the tool accepts"
+)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DeleteIncidentFollowupInput {
+    /// Vehicle id, from `list_vehicles`.
+    pub vehicle_id: i32,
+    /// Id of the incident the followup belongs to, from `list_incidents`.
+    pub incident_id: i32,
+    /// Followup id, from the incident's `followups` in `list_incidents` or `get_incident`.
+    pub followup_id: i32,
 }
 
 #[derive(Deserialize, JsonSchema)]

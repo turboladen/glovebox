@@ -148,17 +148,18 @@ pub struct BundleItem {
     pub due_in_miles: Option<i32>,
 }
 
-/// Warranty posture derived from the vehicle's nullable expiry fields.
-/// `possibly_covered` is true when either bound still holds: today is on or
-/// before `expires_on`, or the estimated mileage is at or below
-/// `expires_miles`.
-// Real warranties usually end at whichever bound comes first, but "possibly
-// covered" errs toward telling the owner to check.
+/// The vehicle's warranty as of the day of the read and its estimated
+/// mileage. A warranty ends at whichever bound comes first, so `in_force`
+/// (flattened in from `bounds` with the per-bound facts) is the reading to
+/// report. `possibly_covered` is the looser one: true while either bound still
+/// holds, so a vehicle past one bound and inside the other reads `true`.
 #[derive(Debug, Serialize, Clone)]
 pub struct WarrantyStatus {
     pub expires_on: Option<NaiveDate>,
     pub expires_miles: Option<i32>,
     pub possibly_covered: bool,
+    #[serde(flatten)]
+    pub bounds: super::warranty::WarrantyBounds,
 }
 
 #[derive(Debug, Serialize)]
@@ -177,26 +178,24 @@ pub struct RemindersResponse {
     pub bundle_suggestions: Vec<BundleSuggestion>,
 }
 
-/// Derive the warranty flag from the vehicle record and the estimated
-/// current mileage. `None` when neither expiry field is set.
+/// The vehicle's warranty as of `today` and the estimated current mileage.
+/// `None` when neither expiry field is set.
 fn warranty_status(
     v: &vehicle::Model,
     estimated_mileage: i32,
     today: NaiveDate,
 ) -> Option<WarrantyStatus> {
-    if v.warranty_expires_on.is_none() && v.warranty_expires_miles.is_none() {
-        return None;
-    }
-    let date_covers = v
-        .warranty_expires_on
-        .is_some_and(|expires| today <= expires);
-    let miles_cover = v
-        .warranty_expires_miles
-        .is_some_and(|expires| estimated_mileage <= expires);
+    let bounds = super::warranty::read(
+        v.warranty_expires_on,
+        v.warranty_expires_miles,
+        estimated_mileage,
+        today,
+    )?;
     Some(WarrantyStatus {
         expires_on: v.warranty_expires_on,
         expires_miles: v.warranty_expires_miles,
-        possibly_covered: date_covers || miles_cover,
+        possibly_covered: bounds.date_passed == Some(false) || bounds.mileage_passed == Some(false),
+        bounds,
     })
 }
 
@@ -859,6 +858,81 @@ mod tests {
                 .warranty
                 .unwrap()
                 .possibly_covered
+        );
+    }
+
+    // The first car is past its warranty date and under its mileage limit, so
+    // its warranty is over although the looser flag still reads true.
+    #[tokio::test]
+    async fn warranty_reports_each_bound_and_ends_at_the_first_one_passed() {
+        let db = test_db().await;
+        let today = date("2026-11-24");
+        let reading = |vehicle_id: i32, mileage: i32| mileage_log::ActiveModel {
+            vehicle_id: Set(vehicle_id),
+            mileage: Set(mileage),
+            recorded_at: Set(date("2026-11-24")),
+            ..Default::default()
+        };
+
+        let old = seed_vehicle(&db, Some("2020-06-30"), Some(60_000)).await;
+        reading(old, 48_500).insert(&db).await.unwrap();
+        let w = calculate_reminders_on(&db, old, today)
+            .await
+            .unwrap()
+            .warranty
+            .unwrap();
+        assert!(w.possibly_covered);
+        assert!(!w.bounds.in_force);
+        assert_eq!(w.bounds.date_passed, Some(true));
+        assert_eq!(w.bounds.days_left, Some(0));
+        assert_eq!(w.bounds.mileage_passed, Some(false));
+        assert_eq!(w.bounds.miles_left, Some(11_500));
+
+        let young = seed_vehicle(&db, Some("2026-12-24"), Some(60_000)).await;
+        reading(young, 48_500).insert(&db).await.unwrap();
+        let w = calculate_reminders_on(&db, young, today)
+            .await
+            .unwrap()
+            .warranty
+            .unwrap();
+        assert!(w.possibly_covered);
+        assert!(w.bounds.in_force);
+        assert_eq!(w.bounds.days_left, Some(30));
+        assert_eq!(w.bounds.miles_left, Some(11_500));
+
+        let driven = seed_vehicle(&db, Some("2026-12-24"), Some(40_000)).await;
+        reading(driven, 48_500).insert(&db).await.unwrap();
+        let w = calculate_reminders_on(&db, driven, today)
+            .await
+            .unwrap()
+            .warranty
+            .unwrap();
+        assert!(w.possibly_covered);
+        assert!(!w.bounds.in_force);
+        assert_eq!(w.bounds.mileage_passed, Some(true));
+        assert_eq!(w.bounds.date_passed, Some(false));
+    }
+
+    #[tokio::test]
+    async fn warranty_serializes_flat_with_null_for_a_bound_the_vehicle_lacks() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db, Some("2026-12-24"), None).await;
+        let w = calculate_reminders_on(&db, vid, date("2026-11-24"))
+            .await
+            .unwrap()
+            .warranty;
+        assert_eq!(
+            serde_json::to_value(&w).unwrap(),
+            serde_json::json!({
+                "expires_on": "2026-12-24",
+                "expires_miles": null,
+                "possibly_covered": true,
+                "in_force": true,
+                "date_passed": false,
+                "mileage_passed": null,
+                "days_left": 30,
+                "miles_left": null
+            })
         );
     }
 

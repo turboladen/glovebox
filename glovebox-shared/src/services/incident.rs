@@ -14,7 +14,7 @@ use crate::{
         service_record, work_item,
     },
     error::{DomainError, DomainResult},
-    inputs::incident::{NewFollowup, NewIncident, UpdateIncident},
+    inputs::incident::{IncidentFilter, NewFollowup, NewIncident, UpdateFollowup, UpdateIncident},
 };
 
 /// Fetch an incident scoped to its owning vehicle. A wrong-vehicle lookup is
@@ -288,15 +288,21 @@ pub(crate) async fn keep_resolver(
     Ok(())
 }
 
-/// Lists a vehicle's incidents newest first, keeping only resolved ones for
-/// `Some(true)`, only unresolved ones for `Some(false)`, and all for `None`.
+/// Lists a vehicle's incidents newest first, keeping those the filter names
+/// and at most `filter.limit` of them. An incident dated only to the day
+/// counts as the end of that day, and the later-logged of two at the same
+/// moment comes first.
+///
+/// # Errors
+/// `NotFound` for a missing vehicle and `Invalid` for a limit of zero.
 pub async fn list_filtered(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
-    resolved: Option<bool>,
+    filter: IncidentFilter,
 ) -> DomainResult<Vec<IncidentWithDetails>> {
     super::vehicle::require(db, vehicle_id).await?;
-    let incidents = list_rows(db, vehicle_id, resolved).await?;
+    super::validate_limit(filter.limit)?;
+    let incidents = rows(db, vehicle_id, &filter).await?;
     with_details(db, incidents).await
 }
 
@@ -308,15 +314,33 @@ pub(crate) async fn list_rows(
     vehicle_id: i32,
     resolved: Option<bool>,
 ) -> DomainResult<Vec<incident::Model>> {
+    let filter = IncidentFilter {
+        resolved,
+        ..Default::default()
+    };
+    rows(db, vehicle_id, &filter).await
+}
+
+async fn rows(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    filter: &IncidentFilter,
+) -> DomainResult<Vec<incident::Model>> {
     let mut query = incident::Entity::find().filter(incident::Column::VehicleId.eq(vehicle_id));
-    if let Some(resolved) = resolved {
+    if let Some(resolved) = filter.resolved {
         query = query.filter(incident::Column::Resolved.eq(resolved));
     }
-    Ok(query
-        .order_by_desc(incident::Column::OccurredAt)
-        .order_by_desc(incident::Column::Id)
-        .all(db)
-        .await?)
+    if let Some(category) = filter.category {
+        query = query.filter(incident::Column::Category.eq(category));
+    }
+    let mut incidents = query.all(db).await?;
+    // The stored text of a bare day sorts below every time on that day, so
+    // the rows are ordered and cut in memory.
+    incidents.sort_by_key(|i| std::cmp::Reverse((i.occurred_at.or_end_of_day(), i.id)));
+    if let Some(limit) = filter.limit {
+        incidents.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+    }
+    Ok(incidents)
 }
 
 pub async fn get(
@@ -722,12 +746,25 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     Ok(())
 }
 
+/// An optional text without its surrounding whitespace, where blank text
+/// reads as absent.
+fn blank_to_none(text: Option<&str>) -> Option<String> {
+    text.and_then(super::trim_to_none)
+}
+
+/// Add a dated followup to the vehicle's incident. A blank `contact_method`,
+/// `contact_with` or `notes` is stored as absent.
+///
+/// # Errors
+/// `Invalid` for a blank summary, and `NotFound` for an incident that is
+/// missing or belongs to another vehicle.
 pub async fn create_followup<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
     incident_id: i32,
     input: NewFollowup,
 ) -> DomainResult<incident_followup::Model> {
+    super::validate_not_blank("summary", &input.summary)?;
     let txn = super::begin_write(db).await?;
     let db = &txn;
     // Verify the incident belongs to this vehicle before attaching a followup.
@@ -736,15 +773,95 @@ pub async fn create_followup<C: ConnectionTrait + TransactionTrait>(
     let model = incident_followup::ActiveModel {
         incident_id: Set(incident_id),
         occurred_at: Set(input.occurred_at),
-        contact_method: Set(input.contact_method),
-        contact_with: Set(input.contact_with),
+        contact_method: Set(blank_to_none(input.contact_method.as_deref())),
+        contact_with: Set(blank_to_none(input.contact_with.as_deref())),
         summary: Set(input.summary),
-        notes: Set(input.notes),
+        notes: Set(blank_to_none(input.notes.as_deref())),
         ..Default::default()
     };
     let out = model.insert(db).await?;
     txn.commit().await?;
     Ok(out)
+}
+
+/// Fetch a followup scoped to its incident and that incident's vehicle. A
+/// followup of another incident or another vehicle is indistinguishable from
+/// a nonexistent one.
+async fn require_followup(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    incident_id: i32,
+    id: i32,
+) -> DomainResult<incident_followup::Model> {
+    incident_followup::Entity::find_by_id(id)
+        .filter(incident_followup::Column::IncidentId.eq(incident_id))
+        .inner_join(incident::Entity)
+        .filter(incident::Column::VehicleId.eq(vehicle_id))
+        .one(db)
+        .await?
+        .ok_or_else(|| DomainError::NotFound(format!("Followup {id} not found")))
+}
+
+/// Correct a followup of the vehicle's incident and return the stored row.
+/// Only the fields the input carries change, and a blank `contact_method`,
+/// `contact_with` or `notes` clears that field.
+///
+/// # Errors
+/// `Invalid` for a blank summary, and `NotFound` for a followup that is
+/// missing or belongs to another incident or vehicle.
+pub async fn update_followup<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    incident_id: i32,
+    id: i32,
+    input: UpdateFollowup,
+) -> DomainResult<incident_followup::Model> {
+    if let Some(summary) = &input.summary {
+        super::validate_not_blank("summary", summary)?;
+    }
+    let txn = super::begin_write(db).await?;
+    let existing = require_followup(&txn, vehicle_id, incident_id, id).await?;
+
+    let mut active: incident_followup::ActiveModel = existing.clone().into();
+    if let Some(v) = input.occurred_at {
+        active.occurred_at = Set(v);
+    }
+    if let Some(v) = input.summary {
+        active.summary = Set(v);
+    }
+    if let Some(v) = input.contact_method {
+        active.contact_method = Set(blank_to_none(v.as_deref()));
+    }
+    if let Some(v) = input.contact_with {
+        active.contact_with = Set(blank_to_none(v.as_deref()));
+    }
+    if let Some(v) = input.notes {
+        active.notes = Set(blank_to_none(v.as_deref()));
+    }
+    // SeaORM refuses an update that sets no column, so a call that changes
+    // nothing answers with the stored row.
+    let out = if active.is_changed() {
+        active.update(&txn).await?
+    } else {
+        existing
+    };
+    txn.commit().await?;
+    Ok(out)
+}
+
+/// Delete one followup of the vehicle's incident. The incident and its other
+/// followups are kept.
+pub async fn delete_followup<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    incident_id: i32,
+    id: i32,
+) -> DomainResult<()> {
+    let txn = super::begin_write(db).await?;
+    let existing = require_followup(&txn, vehicle_id, incident_id, id).await?;
+    existing.delete(&txn).await?;
+    txn.commit().await?;
+    Ok(())
 }
 
 /// The incidents only this service resolves that still read resolved, oldest
@@ -944,7 +1061,9 @@ mod tests {
             .await
             .unwrap();
         }
-        let listed = list_filtered(&db, vid, None).await.unwrap();
+        let listed = list_filtered(&db, vid, IncidentFilter::default())
+            .await
+            .unwrap();
         assert_eq!(listed.len(), 2);
         assert_eq!(listed[0].incident.title, "newer");
         assert_eq!(listed[1].incident.title, "older");
@@ -985,7 +1104,10 @@ mod tests {
             assert_eq!(made.incident.category, *category);
         }
         assert_eq!(
-            list_filtered(&db, vid, None).await.unwrap().len(),
+            list_filtered(&db, vid, IncidentFilter::default())
+                .await
+                .unwrap()
+                .len(),
             IncidentCategory::ALL.len()
         );
     }
@@ -1111,7 +1233,11 @@ mod tests {
             .unwrap_err(),
             DomainError::NotFound(_)
         ));
-        crate::test_support::assert_empty(&list_filtered(&db, owner, None).await.unwrap());
+        crate::test_support::assert_empty(
+            &list_filtered(&db, owner, IncidentFilter::default())
+                .await
+                .unwrap(),
+        );
     }
 
     #[tokio::test]
@@ -1457,7 +1583,11 @@ mod tests {
             .unwrap_err(),
             DomainError::NotFound(_)
         ));
-        crate::test_support::assert_empty(&list_filtered(&db, owner, None).await.unwrap());
+        crate::test_support::assert_empty(
+            &list_filtered(&db, owner, IncidentFilter::default())
+                .await
+                .unwrap(),
+        );
 
         // Update referencing a foreign incident must 404 and mutate nothing.
         let mine = create(&db, owner, new_incident("mine", IncidentCategory::Noise))
@@ -1535,6 +1665,108 @@ mod tests {
                 .recurrence_of_id,
             None
         );
+    }
+
+    #[tokio::test]
+    async fn list_filtered_keeps_a_category_and_the_newest_up_to_a_limit() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        for (title, category, occurred_at) in [
+            ("Old squeak", IncidentCategory::Noise, "2026-01-05"),
+            ("Drip", IncidentCategory::Leak, "2026-03-05"),
+            ("New squeak", IncidentCategory::Noise, "2026-05-05"),
+            ("Rattle", IncidentCategory::Noise, "2026-04-05"),
+        ] {
+            let input = NewIncident {
+                occurred_at: Some(date(occurred_at)),
+                ..new_incident(title, category)
+            };
+            create(&db, vid, input).await.unwrap();
+        }
+        let titles = |filter: IncidentFilter| {
+            let db = &db;
+            async move {
+                list_filtered(db, vid, filter)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|i| i.incident.title)
+                    .collect::<Vec<_>>()
+            }
+        };
+
+        let noises = IncidentFilter {
+            category: Some(IncidentCategory::Noise),
+            ..Default::default()
+        };
+        assert_eq!(titles(noises).await, ["New squeak", "Rattle", "Old squeak"]);
+        let newest_two = IncidentFilter {
+            limit: Some(2),
+            ..Default::default()
+        };
+        assert_eq!(titles(newest_two).await, ["New squeak", "Rattle"]);
+        let one_noise = IncidentFilter {
+            category: Some(IncidentCategory::Noise),
+            resolved: Some(false),
+            limit: Some(1),
+        };
+        assert_eq!(titles(one_noise).await, ["New squeak"]);
+        assert_eq!(titles(IncidentFilter::default()).await.len(), 4);
+    }
+
+    // The stored text of a bare day sorts below a time on the same day, and
+    // the list still reads the bare day as the later of the two.
+    #[tokio::test]
+    async fn list_filtered_reads_a_bare_day_as_the_end_of_its_day() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        for (title, occurred_at) in [
+            ("Day before", "2026-05-04 18:00:00"),
+            ("Morning noise", "2026-05-05 08:15:00"),
+            ("Same day, no time", "2026-05-05"),
+        ] {
+            let input = NewIncident {
+                occurred_at: Some(date(occurred_at)),
+                ..new_incident(title, IncidentCategory::Noise)
+            };
+            create(&db, vid, input).await.unwrap();
+        }
+        let titles = |limit: Option<u32>| {
+            let db = &db;
+            async move {
+                let filter = IncidentFilter {
+                    limit,
+                    ..Default::default()
+                };
+                list_filtered(db, vid, filter)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|i| i.incident.title)
+                    .collect::<Vec<_>>()
+            }
+        };
+        assert_eq!(
+            titles(None).await,
+            ["Same day, no time", "Morning noise", "Day before"]
+        );
+        assert_eq!(titles(Some(1)).await, ["Same day, no time"]);
+        assert_eq!(
+            titles(Some(2)).await,
+            ["Same day, no time", "Morning noise"]
+        );
+    }
+
+    #[tokio::test]
+    async fn list_filtered_refuses_a_limit_of_zero() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let filter = IncidentFilter {
+            limit: Some(0),
+            ..Default::default()
+        };
+        let err = list_filtered(&db, vid, filter).await.err().unwrap();
+        assert_eq!(err.to_string(), "limit: must be at least 1");
     }
 
     // --- followups ------------------------------------------------------------
@@ -1626,6 +1858,249 @@ mod tests {
         );
     }
 
+    fn followup(summary: &str) -> NewFollowup {
+        NewFollowup {
+            occurred_at: date("2024-05-02"),
+            contact_method: Some("phone".into()),
+            contact_with: Some("Adjuster".into()),
+            summary: summary.into(),
+            notes: Some("Left a voicemail".into()),
+        }
+    }
+
+    async fn search_hits(db: &DatabaseConnection, vehicle_id: i32, query: &str) -> usize {
+        let scope = crate::services::search::SearchScope::All;
+        crate::services::search::search(db, query, scope, Some(vehicle_id))
+            .await
+            .unwrap()
+            .len()
+    }
+
+    #[tokio::test]
+    async fn update_followup_changes_only_the_fields_sent_and_search_follows() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let inc = create(&db, vid, new_incident("crash", IncidentCategory::Accident))
+            .await
+            .unwrap()
+            .incident
+            .id;
+        let f = create_followup(&db, vid, inc, followup("Filed the claim"))
+            .await
+            .unwrap();
+        assert_eq!(search_hits(&db, vid, "claim").await, 1);
+
+        let updated = update_followup(
+            &db,
+            vid,
+            inc,
+            f.id,
+            UpdateFollowup {
+                occurred_at: Some(date("2024-05-03 09:30:00")),
+                summary: Some("Adjuster approved the estimate".into()),
+                notes: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.summary, "Adjuster approved the estimate");
+        assert_eq!(updated.occurred_at, date("2024-05-03 09:30:00"));
+        assert_eq!(updated.notes, None);
+        assert_eq!(updated.contact_method.as_deref(), Some("phone"));
+        assert_eq!(updated.contact_with.as_deref(), Some("Adjuster"));
+        assert_eq!(updated.created_at, f.created_at);
+
+        let stored = get(&db, vid, inc).await.unwrap().followups;
+        assert_eq!(stored, vec![updated]);
+        assert_eq!(search_hits(&db, vid, "claim").await, 0);
+        assert_eq!(search_hits(&db, vid, "estimate").await, 1);
+    }
+
+    #[tokio::test]
+    async fn update_followup_with_no_fields_returns_the_stored_row() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let inc = create(&db, vid, new_incident("crash", IncidentCategory::Accident))
+            .await
+            .unwrap()
+            .incident
+            .id;
+        let f = create_followup(&db, vid, inc, followup("Filed the claim"))
+            .await
+            .unwrap();
+        let same = update_followup(&db, vid, inc, f.id, UpdateFollowup::default())
+            .await
+            .unwrap();
+        assert_eq!(same, f);
+    }
+
+    #[tokio::test]
+    async fn delete_followup_removes_one_row_and_its_search_entry() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let inc = create(&db, vid, new_incident("crash", IncidentCategory::Accident))
+            .await
+            .unwrap()
+            .incident
+            .id;
+        let doomed = create_followup(&db, vid, inc, followup("Filed the claim"))
+            .await
+            .unwrap();
+        let kept = create_followup(&db, vid, inc, followup("Booked the bodyshop"))
+            .await
+            .unwrap();
+
+        delete_followup(&db, vid, inc, doomed.id).await.unwrap();
+
+        assert_eq!(get(&db, vid, inc).await.unwrap().followups, vec![kept]);
+        assert_eq!(search_hits(&db, vid, "claim").await, 0);
+        assert_eq!(search_hits(&db, vid, "bodyshop").await, 1);
+        assert!(matches!(
+            delete_followup(&db, vid, inc, doomed.id).await.unwrap_err(),
+            DomainError::NotFound(_)
+        ));
+    }
+
+    // A followup named with another vehicle or another incident answers
+    // exactly as a followup that does not exist, and nothing is written.
+    #[tokio::test]
+    async fn a_followup_of_another_parent_is_not_found_and_stays_unchanged() {
+        let db = test_db().await;
+        let owner = seed_vehicle(&db).await;
+        let other = seed_vehicle(&db).await;
+        let inc = create(
+            &db,
+            owner,
+            new_incident("crash", IncidentCategory::Accident),
+        )
+        .await
+        .unwrap()
+        .incident
+        .id;
+        let sibling = create(&db, owner, new_incident("rattle", IncidentCategory::Noise))
+            .await
+            .unwrap()
+            .incident
+            .id;
+        let elsewhere = create(&db, other, new_incident("drip", IncidentCategory::Noise))
+            .await
+            .unwrap()
+            .incident
+            .id;
+        let f = create_followup(&db, owner, inc, followup("Filed the claim"))
+            .await
+            .unwrap();
+        let missing = format!("Followup {} not found", f.id);
+
+        // The pairs name the wrong vehicle, a sibling incident of the right
+        // vehicle, and the other vehicle's own incident.
+        for (vehicle_id, incident_id) in [(other, inc), (owner, sibling), (other, elsewhere)] {
+            let change = UpdateFollowup {
+                summary: Some("intruder".into()),
+                ..Default::default()
+            };
+            let err = update_followup(&db, vehicle_id, incident_id, f.id, change)
+                .await
+                .unwrap_err();
+            assert_eq!(err.to_string(), missing);
+            let err = delete_followup(&db, vehicle_id, incident_id, f.id)
+                .await
+                .unwrap_err();
+            assert_eq!(err.to_string(), missing);
+        }
+        let err = update_followup(&db, owner, inc, f.id + 1000, UpdateFollowup::default())
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!("Followup {} not found", f.id + 1000)
+        );
+        assert_eq!(get(&db, owner, inc).await.unwrap().followups, vec![f]);
+    }
+
+    // A delete that reads the followup before it holds the write lock lets
+    // every racer see the row and answer `Ok`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn racing_followup_deletes_remove_the_row_once() {
+        let (_dir, pools) = crate::test_support::race_pools().await;
+        let first = &pools[0];
+        let v = seed_vehicle(first).await;
+        let incident = create(first, v, new_incident("Rattle", IncidentCategory::Noise))
+            .await
+            .unwrap()
+            .incident
+            .id;
+        let f = create_followup(first, v, incident, followup("Call"))
+            .await
+            .unwrap()
+            .id;
+        let results = crate::test_support::race(&pools, |_, db| async move {
+            delete_followup(&db, v, incident, f).await
+        })
+        .await;
+        let deleted = results.iter().filter(|r| r.is_ok()).count();
+        assert_eq!(deleted, 1, "{results:?}");
+        assert!(
+            results
+                .iter()
+                .filter_map(|r| r.as_ref().err())
+                .all(|e| matches!(e, DomainError::NotFound(_))),
+            "{results:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_followup_refuses_a_blank_summary_and_stores_blank_text_as_absent() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let inc = create(&db, vid, new_incident("crash", IncidentCategory::Accident))
+            .await
+            .unwrap()
+            .incident
+            .id;
+
+        let blank = NewFollowup {
+            summary: "  ".into(),
+            ..followup("x")
+        };
+        let err = create_followup(&db, vid, inc, blank).await.unwrap_err();
+        assert_eq!(err.to_string(), "summary: must not be blank");
+        crate::test_support::assert_empty(&get(&db, vid, inc).await.unwrap().followups);
+
+        let padded = NewFollowup {
+            contact_method: Some(" ".into()),
+            contact_with: Some(" Adjuster ".into()),
+            notes: Some(String::new()),
+            ..followup("Filed the claim")
+        };
+        let f = create_followup(&db, vid, inc, padded).await.unwrap();
+        assert_eq!(f.contact_method, None);
+        assert_eq!(f.contact_with.as_deref(), Some("Adjuster"));
+        assert_eq!(f.notes, None);
+
+        let blank = UpdateFollowup {
+            summary: Some("\t".into()),
+            contact_with: Some(None),
+            ..Default::default()
+        };
+        let err = update_followup(&db, vid, inc, f.id, blank)
+            .await
+            .unwrap_err();
+        assert_eq!(err.to_string(), "summary: must not be blank");
+        assert_eq!(get(&db, vid, inc).await.unwrap().followups, vec![f.clone()]);
+
+        let change = UpdateFollowup {
+            contact_with: Some(Some("  ".into())),
+            notes: Some(Some(" Call back Monday ".into())),
+            ..Default::default()
+        };
+        let updated = update_followup(&db, vid, inc, f.id, change).await.unwrap();
+        assert_eq!(updated.contact_with, None);
+        assert_eq!(updated.notes.as_deref(), Some("Call back Monday"));
+        assert_eq!(updated.summary, "Filed the claim");
+    }
+
     // --- queries over accident-category incidents with links -------------------
 
     #[tokio::test]
@@ -1660,7 +2135,9 @@ mod tests {
         .await
         .unwrap();
 
-        let listed = list_filtered(&db, vid, None).await.unwrap();
+        let listed = list_filtered(&db, vid, IncidentFilter::default())
+            .await
+            .unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].followups.len(), 1);
         assert_eq!(listed[0].resolved_by[0].id, svc);

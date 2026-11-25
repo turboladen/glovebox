@@ -235,4 +235,10 @@ pub struct UpdatePart {
 #[derive(Default)]
 pub struct PartFilter {
     pub status: Option<PartStatus>,
+    /// `Some(true)` keeps the parts under warranty, as
+    /// `services::part::is_under_warranty` judges them, and `Some(false)`
+    /// keeps every other part.
+    pub under_warranty: Option<bool>,
+    /// The most parts returned, counted from the newest.
+    pub limit: Option<u32>,
 }

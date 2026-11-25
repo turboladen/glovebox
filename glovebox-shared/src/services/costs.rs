@@ -10,16 +10,38 @@ use crate::{
         service_record::{self, Payer},
         service_record_line_item::{self, WorkKind},
     },
-    error::DomainResult,
+    error::{DomainError, DomainResult},
     services::{
         recall::{self, RecallRef},
         service_record::effective_payer,
     },
 };
 
+/// The span of dates a cost summary counts, inclusive at both ends. An
+/// empty bound leaves that end open.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct CostRange {
+    pub from: Option<chrono::NaiveDate>,
+    pub to: Option<chrono::NaiveDate>,
+}
+
+impl CostRange {
+    fn is_open(self) -> bool {
+        self.from.is_none() && self.to.is_none()
+    }
+
+    fn holds(self, date: chrono::NaiveDate) -> bool {
+        self.from.is_none_or(|from| date >= from) && self.to.is_none_or(|to| date <= to)
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct CostSummary {
     pub vehicle_id: i32,
+    /// The first date counted, or `None` when the summary has no start.
+    pub from: Option<chrono::NaiveDate>,
+    /// The last date counted, or `None` when the summary has no end.
+    pub to: Option<chrono::NaiveDate>,
     /// The sum of every service's `total_cost_cents`. Parts the shop supplied
     /// are billed on those invoices, so they are already inside this figure.
     pub service_totals_cents: i64,
@@ -49,14 +71,29 @@ pub struct CostSummary {
     /// The sum of the parts subtotals entered on services, or `None` when no
     /// service has one.
     pub parts_subtotals_cents: Option<i64>,
+    /// The lines of the counted services by kind of work, in the order of
+    /// the `WorkKind` list. A kind with no line is left out. The figures are
+    /// the lines' own amounts, so they add up to the service totals only when
+    /// every invoice's lines do. The split by payer is by line and is not
+    /// comparable with the summary's `out_of_pocket_cents` and
+    /// `covered_cents`, which leave out a service with no total and hold each
+    /// service's split inside its total.
+    pub by_work_kind: Vec<WorkKindCost>,
     pub service_count: usize,
     pub part_count: usize,
     /// The odometer miles the records cover: the highest odometer reading on
     /// record minus the mileage of the earliest-dated service or reading.
     /// `None` when no such reading exists or the difference is not positive.
+    /// With a range, the miles end at the highest reading dated on or before
+    /// `to`. With a `from`, they start at the latest reading dated on or
+    /// before `from`, so the miles driven before the first reading inside the
+    /// range count, or at the earliest reading inside the range when none is
+    /// that early.
     pub miles_covered: Option<i64>,
-    /// The date of the earliest-dated service or odometer
-    /// reading that starts `miles_covered`, or `None` when there is none.
+    /// The date of the service or odometer reading that starts
+    /// `miles_covered`, or `None` when there is none. With a `from`, it is on
+    /// or before `from` when a reading that early exists, and a later date
+    /// means the miles from `from` up to it are not counted.
     pub history_starts_on: Option<chrono::NaiveDate>,
     /// `total_cost_cents` per 1000 of `miles_covered`, rounded to the nearest
     /// cent; `None` when `miles_covered` is, or is under
@@ -102,6 +139,22 @@ pub struct CoveredLine {
     /// The line's own payer, or the service's when the line has none.
     pub paid_by: Payer,
     pub cost_cents: Option<i32>,
+}
+
+/// The lines of one kind of work across the counted services.
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct WorkKindCost {
+    pub work_kind: WorkKind,
+    pub line_count: usize,
+    /// The sum of the lines' amounts. A line with no amount adds nothing.
+    pub cost_cents: i64,
+    /// The part of `cost_cents` on lines the owner paid, where a line with no
+    /// payer of its own follows its service. It counts every line, so it is
+    /// not a share of the summary's `out_of_pocket_cents`.
+    pub out_of_pocket_cents: i64,
+    /// The part of `cost_cents` on lines someone else paid. It counts every
+    /// line, so it is not a share of the summary's `covered_cents`.
+    pub covered_cents: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -244,15 +297,25 @@ async fn covered_work(
         .collect())
 }
 
-/// The odometer miles the records cover and the date they start. The
-/// purchase reading is left out on purpose: the owner may have bought the car
-/// years before the records begin, and the costs cover only the miles driven
-/// since the first record.
+/// The odometer miles the records cover over `range` and the date they
+/// start. The readings are every service mileage and every logged reading of
+/// the vehicle. The miles end at the highest reading dated on or before the
+/// range's end. They start at the latest reading dated on or before the
+/// range's start, or at the earliest reading the range holds when it has no
+/// start or no reading is that early.
 async fn recorded_miles(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
-    services: &[service_record::Model],
+    range: CostRange,
 ) -> DomainResult<(Option<i64>, Option<chrono::NaiveDate>)> {
+    // The purchase reading is left out on purpose: the owner may have bought
+    // the car years before the records begin, and the costs cover only the
+    // miles driven since the first record.
+    let services = service_record::Entity::find()
+        .filter(service_record::Column::VehicleId.eq(vehicle_id))
+        .filter(service_record::Column::Mileage.is_not_null())
+        .all(db)
+        .await?;
     let readings = mileage_log::Entity::find()
         .filter(mileage_log::Column::VehicleId.eq(vehicle_id))
         .all(db)
@@ -261,8 +324,20 @@ async fn recorded_miles(
         .iter()
         .filter_map(|s| Some((s.service_date, s.mileage?)))
         .chain(readings.iter().map(|r| (r.recorded_at.day(), r.mileage)))
+        .filter(|(date, _)| range.to.is_none_or(|to| *date <= to))
         .collect();
-    let start = points.iter().min();
+    // A range that starts at a date starts its miles at the odometer on that
+    // date, which the latest reading up to it gives. Starting at the first
+    // reading inside the range would drop the miles driven before it.
+    let before_start = range
+        .from
+        .and_then(|from| points.iter().filter(|(date, _)| *date <= from).max());
+    let start = before_start.or_else(|| {
+        points
+            .iter()
+            .filter(|(date, _)| range.from.is_none_or(|from| *date >= from))
+            .min()
+    });
     let end = points.iter().map(|(_, m)| *m).max();
     let miles = start
         .zip(end)
@@ -271,22 +346,105 @@ async fn recorded_miles(
     Ok((miles, start.map(|(date, _)| *date)))
 }
 
-/// Aggregate cost totals for a vehicle. Currency is always `i32`/`i64` cents;
-/// integer arithmetic only (no float division).
-pub async fn summary(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult<CostSummary> {
-    crate::services::vehicle::require(db, vehicle_id).await?;
+/// The lines of the given services by kind of work. Each line is judged by
+/// its own payer, or its service's when it has none.
+fn by_work_kind(
+    services: &[service_record::Model],
+    lines_by_service: &LinesByService,
+) -> Vec<WorkKindCost> {
+    use crate::vocab::Vocabulary;
+    let mut kinds: Vec<WorkKindCost> = WorkKind::ALL
+        .iter()
+        .map(|kind| WorkKindCost {
+            work_kind: *kind,
+            line_count: 0,
+            cost_cents: 0,
+            out_of_pocket_cents: 0,
+            covered_cents: 0,
+        })
+        .collect();
+    for svc in services {
+        for line in lines_by_service.get(&svc.id).into_iter().flatten() {
+            let Some(kind) = kinds.iter_mut().find(|k| k.work_kind == line.work_kind) else {
+                continue;
+            };
+            let cents = i64::from(line.cost_cents.unwrap_or(0));
+            kind.line_count += 1;
+            kind.cost_cents += cents;
+            if effective_payer(line.paid_by, svc.paid_by).is_covered() {
+                kind.covered_cents += cents;
+            } else {
+                kind.out_of_pocket_cents += cents;
+            }
+        }
+    }
+    kinds.retain(|k| k.line_count > 0);
+    kinds
+}
 
-    let services = service_record::Entity::find()
-        .filter(service_record::Column::VehicleId.eq(vehicle_id))
+/// The services and parts a summary over `range` counts: the services dated
+/// inside it, oldest first, and the parts that were not returned. With a
+/// bound set, a part counts by its purchase date, or its install date when it
+/// has no purchase date, and a part with neither is left out.
+async fn counted_records(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    range: CostRange,
+) -> DomainResult<(Vec<service_record::Model>, Vec<part::Model>)> {
+    let mut query =
+        service_record::Entity::find().filter(service_record::Column::VehicleId.eq(vehicle_id));
+    if let Some(from) = range.from {
+        query = query.filter(service_record::Column::ServiceDate.gte(from));
+    }
+    if let Some(to) = range.to {
+        query = query.filter(service_record::Column::ServiceDate.lte(to));
+    }
+    let services = query
         .order_by_asc(service_record::Column::ServiceDate)
         .all(db)
         .await?;
     // A returned part went back to the seller, so it is no spend at all.
-    let parts = part::Entity::find()
+    let mut parts = part::Entity::find()
         .filter(part::Column::VehicleId.eq(vehicle_id))
         .filter(part::Column::Status.ne(PartStatus::Returned))
         .all(db)
         .await?;
+    if !range.is_open() {
+        parts.retain(|p| {
+            p.purchase_date
+                .or(p.installed_date)
+                .is_some_and(|date| range.holds(date))
+        });
+    }
+    Ok((services, parts))
+}
+
+/// Aggregate cost totals for a vehicle over all of its records. Currency is
+/// always `i32`/`i64` cents; integer arithmetic only (no float division).
+pub async fn summary(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult<CostSummary> {
+    summary_in(db, vehicle_id, CostRange::default()).await
+}
+
+/// [`summary`] over the records dated inside `range`, both ends included.
+///
+/// # Errors
+/// `NotFound` for a missing vehicle, and `Invalid` when the range starts
+/// after it ends.
+pub async fn summary_in(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    range: CostRange,
+) -> DomainResult<CostSummary> {
+    crate::services::vehicle::require(db, vehicle_id).await?;
+    if let (Some(from), Some(to)) = (range.from, range.to)
+        && from > to
+    {
+        return Err(DomainError::Invalid {
+            field: "from".into(),
+            message: format!("{from} is after the end of the range, {to}"),
+        });
+    }
+    let (services, parts) = counted_records(db, vehicle_id, range).await?;
 
     let service_totals_cents =
         sum_present(services.iter().map(|s| s.total_cost_cents)).unwrap_or(0);
@@ -313,7 +471,7 @@ pub async fn summary(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult
     let covered_cents: i64 = covered_by_service.values().sum();
     let covered_work =
         covered_work(db, &services, &lines_by_service, &out_of_pocket_by_service).await?;
-    let (miles_covered, history_starts_on) = recorded_miles(db, vehicle_id, &services).await?;
+    let (miles_covered, history_starts_on) = recorded_miles(db, vehicle_id, range).await?;
     let cost_per_1000_miles_cents = miles_covered
         .filter(|miles| *miles >= MIN_MILES_FOR_COST_PER_1000)
         .map(|miles| (total_cost_cents * 1000 + miles / 2) / miles);
@@ -350,6 +508,8 @@ pub async fn summary(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult
 
     Ok(CostSummary {
         vehicle_id,
+        from: range.from,
+        to: range.to,
         service_totals_cents,
         self_supplied_parts_cents,
         total_cost_cents,
@@ -359,6 +519,7 @@ pub async fn summary(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResult
         covered_work,
         labor_subtotals_cents: sum_present(services.iter().map(|s| s.labor_cost_cents)),
         parts_subtotals_cents: sum_present(services.iter().map(|s| s.parts_cost_cents)),
+        by_work_kind: by_work_kind(&services, &lines_by_service),
         service_count: services.len(),
         part_count: parts.len(),
         miles_covered,
@@ -1144,5 +1305,293 @@ mod tests {
         assert_eq!(months_covered, totals.covered_cents);
         assert_eq!(months_oop, totals.out_of_pocket_cents);
         assert_eq!(totals.covered_work_count, 4);
+    }
+
+    async fn priced_service(
+        db: &DatabaseConnection,
+        vehicle_id: i32,
+        day: &str,
+        mileage: i32,
+        total_cents: i32,
+        paid_by: Payer,
+    ) -> i32 {
+        service_record::ActiveModel {
+            vehicle_id: Set(vehicle_id),
+            service_date: Set(date(day)),
+            mileage: Set(Some(mileage)),
+            total_cost_cents: Set(Some(total_cents)),
+            paid_by: Set(paid_by),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+        .id
+    }
+
+    async fn priced_line(
+        db: &DatabaseConnection,
+        service_id: i32,
+        kind: WorkKind,
+        cents: Option<i32>,
+        paid_by: Option<Payer>,
+    ) {
+        service_record_line_item::ActiveModel {
+            service_record_id: Set(service_id),
+            description: Set("line".into()),
+            work_kind: Set(kind),
+            cost_cents: Set(cents),
+            paid_by: Set(paid_by),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap();
+    }
+
+    async fn dated_part(
+        db: &DatabaseConnection,
+        vehicle_id: i32,
+        cents: i32,
+        bought: Option<&str>,
+    ) {
+        part::ActiveModel {
+            vehicle_id: Set(vehicle_id),
+            name: Set("Part".into()),
+            status: Set(PartStatus::Purchased),
+            cost_cents: Set(Some(cents)),
+            purchase_date: Set(bought.map(date)),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap();
+    }
+
+    fn range(from: Option<&str>, to: Option<&str>) -> CostRange {
+        CostRange {
+            from: from.map(date),
+            to: to.map(date),
+        }
+    }
+
+    // The fixture holds three services 2,000 miles apart and three parts, one
+    // of them undated.
+    async fn seed_three_years(db: &DatabaseConnection) -> i32 {
+        let vid = seed_vehicle(db, None).await;
+        priced_service(db, vid, "2024-06-01", 10_000, 10_000, Payer::Owner).await;
+        priced_service(db, vid, "2025-06-01", 12_000, 20_000, Payer::Owner).await;
+        priced_service(db, vid, "2026-06-01", 14_000, 40_000, Payer::Owner).await;
+        dated_part(db, vid, 1_000, Some("2024-07-01")).await;
+        dated_part(db, vid, 2_000, Some("2025-07-01")).await;
+        dated_part(db, vid, 4_000, None).await;
+        vid
+    }
+
+    #[tokio::test]
+    async fn a_range_counts_the_services_and_parts_dated_inside_it() {
+        let db = test_db().await;
+        let vid = seed_three_years(&db).await;
+
+        let all = summary(&db, vid).await.unwrap();
+        assert_eq!(all.from, None);
+        assert_eq!(all.to, None);
+        assert_eq!(all.total_cost_cents, 77_000);
+        assert_eq!(all.unbucketed_parts_cents, 4_000);
+
+        // Both ends are inside the range.
+        let s = summary_in(&db, vid, range(Some("2025-06-01"), Some("2026-06-01")))
+            .await
+            .unwrap();
+        assert_eq!(s.from, Some(date("2025-06-01")));
+        assert_eq!(s.to, Some(date("2026-06-01")));
+        assert_eq!(s.service_count, 2);
+        assert_eq!(s.service_totals_cents, 60_000);
+        assert_eq!(s.part_count, 1);
+        assert_eq!(s.self_supplied_parts_cents, 2_000);
+        assert_eq!(s.total_cost_cents, 62_000);
+        assert_eq!(s.out_of_pocket_cents, 62_000);
+        assert_eq!(s.unbucketed_parts_cents, 0);
+        let months: Vec<&str> = s.monthly_costs.iter().map(|m| m.month.as_str()).collect();
+        assert_eq!(months, ["2025-06", "2025-07", "2026-06"]);
+
+        let until = summary_in(&db, vid, range(None, Some("2024-12-31")))
+            .await
+            .unwrap();
+        assert_eq!(until.total_cost_cents, 11_000);
+        let since = summary_in(&db, vid, range(Some("2026-01-01"), None))
+            .await
+            .unwrap();
+        assert_eq!(since.total_cost_cents, 40_000);
+        assert_eq!(since.part_count, 0);
+    }
+
+    #[tokio::test]
+    async fn a_range_measures_the_miles_driven_inside_it() {
+        let db = test_db().await;
+        let vid = seed_three_years(&db).await;
+        mileage_log::ActiveModel {
+            vehicle_id: Set(vid),
+            mileage: Set(15_000),
+            recorded_at: Set(date("2026-09-01")),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        let all = summary(&db, vid).await.unwrap();
+        assert_eq!(all.miles_covered, Some(5_000));
+        assert_eq!(all.history_starts_on, Some(date("2024-06-01")));
+
+        // The miles start at the 2024 service, the latest reading on or before
+        // the range's start, and end at the 2026 service. The reading of
+        // September 2026 is after the range.
+        let s = summary_in(&db, vid, range(Some("2025-01-01"), Some("2026-06-30")))
+            .await
+            .unwrap();
+        assert_eq!(s.total_cost_cents, 62_000);
+        assert_eq!(s.miles_covered, Some(4_000));
+        assert_eq!(s.history_starts_on, Some(date("2024-06-01")));
+        assert_eq!(s.cost_per_1000_miles_cents, Some(15_500));
+
+        // A range with one service still covers the miles driven up to it.
+        let one = summary_in(&db, vid, range(Some("2025-01-01"), Some("2025-12-31")))
+            .await
+            .unwrap();
+        assert_eq!(one.total_cost_cents, 22_000);
+        assert_eq!(one.miles_covered, Some(2_000));
+        assert_eq!(one.cost_per_1000_miles_cents, Some(11_000));
+
+        // No reading is as early as this range's start, so the miles start at
+        // the first reading inside it.
+        let early = summary_in(&db, vid, range(Some("2024-01-01"), Some("2025-12-31")))
+            .await
+            .unwrap();
+        assert_eq!(early.miles_covered, Some(2_000));
+        assert_eq!(early.history_starts_on, Some(date("2024-06-01")));
+
+        // A range with no start counts from the first reading up to its end.
+        let until = summary_in(&db, vid, range(None, Some("2025-12-31")))
+            .await
+            .unwrap();
+        assert_eq!(until.miles_covered, Some(2_000));
+        assert_eq!(until.history_starts_on, Some(date("2024-06-01")));
+    }
+
+    // A year's costs are spread over the miles driven in that year, which
+    // start at the odometer reading taken before the year began.
+    #[tokio::test]
+    async fn a_range_starts_its_miles_at_the_last_reading_before_it() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db, None).await;
+        mileage_log::ActiveModel {
+            vehicle_id: Set(vid),
+            mileage: Set(20_000),
+            recorded_at: Set(date("2025-12-20")),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        priced_service(&db, vid, "2026-06-15", 25_000, 30_000, Payer::Owner).await;
+        priced_service(&db, vid, "2026-12-10", 30_500, 33_000, Payer::Owner).await;
+
+        let year = summary_in(&db, vid, range(Some("2026-01-01"), Some("2026-12-31")))
+            .await
+            .unwrap();
+        assert_eq!(year.total_cost_cents, 63_000);
+        assert_eq!(year.miles_covered, Some(10_500));
+        assert_eq!(year.history_starts_on, Some(date("2025-12-20")));
+        assert_eq!(year.cost_per_1000_miles_cents, Some(6_000));
+    }
+
+    #[tokio::test]
+    async fn a_range_that_starts_after_it_ends_is_invalid() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db, None).await;
+        let err = summary_in(&db, vid, range(Some("2026-02-01"), Some("2026-01-31")))
+            .await
+            .err()
+            .unwrap();
+        assert!(
+            matches!(&err, DomainError::Invalid { field, .. } if field == "from"),
+            "{err}"
+        );
+        assert!(
+            summary_in(&db, vid, range(Some("2026-01-31"), Some("2026-01-31")))
+                .await
+                .is_ok()
+        );
+        let missing = summary_in(&db, 999, range(Some("2026-02-01"), Some("2026-01-31")))
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(missing, DomainError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn work_kinds_split_the_lines_by_who_paid_each() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db, None).await;
+        let mixed = priced_service(&db, vid, "2026-03-01", 10_000, 59_000, Payer::Owner).await;
+        priced_line(
+            &db,
+            mixed,
+            WorkKind::Repair,
+            Some(45_000),
+            Some(Payer::Manufacturer),
+        )
+        .await;
+        priced_line(&db, mixed, WorkKind::Maintenance, Some(12_900), None).await;
+        priced_line(&db, mixed, WorkKind::Fee, Some(1_100), None).await;
+        let insured =
+            priced_service(&db, vid, "2026-04-01", 11_000, 80_000, Payer::Insurance).await;
+        priced_line(&db, insured, WorkKind::Repair, Some(70_000), None).await;
+        priced_line(
+            &db,
+            insured,
+            WorkKind::Repair,
+            Some(10_000),
+            Some(Payer::Owner),
+        )
+        .await;
+        priced_line(&db, insured, WorkKind::Inspection, None, None).await;
+        let earlier = priced_service(&db, vid, "2025-04-01", 9_000, 5_000, Payer::Owner).await;
+        priced_line(&db, earlier, WorkKind::Mod, Some(5_000), None).await;
+
+        let kind =
+            |work_kind, line_count, cost_cents, out_of_pocket_cents, covered_cents| WorkKindCost {
+                work_kind,
+                line_count,
+                cost_cents,
+                out_of_pocket_cents,
+                covered_cents,
+            };
+        let all = summary(&db, vid).await.unwrap();
+        assert_eq!(
+            all.by_work_kind,
+            [
+                kind(WorkKind::Maintenance, 1, 12_900, 12_900, 0),
+                kind(WorkKind::Mod, 1, 5_000, 5_000, 0),
+                kind(WorkKind::Repair, 3, 125_000, 10_000, 115_000),
+                kind(WorkKind::Inspection, 1, 0, 0, 0),
+                kind(WorkKind::Fee, 1, 1_100, 1_100, 0),
+            ]
+        );
+
+        let this_year = summary_in(&db, vid, range(Some("2026-01-01"), None))
+            .await
+            .unwrap();
+        let kinds: Vec<WorkKind> = this_year.by_work_kind.iter().map(|k| k.work_kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                WorkKind::Maintenance,
+                WorkKind::Repair,
+                WorkKind::Inspection,
+                WorkKind::Fee
+            ]
+        );
     }
 }

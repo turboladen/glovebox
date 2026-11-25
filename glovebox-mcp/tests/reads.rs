@@ -234,6 +234,7 @@ async fn the_server_offers_exactly_the_expected_tools() {
             "decode_vin",
             "delete_appointment",
             "delete_incident",
+            "delete_incident_followup",
             "delete_mileage",
             "delete_need",
             "delete_need_option",
@@ -284,6 +285,7 @@ async fn the_server_offers_exactly_the_expected_tools() {
             "unarchive_vehicle",
             "update_appointment",
             "update_incident",
+            "update_incident_followup",
             "update_need",
             "update_need_option",
             "update_planned_work",
@@ -304,6 +306,105 @@ async fn reads_tools_reject_unknown_arguments() {
         "search_records",
         json!({ "query": "brake", "limit": 5 }),
         "limit",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn cost_summary_takes_a_date_range_and_splits_lines_by_work_kind() {
+    let t = connect().await;
+    let v = common::add_vehicle(&t, "Daily").await;
+    for (day, mileage, total, lines) in [
+        (
+            "2025-03-01",
+            20_000,
+            12_900,
+            json!([{ "description": "Oil", "work_kind": "maintenance", "cost_cents": 12_900 }]),
+        ),
+        (
+            "2026-03-01",
+            23_000,
+            59_000,
+            json!([
+                { "description": "Water pump", "work_kind": "repair", "cost_cents": 45_000,
+                  "paid_by": "manufacturer" },
+                { "description": "Oil", "work_kind": "maintenance", "cost_cents": 12_900 },
+                { "description": "Shop supplies", "work_kind": "fee", "cost_cents": 1_100 }
+            ]),
+        ),
+        (
+            "2026-09-01",
+            26_000,
+            8_000,
+            json!([{ "description": "Alignment", "work_kind": "maintenance", "cost_cents": 8_000 }]),
+        ),
+    ] {
+        t.call(
+            "record_service",
+            json!({
+                "vehicle_id": v,
+                "service_date": day,
+                "mileage": mileage,
+                "total_cost_cents": total,
+                "line_items": lines
+            }),
+        )
+        .await;
+    }
+
+    let all = t.call("cost_summary", json!({ "vehicle_id": v })).await;
+    assert_eq!(all["total_cost_cents"], 79_900);
+    assert!(all["from"].is_null() && all["to"].is_null(), "{all}");
+    assert_eq!(all["miles_covered"], 6_000);
+
+    let year = t
+        .call(
+            "cost_summary",
+            json!({ "vehicle_id": v, "from": "2026-01-01", "to": "2026-12-31" }),
+        )
+        .await;
+    assert_eq!(year["from"], "2026-01-01");
+    assert_eq!(year["to"], "2026-12-31");
+    assert_eq!(year["service_count"], 2);
+    assert_eq!(year["total_cost_cents"], 67_000);
+    assert_eq!(year["covered_cents"], 45_000);
+    assert_eq!(year["out_of_pocket_cents"], 22_000);
+    // The miles start at the 2025 service, the latest reading on or before
+    // the range's start, and end at the September 2026 service.
+    assert_eq!(year["miles_covered"], 6_000);
+    assert_eq!(year["history_starts_on"], "2025-03-01");
+    assert_eq!(year["cost_per_1000_miles_cents"], 11_167);
+    assert_eq!(
+        year["by_work_kind"],
+        json!([
+            { "work_kind": "maintenance", "line_count": 2, "cost_cents": 20_900,
+              "out_of_pocket_cents": 20_900, "covered_cents": 0 },
+            { "work_kind": "repair", "line_count": 1, "cost_cents": 45_000,
+              "out_of_pocket_cents": 0, "covered_cents": 45_000 },
+            { "work_kind": "fee", "line_count": 1, "cost_cents": 1_100,
+              "out_of_pocket_cents": 1_100, "covered_cents": 0 }
+        ])
+    );
+
+    let err = t
+        .call_err(
+            "cost_summary",
+            json!({ "vehicle_id": v, "from": "2026-12-31", "to": "2026-01-01" }),
+        )
+        .await;
+    assert!(err.starts_with("from:"), "got: {err}");
+    let err = t
+        .call_err(
+            "cost_summary",
+            json!({ "vehicle_id": v, "from": "last year" }),
+        )
+        .await;
+    assert!(err.contains("from"), "got: {err}");
+    common::assert_unknown_field_rejected(
+        &t,
+        "cost_summary",
+        json!({ "vehicle_id": v, "since": "2026-01-01" }),
+        "since",
     )
     .await;
 }

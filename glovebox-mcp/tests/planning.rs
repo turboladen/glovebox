@@ -564,3 +564,41 @@ async fn update_planned_work_names_the_incident_its_service_stopped_resolving() 
     assert_eq!(back["released_incident_id"], incident);
     assert_eq!(back["released_from_service_id"], service);
 }
+
+// The old car is long past its warranty date and still under the mileage
+// limit, so the stricter reading says its warranty has ended.
+#[tokio::test]
+async fn whats_coming_reports_each_warranty_bound() {
+    let t = connect().await;
+    let add = |name: &'static str, expires_on: serde_json::Value| {
+        t.call(
+            "add_vehicle",
+            json!({
+                "name": name,
+                "purchase_mileage": 50_000,
+                "warranty_expires_on": expires_on,
+                "warranty_expires_miles": 60_000
+            }),
+        )
+    };
+    let old = add("Old", json!("2016-01-01")).await["id"].clone();
+    let new = add("New", json!("2099-01-01")).await["id"].clone();
+    let bare = common::add_vehicle(&t, "Bare").await;
+
+    let w = t.call("whats_coming", json!({ "vehicle_id": old })).await["warranty"].clone();
+    assert_eq!(w["possibly_covered"], true, "{w}");
+    assert_eq!(w["in_force"], false, "{w}");
+    assert_eq!(w["date_passed"], true);
+    assert_eq!(w["days_left"], 0);
+    assert_eq!(w["mileage_passed"], false);
+    assert_eq!(w["miles_left"], 10_000);
+
+    let w = t.call("whats_coming", json!({ "vehicle_id": new })).await["warranty"].clone();
+    assert_eq!(w["possibly_covered"], true, "{w}");
+    assert_eq!(w["in_force"], true, "{w}");
+    assert_eq!(w["date_passed"], false);
+    assert_eq!(w["miles_left"], 10_000);
+
+    let due = t.call("whats_coming", json!({ "vehicle_id": bare })).await;
+    assert!(due["warranty"].is_null(), "{due}");
+}

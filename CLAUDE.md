@@ -196,7 +196,8 @@ named as things a person would say:
   `correct_service`, `delete_service`
 - `parts.rs`: `record_part`, `list_parts`, `correct_part`, `delete_part`
 - `incidents.rs`: `log_incident`, `save_note`, `list_incidents`, `update_incident`,
-  `add_incident_followup`, `delete_incident`
+  `add_incident_followup`, `update_incident_followup`, `delete_incident_followup`,
+  `delete_incident`
 - `planning.rs`: `plan_work`, `list_planned_work`, `whats_coming`, `update_planned_work`,
   `delete_planned_work`
 - `checklist.rs`: `plan_appointment`, `update_appointment`, `list_appointments`,
@@ -274,6 +275,29 @@ lines. `cost_summary`'s `covered_work` lists the services with covered work, eac
 `covered_cents`). `miles_covered` (the highest odometer reading minus the earliest service or
 reading, dated by `history_starts_on`) is the base of the per-1,000-miles figure, which stays null
 until the records cover 1,000 miles (`costs::MIN_MILES_FOR_COST_PER_1000`).
+
+`list_services`, `list_parts` and `list_incidents` answer with a bare array, newest first
+(service date, `created_at` and `occurred_at`, each with the id as the tiebreak), and take
+`limit`, which is applied after the other filters and refused at zero (`services::validate_limit`).
+Incidents are ordered and cut in memory by `DayOrTime::or_end_of_day`, because the stored text of
+a bare day sorts below every time on that day. Their filters are `inputs` structs
+(`ServiceFilter`, `PartFilter`, `IncidentFilter`); `ServiceFilter::work_kind` keeps a service with
+any line of that kind, and a `shop_id` that names no shop is `NotFound`. `cost_summary` takes an
+inclusive `from` and `to` (`costs::summary_in` with a `costs::CostRange`; `from` after `to` is
+`Invalid`). A ranged summary counts the services dated inside the range and the parts whose
+purchase date, else install date, falls inside it. Its `miles_covered` runs from the latest
+reading dated on or before `from` (the earliest reading inside the range when none is that early)
+to the highest reading dated on or before `to`, so a year's costs are not divided by only the
+miles between that year's readings. `by_work_kind` sums the counted lines per `WorkKind`, each
+line judged by `service_record::effective_payer`; its split by payer is by line and is not
+comparable with the summary's top-level split.
+
+An incident's followups are added, corrected and deleted one at a time (`incident::create_followup`,
+`update_followup`, `delete_followup`). A correction or a delete names the vehicle, the incident and
+the followup, and a followup of another incident or another vehicle is the same `NotFound` as one
+that does not exist. A blank summary is `Invalid` on both writes, and a blank `contact_method`,
+`contact_with` or `notes` is stored as absent. A followup has no `updated_at`, and the `fts_incident_followups` triggers keep
+search in step with both writes.
 
 **Job checklist.** An appointment groups jobs (`work_items`) and to-dos for one shop trip, a job
 lists needs, and a need lists researched options. A need's stage (`undecided`, `to_order`,
@@ -353,6 +377,15 @@ edits them by item (`add_contents` appends, `remove_contents` names ids; an id n
 part with its contents (`part::views` loads them for many parts in one query), and the job and
 appointment pages list a kit's items in the need's row.
 `docs/adr/0014-a-kit-lists-its-contents.md` records why.
+A warranty ends at whichever bound comes first (`warranty::read` judges an expiry date and an
+expiry odometer reading against `today` and `reminders::estimate_mileage`; the date and the
+reading themselves are still inside it). `list_parts` goes through `part::list_on`, which takes
+`today` and returns each `part::ListedPart`: the `PartView` plus a derived `warranty` when the part
+has a bound. No other reply that returns a part carries it. `under_warranty: true` keeps the
+purchased and installed parts whose warranty is in force (`part::is_under_warranty`).
+The vehicle's `warranty` in `whats_coming` (`reminders::WarrantyStatus`) carries the same reading
+flat beside `possibly_covered`, which stays true while either bound holds; a client reports
+`in_force`. `docs/adr/0026-a-warranty-ends-at-its-first-bound.md` records why.
 
 **Schedule names** compare through `schedule::name_key` (ASCII case and surrounding spaces do not
 matter), so a vehicle's "Cabin air filter" shadows the inherited "Cabin Air Filter". A new item that shadows an inherited one takes that
