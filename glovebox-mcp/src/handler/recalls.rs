@@ -5,9 +5,12 @@ use rmcp::{ErrorData as McpError, model::CallToolResult, tool, tool_router};
 use serde::Serialize;
 
 use super::{GloveboxMcp, Parameters, domain_error, domain_result, tool_json_result};
-use glovebox_shared::services::{recall, research};
+use glovebox_shared::services::{finding, recall, research};
 
-use crate::schemas::{FileResearchFindingInput, SetRecallStatusInput, VehicleParams};
+use crate::schemas::{
+    FileResearchFindingInput, ListResearchFindingsInput, ResearchFindingParams,
+    SetRecallStatusInput, UpdateResearchFindingInput, VehicleParams,
+};
 
 #[tool_router(router = recalls_router, vis = "pub(super)")]
 impl GloveboxMcp {
@@ -89,7 +92,10 @@ impl GloveboxMcp {
         name = "file_research_finding",
         description = "Save research you've done about this vehicle (forum consensus, TSBs, known \
                        issues, upgrade notes) as a persistent finding. Use after answering \
-                       research questions so the knowledge isn't lost when the conversation ends."
+                       research questions so the knowledge isn't lost when the conversation ends. \
+                       Returns the finding with its `id` and its status, `open`. A recall is \
+                       never filed here: the category `recall` is refused, because recalls come \
+                       only from `check_recalls`."
     )]
     async fn file_research_finding(
         &self,
@@ -97,6 +103,100 @@ impl GloveboxMcp {
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "file_research_finding");
         let (vehicle_id, input) = p.into_domain();
-        domain_result(research::file_finding(&*self.db, vehicle_id, input).await)
+        domain_result(finding::file(&*self.db, vehicle_id, input).await)
+    }
+
+    #[tool(
+        name = "list_research_findings",
+        description = "The research findings saved for this vehicle (forum reports, known issues, \
+                       service bulletins, suggested maintenance, upgrade ideas), newest first, as \
+                       `findings`. Each has its status (`open`, `planned`, `done` or \
+                       `dismissed`), the job filed from it (`work_item`: `id`, `title`, `status` \
+                       and `appointment_id`; a planned job on an appointment, else the oldest \
+                       planned one, else the latest done one) and the service that completed that \
+                       job (`done_service`). Call it before researching a question again, to see \
+                       what an earlier conversation saved. Filter with `category`, `status` or \
+                       `has_planned_work`. Recalls are never listed here: use `list_recalls`."
+    )]
+    async fn list_research_findings(
+        &self,
+        params: Parameters<ListResearchFindingsInput>,
+    ) -> Result<CallToolResult, McpError> {
+        #[derive(Serialize)]
+        struct Findings {
+            findings: Vec<finding::FindingView>,
+        }
+        let p = tool_input!(params, "list_research_findings");
+        let (vehicle_id, filter) = p.into_domain();
+        match finding::list(&*self.db, vehicle_id, filter).await {
+            Ok(findings) => tool_json_result(&Findings { findings }),
+            Err(e) => domain_error(e),
+        }
+    }
+
+    #[tool(
+        name = "get_research_finding",
+        description = "One research finding with its status, the job filed from it (`work_item`) \
+                       and the service that completed that job (`done_service`). A recall's id is \
+                       not found here: read a recall with `list_recalls`."
+    )]
+    async fn get_research_finding(
+        &self,
+        params: Parameters<ResearchFindingParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = tool_input!(params, "get_research_finding");
+        domain_result(finding::get(&*self.db, p.vehicle_id, p.finding_id).await)
+    }
+
+    #[tool(
+        name = "update_research_finding",
+        description = "Correct a research finding's title, description, category, severity or \
+                       source URL, or set its status: `done` when it was acted on and no job \
+                       records that, `dismissed` when the owner decided against it, `open` to \
+                       undo either. Undoing a mark returns the finding to what its jobs say, so \
+                       it may then read `planned` or `done` rather than `open`. `planned` is \
+                       never set: a finding reads it while a planned job addresses it \
+                       (`plan_work` with `research_finding_id`), and reads `done` once that job \
+                       is done. A status the finding already reads changes nothing. A finding \
+                       with no mark whose job is done stays done until that job is planned again \
+                       or dropped, so setting it `open` is an error. A finding cannot become a \
+                       recall, and a recall's id is not found here: use `set_recall_status` for a \
+                       recall. Returns the finding as it reads afterwards."
+    )]
+    async fn update_research_finding(
+        &self,
+        params: Parameters<UpdateResearchFindingInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = tool_input!(params, "update_research_finding");
+        let (vehicle_id, finding_id, input) = p.into_domain();
+        domain_result(finding::update(&*self.db, vehicle_id, finding_id, input).await)
+    }
+
+    #[tool(
+        name = "delete_research_finding",
+        description = "Permanently delete a research finding that was filed by mistake or is \
+                       wrong. Every job planned from it is kept with its status and stops naming \
+                       the finding; the reply lists those jobs in `unlinked_work_items`, so tell \
+                       the owner which ones. For a finding the owner decided against, set it \
+                       `dismissed` with `update_research_finding` instead, which keeps the \
+                       record. A recall cannot be deleted: its id is not found here."
+    )]
+    async fn delete_research_finding(
+        &self,
+        params: Parameters<ResearchFindingParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = tool_input!(params, "delete_research_finding");
+        domain_result(
+            finding::delete(&*self.db, p.vehicle_id, p.finding_id)
+                .await
+                .map(|out| {
+                    serde_json::json!({
+                        "deleted": "research finding",
+                        "id": out.id,
+                        "title": out.title,
+                        "unlinked_work_items": out.unlinked_work_items,
+                    })
+                }),
+        )
     }
 }

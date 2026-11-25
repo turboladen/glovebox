@@ -3,8 +3,8 @@ use serde::Serialize;
 
 use crate::{
     entities::{
-        research_finding::{self, FindingStatus},
-        research_report,
+        research_finding::{self, FindingCategory, FindingSeverity, FindingStatus},
+        research_report::{self, ReportType},
     },
     error::{DomainError, DomainResult},
     services::{
@@ -14,24 +14,12 @@ use crate::{
 };
 
 #[derive(Debug)]
-struct NewFinding {
-    category: String,
+struct NewRecall {
+    category: FindingCategory,
     title: String,
     description: Option<String>,
     source_url: Option<String>,
-    severity: Option<String>,
-}
-
-/// Input for [`file_finding`] — a finding researched outside the app
-/// (e.g. by an MCP client) to persist under the vehicle's
-/// `external_research` anchor report.
-#[derive(Debug)]
-pub struct NewFiledFinding {
-    pub category: String,
-    pub title: String,
-    pub description: Option<String>,
-    pub source_url: Option<String>,
-    pub severity: Option<String>,
+    severity: Option<FindingSeverity>,
 }
 
 // --- Recall check ---
@@ -188,7 +176,7 @@ async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
         } else {
             research_finding::Entity::find()
                 .filter(research_finding::Column::ReportId.is_in(report_ids))
-                .filter(research_finding::Column::Category.eq("recall"))
+                .filter(research_finding::Column::Category.eq(FindingCategory::Recall))
                 .all(db)
                 .await?
                 .into_iter()
@@ -196,7 +184,7 @@ async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
                 .collect()
         };
 
-    let mut new_findings: Vec<NewFinding> = Vec::new();
+    let mut new_findings: Vec<NewRecall> = Vec::new();
     let mut seen_urls: std::collections::HashSet<String> = std::collections::HashSet::new();
     for recall in recalls {
         let url = format!(
@@ -226,12 +214,12 @@ async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
         if !seen_urls.insert(url.clone()) {
             continue;
         }
-        new_findings.push(NewFinding {
-            category: "recall".to_string(),
+        new_findings.push(NewRecall {
+            category: FindingCategory::Recall,
             title: recall.title.clone(),
             description: recall_description(recall),
             source_url: Some(url),
-            severity: Some("critical".to_string()),
+            severity: Some(FindingSeverity::Critical),
         });
     }
 
@@ -243,7 +231,7 @@ async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
 
     let report = research_report::ActiveModel {
         vehicle_id: Set(vehicle_id),
-        report_type: Set(Some("recalls_only".to_string())),
+        report_type: Set(Some(ReportType::RecallsOnly)),
         ..Default::default()
     };
     let report = report.insert(&txn).await?;
@@ -264,63 +252,6 @@ async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
 
     txn.commit().await?;
     Ok(count)
-}
-
-/// Persist an externally-researched finding (e.g. filed by an MCP client)
-/// under this vehicle's `external_research` anchor report — created on first
-/// use, reused thereafter (mirrors how recalls anchor to `recalls_only`).
-pub async fn file_finding<C: ConnectionTrait + TransactionTrait>(
-    db: &C,
-    vehicle_id: i32,
-    input: NewFiledFinding,
-) -> DomainResult<research_finding::Model> {
-    // The anchor report and the finding are written under one write lock, so
-    // two first filings at once create one anchor.
-    let txn = super::begin_write(db).await?;
-    let db = &txn;
-    crate::services::vehicle::require(db, vehicle_id).await?;
-
-    // No unique index stops two anchors for one vehicle, so the oldest is
-    // always the one picked.
-    let report = match research_report::Entity::find()
-        .filter(research_report::Column::VehicleId.eq(vehicle_id))
-        .filter(research_report::Column::ReportType.eq("external_research"))
-        .order_by_asc(research_report::Column::Id)
-        .one(db)
-        .await?
-    {
-        Some(r) => {
-            // Touch generated_at so the anchor dates from its newest filing,
-            // not a stale first-filing date.
-            let mut active: research_report::ActiveModel = r.into();
-            active.generated_at = Set(super::now());
-            active.update(db).await?
-        }
-        None => {
-            research_report::ActiveModel {
-                vehicle_id: Set(vehicle_id),
-                report_type: Set(Some("external_research".to_string())),
-                ..Default::default()
-            }
-            .insert(db)
-            .await?
-        }
-    };
-
-    let finding = research_finding::ActiveModel {
-        report_id: Set(report.id),
-        category: Set(input.category),
-        title: Set(input.title),
-        description: Set(input.description),
-        source_url: Set(input.source_url),
-        severity: Set(input.severity),
-        status: Set(FindingStatus::New),
-        ..Default::default()
-    }
-    .insert(db)
-    .await?;
-    txn.commit().await?;
-    Ok(finding)
 }
 
 #[cfg(test)]
@@ -527,86 +458,5 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(last.recalls[0].title, "Fuel pump recall");
-    }
-
-    #[tokio::test]
-    async fn file_finding_creates_and_reuses_external_research_report() {
-        let db = test_db().await;
-        let vid = seed_vehicle(&db).await;
-        let f1 = file_finding(
-            &db,
-            vid,
-            NewFiledFinding {
-                category: "maintenance".into(),
-                title: "DSG service interval is 40k, not 60k".into(),
-                description: Some("Per community consensus for this gearbox".into()),
-                source_url: Some("https://example.com/thread".into()),
-                severity: Some("info".into()),
-            },
-        )
-        .await
-        .unwrap();
-        let f2 = file_finding(
-            &db,
-            vid,
-            NewFiledFinding {
-                category: "recall".into(),
-                title: "Second finding".into(),
-                description: None,
-                source_url: None,
-                severity: None,
-            },
-        )
-        .await
-        .unwrap();
-        // Same anchor report, created once, type external_research.
-        assert_eq!(f1.report_id, f2.report_id);
-        let report = research_report::Entity::find_by_id(f1.report_id)
-            .one(&db)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(report.report_type.as_deref(), Some("external_research"));
-        let findings = research_finding::Entity::find()
-            .filter(research_finding::Column::ReportId.eq(f1.report_id))
-            .count(&db)
-            .await
-            .unwrap();
-        assert_eq!(findings, 2);
-        // Another vehicle gets its own anchor, never vehicle A's, which is
-        // what a lookup missing its VehicleId filter would return.
-        let other = seed_vehicle(&db).await;
-        let f3 = file_finding(
-            &db,
-            other,
-            NewFiledFinding {
-                category: "forum_report".into(),
-                title: "Other car's finding".into(),
-                description: None,
-                source_url: None,
-                severity: None,
-            },
-        )
-        .await
-        .unwrap();
-        assert_ne!(f3.report_id, f1.report_id);
-
-        // Missing vehicle is indistinguishable from nonexistent.
-        assert!(matches!(
-            file_finding(
-                &db,
-                999,
-                NewFiledFinding {
-                    category: "note".into(),
-                    title: "x".into(),
-                    description: None,
-                    source_url: None,
-                    severity: None,
-                }
-            )
-            .await
-            .unwrap_err(),
-            DomainError::NotFound(_)
-        ));
     }
 }

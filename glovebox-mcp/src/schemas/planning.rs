@@ -26,9 +26,11 @@ pub struct PlanWorkInput {
     /// `whats_coming`) — completing the work then clears the
     /// reminder.
     pub schedule_item_id: Option<i32>,
-    /// The research finding (e.g. a recall from `whats_coming` or `check_recalls`) this
-    /// addresses. The recall reads as planned while the work is open and as done once the
-    /// work is done. Completing the work through `record_service` also links the service to it.
+    /// The research finding (a recall's `finding_id` from `whats_coming` or `check_recalls`, or
+    /// a finding's `id` from `whats_coming` or `list_research_findings`) this
+    /// addresses. It reads as planned while the work is open and as done once the work is
+    /// done. Completing a recall's work through `record_service` also links the service to
+    /// the recall.
     pub research_finding_id: Option<i32>,
     /// The incident this fixes (from `log_incident`) — completing the work
     /// links the incident to the service record. While the job is planned and the incident is unresolved and not a `note`, the appointment's work sheet prints the incident's title and description for the shop as the reported symptom, so check that both hold only what the shop may read.

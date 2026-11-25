@@ -142,16 +142,18 @@ impl ServerHandler for GloveboxMcp {
                  mistaken `add_vehicle`), `record_part` and `list_parts` / `correct_part` / \
                  `delete_part` for parts, `save_note` for facts worth keeping, \
                  `file_research_finding` for research worth keeping (read back with \
-                 `search_records`), `search_records` and `cost_summary` to look things up, \
-                 `check_recalls` (once per conversation; a failed lookup still lists the known \
-                 recalls) and `set_recall_status` for recalls, and `list_shops`, `add_shop`, \
-                 `get_shop` (a shop's history), `update_shop`, `merge_shops` (after the owner \
-                 confirms two entries are one shop) and `delete_shop` for the shop directory. \
-                 Services, parts, incidents and planned work can each be listed, corrected and \
-                 deleted; a correct or update tool leaves absent fields alone and clears a field \
-                 sent as null, and an argument a tool does not define is an error. All money is \
-                 integer cents; all dates are YYYY-MM-DD, and a malformed date is an error naming \
-                 the field.",
+                 `list_research_findings`, which shows what was done about each; \
+                 `update_research_finding` and `delete_research_finding` fix one; never a recall, \
+                 which comes only from `check_recalls`), `search_records` and `cost_summary` to \
+                 look things up, `check_recalls` (once per conversation; a failed lookup still \
+                 lists the known recalls) and `set_recall_status` for recalls, and `list_shops`, \
+                 `add_shop`, `get_shop` (a shop's history), `update_shop`, `merge_shops` (after \
+                 the owner confirms two entries are one shop) and `delete_shop` for the shop \
+                 directory. Services, parts, incidents and planned work can each be listed, \
+                 corrected and deleted; a correct or update tool leaves absent fields alone and \
+                 clears a field sent as null, and an argument a tool does not define is an error. \
+                 All money is integer cents; all dates are YYYY-MM-DD, and a malformed date is an \
+                 error naming the field.",
             )
     }
 

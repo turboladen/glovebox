@@ -504,12 +504,12 @@ mod tests {
         assert_eq!(matches(&db, "brake").await, 1);
         fts_integrity(&db, &["fts_service_records"]).await;
 
-        // Every migration runs again over the finished schema, the earlier
-        // ones that name the dropped columns included.
+        // Every migration up to this one runs again over the finished
+        // schema, the earlier ones that name the dropped columns included.
         db.execute_unprepared("DELETE FROM seaql_migrations")
             .await
             .unwrap();
-        Migrator::up(&db, None).await.unwrap();
+        Migrator::up(&db, Some(BEFORE + 1)).await.unwrap();
         assert_eq!(whole_schema(&db).await, schema);
         assert_eq!(rows(&db).await, stored);
         fts_integrity(&db, &["fts_service_records"]).await;

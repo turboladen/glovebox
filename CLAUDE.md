@@ -116,9 +116,9 @@ command does. Tests use `test_db()` or a temporary directory.
 functions.
 
 **Services** (`services/`): One module per domain (`vehicle`, `service_record`, `part`, `incident`,
-`work_item`, `appointment`, `need`, `todo`, `schedule`, `recall`, `research`, `shop`, ...) of free functions taking `db: &impl
+`work_item`, `appointment`, `need`, `todo`, `schedule`, `recall`, `research`, `finding`, `shop`, ...) of free functions taking `db: &impl
 ConnectionTrait` first and returning `DomainResult<T>`. Composite reads: `upcoming` (the
-`whats_coming` answer: reminders, budget, planned work, recalls, open incidents), `reminders`,
+`whats_coming` answer: reminders, budget, planned work, recalls, open findings, open incidents), `reminders`,
 `budget`, `costs`, `activity`, `search`, `work_sheet` (an appointment's sheet for the mechanic), `service_detail` (one service with its schedule items' names and the split of its total, for its page), `vehicle_detail` (one vehicle with its last odometer reading, the estimate for today, its cost summary and its recent activity, for its page), `history` (every service of a vehicle oldest first and the parts installed on it, for the printable history), and `checklist` (the checklist for an appointment, an
 unscheduled job or one job, the past decisions across vehicles, and the home page's rows; the MCP
 tools and the web page both render it), and `waiting` (what is not yet on an appointment: due
@@ -180,7 +180,10 @@ and adds a CHECK that `shop_name` stays NULL on services and appointments, and
 `m20261124_000001_drop_unused_columns`, which drops both `shop_name` columns with those checks,
 `research_reports.summary`, `raw_data` and `notes`, and `vehicle_attributes.superseded_by` with
 its foreign key, builds `fts_service_records` again over `description` and `notes`, and adds
-`idx_service_records_shop`. They run on startup.
+`idx_service_records_shop`, and `m20261124_000002_finding_vocabularies`, which rewrites a
+finding's category or severity or a report's type that differs from a listed value only by ASCII
+case or surrounding spaces, turns a blank severity or report type into NULL, refuses to finish
+while a column holds any other value, and adds a CHECK per column. They run on startup.
 
 **Test harness** (`test_support.rs`): `test_db()` is an in-memory SQLite database with migrations
 applied. It is compiled under `#[cfg(any(test, feature = "test-support"))]`; `glovebox-mcp` uses it
@@ -216,7 +219,9 @@ named as things a person would say:
   `delete_todo`
 - `schedule.rs`: `list_schedule`, `add_schedule_item`, `update_schedule_item`,
   `dismiss_schedule_item`, `restore_schedule_item`
-- `recalls.rs`: `check_recalls`, `list_recalls`, `set_recall_status`, `file_research_finding`
+- `recalls.rs`: `check_recalls`, `list_recalls`, `set_recall_status`, `file_research_finding`,
+  `list_research_findings`, `get_research_finding`, `update_research_finding`,
+  `delete_research_finding`
 - `reads.rs`: `summarize_recent_activity`, `search_records`, `cost_summary`, `get_service`,
   `get_incident`
 - `shops.rs`: `list_shops`, `add_shop`, `get_shop`, `update_shop`, `merge_shops`, `delete_shop`
@@ -423,6 +428,20 @@ item counts from the model year, and the mileage estimate ignores a reading date
 and planned work it left unpriced, `bundle_suggestions` is one entry listing every overdue or
 due-soon item when there are two or more, and a stored recall title is the NHTSA component in title
 case.
+A research finding and a recall are rows of one table, told apart by
+`research_finding::FindingCategory`. Recalls come only from the NHTSA check: `finding::file` and
+`finding::update` refuse the category `recall`, and every function of `services::finding` reads a
+recall's id as the byte-identical `NotFound` a missing id gives, so the finding tools and the
+recall tools never touch each other's rows. A finding reads `open`, `planned`, `done` or
+`dismissed` (`finding::ShownFindingStatus`): a mark the owner set wins, then a planned job, then
+a done job with none planned. A status sent back as read stores no mark (the same holds in
+`recall::set_status`), and `open` clears a mark. A search hit on a recall has the kind `recall`
+and one on a finding `research_finding`. Every read shows the job filed from it and the service that
+completed that job. `finding::delete` keeps the jobs, clears their link and names them, and
+deletes a report left with no finding. `whats_coming` lists in `open_findings` the findings that
+read `open`, or `planned` with the job on no appointment, by severity and then newest, at most
+`finding::OPEN_FINDINGS_SHOWN`, with `open_findings_total` counting them all
+(`docs/adr/0028-recalls-come-only-from-nhtsa.md`).
 Platforms and model templates are written only by migrations; `model_template::list` and
 `list_with_platform` are the only template services
 (`docs/adr/0013-templates-come-from-migrations.md`). The shop directory (`shop::create`,
@@ -647,19 +666,21 @@ role per control style, and `YYYY-MM-DD` dates.
   macro refuses a doc comment on a variant, because one turns the schema's `enum` list into
   `oneOf`. A query filter takes a variant (`Column::Status.eq(JobStatus::Planned)`), never a
   string literal. Adding a value is one line in the macro call (and, for
-  `research_finding::FindingStatus`, a migration that rewrites its CHECK), and every program must be
+  `research_finding::FindingStatus`, `FindingCategory` and `FindingSeverity` and
+  `research_report::ReportType`, a migration that rewrites its CHECK), and every program must be
   rebuilt with it, because an older binary cannot read a row that holds the new value. Removing
   or renaming one needs a migration that rewrites the rows, placed after
   `m20261115_000001_vocabulary_values`, whose lists stay as written.
-  An enum that no column stores lives in the service that uses it. Six of them are derived
-  values (`recall::ShownRecallStatus`, `appointment::AppointmentStatus`,
+  An enum that no column stores lives in the service that uses it. Seven of them are derived
+  values (`recall::ShownRecallStatus`, `finding::ShownFindingStatus`, `appointment::AppointmentStatus`,
   `appointment::AppointmentPhase`, `reminders::DueStatus`, which reminders and planned work's
-  revisit share, `reminders::Trigger` and `activity::ActivityKind`). The other four are
-  arguments: `recall::RecallStatus`, which the recall service maps to and from the stored
-  `research_finding::FindingStatus`, `service_record::CompletedWork`, `schedule::LinkMode` and `search::SearchScope`. A
+  revisit share, `reminders::Trigger` and `activity::ActivityKind`). The other five are
+  arguments: `recall::RecallStatus` and `finding::FiledFindingStatus`, which their services map
+  to and from the stored `research_finding::FindingStatus`, `service_record::CompletedWork`,
+  `schedule::LinkMode` and `search::SearchScope`. A
   filter on a column never takes one of these.
   `docs/adr/0004-typed-vocabularies.md` records why.
-- **Migrations**: new migrations go after `m20261124_000001_drop_unused_columns`; the
+- **Migrations**: new migrations go after `m20261124_000002_finding_vocabularies`; the
   `new-migration` skill has the templates. Use `Expr::cust()` for expressions inside builder queries; raw
   `execute_unprepared` only where no builder form exists (FTS5 DDL, cross-table copies). A delete
   by a correlated subquery has one: `Query::delete().cond_where(Expr::exists(subquery))`, as

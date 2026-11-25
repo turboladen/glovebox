@@ -18,6 +18,8 @@ async fn whats_coming_returns_every_section_for_a_bare_vehicle() {
         "budget",
         "planned_work",
         "recalls",
+        "open_findings",
+        "open_findings_total",
         "open_incidents",
     ] {
         assert!(due.get(key).is_some(), "missing {key}; got: {due}");
@@ -86,18 +88,7 @@ async fn recall_and_schedule_item_plan_into_the_todo_list_and_forecast() {
     .await
     .unwrap();
 
-    let finding = t
-        .call(
-            "file_research_finding",
-            json!({
-                "vehicle_id": v.id,
-                "category": "recall",
-                "title": "Recall: coolant pump may seize",
-                "severity": "critical"
-            }),
-        )
-        .await;
-    let finding_id = finding["id"].as_i64().expect("finding id");
+    let finding_id = common::seed_recall(&t.db, v.id, "24V110000").await;
 
     let planned = t
         .call(

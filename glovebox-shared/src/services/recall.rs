@@ -14,7 +14,7 @@ use serde::Serialize;
 
 use crate::{
     entities::{
-        research_finding::{self, FindingStatus},
+        research_finding::{self, FindingCategory, FindingStatus},
         research_report, service_recall_link, service_record,
         work_item::{self, JobStatus},
     },
@@ -167,7 +167,7 @@ pub(crate) async fn require_recalls(
     let found: HashMap<i32, research_finding::Model> = research_finding::Entity::find()
         .filter(research_finding::Column::Id.is_in(finding_ids.to_vec()))
         .filter(research_finding::Column::ReportId.is_in(report_ids))
-        .filter(research_finding::Column::Category.eq("recall"))
+        .filter(research_finding::Column::Category.eq(FindingCategory::Recall))
         .all(db)
         .await?
         .into_iter()
@@ -285,7 +285,7 @@ pub async fn list(
         .collect();
     let findings = research_finding::Entity::find()
         .filter(research_finding::Column::ReportId.is_in(report_ids))
-        .filter(research_finding::Column::Category.eq("recall"))
+        .filter(research_finding::Column::Category.eq(FindingCategory::Recall))
         .order_by_asc(research_finding::Column::Id)
         .all(db)
         .await?;
@@ -320,6 +320,14 @@ pub async fn set_status<C: ConnectionTrait + TransactionTrait>(
     let finding = require_recalls(&txn, vehicle_id, &[finding_id])
         .await?
         .remove(0);
+
+    // A caller that sends back the status it read must not turn a status a
+    // job or a service decides into a stored one, which would outlast them.
+    let current = with_status(&txn, vec![finding.clone()]).await?.remove(0);
+    if current.settled == status {
+        txn.commit().await?;
+        return Ok(current);
+    }
 
     // The requested status goes through the derivation every list uses, so
     // the refusal and the lists cannot disagree.
@@ -364,7 +372,7 @@ pub(crate) async fn recall_ids_among(
     }
     Ok(research_finding::Entity::find()
         .filter(research_finding::Column::Id.is_in(finding_ids.to_vec()))
-        .filter(research_finding::Column::Category.eq("recall"))
+        .filter(research_finding::Column::Category.eq(FindingCategory::Recall))
         .all(db)
         .await?
         .into_iter()
@@ -522,11 +530,13 @@ mod tests {
             mileage_log, part, service_record_line_item, service_record_line_item::WorkKind,
         },
         inputs::{
+            finding::NewFinding,
             part::NewPart,
             service_record::{NewLineItem, NewServiceRecord},
             work_item::NewWorkItem,
         },
         services::{
+            finding,
             nhtsa::RecallInfo,
             research,
             service_record::{self as service_svc, ServiceRecordWithLinks},
@@ -634,11 +644,11 @@ mod tests {
     }
 
     async fn seed_non_recall(db: &DatabaseConnection, vehicle_id: i32) -> i32 {
-        research::file_finding(
+        finding::file(
             db,
             vehicle_id,
-            research::NewFiledFinding {
-                category: "maintenance".into(),
+            NewFinding {
+                category: FindingCategory::SuggestedMaintenance,
                 title: "Community fix".into(),
                 description: None,
                 source_url: None,
@@ -758,20 +768,7 @@ mod tests {
         let v = seed_vehicle(&db).await;
         let other = seed_vehicle(&db).await;
         let foreign = seed_recall(&db, other, "24V999000").await;
-        let note = research::file_finding(
-            &db,
-            v,
-            research::NewFiledFinding {
-                category: "maintenance".into(),
-                title: "Not a recall".into(),
-                description: None,
-                source_url: None,
-                severity: None,
-            },
-        )
-        .await
-        .unwrap()
-        .id;
+        let note = seed_non_recall(&db, v).await;
 
         let missing = set_status(&db, v, 9999, RecallStatus::Done)
             .await
@@ -894,6 +891,28 @@ mod tests {
 
         set_job_status(&db, v, item.id, JobStatus::Dropped).await;
         assert_eq!(shown(&db, v).await, (ShownRecallStatus::Open, None, false));
+    }
+
+    // A client that sends back the `done` it read must not pin the recall:
+    // the status came from the job, and it follows the job back to planned.
+    #[tokio::test]
+    async fn a_status_sent_back_as_read_stores_nothing_and_follows_the_job() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let id = seed_recall(&db, v, "24V110000").await;
+        let item = plan_work_for_recall(&db, v, id).await;
+        set_job_status(&db, v, item.id, JobStatus::Done).await;
+
+        let read = set_status(&db, v, id, RecallStatus::Done).await.unwrap();
+        assert_eq!(read.status, ShownRecallStatus::Done);
+        let stored = research_finding::Entity::find_by_id(id).one(&db).await;
+        assert_eq!(stored.unwrap().unwrap().status, FindingStatus::New);
+
+        set_job_status(&db, v, item.id, JobStatus::Planned).await;
+        assert_eq!(
+            shown(&db, v).await,
+            (ShownRecallStatus::Planned, Some(item.id), false)
+        );
     }
 
     #[tokio::test]

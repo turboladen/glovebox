@@ -110,9 +110,17 @@ impl GloveboxMcp {
                        them in `unestimated_items` and `unestimated_planned_work` (with counts): \
                        when either list is not empty, say the forecast total is a floor, not a \
                        real total, and offer to add estimates with `update_schedule_item` or \
-                       `update_planned_work`. Group overdue and due-soon items into one shop trip \
-                       when advising. For items worth doing, offer to plan_work them (linked via \
-                       schedule_item_id); when recorded work satisfies an item, link it via \
+                       `update_planned_work`. `open_findings` lists the research findings that \
+                       still wait (each reads `open`, or `planned` with its job on no \
+                       appointment; recalls are in `recalls`), most severe first and at most ten, \
+                       and `open_findings_total` counts them all: when one fits the work being \
+                       discussed, say so. Offer to `plan_work` only one that reads `open`, with \
+                       `research_finding_id`; one that reads `planned` already has its job in \
+                       `work_item`, so put that job on the appointment with `update_planned_work` \
+                       and never plan it again. Set one the owner rules out to `dismissed` with \
+                       `update_research_finding`. Group overdue and due-soon items into one shop \
+                       trip when advising. For items worth doing, offer to plan_work them (linked \
+                       via schedule_item_id); when recorded work satisfies an item, link it via \
                        `record_service`'s `schedule_item_ids` so the reminder clears, or for \
                        service records that already exist call `link_service_to_maintenance`; for \
                        an item that does not apply to this vehicle, use `dismiss_schedule_item`."

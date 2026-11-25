@@ -1,5 +1,6 @@
 //! The one-call answer to "what is coming for this car": scheduled
-//! maintenance, the to-do list, open recalls and unresolved incidents.
+//! maintenance, the to-do list, open recalls, the findings still waiting and
+//! unresolved incidents.
 
 use sea_orm::*;
 use serde::Serialize;
@@ -13,6 +14,7 @@ use crate::{
     services::{
         appointment::{self, AppointmentSummary},
         budget::{self, BudgetForecast},
+        finding::{self, FindingView, OpenFindings},
         incident as incident_svc,
         recall::{self, RecallWithStatus},
         reminders::{self, DueStatus, RemindersResponse},
@@ -34,6 +36,13 @@ pub struct Upcoming {
     pub planned_work: Vec<PlannedItem>,
     /// Recalls that are still `open` or `planned`.
     pub recalls: Vec<RecallWithStatus>,
+    /// Findings that are not recalls and still wait for the owner: each reads
+    /// `open`, or `planned` with its job on no appointment. The most severe
+    /// come first, then the newest, and the list holds at most
+    /// [`finding::OPEN_FINDINGS_SHOWN`].
+    pub open_findings: Vec<FindingView>,
+    /// How many findings wait, the ones `open_findings` leaves out included.
+    pub open_findings_total: usize,
     /// Unresolved incidents, excluding notes.
     pub open_incidents: Vec<incident::Model>,
     /// Appointments still being prepared, soonest first, each with its open
@@ -56,6 +65,10 @@ pub async fn upcoming(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResul
     let planned_work = planned_work(db, vehicle_id, today).await?;
     let budget = budget::forecast_from(db, &reminders, &planned_work, today).await?;
     let recalls = open_recalls(db, vehicle_id).await?;
+    let OpenFindings {
+        findings: open_findings,
+        total: open_findings_total,
+    } = finding::open(db, vehicle_id).await?;
     let open_incidents = open_incidents(db, vehicle_id).await?;
 
     let appointments = appointment::list(db, vehicle_id, false, today).await?;
@@ -65,6 +78,8 @@ pub async fn upcoming(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResul
         budget,
         planned_work,
         recalls,
+        open_findings,
+        open_findings_total,
         open_incidents,
         appointments,
     })
@@ -382,6 +397,63 @@ mod tests {
         );
     }
 
+    // A finding shows beside the recalls, never among them, and leaves once
+    // it is dismissed.
+    #[tokio::test]
+    async fn upcoming_lists_a_waiting_finding_apart_from_the_recalls() {
+        use crate::{
+            entities::research_finding::FindingCategory,
+            inputs::finding::{NewFinding, UpdateFinding},
+            services::finding::{FiledFindingStatus, ShownFindingStatus},
+        };
+
+        let db = test_db().await;
+        let v = VehicleFixture::new().insert_id(&db).await;
+        research::record_recalls(&db, v, &[recall_info("24V110000")])
+            .await
+            .unwrap();
+        let filed = finding::file(
+            &db,
+            v,
+            NewFinding {
+                category: FindingCategory::KnownIssue,
+                title: "Water pump fails near 60k".into(),
+                description: None,
+                source_url: None,
+                severity: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let u = upcoming(&db, v).await.unwrap();
+        assert_eq!(u.recalls.len(), 1);
+        assert_eq!(u.open_findings_total, 1);
+        assert_eq!(u.open_findings[0].id, filed.id);
+        assert_eq!(u.open_findings[0].status, ShownFindingStatus::Open);
+        let json = serde_json::to_value(&u).unwrap();
+        assert_eq!(
+            json["open_findings"][0]["title"],
+            "Water pump fails near 60k"
+        );
+        assert_eq!(json["open_findings_total"], 1);
+
+        finding::update(
+            &db,
+            v,
+            filed.id,
+            UpdateFinding {
+                status: Some(FiledFindingStatus::Dismissed),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let u = upcoming(&db, v).await.unwrap();
+        crate::test_support::assert_empty(&u.open_findings);
+        assert_eq!((u.open_findings_total, u.recalls.len()), (0, 1));
+    }
+
     #[tokio::test]
     async fn upcoming_works_for_a_bare_vehicle() {
         // No model template, no mileage readings, no purchase date, no records.
@@ -390,6 +462,8 @@ mod tests {
         let u = upcoming(&db, v).await.unwrap();
         assert!(u.reminders.reminders.is_empty());
         assert!(u.planned_work.is_empty() && u.recalls.is_empty() && u.open_incidents.is_empty());
+        crate::test_support::assert_empty(&u.open_findings);
+        assert_eq!(u.open_findings_total, 0);
         assert_eq!(u.budget.planned_work_cents, 0);
     }
 
