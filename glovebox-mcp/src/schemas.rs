@@ -27,6 +27,7 @@ mod parts;
 #[allow(clippy::option_option)]
 mod planning;
 mod reads;
+#[allow(clippy::option_option)]
 mod recalls;
 #[allow(clippy::option_option)]
 mod schedule;
