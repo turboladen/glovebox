@@ -90,6 +90,10 @@ async fn seed_fills_the_named_environment() {
     .unwrap();
     assert!(text.contains("1 vehicle"), "{text}");
     assert!(text.contains("1 appointment"), "{text}");
+    assert!(
+        text.ends_with("2 services, 6 odometer readings, 3 incidents, 1 note and 1 recall."),
+        "{text}"
+    );
     assert!(!live.exists(), "GLOVEBOX_DB_PATH must be ignored");
     let seeded = dir.path().join("glovebox-demo.db");
     assert!(seeded.exists());

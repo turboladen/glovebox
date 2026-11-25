@@ -30,7 +30,8 @@ The readers that judge what counts go through it:
   the `released_schedule_item_ids` of a correction name the tracked item.
 - `work_item::list_with_status`, the planned-work list behind `list_planned_work`, `whats_coming`
   and the home page, so a planned job carries the same id as the reminder it covers.
-- `budget::forecast_from`, which asks whether a planned job covers an item.
+- `budget::forecast_from`, which asks whether a planned job covers an item. It takes the
+  planned-work list its caller read, so it judges the ids that list already resolved.
 - `schedule::drop_links_jobs_bring`, so a stored link to the inherited row still follows a job on
   the vehicle's own copy (ADR-0017). `add_schedule_item`, `update_schedule_item` and a change of
   the vehicle's model template end with it for the vehicle's services, because each can make a

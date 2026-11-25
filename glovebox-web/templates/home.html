@@ -24,11 +24,11 @@
       {% for m in hv.waiting.due %}
       <li class="row row--wait">
         <span class="key">{{ m.name }}</span>
-        <span data-l="Status"><span class="pill pill--{{ m.status.kind }}">{{ m.status.text }}</span></span>
-        <span data-l="Due at">{{ m.due_at }}</span>
-        <span data-l="How far">{{ m.how_far }}</span>
-        <span data-l="Last done">{% if let Some(d) = m.last_done %}{{ d }}{% else %}<span class="empty">No record</span>{% endif %}</span>
-        <span data-l="Job">{% if let Some(id) = m.job_id %}<a href="/vehicles/{{ v.vehicle.id }}/jobs/{{ id }}">Job planned</a>{% else %}<span class="empty">Not planned</span>{% endif %}</span>
+        <span data-l="Status"><span class="vh">Status </span><span class="pill pill--{{ m.status.kind }}">{{ m.status.text }}</span></span>
+        <span data-l="Due at"><span class="vh">Due at </span>{{ m.due_at }}</span>
+        <span data-l="How far"><span class="vh">How far </span>{{ m.how_far }}</span>
+        <span data-l="Last done"><span class="vh">Last done </span>{% if let Some(d) = m.last_done %}{{ d }}{% else %}<span class="empty">No record</span>{% endif %}</span>
+        <span data-l="Job"><span class="vh">Job </span>{% if let Some(id) = m.job_id %}<a href="/vehicles/{{ v.vehicle.id }}/jobs/{{ id }}">Job planned</a>{% else %}<span class="empty">Not planned</span>{% endif %}</span>
       </li>
       {% endfor %}
     </ul>
@@ -45,8 +45,8 @@
       {% for j in hv.waiting.jobs %}
       <li class="row row--wait">
         <span class="key"><a href="/vehicles/{{ v.vehicle.id }}/jobs/{{ j.id }}">{{ j.title }}</a></span>
-        <span data-l="Revisit">{% if let Some(t) = j.revisit %}<span class="pill pill--{{ t.kind }}">{{ t.text }}</span>{% endif %}</span>
-        <span data-l="Estimate">{% if let Some(e) = j.estimate %}{{ e }}{% endif %}</span>
+        <span data-l="Revisit">{% if let Some(t) = j.revisit %}<span class="vh">Revisit </span><span class="pill pill--{{ t.kind }}">{{ t.text }}</span>{% endif %}</span>
+        <span data-l="Estimate">{% if let Some(e) = j.estimate %}<span class="vh">Estimate </span>{{ e }}{% endif %}</span>
         <span class="at-job num" data-l="Needs open"><span class="vh">Needs open </span><span class="n{% if j.needs_open > 0 %} n--todo{% endif %}">{{ j.needs_open }}</span></span>
       </li>
       {% endfor %}
@@ -64,8 +64,8 @@
       {% for r in hv.waiting.recalls %}
       <li class="row row--wait">
         <span class="key at-key">{{ r.title }}</span>
-        <span class="at-wide" data-l="Campaign">{% if let Some(c) = r.campaign %}{{ c }}{% endif %}</span>
-        <span class="at-job" data-l="Job">{% if let Some(id) = r.job_id %}<a href="/vehicles/{{ v.vehicle.id }}/jobs/{{ id }}">Job planned</a>{% else %}<span class="empty">Not planned</span>{% endif %}</span>
+        <span class="at-wide" data-l="Campaign">{% if let Some(c) = r.campaign %}<span class="vh">Campaign </span>{{ c }}{% endif %}</span>
+        <span class="at-job" data-l="Job"><span class="vh">Job </span>{% if let Some(id) = r.job_id %}<a href="/vehicles/{{ v.vehicle.id }}/jobs/{{ id }}">Job planned</a>{% else %}<span class="empty">Not planned</span>{% endif %}</span>
       </li>
       {% endfor %}
     </ul>
@@ -82,14 +82,42 @@
       {% for i in hv.waiting.incidents %}
       <li class="row row--wait">
         <span class="key at-key">{{ i.title }}</span>
-        <span class="at-wide" data-l="Kind">{{ i.category }}</span>
-        <span class="at-date" data-l="Date">{{ i.date }}</span>
-        <span class="at-job" data-l="Job">{% if let Some(id) = i.job_id %}<a href="/vehicles/{{ v.vehicle.id }}/jobs/{{ id }}">Job planned</a>{% else %}<span class="empty">Not planned</span>{% endif %}</span>
+        <span class="at-wide" data-l="Kind"><span class="vh">Kind </span>{{ i.category }}</span>
+        <span class="at-date" data-l="Date"><span class="vh">Date </span>{{ i.date }}</span>
+        <span class="at-job" data-l="Job"><span class="vh">Job </span>{% if let Some(id) = i.job_id %}<a href="/vehicles/{{ v.vehicle.id }}/jobs/{{ id }}">Job planned</a>{% else %}<span class="empty">Not planned</span>{% endif %}</span>
       </li>
       {% endfor %}
     </ul>
     {% endif %}
   </section>
+
+  {% if let Some(o) = hv.outlook %}
+  <section class="sheet">
+    <div class="sheet-head"><h3>Budget and latest activity</h3><a class="aside" href="{{ o.vehicle_href }}">All costs and activity</a></div>
+    {% if let Some(b) = o.budget %}
+    <div class="summary lone">
+      <div><span class="l">Next 12 months</span><span class="price">{% if b.floor %}At least {% endif %}{{ b.total }}</span></div>
+      <div><span class="l">Scheduled maintenance</span><span class="price">{{ b.maintenance }}</span></div>
+      <div><span class="l">Planned work</span><span class="price">{{ b.planned }}</span></div>
+      {% if let Some(n) = b.unpriced %}<div><span class="l">Not in the total</span>{{ n }}</div>{% endif %}
+    </div>
+    {% endif %}
+    {% if !o.activity.is_empty() %}
+    <div class="cols cols--wait" aria-hidden="true"><span class="at-key">Record</span><span class="at-wide">Kind</span><span>Odometer</span><span class="at-date">Date</span><span class="at-job num">Total</span></div>
+    <ul class="needs">
+      {% for a in o.activity %}
+      <li class="row row--wait">
+        <span class="key at-key">{% if let Some(s) = a.summary %}{% if let Some(href) = a.href %}<a href="{{ href }}">{{ s }}</a>{% else %}{{ s }}{% endif %}{% else %}<span class="empty">No note</span>{% endif %}</span>
+        <span class="at-wide" data-l="Kind"><span class="vh">Kind </span>{{ a.kind }}</span>
+        <span data-l="Odometer">{% if let Some(o) = a.odometer %}<span class="vh">Odometer </span>{{ o }}{% endif %}</span>
+        <span class="at-date" data-l="Date"><span class="vh">Date </span>{{ a.date }}</span>
+        <span class="at-job num price" data-l="Total">{% if let Some(t) = a.total %}<span class="vh">Total </span>{{ t }}{% endif %}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </section>
+  {% endif %}
 
   <section class="sheet">
     <div class="sheet-head"><h3>Appointments</h3><span class="n">{{ hv.appointments.len() }}</span></div>
@@ -101,9 +129,9 @@
       {% for a in hv.appointments %}
       <li class="row row--home">
         <span class="key"><a href="/vehicles/{{ v.vehicle.id }}/appointments/{{ a.id }}">{{ a.purpose }}</a></span>
-        <span data-l="Status"><span class="pill pill--{{ a.status.kind }}">{{ a.status.text }}</span></span>
-        <span data-l="Date">{% if a.dated %}{{ a.when }}{% else %}<span class="empty cap">{{ a.when }}</span>{% endif %}</span>
-        <span data-l="Shop">{% if let Some(shop) = a.shop %}<a href="{{ shop.href }}">{{ shop.name }}</a>{% endif %}</span>
+        <span data-l="Status"><span class="vh">Status </span><span class="pill pill--{{ a.status.kind }}">{{ a.status.text }}</span></span>
+        <span data-l="Date"><span class="vh">Date </span>{% if a.dated %}{{ a.when }}{% else %}<span class="empty cap">{{ a.when }}</span>{% endif %}</span>
+        <span data-l="Shop">{% if let Some(shop) = a.shop %}<span class="vh">Shop </span><a href="{{ shop.href }}">{{ shop.name }}</a>{% endif %}</span>
         <span class="num" data-l="Jobs"><span class="vh">Jobs </span>{{ a.jobs }}</span>
         <span class="num" data-l="Needs open"><span class="vh">Needs open </span><span class="n{% if a.needs_open > 0 %} n--todo{% endif %}">{{ a.needs_open }}</span></span>
         <span class="num" data-l="To-dos open"><span class="vh">To-dos open </span><span class="n{% if a.todos_open > 0 %} n--todo{% endif %}">{{ a.todos_open }}</span></span>

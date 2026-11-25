@@ -14,12 +14,9 @@ use sea_orm::*;
 use serde::Serialize;
 
 use crate::{
-    entities::{
-        maintenance_schedule_item,
-        work_item::{self, JobStatus},
-    },
+    entities::maintenance_schedule_item,
     error::DomainResult,
-    services::reminders::RemindersResponse,
+    services::{reminders::RemindersResponse, work_item::PlannedItem},
 };
 
 /// Forecast horizon: days `0..HORIZON_DAYS` from today (an occurrence
@@ -58,6 +55,33 @@ pub struct BudgetForecast {
     pub unestimated_planned_work_count: usize,
 }
 
+impl BudgetForecast {
+    /// True when the forecast has nothing to say: no cost in either bucket
+    /// and nothing left unpriced.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.total_cents == 0 && self.unestimated_count() == 0
+    }
+
+    /// Counts the schedule items and planned jobs whose cost is missing from
+    /// `total_cents`. The total is a floor while this is above zero.
+    #[must_use]
+    pub fn unestimated_count(&self) -> usize {
+        self.unestimated_item_count + self.unestimated_planned_work_count
+    }
+
+    /// Says how many items the total leaves out, such as
+    /// `3 items have no estimate`, or `None` when every item is priced.
+    #[must_use]
+    pub fn unestimated_note(&self) -> Option<String> {
+        match self.unestimated_count() {
+            0 => None,
+            1 => Some("1 item has no estimate".to_owned()),
+            n => Some(format!("{n} items have no estimate")),
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct UnestimatedItem {
     pub id: i32,
@@ -80,26 +104,33 @@ pub struct ForecastLine {
 }
 
 /// The summed estimates of the planned backlog, and the items with none.
-fn planned_work_cost(backlog: &[work_item::Model]) -> (i64, Vec<UnestimatedWork>) {
+fn planned_work_cost(backlog: &[PlannedItem]) -> (i64, Vec<UnestimatedWork>) {
     let cents = backlog
         .iter()
-        .filter_map(|i| i.est_cost_cents)
+        .filter_map(|p| p.item.est_cost_cents)
         .map(i64::from)
         .sum();
-    let unestimated = backlog
+    // The backlog arrives most urgent revisit first, and this list is in the
+    // order the jobs were planned.
+    let mut unestimated: Vec<UnestimatedWork> = backlog
         .iter()
-        .filter(|i| i.est_cost_cents.is_none())
-        .map(|i| UnestimatedWork {
-            id: i.id,
-            title: i.title.clone(),
+        .filter(|p| p.item.est_cost_cents.is_none())
+        .map(|p| UnestimatedWork {
+            id: p.item.id,
+            title: p.item.title.clone(),
         })
         .collect();
+    unestimated.sort_by_key(|work| work.id);
     (cents, unestimated)
 }
 
 /// Projects the vehicle's 12 months of maintenance spend from `today`, from reminders
 /// the caller has already computed with
-/// [`calculate_reminders`](crate::services::reminders::calculate_reminders).
+/// [`calculate_reminders`](crate::services::reminders::calculate_reminders)
+/// and from `backlog`, the vehicle's planned jobs as
+/// [`planned_work`](crate::services::upcoming::planned_work) lists them, where
+/// each job's schedule item is the one the vehicle tracks. It runs one query,
+/// for the schedule items' intervals and estimates.
 ///
 /// For each enabled resolved schedule item carrying `est_cost_cents`:
 /// occurrences repeat at the item's interval — `interval_months`, and/or
@@ -110,8 +141,8 @@ fn planned_work_cost(backlog: &[work_item::Model]) -> (i64, Vec<UnestimatedWork>
 #[expect(clippy::cast_possible_truncation, reason = "day counts, not money")]
 pub(crate) async fn forecast_from(
     db: &impl ConnectionTrait,
-    vehicle_id: i32,
     rems: &RemindersResponse,
+    backlog: &[PlannedItem],
     today: chrono::NaiveDate,
 ) -> DomainResult<BudgetForecast> {
     // The reminders response carries id + name; the intervals and est_cost
@@ -131,20 +162,10 @@ pub(crate) async fn forecast_from(
 
     // The planned backlog: its estimates are the second bucket, and its
     // schedule links suppress first occurrences ("already planned").
-    let backlog: Vec<work_item::Model> = work_item::Entity::find()
-        .filter(work_item::Column::VehicleId.eq(vehicle_id))
-        .filter(work_item::Column::Status.eq(JobStatus::Planned))
-        .all(db)
-        .await?;
-
-    // A job may name the inherited row of an item the vehicle has its own
-    // copy of, so each id is read as the item it counts toward.
-    let named: Vec<i32> = backlog.iter().filter_map(|i| i.schedule_item_id).collect();
-    let planned_schedule_items: HashSet<i32> =
-        super::schedule::effective_ids(db, vehicle_id, &named)
-            .await?
-            .into_values()
-            .collect();
+    let planned_schedule_items: HashSet<i32> = backlog
+        .iter()
+        .filter_map(|p| p.item.schedule_item_id)
+        .collect();
 
     let avg_daily = rems.avg_daily_miles;
     let miles_to_days = |miles: i32| -> Option<i64> {
@@ -221,7 +242,7 @@ pub(crate) async fn forecast_from(
     lines.sort_by(|a, b| a.when.cmp(&b.when).then_with(|| a.label.cmp(&b.label)));
     let projected_maintenance_cents: i64 = lines.iter().map(|l| l.est_cents).sum();
 
-    let (planned_work_cents, unestimated_planned_work) = planned_work_cost(&backlog);
+    let (planned_work_cents, unestimated_planned_work) = planned_work_cost(backlog);
 
     Ok(BudgetForecast {
         horizon_months: HORIZON_MONTHS,
@@ -240,7 +261,7 @@ pub(crate) async fn forecast_from(
 mod tests {
     use super::*;
     use crate::{
-        entities::{mileage_log, service_record, service_schedule_link},
+        entities::{mileage_log, service_record, service_schedule_link, work_item::JobStatus},
         error::DomainError,
         inputs::work_item::{NewWorkItem, UpdateWorkItem},
         services::{reminders, work_item as work_item_svc},
@@ -248,8 +269,10 @@ mod tests {
     };
 
     async fn forecast(db: &DatabaseConnection, vehicle_id: i32) -> DomainResult<BudgetForecast> {
+        let today = crate::services::today();
         let rems = reminders::calculate_reminders(db, vehicle_id).await?;
-        forecast_from(db, vehicle_id, &rems, crate::services::today()).await
+        let backlog = crate::services::upcoming::planned_work(db, vehicle_id, today).await?;
+        forecast_from(db, &rems, &backlog, today).await
     }
 
     async fn seed_item(
@@ -282,6 +305,114 @@ mod tests {
             forecast(&db, 999).await.unwrap_err(),
             DomainError::NotFound(_)
         ));
+    }
+
+    // The home page prints these two readings of a forecast.
+    #[tokio::test]
+    async fn a_forecast_says_how_many_items_it_could_not_price() {
+        let db = test_db().await;
+        let vid = VehicleFixture::new()
+            .purchase_date(&days_ago(730))
+            .purchase_mileage(0)
+            .insert_id(&db)
+            .await;
+        let nothing = forecast(&db, vid).await.unwrap();
+        assert!(nothing.is_empty());
+        assert_eq!(nothing.unestimated_note(), None);
+
+        let plan = |title: &str, est_cost_cents| NewWorkItem {
+            title: title.into(),
+            est_cost_cents,
+            ..Default::default()
+        };
+        work_item_svc::create(&db, vid, plan("Priced", Some(7_500)))
+            .await
+            .unwrap();
+        let priced = forecast(&db, vid).await.unwrap();
+        assert!(!priced.is_empty());
+        assert_eq!(priced.unestimated_note(), None);
+
+        work_item_svc::create(&db, vid, plan("Unpriced", None))
+            .await
+            .unwrap();
+        let one = forecast(&db, vid).await.unwrap();
+        assert_eq!(
+            one.unestimated_note().as_deref(),
+            Some("1 item has no estimate")
+        );
+
+        // An overdue schedule item with no estimate counts beside the job.
+        seed_item(&db, vid, "Timing belt check", None, Some(12), None).await;
+        let two = forecast(&db, vid).await.unwrap();
+        assert_eq!(two.unestimated_count(), 2);
+        assert_eq!(
+            two.unestimated_note().as_deref(),
+            Some("2 items have no estimate")
+        );
+        assert_eq!(two.total_cents, 7_500);
+    }
+
+    // The planned jobs reach the forecast most urgent first, and the list of
+    // unpriced ones stays in the order they were planned.
+    #[tokio::test]
+    async fn unpriced_planned_work_is_listed_in_id_order() {
+        let db = test_db().await;
+        let vid = VehicleFixture::new().insert_id(&db).await;
+        let first = work_item_svc::create(
+            &db,
+            vid,
+            NewWorkItem {
+                title: "No revisit".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let second = work_item_svc::create(
+            &db,
+            vid,
+            NewWorkItem {
+                title: "Overdue revisit".into(),
+                revisit_by_date: Some(days_ago(10)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let today = crate::services::today();
+        let backlog = crate::services::upcoming::planned_work(&db, vid, today)
+            .await
+            .unwrap();
+        let by_urgency: Vec<i32> = backlog.iter().map(|p| p.item.id).collect();
+        assert_eq!(by_urgency, [second.id, first.id]);
+
+        let f = forecast(&db, vid).await.unwrap();
+
+        let listed: Vec<i32> = f.unestimated_planned_work.iter().map(|w| w.id).collect();
+        assert_eq!(listed, [first.id, second.id]);
+    }
+
+    // A vehicle whose only forecast content is unpriced still has something
+    // to show: the count of what the total leaves out.
+    #[tokio::test]
+    async fn a_forecast_of_only_unpriced_items_is_not_empty() {
+        let db = test_db().await;
+        let vid = VehicleFixture::new().insert_id(&db).await;
+        work_item_svc::create(
+            &db,
+            vid,
+            NewWorkItem {
+                title: "Unpriced".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let f = forecast(&db, vid).await.unwrap();
+
+        assert_eq!(f.total_cents, 0);
+        assert!(!f.is_empty());
     }
 
     #[tokio::test]
@@ -515,9 +646,7 @@ mod tests {
         .unwrap();
 
         let rems = reminders::calculate_reminders(&db, vid).await.unwrap();
-        let f = forecast_from(&db, vid, &rems, crate::services::today())
-            .await
-            .unwrap();
+        let f = forecast(&db, vid).await.unwrap();
         assert!(!f.lines.is_empty(), "rate {}", rems.avg_daily_miles);
         #[expect(
             clippy::cast_possible_truncation,
@@ -558,9 +687,7 @@ mod tests {
 
         let rems = reminders::calculate_reminders(&db, vid).await.unwrap();
         assert_eq!(rems.reminders[0].miles_remaining, Some(0));
-        let f = forecast_from(&db, vid, &rems, crate::services::today())
-            .await
-            .unwrap();
+        let f = forecast(&db, vid).await.unwrap();
         assert_eq!(f.projected_maintenance_cents, 2_000);
         assert_eq!(f.lines.len(), 1);
         assert_eq!(f.unestimated_item_count, 1);

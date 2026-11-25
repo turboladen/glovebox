@@ -24,10 +24,12 @@ use crate::{
     inputs::checklist::ChecklistScope,
     money::format_cents,
     services::{
+        activity::{self, ActivityItem},
         appointment::{self, AppointmentSummary},
+        budget::{self, BudgetForecast},
         incident::ServiceRef,
         need::{self, Stage, stage},
-        todo as todo_svc,
+        reminders, todo as todo_svc, upcoming,
         waiting::{self, Waiting},
     },
 };
@@ -713,7 +715,16 @@ pub struct VehicleHome {
     pub waiting: Waiting,
     /// Lists the open to-dos that are on no appointment.
     pub todos: Vec<todo::Model>,
+    /// The 12-month cost forecast, judged from the same reminders and planned
+    /// jobs as `waiting`.
+    pub budget: BudgetForecast,
+    /// The latest [`HOME_ACTIVITY_LIMIT`] services, incidents and odometer
+    /// readings, newest first.
+    pub recent_activity: Vec<ActivityItem>,
 }
+
+/// How many recent records [`home`] lists for each vehicle.
+pub const HOME_ACTIVITY_LIMIT: usize = 3;
 
 /// Describes an open appointment and what is still open on it.
 #[derive(Debug, Serialize)]
@@ -739,9 +750,10 @@ pub struct HomeAppointment {
 }
 
 /// What the home page shows for every vehicle that is not archived: what is
-/// waiting for an appointment, its open appointments and its to-dos that are
-/// on no appointment. An appointment whose jobs are all done stays listed while it
-/// has an open to-do.
+/// waiting for an appointment, its open appointments, its to-dos that are
+/// on no appointment, its 12-month forecast and its latest records. An
+/// appointment whose jobs are all done stays listed while it has an open
+/// to-do.
 ///
 /// # Errors
 /// `Db` when a query fails.
@@ -749,8 +761,11 @@ pub async fn home(
     db: &impl ConnectionTrait,
     today: chrono::NaiveDate,
 ) -> DomainResult<Vec<VehicleHome>> {
-    // Every vehicle's rows come from the same batched queries, through the
-    // functions the per-vehicle lists use, so the page and the tools agree.
+    // The appointments and the to-dos of every vehicle come from one batched
+    // query each. The rest is read per vehicle, through the functions the
+    // tools use, so the page and the tools agree: the reminders and the
+    // planned jobs are read once, and both the waiting lists and the forecast
+    // are judged from them.
     let vehicles = super::vehicle::list(db, false).await?;
     let ids: Vec<i32> = vehicles.iter().map(|v| v.id).collect();
     let mut appointments = appointment::open_by_vehicle(db, &ids, today).await?;
@@ -760,8 +775,12 @@ pub async fn home(
     }
     let mut homes = Vec::with_capacity(vehicles.len());
     for vehicle in vehicles {
+        let reminders = reminders::calculate_reminders_on(db, vehicle.id, today).await?;
+        let planned = upcoming::planned_work(db, vehicle.id, today).await?;
         homes.push(VehicleHome {
-            waiting: waiting::waiting(db, vehicle.id, today).await?,
+            waiting: waiting::from_parts(db, vehicle.id, &reminders, &planned).await?,
+            budget: budget::forecast_from(db, &reminders, &planned, today).await?,
+            recent_activity: activity::recent_of(db, &vehicle, HOME_ACTIVITY_LIMIT).await?,
             appointments: appointments
                 .remove(&vehicle.id)
                 .unwrap_or_default()

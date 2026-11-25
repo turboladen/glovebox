@@ -68,7 +68,17 @@ pub async fn recent(
     limit: usize,
 ) -> DomainResult<Vec<ActivityItem>> {
     let vehicle = super::vehicle::require(db, vehicle_id).await?;
-    let vehicle_name = vehicle.name;
+    recent_of(db, &vehicle, limit).await
+}
+
+/// [`recent`] for a vehicle the caller has already read.
+pub(crate) async fn recent_of(
+    db: &impl ConnectionTrait,
+    vehicle: &crate::entities::vehicle::Model,
+    limit: usize,
+) -> DomainResult<Vec<ActivityItem>> {
+    let vehicle_id = vehicle.id;
+    let vehicle_name = &vehicle.name;
     let limit = limit.min(MAX_LIMIT);
     let limit_u64 = limit as u64;
 

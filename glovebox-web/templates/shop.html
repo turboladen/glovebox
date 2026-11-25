@@ -18,7 +18,7 @@
 
 <section class="section page">
   <section class="sheet" aria-labelledby="shop-services">
-    <div class="sheet-head"><h3 id="shop-services">Services</h3><span class="n">{{ v.services.len() }}</span></div>
+    <div class="sheet-head"><h2 id="shop-services">Services</h2><span class="n">{{ v.services.len() }}</span></div>
     {% if v.services.is_empty() %}
     <p class="empty lone">No services at this shop.</p>
     {% else %}
@@ -27,10 +27,10 @@
       {% for s in v.services %}
       <li class="row row--visits">
         <span class="key"><a href="{{ s.href }}">{{ s.date }}</a></span>
-        <span data-l="Vehicle">{{ s.vehicle }}</span>
-        <span data-l="Description">{% if let Some(t) = s.description %}{{ t }}{% endif %}</span>
-        <span class="num price" data-l="Total">{% if let Some(t) = s.total %}{{ t }}{% else %}<span class="empty">No total</span>{% endif %}</span>
-        <span class="num price" data-l="You paid">{% if let Some(p) = s.paid %}{{ p }}{% endif %}</span>
+        <span data-l="Vehicle"><span class="vh">Vehicle </span>{{ s.vehicle }}</span>
+        <span data-l="Description">{% if let Some(t) = s.description %}<span class="vh">Description </span>{{ t }}{% endif %}</span>
+        <span class="num price" data-l="Total"><span class="vh">Total </span>{% if let Some(t) = s.total %}{{ t }}{% else %}<span class="empty">No total</span>{% endif %}</span>
+        <span class="num price" data-l="You paid">{% if let Some(p) = s.paid %}<span class="vh">You paid </span>{{ p }}{% endif %}</span>
       </li>
       {% endfor %}
     </ul>
@@ -38,7 +38,7 @@
   </section>
 
   <section class="sheet" aria-labelledby="shop-appointments">
-    <div class="sheet-head"><h3 id="shop-appointments">Appointments</h3><span class="n">{{ v.appointments.len() }}</span></div>
+    <div class="sheet-head"><h2 id="shop-appointments">Appointments</h2><span class="n">{{ v.appointments.len() }}</span></div>
     {% if v.appointments.is_empty() %}
     <p class="empty lone">No appointments at this shop.</p>
     {% else %}
@@ -47,9 +47,9 @@
       {% for a in v.appointments %}
       <li class="row row--appts">
         <span class="key"><a href="{{ a.href }}">{{ a.purpose }}</a></span>
-        <span data-l="Vehicle">{{ a.vehicle }}</span>
-        <span data-l="Date">{% if a.dated %}{{ a.when }}{% else %}<span class="empty cap">{{ a.when }}</span>{% endif %}</span>
-        <span data-l="Status"><span class="pill pill--{{ a.status.kind }}">{{ a.status.text }}</span></span>
+        <span data-l="Vehicle"><span class="vh">Vehicle </span>{{ a.vehicle }}</span>
+        <span data-l="Date"><span class="vh">Date </span>{% if a.dated %}{{ a.when }}{% else %}<span class="empty cap">{{ a.when }}</span>{% endif %}</span>
+        <span data-l="Status"><span class="vh">Status </span><span class="pill pill--{{ a.status.kind }}">{{ a.status.text }}</span></span>
       </li>
       {% endfor %}
     </ul>

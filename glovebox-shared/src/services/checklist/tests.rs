@@ -1381,3 +1381,94 @@ async fn a_job_view_names_the_service_that_completed_it() {
     let view = for_job(&db, v, planned).await.unwrap();
     assert!(view.completed_by.is_none(), "{:?}", view.completed_by);
 }
+
+// The home page's forecast and latest records come from the same read as its
+// waiting lists.
+#[tokio::test]
+async fn home_carries_each_vehicles_forecast_and_latest_records() {
+    use crate::{
+        entities::service_record::Performer,
+        inputs::{
+            mileage::NewMileageEntry, service_record::NewServiceRecord, work_item::NewWorkItem,
+        },
+        services::{activity::ActivityKind, mileage, service_record, work_item as work_item_svc},
+    };
+
+    let db = test_db().await;
+    let today = date("2026-11-18");
+    let golf = VehicleFixture::new().name("Golf").insert_id(&db).await;
+    let quiet = VehicleFixture::new().name("Quiet").insert_id(&db).await;
+    let plan = |title: &str, est_cost_cents| NewWorkItem {
+        title: title.into(),
+        est_cost_cents,
+        ..Default::default()
+    };
+    work_item_svc::create(&db, golf, plan("Brakes", Some(65_000)))
+        .await
+        .unwrap();
+    work_item_svc::create(&db, golf, plan("Wipers", None))
+        .await
+        .unwrap();
+    let mut services = Vec::new();
+    for (day, miles) in [
+        ("2026-08-01", 58_000),
+        ("2026-09-01", 59_000),
+        ("2026-10-01", 60_000),
+    ] {
+        let created = service_record::create(
+            &db,
+            golf,
+            NewServiceRecord {
+                service_date: date(day),
+                performed_by: Some(Performer::Owner),
+                mileage: Some(miles),
+                description: Some(format!("Service at {miles}")),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        services.push(created.record.id);
+    }
+    mileage::create(
+        &db,
+        golf,
+        NewMileageEntry {
+            mileage: 60_500,
+            recorded_at: Some(date("2026-11-01")),
+            source: None,
+            notes: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let home = home(&db, today).await.unwrap();
+
+    let g = &home[0];
+    assert_eq!(g.vehicle.id, golf);
+    assert_eq!(g.budget.planned_work_cents, 65_000);
+    assert_eq!(g.budget.total_cents, 65_000);
+    assert_eq!(
+        g.budget.unestimated_note().as_deref(),
+        Some("1 item has no estimate")
+    );
+    // The waiting list and the forecast read the same planned jobs.
+    assert_eq!(g.waiting.jobs.len(), 2);
+    let latest: Vec<(ActivityKind, i32)> =
+        g.recent_activity.iter().map(|a| (a.kind, a.id)).collect();
+    assert_eq!(latest.len(), HOME_ACTIVITY_LIMIT);
+    assert_eq!(latest[0].0, ActivityKind::Mileage);
+    assert_eq!(
+        latest[1..],
+        [
+            (ActivityKind::Service, services[2]),
+            (ActivityKind::Service, services[1]),
+        ]
+    );
+
+    let q = &home[1];
+    assert_eq!(q.vehicle.id, quiet);
+    assert!(q.budget.is_empty());
+    crate::test_support::assert_empty(&q.recent_activity);
+}

@@ -597,7 +597,11 @@ async fn changing_an_inherited_item_keeps_its_history_and_planned_work() {
     // override, so it still stands in for the first projected occurrence.
     let kept = work_item::get(&db, vid, planned.id).await.unwrap();
     assert_eq!(kept.schedule_item_id, Some(inherited.id));
-    let f = budget::forecast_from(&db, vid, &rems, crate::services::today())
+    let today = crate::services::today();
+    let backlog = crate::services::upcoming::planned_work(&db, vid, today)
+        .await
+        .unwrap();
+    let f = budget::forecast_from(&db, &rems, &backlog, today)
         .await
         .unwrap();
     assert!(

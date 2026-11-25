@@ -55,7 +55,7 @@ reminder and not a state. A count of things waiting on the owner sits in a squar
 **Only form fields have a boxed outline.** Text fields, selects and textareas have an outline and
 the field background, and radios, checkboxes and the tick are drawn to match. A form sits in a
 bordered panel. An error is a line with a red bar at its start, the invalid field gets a red border,
-and the focus ring is the accent color.
+and the focus ring is the ink on the light theme and the accent on the dark one.
 
 **Each style of control has one role.** A solid button commits something. An outlined button
 opens a form or a row. Underlined text does minor things, such as Delete, Show and Hide. The
@@ -101,6 +101,13 @@ breakdown of the cost summary stays in Claude Desktop, because a row per month w
 totals. The page holds no forms and adds no stylesheet rule. A vehicle's name printed on the
 home, service, job and appointment pages links to it.
 
+**The home page's budget panel follows the same rules (2026-11-24).** It is one panel after the
+waiting lists. The forecast's figures are labeled values, like an appointment's head, with the
+amounts as prices, and "At least" before a total that leaves out an unpriced item. The latest
+records reuse the vehicle page's activity rows and the waiting columns. The link to the
+vehicle's page is underlined text at the end of the panel's head, because it is a minor
+control. The panel adds no stylesheet rule and holds no forms.
+
 **A vehicle's printable history departs from the ledger as the work sheet does (2026-11-24).**
 ADR 0009 sets that look and ADR 0025 sets the content. On screen and on paper the history is
 plain text with no panels and no pills: a heading, the car on one line, labeled facts, then one
@@ -109,6 +116,23 @@ changes two print rules in `templates/base.html`: `.ws a` drops the underline fr
 `.ws .l` prints every label black, where the rule covered only the labels of the car's facts.
 Both apply to every page printed this way, the work sheet included. On paper the site header is
 hidden and the strip of on-screen links is left out.
+
+**The page reads the same to assistive technology at every width (2026-11-24).** The header
+line of a ledger is hidden from a screen reader, so each cell with a value starts with its
+column's name in a visually hidden span, and the name a narrow window shows beside the value is
+generated content with empty alternative text, so it is not read a second time. A cell with no
+value stays empty. The first cell of a row is the row's own name and carries no label. A need's
+row is one disclosure whose name is the need's name and its stage, and the whole row is its
+description, so the values in its cells are still read. Every page has one top heading and a
+panel's heading is the next level down, which makes it a second-level heading on a page whose
+panels sit directly under the title (a vehicle, a service, a shop and the directory) and a
+third-level one under a vehicle's or a section's name; the two look the same. Three measures
+changed with this. The to-do tick is 24 by 24 CSS pixels, the smallest pointer target WCAG 2.2
+allows, and an underlined control is as tall. The focus ring has its own token, `--focus`: the
+accent stands 1.2:1 to 1.7:1 against the light theme's grounds, below the 3:1 a focus
+indicator needs, so the ring is the ink there (10.7:1 or more) and stays the accent on the dark
+theme (8:1 or more). The light theme's label gray is `#46626A`, which stands 4.7:1 against the
+tinted ground, where small label text needs 4.5:1.
 
 **The page has no script.** The content security policy in `glovebox-web/src/guard.rs` allows
 inline styles and fonts from this server, and nothing else loads.

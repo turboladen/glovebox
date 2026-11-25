@@ -590,6 +590,22 @@ pub async fn decide<C: ConnectionTrait + TransactionTrait>(
     option_id: Option<i32>,
     reason: Option<String>,
 ) -> DomainResult<job_need::Model> {
+    decide_on(db, vehicle_id, need_id, option_id, reason, super::today()).await
+}
+
+/// [`decide`] for a choice made on `today`, which is the date a new choice
+/// is stamped with.
+///
+/// # Errors
+/// As for [`decide`].
+pub async fn decide_on<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    need_id: i32,
+    option_id: Option<i32>,
+    reason: Option<String>,
+    today: chrono::NaiveDate,
+) -> DomainResult<job_need::Model> {
     let txn = super::begin_write(db).await?;
     let db = &txn;
     let need = require(db, vehicle_id, need_id).await?;
@@ -612,7 +628,7 @@ pub async fn decide<C: ConnectionTrait + TransactionTrait>(
                     on,
                     ..
                 } if kept == option_id => on,
-                _ => crate::services::today(),
+                _ => today,
             };
             Decision::Chosen {
                 option_id,
@@ -1103,6 +1119,21 @@ pub async fn return_part<C: ConnectionTrait + TransactionTrait>(
     need_id: i32,
     input: ReturnInput,
 ) -> DomainResult<ReturnOutcome> {
+    return_part_on(db, vehicle_id, need_id, input, super::today()).await
+}
+
+/// [`return_part`] for a part sent back on `today`, which is the date the
+/// part's return is stamped with.
+///
+/// # Errors
+/// As for [`return_part`].
+pub async fn return_part_on<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    need_id: i32,
+    input: ReturnInput,
+    today: chrono::NaiveDate,
+) -> DomainResult<ReturnOutcome> {
     super::validate_not_blank("reason", &input.reason)?;
     let txn = super::begin_write(db).await?;
     let need = require(&txn, vehicle_id, need_id).await?;
@@ -1117,7 +1148,7 @@ pub async fn return_part<C: ConnectionTrait + TransactionTrait>(
     let chosen_option_id = need.chosen_option_id;
 
     let returned_part =
-        super::part::mark_returned(&txn, found, input.reason.clone(), need_id).await?;
+        super::part::mark_returned(&txn, found, input.reason.clone(), need_id, today).await?;
     let returned_part = super::part::view(&txn, returned_part).await?;
     set_need_part(&txn, need, None, None).await?;
     if let Some(option_id) = chosen_option_id.filter(|_| input.option_was_wrong) {

@@ -127,13 +127,13 @@ async fn home_lists_open_appointments_and_jobs_not_scheduled() {
     );
     assert!(
         body.contains(
-            r#"<span data-l="Status"><span class="pill pill--wait">Booked</span></span>"#
+            r#"<span data-l="Status"><span class="vh">Status </span><span class="pill pill--wait">Booked</span></span>"#
         ),
         "the dated appointment reads booked: {body}"
     );
     assert!(
         body.contains(
-            r#"<span data-l="Status"><span class="pill pill--plain">Planning</span></span>"#
+            r#"<span data-l="Status"><span class="vh">Status </span><span class="pill pill--plain">Planning</span></span>"#
         ),
         "the undated one reads planning: {body}"
     );
@@ -160,7 +160,7 @@ async fn home_lists_open_appointments_and_jobs_not_scheduled() {
     );
     assert!(body.contains("Winter tires"), "{body}");
     assert!(
-        body.contains(r#"<span data-l="Date"><span class="empty cap">not booked</span></span>"#),
+        body.contains(r#"<span data-l="Date"><span class="vh">Date </span><span class="empty cap">not booked</span></span>"#),
         "{body}"
     );
     assert!(body.contains("Jobs not scheduled"), "{body}");
@@ -174,7 +174,7 @@ async fn home_lists_open_appointments_and_jobs_not_scheduled() {
     );
     assert!(body.contains("Wash the car"), "{body}");
     assert!(
-        body.contains(r#"<span data-l="Date">2026-12-01</span>"#),
+        body.contains(r#"<span data-l="Date"><span class="vh">Date </span>2026-12-01</span>"#),
         "{body}"
     );
     assert_eq!(body.matches(">Add a to-do<").count(), 2, "{body}");
@@ -1321,11 +1321,23 @@ async fn shop_fixture(db: &DatabaseConnection) -> (i32, i32, i32) {
     (smith, golf, planning)
 }
 
+// `html` without its visually hidden label spans.
+fn without_hidden_labels(html: &str) -> String {
+    let mut out = String::new();
+    let mut rest = html;
+    while let Some((before, after)) = rest.split_once(r#"<span class="vh">"#) {
+        out.push_str(before);
+        rest = after.split_once("</span>").map_or("", |(_, tail)| tail);
+    }
+    out.push_str(rest);
+    out
+}
+
 // The rows of the section headed `heading`, each with its tags stripped and
 // its whitespace collapsed.
 fn section_rows(body: &str, heading: &str) -> Vec<String> {
     let section = body
-        .split(&format!(">{heading}</h3>"))
+        .split(&format!(">{heading}</h2>"))
         .nth(1)
         .unwrap_or_else(|| panic!("no {heading} section: {body}"));
     let section = section.split("</section>").next().unwrap_or_default();
@@ -1335,6 +1347,9 @@ fn section_rows(body: &str, heading: &str) -> Vec<String> {
         .map(|row| {
             let row = row.split("</li>").next().unwrap_or_default();
             let row = row.split_once('>').map_or("", |(_, rest)| rest);
+            // The hidden labels have their own test, so a row reads here
+            // as it does on a wide window.
+            let row = without_hidden_labels(row);
             let mut text = String::new();
             let mut in_tag = false;
             for c in row.chars() {
@@ -1366,8 +1381,8 @@ async fn shops_page_lists_each_shop_with_its_counts() {
     assert_eq!(
         section_rows(&body, "Directory"),
         [
-            "Acme Tires Services 0 Appointments 0 No services",
-            "Smith Auto 1 Main St Services 3 Appointments 2 2026-11-01",
+            "Acme Tires 0 0 No services",
+            "Smith Auto 1 Main St 3 2 2026-11-01",
         ]
     );
 }
@@ -1704,7 +1719,7 @@ async fn a_service_page_omits_its_empty_sections() {
         "{body}"
     );
     for absent in [
-        "<h3",
+        "<h2",
         ">Odometer<",
         ">Invoice<",
         ">Lines<",
@@ -2126,7 +2141,7 @@ async fn a_vehicle_page_omits_its_empty_sections() {
         "{body}"
     );
     for absent in [
-        "<h3",
+        "<h2",
         ">VIN<",
         ">Plate<",
         ">Color<",
@@ -2376,4 +2391,148 @@ async fn a_missing_vehicles_history_is_the_not_found_page() {
     let (status, body) = page(app(db, "test"), get(&history_path(999))).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(body.contains("Page not found"), "{body}");
+}
+
+// A self-performed service on `vehicle`, `days_ago` days before the page's
+// clock, with its description. The result is its id.
+async fn plain_service(db: &DatabaseConnection, vehicle: i32, days_ago: u64, text: &str) -> i32 {
+    use glovebox_shared::{
+        entities::service_record::Performer, inputs::service_record::NewServiceRecord,
+        services::service_record,
+    };
+    service_record::create(
+        db,
+        vehicle,
+        NewServiceRecord {
+            service_date: days_before_today(days_ago),
+            performed_by: Some(Performer::Owner),
+            description: Some(text.into()),
+            total_cost_cents: Some(4_500),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .record
+    .id
+}
+
+async fn planned_job(db: &DatabaseConnection, vehicle: i32, title: &str, cents: Option<i32>) {
+    let job = NewWorkItem {
+        title: title.into(),
+        est_cost_cents: cents,
+        ..Default::default()
+    };
+    work_item::create(db, vehicle, job).await.unwrap();
+}
+
+#[tokio::test]
+async fn home_shows_each_cars_budget_and_latest_activity() {
+    let db = db().await;
+    let v = VehicleFixture::new().name("Golf").insert_id(&db).await;
+    planned_job(&db, v, "Brakes", Some(65_000)).await;
+    planned_job(&db, v, "Wipers", None).await;
+    let oldest = plain_service(&db, v, 300, "Oldest service").await;
+    let mut latest = Vec::new();
+    for (days_ago, text) in [
+        (200, "Tire rotation"),
+        (100, "Oil change"),
+        (20, "Inspection"),
+    ] {
+        latest.push((plain_service(&db, v, days_ago, text).await, text));
+    }
+
+    let (status, body) = page(app(db, "test"), get("/")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    for detail in [
+        "<h3>Budget and latest activity</h3>".to_owned(),
+        format!(r#"<a class="aside" href="/vehicles/{v}">All costs and activity</a>"#),
+        r#"<span class="l">Next 12 months</span><span class="price">At least $650.00</span>"#
+            .to_owned(),
+        r#"<span class="l">Scheduled maintenance</span><span class="price">$0.00</span>"#
+            .to_owned(),
+        r#"<span class="l">Planned work</span><span class="price">$650.00</span>"#.to_owned(),
+        r#"<span class="l">Not in the total</span>1 item has no estimate"#.to_owned(),
+        day_label(20),
+    ] {
+        assert!(body.contains(&detail), "missing {detail}: {body}");
+    }
+    for (id, text) in latest {
+        let link = format!(r#"<a href="/vehicles/{v}/services/{id}">{text}</a>"#);
+        assert!(body.contains(&link), "missing {link}: {body}");
+    }
+    // Only the three latest records are listed.
+    assert!(!body.contains("Oldest service"), "{body}");
+    assert!(!body.contains(&format!("/services/{oldest}\"")), "{body}");
+    // The panel comes after the waiting lists and before the appointments.
+    let at = |text: &str| {
+        body.find(text)
+            .unwrap_or_else(|| panic!("no {text}: {body}"))
+    };
+    assert!(at("<h3>Open incidents</h3>") < at("<h3>Budget and latest activity</h3>"));
+    assert!(at("<h3>Budget and latest activity</h3>") < at("<h3>Appointments</h3>"));
+}
+
+#[tokio::test]
+async fn home_prints_an_exact_budget_when_every_item_has_an_estimate() {
+    let db = db().await;
+    let v = VehicleFixture::new().name("Golf").insert_id(&db).await;
+    planned_job(&db, v, "Brakes", Some(123_456)).await;
+
+    let (_, body) = page(app(db, "test"), get("/")).await;
+
+    assert!(
+        body.contains(
+            r#"<span class="l">Next 12 months</span><span class="price">$1,234.56</span>"#
+        ),
+        "{body}"
+    );
+    for absent in ["At least", "Not in the total", ">Record<"] {
+        assert!(!body.contains(absent), "{absent} is shown: {body}");
+    }
+}
+
+#[tokio::test]
+async fn home_shows_no_budget_or_activity_for_a_car_with_neither() {
+    let db = db().await;
+    VehicleFixture::new().name("Golf").insert_id(&db).await;
+
+    let (status, body) = page(app(db, "test"), get("/")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Golf"), "{body}");
+    for absent in [
+        "Budget and latest activity",
+        "Next 12 months",
+        "All costs and activity",
+    ] {
+        assert!(!body.contains(absent), "{absent} is shown: {body}");
+    }
+}
+
+#[tokio::test]
+async fn home_lists_no_budget_or_activity_of_an_archived_car() {
+    let db = db().await;
+    let sold = VehicleFixture::new().name("Old Jetta").insert_id(&db).await;
+    plain_service(&db, sold, 30, "Jetta oil change").await;
+    glovebox_shared::services::vehicle::archive(
+        &db,
+        sold,
+        glovebox_shared::inputs::vehicle::VehicleSale::default(),
+    )
+    .await
+    .unwrap();
+
+    let (status, body) = page(app(db, "test"), get("/")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    for absent in [
+        "Old Jetta",
+        "Jetta oil change",
+        "Budget and latest activity",
+        "$45.00",
+    ] {
+        assert!(!body.contains(absent), "{absent} is shown: {body}");
+    }
 }

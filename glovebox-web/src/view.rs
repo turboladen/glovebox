@@ -18,7 +18,7 @@ use glovebox_shared::{
     services::{
         activity::{ActivityItem, ActivityKind},
         appointment::{self, AppointmentPhase},
-        checklist::{self, Checklist, HomeAppointment, JobView, NeedView, StepRow},
+        checklist::{self, Checklist, HomeAppointment, JobView, NeedView, StepRow, VehicleHome},
         date_label,
         history::VehicleHistory,
         incident::ServiceRef,
@@ -1558,6 +1558,54 @@ impl From<&ActivityItem> for ActivityRow {
             date: date_label(a.date.day()),
             total: a.total_cost_cents.map(format_cents),
         }
+    }
+}
+
+/// The figures of a vehicle's 12-month forecast on the home page.
+pub struct BudgetLine {
+    pub total: String,
+    /// True when the total leaves out an item with no estimate, so the page
+    /// prints it as a floor.
+    pub floor: bool,
+    /// Says how many items have no estimate, when any do.
+    pub unpriced: Option<String>,
+    pub maintenance: String,
+    pub planned: String,
+}
+
+/// A vehicle's forecast and latest records, which the home page prints after
+/// its waiting lists.
+pub struct HomeOutlook {
+    /// None when there is nothing to forecast.
+    pub budget: Option<BudgetLine>,
+    pub activity: Vec<ActivityRow>,
+    /// The path of the vehicle's page, which lists the rest.
+    pub vehicle_href: String,
+}
+
+impl HomeOutlook {
+    /// The panel for `home`, or none for a vehicle with nothing to forecast
+    /// and no records.
+    pub fn of(home: &VehicleHome) -> Option<Self> {
+        let b = &home.budget;
+        let budget = (!b.is_empty()).then(|| {
+            let unpriced = b.unestimated_note();
+            BudgetLine {
+                total: format_cents(b.total_cents),
+                floor: unpriced.is_some(),
+                unpriced,
+                maintenance: format_cents(b.projected_maintenance_cents),
+                planned: format_cents(b.planned_work_cents),
+            }
+        });
+        if budget.is_none() && home.recent_activity.is_empty() {
+            return None;
+        }
+        Some(Self {
+            budget,
+            activity: home.recent_activity.iter().map(Into::into).collect(),
+            vehicle_href: crate::pages::vehicle_path(home.vehicle.id),
+        })
     }
 }
 

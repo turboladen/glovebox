@@ -13,7 +13,7 @@ use crate::{
     error::DomainResult,
     services::{
         checklist,
-        reminders::{self, DueStatus},
+        reminders::{self, DueStatus, RemindersResponse},
         upcoming,
         work_item::PlannedItem,
     },
@@ -154,6 +154,18 @@ pub async fn waiting(
 ) -> DomainResult<Waiting> {
     let reminders = reminders::calculate_reminders_on(db, vehicle_id, today).await?;
     let planned = upcoming::planned_work(db, vehicle_id, today).await?;
+    from_parts(db, vehicle_id, &reminders, &planned).await
+}
+
+/// [`waiting`] from the vehicle's reminders and its planned jobs, for a
+/// caller that has read both and uses them for something else as well.
+/// `planned` is what [`upcoming::planned_work`] lists.
+pub(crate) async fn from_parts(
+    db: &impl ConnectionTrait,
+    vehicle_id: i32,
+    reminders: &RemindersResponse,
+    planned: &[PlannedItem],
+) -> DomainResult<Waiting> {
     let covering = |link: fn(&work_item::Model) -> Option<i32>, id: i32| {
         Cover::of(
             planned
@@ -217,8 +229,8 @@ pub async fn waiting(
         })
         .collect();
 
-    let unbooked: Vec<PlannedItem> = planned
-        .into_iter()
+    let unbooked: Vec<&PlannedItem> = planned
+        .iter()
         .filter(|p| p.item.appointment_id.is_none())
         .collect();
     let needs_open: HashMap<i32, usize> =
@@ -228,7 +240,7 @@ pub async fn waiting(
         .map(|p| WaitingJob {
             needs_open: needs_open.get(&p.item.id).copied().unwrap_or(0),
             id: p.item.id,
-            title: p.item.title,
+            title: p.item.title.clone(),
             revisit_status: p.revisit_status,
             est_cost_cents: p.item.est_cost_cents,
         })

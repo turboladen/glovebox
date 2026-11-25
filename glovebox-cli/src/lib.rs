@@ -70,7 +70,7 @@ pub async fn run(
             let name = env::test_name(&env)?;
             let path = data_dir.join(format!("glovebox-{name}.db"));
             let conn = db::connect_as(&path.to_string_lossy(), db::Program::Cli).await?;
-            let summary = seed::demo(&conn).await?;
+            let summary = seed::demo(&conn, glovebox_shared::services::today()).await?;
             conn.close().await?;
             Ok(format!(
                 "Seeded environment {name} at {}: {}.",
@@ -84,7 +84,7 @@ pub async fn run(
 fn describe(s: &SeedSummary) -> String {
     let count = |n: u64, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
     format!(
-        "{}, {}, {}, {}, {}, {} and {}",
+        "{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {} and {}",
         count(s.vehicles, "vehicle", "vehicles"),
         count(s.appointments, "appointment", "appointments"),
         count(s.jobs, "job", "jobs"),
@@ -92,6 +92,11 @@ fn describe(s: &SeedSummary) -> String {
         count(s.options, "option", "options"),
         count(s.parts, "part", "parts"),
         count(s.todos, "to-do", "to-dos"),
+        count(s.services, "service", "services"),
+        count(s.readings, "odometer reading", "odometer readings"),
+        count(s.incidents, "incident", "incidents"),
+        count(s.notes, "note", "notes"),
+        count(s.recalls, "recall", "recalls"),
     )
 }
 

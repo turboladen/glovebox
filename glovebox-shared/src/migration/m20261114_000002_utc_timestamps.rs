@@ -337,7 +337,9 @@ mod tests {
     #[tokio::test]
     async fn every_stamp_the_services_write_is_whole_second_rfc_3339() {
         let db = crate::test_support::test_db().await;
-        crate::seed::demo(&db).await.unwrap();
+        crate::seed::demo(&db, crate::test_support::date("2026-11-13"))
+            .await
+            .unwrap();
 
         let (other, all) = stamps(&db).await;
 
