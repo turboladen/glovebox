@@ -3,8 +3,8 @@ use serde::Serialize;
 
 use crate::{
     entities::{
-        research_finding::{self, FindingStatus},
-        research_report,
+        research_finding::{self, FindingCategory, FindingSeverity, FindingStatus},
+        research_report::{self, ReportType},
     },
     error::{DomainError, DomainResult},
     services::{
@@ -15,11 +15,11 @@ use crate::{
 
 #[derive(Debug)]
 struct NewFinding {
-    category: String,
+    category: FindingCategory,
     title: String,
     description: Option<String>,
     source_url: Option<String>,
-    severity: Option<String>,
+    severity: Option<FindingSeverity>,
 }
 
 /// Input for [`file_finding`] — a finding researched outside the app
@@ -27,11 +27,11 @@ struct NewFinding {
 /// `external_research` anchor report.
 #[derive(Debug)]
 pub struct NewFiledFinding {
-    pub category: String,
+    pub category: FindingCategory,
     pub title: String,
     pub description: Option<String>,
     pub source_url: Option<String>,
-    pub severity: Option<String>,
+    pub severity: Option<FindingSeverity>,
 }
 
 // --- Recall check ---
@@ -188,7 +188,7 @@ async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
         } else {
             research_finding::Entity::find()
                 .filter(research_finding::Column::ReportId.is_in(report_ids))
-                .filter(research_finding::Column::Category.eq("recall"))
+                .filter(research_finding::Column::Category.eq(FindingCategory::Recall))
                 .all(db)
                 .await?
                 .into_iter()
@@ -227,11 +227,11 @@ async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
             continue;
         }
         new_findings.push(NewFinding {
-            category: "recall".to_string(),
+            category: FindingCategory::Recall,
             title: recall.title.clone(),
             description: recall_description(recall),
             source_url: Some(url),
-            severity: Some("critical".to_string()),
+            severity: Some(FindingSeverity::Critical),
         });
     }
 
@@ -243,7 +243,7 @@ async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
 
     let report = research_report::ActiveModel {
         vehicle_id: Set(vehicle_id),
-        report_type: Set(Some("recalls_only".to_string())),
+        report_type: Set(Some(ReportType::RecallsOnly)),
         ..Default::default()
     };
     let report = report.insert(&txn).await?;
@@ -284,7 +284,7 @@ pub async fn file_finding<C: ConnectionTrait + TransactionTrait>(
     // always the one picked.
     let report = match research_report::Entity::find()
         .filter(research_report::Column::VehicleId.eq(vehicle_id))
-        .filter(research_report::Column::ReportType.eq("external_research"))
+        .filter(research_report::Column::ReportType.eq(ReportType::ExternalResearch))
         .order_by_asc(research_report::Column::Id)
         .one(db)
         .await?
@@ -299,7 +299,7 @@ pub async fn file_finding<C: ConnectionTrait + TransactionTrait>(
         None => {
             research_report::ActiveModel {
                 vehicle_id: Set(vehicle_id),
-                report_type: Set(Some("external_research".to_string())),
+                report_type: Set(Some(ReportType::ExternalResearch)),
                 ..Default::default()
             }
             .insert(db)
@@ -537,11 +537,11 @@ mod tests {
             &db,
             vid,
             NewFiledFinding {
-                category: "maintenance".into(),
+                category: FindingCategory::SuggestedMaintenance,
                 title: "DSG service interval is 40k, not 60k".into(),
                 description: Some("Per community consensus for this gearbox".into()),
                 source_url: Some("https://example.com/thread".into()),
-                severity: Some("info".into()),
+                severity: Some(FindingSeverity::Informational),
             },
         )
         .await
@@ -550,7 +550,7 @@ mod tests {
             &db,
             vid,
             NewFiledFinding {
-                category: "recall".into(),
+                category: FindingCategory::KnownIssue,
                 title: "Second finding".into(),
                 description: None,
                 source_url: None,
@@ -566,7 +566,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(report.report_type.as_deref(), Some("external_research"));
+        assert_eq!(report.report_type, Some(ReportType::ExternalResearch));
         let findings = research_finding::Entity::find()
             .filter(research_finding::Column::ReportId.eq(f1.report_id))
             .count(&db)
@@ -580,7 +580,7 @@ mod tests {
             &db,
             other,
             NewFiledFinding {
-                category: "forum_report".into(),
+                category: FindingCategory::ForumReport,
                 title: "Other car's finding".into(),
                 description: None,
                 source_url: None,
@@ -597,7 +597,7 @@ mod tests {
                 &db,
                 999,
                 NewFiledFinding {
-                    category: "note".into(),
+                    category: FindingCategory::Other,
                     title: "x".into(),
                     description: None,
                     source_url: None,

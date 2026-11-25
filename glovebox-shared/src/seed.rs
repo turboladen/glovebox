@@ -95,7 +95,10 @@ pub async fn demo<C: ConnectionTrait + TransactionTrait>(
         incidents: entities::incident::Entity::find().count(&txn).await? - notes,
         notes,
         recalls: entities::research_finding::Entity::find()
-            .filter(entities::research_finding::Column::Category.eq("recall"))
+            .filter(
+                entities::research_finding::Column::Category
+                    .eq(entities::research_finding::FindingCategory::Recall),
+            )
             .count(&txn)
             .await?,
     };

@@ -177,7 +177,7 @@ async fn file_research_finding_persists_and_rejects_a_missing_vehicle() {
             "file_research_finding",
             json!({
                 "vehicle_id": v.id,
-                "category": "maintenance",
+                "category": "suggested_maintenance",
                 "title": "DSG interval 40k",
                 "source_url": "https://example.com/t"
             }),
@@ -187,7 +187,7 @@ async fn file_research_finding_persists_and_rejects_a_missing_vehicle() {
 
     t.call_err(
         "file_research_finding",
-        json!({ "vehicle_id": 999, "category": "x", "title": "y" }),
+        json!({ "vehicle_id": 999, "category": "other", "title": "y" }),
     )
     .await;
 }

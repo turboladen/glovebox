@@ -692,7 +692,7 @@ mod tests {
         .unwrap();
         research_finding::ActiveModel {
             report_id: Set(report.id),
-            category: Set("recall".into()),
+            category: Set(research_finding::FindingCategory::Recall),
             title: Set("Recall".into()),
             status: Set(crate::entities::research_finding::FindingStatus::New),
             ..Default::default()

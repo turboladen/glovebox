@@ -10,17 +10,42 @@ crate::vocab::vocabulary! {
     }
 }
 
+crate::vocab::vocabulary! {
+    /// What kind of fact a finding records.
+    // The recall check is the only writer of `recall`. The other kinds are
+    // filed by hand, and `other` holds a fact none of them names.
+    pub enum FindingCategory {
+        Recall => "recall",
+        ForumReport => "forum_report",
+        SuggestedMaintenance => "suggested_maintenance",
+        UpgradeIdea => "upgrade_idea",
+        KnownIssue => "known_issue",
+        ServiceBulletin => "service_bulletin",
+        Other => "other",
+    }
+}
+
+crate::vocab::vocabulary! {
+    /// How much a finding matters, most pressing first.
+    pub enum FindingSeverity {
+        Critical => "critical",
+        Recommended => "recommended",
+        Optional => "optional",
+        Informational => "informational",
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "research_findings")]
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
     pub report_id: i32,
-    pub category: String,
+    pub category: FindingCategory,
     pub title: String,
     pub description: Option<String>,
     pub source_url: Option<String>,
-    pub severity: Option<String>,
+    pub severity: Option<FindingSeverity>,
     pub status: FindingStatus,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,

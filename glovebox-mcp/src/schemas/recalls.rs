@@ -1,6 +1,9 @@
 //! Inputs for the recall and research tools.
 
-use glovebox_shared::services::{recall::RecallStatus, research::NewFiledFinding};
+use glovebox_shared::{
+    entities::research_finding::{FindingCategory, FindingSeverity},
+    services::{recall::RecallStatus, research::NewFiledFinding},
+};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -21,17 +24,18 @@ pub struct SetRecallStatusInput {
 pub struct FileResearchFindingInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
-    /// Finding kind: `forum_report`, `suggested_maintenance`, `upgrade_idea`,
-    /// or `recall` (other values render under their own heading).
-    pub category: String,
+    /// Finding kind: `forum_report` (what owners report), `suggested_maintenance` (work worth
+    /// doing that the schedule does not list), `upgrade_idea`, `known_issue` (a failure this
+    /// model is known for), `service_bulletin` (a TSB), `recall`, or `other`.
+    pub category: FindingCategory,
     /// Short title, e.g. "DSG service interval is 40k, not 60k".
     pub title: String,
     /// Longer description of what was found.
     pub description: Option<String>,
     /// Where this was found (URL).
     pub source_url: Option<String>,
-    /// "critical", "recommended", "optional", or "informational".
-    pub severity: Option<String>,
+    /// How much it matters: `critical`, `recommended`, `optional` or `informational`.
+    pub severity: Option<FindingSeverity>,
 }
 
 impl FileResearchFindingInput {

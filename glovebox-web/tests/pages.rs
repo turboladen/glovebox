@@ -9,11 +9,7 @@ use glovebox_shared::{
         appointment::NewAppointment, incident::NewIncident, mileage::NewMileageEntry,
         need::NewNeed, todo::NewTodo, work_item::NewWorkItem,
     },
-    services::{
-        appointment, incident, mileage, model_template, need,
-        research::{self, NewFiledFinding},
-        todo, waiting, work_item,
-    },
+    services::{appointment, incident, mileage, model_template, need, todo, waiting, work_item},
     test_support::{VehicleFixture, date},
 };
 
@@ -286,19 +282,7 @@ async fn home_shows_what_is_waiting_before_the_appointments() {
     .await
     .unwrap()
     .id;
-    research::file_finding(
-        &db,
-        v,
-        NewFiledFinding {
-            category: "recall".into(),
-            title: "Fuel pump".into(),
-            description: None,
-            source_url: Some("https://www.nhtsa.gov/recalls?nhtsaId=24V123".into()),
-            severity: None,
-        },
-    )
-    .await
-    .unwrap();
+    glovebox_shared::test_support::seed_recall(&db, v, "24V123", "Fuel pump").await;
     incident::create(
         &db,
         v,

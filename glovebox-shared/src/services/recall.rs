@@ -14,7 +14,7 @@ use serde::Serialize;
 
 use crate::{
     entities::{
-        research_finding::{self, FindingStatus},
+        research_finding::{self, FindingCategory, FindingStatus},
         research_report, service_recall_link, service_record,
         work_item::{self, JobStatus},
     },
@@ -167,7 +167,7 @@ pub(crate) async fn require_recalls(
     let found: HashMap<i32, research_finding::Model> = research_finding::Entity::find()
         .filter(research_finding::Column::Id.is_in(finding_ids.to_vec()))
         .filter(research_finding::Column::ReportId.is_in(report_ids))
-        .filter(research_finding::Column::Category.eq("recall"))
+        .filter(research_finding::Column::Category.eq(FindingCategory::Recall))
         .all(db)
         .await?
         .into_iter()
@@ -285,7 +285,7 @@ pub async fn list(
         .collect();
     let findings = research_finding::Entity::find()
         .filter(research_finding::Column::ReportId.is_in(report_ids))
-        .filter(research_finding::Column::Category.eq("recall"))
+        .filter(research_finding::Column::Category.eq(FindingCategory::Recall))
         .order_by_asc(research_finding::Column::Id)
         .all(db)
         .await?;
@@ -364,7 +364,7 @@ pub(crate) async fn recall_ids_among(
     }
     Ok(research_finding::Entity::find()
         .filter(research_finding::Column::Id.is_in(finding_ids.to_vec()))
-        .filter(research_finding::Column::Category.eq("recall"))
+        .filter(research_finding::Column::Category.eq(FindingCategory::Recall))
         .all(db)
         .await?
         .into_iter()
@@ -638,7 +638,7 @@ mod tests {
             db,
             vehicle_id,
             research::NewFiledFinding {
-                category: "maintenance".into(),
+                category: FindingCategory::SuggestedMaintenance,
                 title: "Community fix".into(),
                 description: None,
                 source_url: None,
@@ -762,7 +762,7 @@ mod tests {
             &db,
             v,
             research::NewFiledFinding {
-                category: "maintenance".into(),
+                category: FindingCategory::SuggestedMaintenance,
                 title: "Not a recall".into(),
                 description: None,
                 source_url: None,

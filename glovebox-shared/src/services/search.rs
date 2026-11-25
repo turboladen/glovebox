@@ -882,7 +882,7 @@ mod tests {
         .unwrap();
         entities::research_finding::ActiveModel {
             report_id: Set(report.id),
-            category: Set("common_issue".into()),
+            category: Set(entities::research_finding::FindingCategory::KnownIssue),
             title: Set("Water pump failure".into()),
             description: Set(Some("plastic impeller cracks".into())),
             status: Set(entities::research_finding::FindingStatus::New),
