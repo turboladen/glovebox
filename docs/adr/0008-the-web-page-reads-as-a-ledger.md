@@ -101,6 +101,13 @@ breakdown of the cost summary stays in Claude Desktop, because a row per month w
 totals. The page holds no forms and adds no stylesheet rule. A vehicle's name printed on the
 home, service, job and appointment pages links to it.
 
+**The home page's budget panel follows the same rules (2026-11-24).** It is one panel after the
+waiting lists. The forecast's figures are labeled values, like an appointment's head, with the
+amounts as prices, and "At least" before a total that leaves out an unpriced item. The latest
+records reuse the vehicle page's activity rows and the waiting columns. The link to the
+vehicle's page is underlined text at the end of the panel's head, because it is a minor
+control. The panel adds no stylesheet rule and holds no forms.
+
 **A vehicle's printable history departs from the ledger as the work sheet does (2026-11-24).**
 ADR 0009 sets that look and ADR 0025 sets the content. On screen and on paper the history is
 plain text with no panels and no pills: a heading, the car on one line, labeled facts, then one

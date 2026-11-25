@@ -91,6 +91,34 @@
     {% endif %}
   </section>
 
+  {% if let Some(o) = hv.outlook %}
+  <section class="sheet">
+    <div class="sheet-head"><h3>Budget and latest activity</h3><a class="aside" href="{{ o.vehicle_href }}">All costs and activity</a></div>
+    {% if let Some(b) = o.budget %}
+    <div class="summary lone">
+      <div><span class="l">Next 12 months</span><span class="price">{% if b.floor %}At least {% endif %}{{ b.total }}</span></div>
+      <div><span class="l">Scheduled maintenance</span><span class="price">{{ b.maintenance }}</span></div>
+      <div><span class="l">Planned work</span><span class="price">{{ b.planned }}</span></div>
+      {% if let Some(n) = b.unpriced %}<div><span class="l">Not in the total</span>{{ n }}</div>{% endif %}
+    </div>
+    {% endif %}
+    {% if !o.activity.is_empty() %}
+    <div class="cols cols--wait" aria-hidden="true"><span class="at-key">Record</span><span class="at-wide">Kind</span><span>Odometer</span><span class="at-date">Date</span><span class="at-job num">Total</span></div>
+    <ul class="needs">
+      {% for a in o.activity %}
+      <li class="row row--wait">
+        <span class="key at-key">{% if let Some(s) = a.summary %}{% if let Some(href) = a.href %}<a href="{{ href }}">{{ s }}</a>{% else %}{{ s }}{% endif %}{% else %}<span class="empty">No note</span>{% endif %}</span>
+        <span class="at-wide" data-l="Kind">{{ a.kind }}</span>
+        <span data-l="Odometer">{% if let Some(o) = a.odometer %}{{ o }}{% endif %}</span>
+        <span class="at-date" data-l="Date">{{ a.date }}</span>
+        <span class="at-job num price" data-l="Total">{% if let Some(t) = a.total %}{{ t }}{% endif %}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </section>
+  {% endif %}
+
   <section class="sheet">
     <div class="sheet-head"><h3>Appointments</h3><span class="n">{{ hv.appointments.len() }}</span></div>
     {% if hv.appointments.is_empty() %}

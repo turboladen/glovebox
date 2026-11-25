@@ -22,9 +22,9 @@ use serde::Deserialize;
 use crate::{
     AppState, DeletedTodo,
     view::{
-        Banner, CardContext, Count, Failure, HistoryPageView, HomeAppointmentRow, JobCard,
-        ServicePageView, SheetCar, SheetJobCard, ShopLink, ShopPageView, ShopRow, Steps, Tag,
-        Target, TodoCard, TodoForm, UnsettledRow, VehicleLink, VehiclePageView, WaitingRows,
+        Banner, CardContext, Count, Failure, HistoryPageView, HomeAppointmentRow, HomeOutlook,
+        JobCard, ServicePageView, SheetCar, SheetJobCard, ShopLink, ShopPageView, ShopRow, Steps,
+        Tag, Target, TodoCard, TodoForm, UnsettledRow, VehicleLink, VehiclePageView, WaitingRows,
         job_card, sheet_car, sheet_heading, sheet_jobs, steps, unsettled_rows,
     },
 };
@@ -66,6 +66,7 @@ fn today_label(state: &AppState) -> String {
 struct HomeVehicle {
     home: VehicleHome,
     waiting: WaitingRows,
+    outlook: Option<HomeOutlook>,
     appointments: Vec<HomeAppointmentRow>,
     todos: Vec<TodoCard>,
     todo_form: TodoForm,
@@ -198,6 +199,7 @@ pub async fn home_response(state: &AppState, view: Page<'_>, status: StatusCode)
             .collect();
         vehicles.push(HomeVehicle {
             waiting: WaitingRows::from(&home.waiting),
+            outlook: HomeOutlook::of(&home),
             appointments: home.appointments.iter().map(Into::into).collect(),
             todo_form: TodoForm::after(vid, None, "/", failure.filter(|f| f.vid == vid)),
             todos,

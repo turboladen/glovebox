@@ -35,20 +35,32 @@ open.
 **The lists only show.** They hold no forms. Planning a job, booking an appointment and closing
 an incident stay with Claude.
 
+**The forecast and the latest records follow the waiting lists (2026-11-24).** After the four
+lists, one panel per vehicle prints the 12-month forecast (the total, the scheduled maintenance
+and the planned work) and the three latest services, incidents and odometer readings, with a
+link to the vehicle's page for the rest. The total is printed as "At least" while an item has no
+estimate, with the count of such items from `BudgetForecast::unestimated_note`. The panel sits
+after the waiting lists, because it is reference and asks nothing of the owner, and before the
+appointments, so that the appointments and the to-dos, which hold the page's forms, stay
+together at the end. A vehicle with nothing to forecast and no records shows no panel.
+
 ## Alternatives
 
 - **Let the owner tick items and create an appointment on the page.** A due maintenance item
   would first have to become a planned job, which is a second write path beside the tools. The
   owner asked for the cue only.
-- **Render `upcoming` itself.** It also computes the 12-month budget forecast, which the page
-  does not show, and it does not say which items a job already covers.
+- **Render `upcoming` itself.** It does not say which items a job already covers.
+- **Put the forecast in the vehicle's heading.** A figure above the waiting lists would lead the
+  page with money, and the cue to book the shop would come second.
 - **Hide a covered item from its own list.** The owner would then not see that an overdue item
   is overdue once a job exists for it, although nothing is booked yet.
 
 ## Consequences
 
-- `checklist::home` calls `waiting` once per vehicle, so the home page costs a handful of
-  queries per vehicle that is not archived.
+- `checklist::home` reads each vehicle's reminders and planned jobs once and builds the waiting
+  lists and the forecast from them, so the forecast costs one more query per vehicle and the
+  latest records three. The home page costs about two dozen queries per vehicle that is not
+  archived.
 - Maintenance is judged against today's mileage, and the sheet prints that mileage and says when
   it is an estimate.
 - A list that leaves items out says how many ("plus 2 on an appointment"), so an empty list

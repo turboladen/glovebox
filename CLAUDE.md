@@ -483,7 +483,12 @@ A page is a view of the shared library, and a future page follows the same rules
   overdue or due soon, every planned job on no appointment, the open recalls and the open
   incidents (`waiting::waiting`), then the appointments and to-dos. Those four lists hold no
   forms. An item a planned job covers links to the job, and an item whose job is on an
-  appointment is left out. `docs/adr/0002-home-page-shows-waiting-work.md` records why.
+  appointment is left out. After those four lists one panel prints the 12-month forecast
+  (`budget::BudgetForecast`, a floor while `unestimated_note` names unpriced items) and the three
+  latest records, and a car with neither shows no panel. `checklist::home` reads each vehicle's
+  reminders and planned jobs once and judges the waiting lists and the forecast from them
+  (`waiting::from_parts`, `budget::forecast_from`). `docs/adr/0002-home-page-shows-waiting-work.md`
+  records why.
 - **The work sheet** (`/vehicles/{vid}/appointments/{id}/print`, `work_sheet::for_appointment`)
   opens with the car: its name, the shop and the date, then the year, make, model and trim on
   one line, and the VIN, plate and odometer for each one the vehicle has. The odometer is the
