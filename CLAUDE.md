@@ -29,8 +29,12 @@ cargo test -p glovebox-mcp --test rehearsal       # One MCP integration test fil
 just ci                   # Everything CI runs: nightly fmt-check, layering, typos, audit, clippy, docs, build, test
                           # (often over 2 minutes: give the Bash call a 600000 ms timeout)
                           # the docs step denies warnings: a public doc linking to a private item fails it
+just ci > target/ci.log 2>&1; echo exit=$?   # keep the real exit code; a pipe reports the last command's
+cargo test --workspace --locked 2>&1 | rg 'test result' | awk '{p+=$4; f+=$6} END{print p, f}'   # passed and failed totals
 just fmt                  # cargo +nightly fmt — rustfmt.toml uses nightly-only options (it also rewraps `///` text, so run it after editing docs); plain `cargo fmt` passes locally but CI's format job will fail
                           # it rewraps long string literals too (`format_strings`): re-read a tool `description` before editing it again
+                          # it runs `cargo +$GLOVEBOX_NIGHTLY` (plain `nightly` when unset); CI sets a dated nightly in ci.yml and installs it
+                          # through dtolnay/rust-toolchain@master with a `toolchain:` input, because that action has no dated ref
 just check-layering       # Layering gate only (scripts/check-layering.sh)
 just audit                # RustSec advisories for the locked dependencies; .cargo/audit.toml lists the accepted ones
 just backup               # Copy the current environment's database to data/backups/ now (glovebox backup)
@@ -38,11 +42,14 @@ just reset-env test       # Delete the named non-live environment's database fil
 just seed test            # Fill the named non-live environment with made-up demo data (glovebox seed --env test)
 just web                  # Serve the live page on 127.0.0.1:4827 and open it; `just web test` serves data/glovebox-test.db on 4828
 # Visual checks: `just seed <name>` then `just web <name>`; Playwright screenshots must go under .playwright-mcp/ (git-ignored), not the scratchpad
+# The column layout starts above 1200 px: screenshot at 1500 wide for it, and at 1200 for the stacked rows
+# In a worktree, `just seed <name>` writes that worktree's own data/, and screenshots still land in the main checkout's .playwright-mcp/
 
 cargo clippy --workspace --all-targets --locked -- -D warnings   # Rust lints, tests included (the CI gate; pedantic is set in Cargo.toml)
 
 # Merging PRs: gate on parsed `gh pr checks` output showing zero pending/failed —
 # `--watch` exits 0 when it races a run that hasn't registered yet
+# After `gh run watch` exits, `all-checks` can still read pending for a few seconds: poll `gh pr checks` until nothing is pending
 # Run `gh pr merge <N> --squash --delete-branch` as its own command; from inside the branch's
 # worktree it leaves the local branch, so remove the worktree and `git branch -D` from the main checkout
 # Agent worktrees live in .claude/worktrees/ and stay locked while the agent's process lives:
@@ -50,6 +57,8 @@ cargo clippy --workspace --all-targets --locked -- -D warnings   # Rust lints, t
 # A branch stacked on a squash-merged PR: `git rebase --onto origin/main origin/<merged-branch>`
 # `/code-review <branch>` can leave that branch's worktree on a detached HEAD: check it out again
 # A forked `/code-review` that answers `(none)` found nothing
+# Parallel agent branches: cherry-pick each onto a branch from main, merge one at a time, rebase the next and
+# rerun `just ci`; a struct that gained a field on one branch breaks a full struct literal on another
 ```
 
 ## Environment
@@ -615,6 +624,14 @@ role per control style, and `YYYY-MM-DD` dates.
   every update function sets `active.updated_at = Set(services::now())`, because SeaORM
   `ActiveModel::update()` does not set it. A bulk insert (`insert_many`) or raw SQL bypasses the
   entity and sets both stamps itself.
+- **A column left `NotSet` on insert takes its SQL default.** `parts.cost_currency` defaults to
+  `'USD'`, so `insert_part` sets it to NULL explicitly. Check the column's definition in the
+  migrations before removing a `Set(None)`.
+- A filter or input struct that derives `Default` is built with `..Default::default()` unless
+  every field is set on purpose.
+- **A refactor that must not change a reply proves it.** Dump the tools list, or the affected
+  tool replies with stamps masked, from a throwaway test before and after, and `cmp` them. Then
+  pin the keys with a committed test.
 - New domain logic gets service-level unit tests in `glovebox-shared` (via `test_support::test_db()`)
   and MCP coverage in `glovebox-mcp/tests`.
 - A test that compares an incident's date with a service's sets `occurred_at` explicitly; it
@@ -717,6 +734,9 @@ role per control style, and `YYYY-MM-DD` dates.
   `sqlite_schema` and `.dump` output from `main`'s build and the branch's on a pre-migration backup.
   The `sqlite3` CLI starts with foreign keys off: run `PRAGMA foreign_keys = ON` before testing a
   key's action on a copy.
+- **Verify a migration again with the binary built from the rebased tree**, and compare every
+  content table (`select * from "<t>" order by rowid | shasum`) between `main`'s build and the
+  branch's on scratch copies of a backup.
 - **When a read starts deriving a value from existing rows**, query a backup copy for the rows
   the new derivation counts that the stored data did not (a completed job with an incident and
   no `resolved` link), and state in the ADR how those records read after the upgrade.
