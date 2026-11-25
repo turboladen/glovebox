@@ -151,7 +151,8 @@ read the open incidents from `whats_coming`. When the job addresses one, say whi
 whether to link it. When a job is already planned without the link, `update_planned_work` sets
 `incident_id`. Use `add_incident_followup` to log a
 phone call or a second opinion, `update_incident_followup` to correct one already logged (send
-only the fields to change, and `null` clears `contact_method`, `contact_with` or `notes`),
+only the fields to change, and `null` clears `contact_method`, `contact_with` or `notes`; a
+followup always keeps a summary),
 `delete_incident_followup` to remove one logged by mistake, and `update_planned_work` with
 `status` set to `dropped` when Steve decides not to do the work.
 
@@ -339,8 +340,8 @@ call it only when a question needs such a detail; an empty list means the car ha
 and `decode_vin` fetches one. `list_services`, `list_parts` and
 `list_incidents` list records, and `get_service` and `get_incident` read one in full.
 Each list is newest first (services by service date, incidents by when they happened, parts by
-when they were recorded) and takes `limit`, so ask for what the question needs: "the last three
-services" is `limit: 3`. `list_services` also narrows by `from` and `to`, by `shop_id` and by
+when they were recorded) and takes `limit` (at least 1), so ask for what the question needs: "the last three
+services" is `limit: 3`. An incident dated only to the day sorts as the end of that day. `list_services` also narrows by `from` and `to`, by `shop_id` and by
 `work_kind`, which matches a service with any line of that kind, and `list_incidents` by
 `category` and `resolved`.
 When a part fails or Steve asks what a warranty still covers, call `list_parts` with
@@ -350,9 +351,13 @@ warranty with both a date and a mileage ends at whichever comes first, so report
 never the more generous bound.
 `search_records` searches everything, and `cost_summary` reports what the car has cost. For
 "what did I spend this year", pass `from` and `to` (inclusive dates); the reply then counts only
-the services and parts dated inside the range, and its cost per 1,000 miles is the range's cost
-over the miles driven inside it. `by_work_kind` splits the lines into maintenance, repairs, mods
-and the rest, each with what Steve paid and what someone else covered. `save_note`
+the services and parts dated inside the range. Its cost per 1,000 miles is the range's cost over
+the miles from the latest odometer reading on or before `from` to the highest reading on or before
+`to`. `history_starts_on` dates the starting reading: when it is after `from`, no reading was that
+early, the miles before it are missing and the rate reads high, so say so. `by_work_kind` splits the lines into maintenance, repairs, mods
+and the rest, each with what Steve paid and what someone else covered. That split is by line, so do not compare
+it with the summary's own `out_of_pocket_cents` and `covered_cents` or present it as a share of
+them. `save_note`
 keeps a plain fact worth remembering.
 
 ## The shop directory

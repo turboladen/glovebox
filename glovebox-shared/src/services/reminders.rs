@@ -861,8 +861,8 @@ mod tests {
         );
     }
 
-    // A ten-year-old car under its mileage limit: the date bound has passed,
-    // so the warranty is over although the looser flag still reads true.
+    // The first car is past its warranty date and under its mileage limit, so
+    // its warranty is over although the looser flag still reads true.
     #[tokio::test]
     async fn warranty_reports_each_bound_and_ends_at_the_first_one_passed() {
         let db = test_db().await;

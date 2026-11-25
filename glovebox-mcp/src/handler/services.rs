@@ -130,10 +130,10 @@ impl GloveboxMcp {
                        (`YYYY-MM-DD`, inclusive), `shop_id` (a shop from `list_shops`; an id that \
                        names no shop is an error) and `work_kind` (a service matches when any of \
                        its lines has that kind). `limit` keeps that many from the top of the \
-                       list, after the other filters, so `limit: 5` is the five most recent. Use \
-                       `get_service` for one record, `summarize_recent_activity` for a short \
-                       mixed feed, and this tool to find the `service_id` for `correct_service` \
-                       or `delete_service`."
+                       list, after the other filters, so `limit: 5` is the five most recent; it \
+                       must be at least 1. Use `get_service` for one record, \
+                       `summarize_recent_activity` for a short mixed feed, and this tool to find \
+                       the `service_id` for `correct_service` or `delete_service`."
     )]
     async fn list_services(
         &self,

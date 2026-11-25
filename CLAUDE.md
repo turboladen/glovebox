@@ -278,19 +278,25 @@ until the records cover 1,000 miles (`costs::MIN_MILES_FOR_COST_PER_1000`).
 
 `list_services`, `list_parts` and `list_incidents` answer with a bare array, newest first
 (service date, `created_at` and `occurred_at`, each with the id as the tiebreak), and take
-`limit`, which is applied after the other filters. Their filters are `inputs` structs
+`limit`, which is applied after the other filters and refused at zero (`services::validate_limit`).
+Incidents are ordered and cut in memory by `DayOrTime::or_end_of_day`, because the stored text of
+a bare day sorts below every time on that day. Their filters are `inputs` structs
 (`ServiceFilter`, `PartFilter`, `IncidentFilter`); `ServiceFilter::work_kind` keeps a service with
 any line of that kind, and a `shop_id` that names no shop is `NotFound`. `cost_summary` takes an
 inclusive `from` and `to` (`costs::summary_in` with a `costs::CostRange`; `from` after `to` is
 `Invalid`). A ranged summary counts the services dated inside the range and the parts whose
-purchase date, else install date, falls inside it, and measures `miles_covered` from the services
-and readings dated inside it. `by_work_kind` sums the counted lines per `WorkKind`, each line
-judged by `service_record::effective_payer`.
+purchase date, else install date, falls inside it. Its `miles_covered` runs from the latest
+reading dated on or before `from` (the earliest reading inside the range when none is that early)
+to the highest reading dated on or before `to`, so a year's costs are not divided by only the
+miles between that year's readings. `by_work_kind` sums the counted lines per `WorkKind`, each
+line judged by `service_record::effective_payer`; its split by payer is by line and is not
+comparable with the summary's top-level split.
 
 An incident's followups are added, corrected and deleted one at a time (`incident::create_followup`,
 `update_followup`, `delete_followup`). A correction or a delete names the vehicle, the incident and
 the followup, and a followup of another incident or another vehicle is the same `NotFound` as one
-that does not exist. A followup has no `updated_at`, and the `fts_incident_followups` triggers keep
+that does not exist. A blank summary is `Invalid` on both writes, and a blank `contact_method`,
+`contact_with` or `notes` is stored as absent. A followup has no `updated_at`, and the `fts_incident_followups` triggers keep
 search in step with both writes.
 
 **Job checklist.** An appointment groups jobs (`work_items`) and to-dos for one shop trip, a job

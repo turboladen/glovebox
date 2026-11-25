@@ -294,7 +294,7 @@ pub struct ListServicesInput {
     pub shop_id: Option<i32>,
     /// Only services with at least one line of this kind.
     pub work_kind: Option<WorkKind>,
-    /// The most services to return, counted from the newest service date after the other filters. Omit for all.
+    /// The most services to return, counted from the newest service date after the other filters. At least 1; 0 is an error. Omit for all.
     pub limit: Option<u32>,
 }
 
@@ -322,7 +322,7 @@ pub struct ListPartsInput {
     pub status: Option<PartStatus>,
     /// `true` for the parts still under warranty: purchased or installed, with a warranty expiry date or expiry odometer reading, and no bound passed (a part with both is under warranty only while neither has passed). `false` for every other part. Omit for all.
     pub under_warranty: Option<bool>,
-    /// The most parts to return, counted from the most recently recorded after the other filters. Omit for all.
+    /// The most parts to return, counted from the most recently recorded after the other filters. At least 1; 0 is an error. Omit for all.
     pub limit: Option<u32>,
 }
 
@@ -335,7 +335,7 @@ pub struct ListIncidentsInput {
     pub resolved: Option<bool>,
     /// Only incidents of this category.
     pub category: Option<IncidentCategory>,
-    /// The most incidents to return, counted from the newest `occurred_at` after the other filters. Omit for all.
+    /// The most incidents to return, counted from the newest after the other filters. At least 1; 0 is an error. Omit for all.
     pub limit: Option<u32>,
 }
 
@@ -876,13 +876,13 @@ pub struct AddIncidentFollowupInput {
     pub incident_id: i32,
     /// When the contact happened, `YYYY-MM-DD HH:MM:SS` or just `YYYY-MM-DD`.
     pub occurred_at: String,
-    /// What happened or was said, e.g. 'Adjuster approved the estimate'.
+    /// What happened or was said, e.g. 'Adjuster approved the estimate'. Blank text is an error.
     pub summary: String,
-    /// How, e.g. `phone`, `email`.
+    /// How, e.g. `phone`, `email`. Blank text is stored as none.
     pub contact_method: Option<String>,
-    /// Who with.
+    /// Who with. Blank text is stored as none.
     pub contact_with: Option<String>,
-    /// Free-form notes.
+    /// Free-form notes. Blank text is stored as none.
     pub notes: Option<String>,
 }
 
@@ -913,23 +913,23 @@ pub struct UpdateIncidentFollowupInput {
     pub followup_id: i32,
     /// When the contact happened, `YYYY-MM-DD HH:MM:SS` or just `YYYY-MM-DD`.
     pub occurred_at: Option<String>,
-    /// What happened or was said. A followup always has one, so `null` is the same as leaving it out.
+    /// What happened or was said. A followup always has one, so blank text is an error and `null` is the same as leaving it out.
     pub summary: Option<String>,
     /// How, e.g. `phone`, `email`.
     ///
-    /// Send `null` to clear it; omit the key to leave it unchanged.
+    /// Send `null` or blank text to clear it; omit the key to leave it unchanged.
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<String>")]
     pub contact_method: Option<Option<String>>,
     /// Who with.
     ///
-    /// Send `null` to clear it; omit the key to leave it unchanged.
+    /// Send `null` or blank text to clear it; omit the key to leave it unchanged.
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<String>")]
     pub contact_with: Option<Option<String>>,
     /// Free-form notes.
     ///
-    /// Send `null` to clear it; omit the key to leave it unchanged.
+    /// Send `null` or blank text to clear it; omit the key to leave it unchanged.
     #[serde(default, deserialize_with = "nullable")]
     #[schemars(with = "Option<String>")]
     pub notes: Option<Option<String>>,
@@ -952,8 +952,10 @@ impl UpdateIncidentFollowupInput {
     }
 }
 
-// The field names are the ids the tool accepts.
-#[allow(clippy::struct_field_names)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "the field names are the ids the tool accepts"
+)]
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DeleteIncidentFollowupInput {

@@ -369,10 +369,11 @@ async fn cost_summary_takes_a_date_range_and_splits_lines_by_work_kind() {
     assert_eq!(year["total_cost_cents"], 67_000);
     assert_eq!(year["covered_cents"], 45_000);
     assert_eq!(year["out_of_pocket_cents"], 22_000);
-    // The range's cost over the 3,000 miles driven inside the range.
-    assert_eq!(year["miles_covered"], 3_000);
-    assert_eq!(year["history_starts_on"], "2026-03-01");
-    assert_eq!(year["cost_per_1000_miles_cents"], 22_333);
+    // The miles start at the 2025 service, the latest reading on or before
+    // the range's start, and end at the September 2026 service.
+    assert_eq!(year["miles_covered"], 6_000);
+    assert_eq!(year["history_starts_on"], "2025-03-01");
+    assert_eq!(year["cost_per_1000_miles_cents"], 11_167);
     assert_eq!(
         year["by_work_kind"],
         json!([

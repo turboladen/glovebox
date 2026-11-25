@@ -288,14 +288,20 @@ pub(crate) async fn keep_resolver(
     Ok(())
 }
 
-/// Lists a vehicle's incidents, the latest `occurred_at` first, keeping those
-/// the filter names and at most `filter.limit` of them.
+/// Lists a vehicle's incidents newest first, keeping those the filter names
+/// and at most `filter.limit` of them. An incident dated only to the day
+/// counts as the end of that day, and the later-logged of two at the same
+/// moment comes first.
+///
+/// # Errors
+/// `NotFound` for a missing vehicle and `Invalid` for a limit of zero.
 pub async fn list_filtered(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     filter: IncidentFilter,
 ) -> DomainResult<Vec<IncidentWithDetails>> {
     super::vehicle::require(db, vehicle_id).await?;
+    super::validate_limit(filter.limit)?;
     let incidents = rows(db, vehicle_id, &filter).await?;
     with_details(db, incidents).await
 }
@@ -327,12 +333,14 @@ async fn rows(
     if let Some(category) = filter.category {
         query = query.filter(incident::Column::Category.eq(category));
     }
-    Ok(query
-        .order_by_desc(incident::Column::OccurredAt)
-        .order_by_desc(incident::Column::Id)
-        .limit(filter.limit.map(u64::from))
-        .all(db)
-        .await?)
+    let mut incidents = query.all(db).await?;
+    // The stored text of a bare day sorts below every time on that day, so
+    // the rows are ordered and cut in memory.
+    incidents.sort_by_key(|i| std::cmp::Reverse((i.occurred_at.or_end_of_day(), i.id)));
+    if let Some(limit) = filter.limit {
+        incidents.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+    }
+    Ok(incidents)
 }
 
 pub async fn get(
@@ -738,12 +746,25 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
     Ok(())
 }
 
+/// An optional text without its surrounding whitespace, where blank text
+/// reads as absent.
+fn blank_to_none(text: Option<&str>) -> Option<String> {
+    text.and_then(super::trim_to_none)
+}
+
+/// Add a dated followup to the vehicle's incident. A blank `contact_method`,
+/// `contact_with` or `notes` is stored as absent.
+///
+/// # Errors
+/// `Invalid` for a blank summary, and `NotFound` for an incident that is
+/// missing or belongs to another vehicle.
 pub async fn create_followup<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
     incident_id: i32,
     input: NewFollowup,
 ) -> DomainResult<incident_followup::Model> {
+    super::validate_not_blank("summary", &input.summary)?;
     let txn = super::begin_write(db).await?;
     let db = &txn;
     // Verify the incident belongs to this vehicle before attaching a followup.
@@ -752,10 +773,10 @@ pub async fn create_followup<C: ConnectionTrait + TransactionTrait>(
     let model = incident_followup::ActiveModel {
         incident_id: Set(incident_id),
         occurred_at: Set(input.occurred_at),
-        contact_method: Set(input.contact_method),
-        contact_with: Set(input.contact_with),
+        contact_method: Set(blank_to_none(input.contact_method.as_deref())),
+        contact_with: Set(blank_to_none(input.contact_with.as_deref())),
         summary: Set(input.summary),
-        notes: Set(input.notes),
+        notes: Set(blank_to_none(input.notes.as_deref())),
         ..Default::default()
     };
     let out = model.insert(db).await?;
@@ -782,7 +803,12 @@ async fn require_followup(
 }
 
 /// Correct a followup of the vehicle's incident and return the stored row.
-/// Only the fields the input carries change.
+/// Only the fields the input carries change, and a blank `contact_method`,
+/// `contact_with` or `notes` clears that field.
+///
+/// # Errors
+/// `Invalid` for a blank summary, and `NotFound` for a followup that is
+/// missing or belongs to another incident or vehicle.
 pub async fn update_followup<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -790,6 +816,9 @@ pub async fn update_followup<C: ConnectionTrait + TransactionTrait>(
     id: i32,
     input: UpdateFollowup,
 ) -> DomainResult<incident_followup::Model> {
+    if let Some(summary) = &input.summary {
+        super::validate_not_blank("summary", summary)?;
+    }
     let txn = super::begin_write(db).await?;
     let existing = require_followup(&txn, vehicle_id, incident_id, id).await?;
 
@@ -801,13 +830,13 @@ pub async fn update_followup<C: ConnectionTrait + TransactionTrait>(
         active.summary = Set(v);
     }
     if let Some(v) = input.contact_method {
-        active.contact_method = Set(v);
+        active.contact_method = Set(blank_to_none(v.as_deref()));
     }
     if let Some(v) = input.contact_with {
-        active.contact_with = Set(v);
+        active.contact_with = Set(blank_to_none(v.as_deref()));
     }
     if let Some(v) = input.notes {
-        active.notes = Set(v);
+        active.notes = Set(blank_to_none(v.as_deref()));
     }
     // SeaORM refuses an update that sets no column, so a call that changes
     // nothing answers with the stored row.
@@ -1685,6 +1714,61 @@ mod tests {
         assert_eq!(titles(IncidentFilter::default()).await.len(), 4);
     }
 
+    // The stored text of a bare day sorts below a time on the same day, and
+    // the list still reads the bare day as the later of the two.
+    #[tokio::test]
+    async fn list_filtered_reads_a_bare_day_as_the_end_of_its_day() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        for (title, occurred_at) in [
+            ("Day before", "2026-05-04 18:00:00"),
+            ("Morning noise", "2026-05-05 08:15:00"),
+            ("Same day, no time", "2026-05-05"),
+        ] {
+            let input = NewIncident {
+                occurred_at: Some(date(occurred_at)),
+                ..new_incident(title, IncidentCategory::Noise)
+            };
+            create(&db, vid, input).await.unwrap();
+        }
+        let titles = |limit: Option<u32>| {
+            let db = &db;
+            async move {
+                let filter = IncidentFilter {
+                    limit,
+                    ..Default::default()
+                };
+                list_filtered(db, vid, filter)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|i| i.incident.title)
+                    .collect::<Vec<_>>()
+            }
+        };
+        assert_eq!(
+            titles(None).await,
+            ["Same day, no time", "Morning noise", "Day before"]
+        );
+        assert_eq!(titles(Some(1)).await, ["Same day, no time"]);
+        assert_eq!(
+            titles(Some(2)).await,
+            ["Same day, no time", "Morning noise"]
+        );
+    }
+
+    #[tokio::test]
+    async fn list_filtered_refuses_a_limit_of_zero() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let filter = IncidentFilter {
+            limit: Some(0),
+            ..Default::default()
+        };
+        let err = list_filtered(&db, vid, filter).await.err().unwrap();
+        assert_eq!(err.to_string(), "limit: must be at least 1");
+    }
+
     // --- followups ------------------------------------------------------------
 
     #[tokio::test]
@@ -1909,8 +1993,8 @@ mod tests {
             .unwrap();
         let missing = format!("Followup {} not found", f.id);
 
-        // The wrong vehicle, a sibling incident of the right vehicle, and the
-        // other vehicle's own incident.
+        // The pairs name the wrong vehicle, a sibling incident of the right
+        // vehicle, and the other vehicle's own incident.
         for (vehicle_id, incident_id) in [(other, inc), (owner, sibling), (other, elsewhere)] {
             let change = UpdateFollowup {
                 summary: Some("intruder".into()),
@@ -1957,6 +2041,64 @@ mod tests {
         .await;
         let deleted = results.iter().filter(|r| r.is_ok()).count();
         assert_eq!(deleted, 1, "{results:?}");
+        assert!(
+            results
+                .iter()
+                .filter_map(|r| r.as_ref().err())
+                .all(|e| matches!(e, DomainError::NotFound(_))),
+            "{results:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_followup_refuses_a_blank_summary_and_stores_blank_text_as_absent() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let inc = create(&db, vid, new_incident("crash", IncidentCategory::Accident))
+            .await
+            .unwrap()
+            .incident
+            .id;
+
+        let blank = NewFollowup {
+            summary: "  ".into(),
+            ..followup("x")
+        };
+        let err = create_followup(&db, vid, inc, blank).await.unwrap_err();
+        assert_eq!(err.to_string(), "summary: must not be blank");
+        crate::test_support::assert_empty(&get(&db, vid, inc).await.unwrap().followups);
+
+        let padded = NewFollowup {
+            contact_method: Some(" ".into()),
+            contact_with: Some(" Adjuster ".into()),
+            notes: Some(String::new()),
+            ..followup("Filed the claim")
+        };
+        let f = create_followup(&db, vid, inc, padded).await.unwrap();
+        assert_eq!(f.contact_method, None);
+        assert_eq!(f.contact_with.as_deref(), Some("Adjuster"));
+        assert_eq!(f.notes, None);
+
+        let blank = UpdateFollowup {
+            summary: Some("\t".into()),
+            contact_with: Some(None),
+            ..Default::default()
+        };
+        let err = update_followup(&db, vid, inc, f.id, blank)
+            .await
+            .unwrap_err();
+        assert_eq!(err.to_string(), "summary: must not be blank");
+        assert_eq!(get(&db, vid, inc).await.unwrap().followups, vec![f.clone()]);
+
+        let change = UpdateFollowup {
+            contact_with: Some(Some("  ".into())),
+            notes: Some(Some(" Call back Monday ".into())),
+            ..Default::default()
+        };
+        let updated = update_followup(&db, vid, inc, f.id, change).await.unwrap();
+        assert_eq!(updated.contact_with, None);
+        assert_eq!(updated.notes.as_deref(), Some("Call back Monday"));
+        assert_eq!(updated.summary, "Filed the claim");
     }
 
     // --- queries over accident-category incidents with links -------------------

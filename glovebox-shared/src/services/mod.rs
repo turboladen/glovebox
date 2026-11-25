@@ -84,6 +84,18 @@ pub(crate) fn validate_not_blank(field: &str, value: &str) -> crate::error::Doma
     Ok(())
 }
 
+/// Checks that a list's `limit`, when given, asks for at least one row. An
+/// empty reply would read the same as a vehicle with no records.
+pub(crate) fn validate_limit(limit: Option<u32>) -> crate::error::DomainResult<()> {
+    if limit == Some(0) {
+        return Err(crate::error::DomainError::invalid(
+            "limit",
+            "must be at least 1",
+        ));
+    }
+    Ok(())
+}
+
 /// `value` without its surrounding whitespace, or `None` when nothing is
 /// left, so blank text is stored and read as absent.
 #[must_use]

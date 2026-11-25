@@ -50,12 +50,13 @@ impl GloveboxMcp {
     #[tool(
         name = "list_incidents",
         description = "The vehicle's incidents (noises, leaks, warning lights, damage, accidents, \
-                       shop observations, notes), the latest `occurred_at` first, each with its \
-                       followups and the services that noticed or fixed it. Pass `resolved: \
-                       false` for what is still open and `category` for one kind. `limit` keeps \
-                       that many from the top of the list, after the other filters. Use \
-                       `get_incident` for one in full and this tool to find an `incident_id` for \
-                       `update_incident`."
+                       shop observations, notes), newest first (an incident dated only to the day \
+                       counts as the end of that day, and the later-logged of two at the same \
+                       moment comes first), each with its followups and the services that noticed \
+                       or fixed it. Pass `resolved: false` for what is still open and `category` \
+                       for one kind. `limit` keeps that many from the top of the list, after the \
+                       other filters, and must be at least 1. Use `get_incident` for one in full \
+                       and this tool to find an `incident_id` for `update_incident`."
     )]
     async fn list_incidents(
         &self,
@@ -100,11 +101,11 @@ impl GloveboxMcp {
     #[tool(
         name = "add_incident_followup",
         description = "Add a dated followup to an incident: a call with the adjuster, an email to \
-                       the shop, what was learned. Give `occurred_at`, a `summary`, and \
-                       optionally `contact_method`, `contact_with` and `notes`. Use \
-                       `update_incident` to change the incident's own fields, and \
-                       `update_incident_followup` or `delete_incident_followup` to correct or \
-                       remove a followup already added."
+                       the shop, what was learned. Give `occurred_at`, a `summary` (blank text is \
+                       an error), and optionally `contact_method`, `contact_with` and `notes`, \
+                       where blank text is stored as none. Use `update_incident` to change the \
+                       incident's own fields, and `update_incident_followup` or \
+                       `delete_incident_followup` to correct or remove a followup already added."
     )]
     async fn add_incident_followup(
         &self,
@@ -119,11 +120,12 @@ impl GloveboxMcp {
         name = "update_incident_followup",
         description = "Correct a followup already on an incident: when it happened, the summary, \
                        `contact_method`, `contact_with` or `notes`. Send only the fields to \
-                       change; null clears `contact_method`, `contact_with` or `notes`, and a \
-                       field left out is untouched. `followup_id` comes from the incident's \
-                       `followups` in `list_incidents` or `get_incident`, and `incident_id` must \
-                       be the incident that followup belongs to. Returns the followup as stored. \
-                       Use `add_incident_followup` for a new contact."
+                       change; null or blank text clears `contact_method`, `contact_with` or \
+                       `notes`, a blank `summary` is an error, and a field left out is untouched. \
+                       `followup_id` comes from the incident's `followups` in `list_incidents` or \
+                       `get_incident`, and `incident_id` must be the incident that followup \
+                       belongs to. Returns the followup as stored. Use `add_incident_followup` \
+                       for a new contact."
     )]
     async fn update_incident_followup(
         &self,

@@ -5155,8 +5155,8 @@ async fn listed_descriptions(
         .collect()
 }
 
-// Four services: two at each shop, with repair lines on the first and the
-// last by date.
+// The fixture holds four services, two at each shop, and the second and
+// third by date carry a repair line.
 async fn seed_filterable_services(db: &DatabaseConnection) -> (i32, i32, i32) {
     let v = seed_vehicle(db).await;
     let dealer = crate::test_support::add_shop(db, "Dealer").await;
@@ -5283,4 +5283,16 @@ async fn list_filtered_by_a_missing_shop_is_not_found() {
     };
     let err = list_filtered(&db, v, filter).await.err().unwrap();
     assert_eq!(err.to_string(), "Shop 9999 not found");
+}
+
+#[tokio::test]
+async fn list_filtered_refuses_a_limit_of_zero() {
+    let db = test_db().await;
+    let (v, ..) = seed_filterable_services(&db).await;
+    let filter = ServiceFilter {
+        limit: Some(0),
+        ..Default::default()
+    };
+    let err = list_filtered(&db, v, filter).await.err().unwrap();
+    assert_eq!(err.to_string(), "limit: must be at least 1");
 }

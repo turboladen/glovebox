@@ -50,8 +50,8 @@ impl GloveboxMcp {
                        bounds alone, whatever the part's status. Pass `under_warranty: true` for \
                        the parts a warranty claim could still cover, which are the purchased and \
                        installed ones whose warranty is in force. `limit` keeps that many from \
-                       the top of the list, after the other filters. Use this to find the \
-                       `part_id` for `correct_part` or `delete_part`."
+                       the top of the list, after the other filters, and must be at least 1. Use \
+                       this to find the `part_id` for `correct_part` or `delete_part`."
     )]
     async fn list_parts(
         &self,

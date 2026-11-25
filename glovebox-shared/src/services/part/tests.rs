@@ -1674,3 +1674,17 @@ async fn list_limit_keeps_the_most_recently_recorded_after_the_other_filters() {
     };
     assert_eq!(names(newest_covered).await, ["third"]);
 }
+
+#[tokio::test]
+async fn list_refuses_a_limit_of_zero() {
+    let db = test_db().await;
+    let v = seed_vehicle(&db).await;
+    let filter = PartFilter {
+        limit: Some(0),
+        ..Default::default()
+    };
+    let err = list_on(&db, v, filter, date(WARRANTY_TODAY))
+        .await
+        .unwrap_err();
+    assert_eq!(err.to_string(), "limit: must be at least 1");
+}

@@ -74,17 +74,26 @@ pub struct CostSummary {
     /// The lines of the counted services by kind of work, in the order of
     /// the `WorkKind` list. A kind with no line is left out. The figures are
     /// the lines' own amounts, so they add up to the service totals only when
-    /// every invoice's lines do.
+    /// every invoice's lines do. The split by payer is by line and is not
+    /// comparable with the summary's `out_of_pocket_cents` and
+    /// `covered_cents`, which leave out a service with no total and hold each
+    /// service's split inside its total.
     pub by_work_kind: Vec<WorkKindCost>,
     pub service_count: usize,
     pub part_count: usize,
     /// The odometer miles the records cover: the highest odometer reading on
     /// record minus the mileage of the earliest-dated service or reading.
     /// `None` when no such reading exists or the difference is not positive.
-    /// With a date range, only services and readings dated inside it count.
+    /// With a range, the miles end at the highest reading dated on or before
+    /// `to`. With a `from`, they start at the latest reading dated on or
+    /// before `from`, so the miles driven before the first reading inside the
+    /// range count, or at the earliest reading inside the range when none is
+    /// that early.
     pub miles_covered: Option<i64>,
-    /// The date of the earliest-dated service or odometer
-    /// reading that starts `miles_covered`, or `None` when there is none.
+    /// The date of the service or odometer reading that starts
+    /// `miles_covered`, or `None` when there is none. With a `from`, it is on
+    /// or before `from` when a reading that early exists, and a later date
+    /// means the miles from `from` up to it are not counted.
     pub history_starts_on: Option<chrono::NaiveDate>,
     /// `total_cost_cents` per 1000 of `miles_covered`, rounded to the nearest
     /// cent; `None` when `miles_covered` is, or is under
@@ -140,9 +149,11 @@ pub struct WorkKindCost {
     /// The sum of the lines' amounts. A line with no amount adds nothing.
     pub cost_cents: i64,
     /// The part of `cost_cents` on lines the owner paid, where a line with no
-    /// payer of its own follows its service.
+    /// payer of its own follows its service. It counts every line, so it is
+    /// not a share of the summary's `out_of_pocket_cents`.
     pub out_of_pocket_cents: i64,
-    /// The part of `cost_cents` on lines someone else paid.
+    /// The part of `cost_cents` on lines someone else paid. It counts every
+    /// line, so it is not a share of the summary's `covered_cents`.
     pub covered_cents: i64,
 }
 
@@ -286,17 +297,25 @@ async fn covered_work(
         .collect())
 }
 
-/// The odometer miles the records cover and the date they start, counting
-/// the given services and the odometer readings dated inside `range`. The
-/// purchase reading is left out on purpose: the owner may have bought the car
-/// years before the records begin, and the costs cover only the miles driven
-/// since the first record.
+/// The odometer miles the records cover over `range` and the date they
+/// start. The readings are every service mileage and every logged reading of
+/// the vehicle. The miles end at the highest reading dated on or before the
+/// range's end. They start at the latest reading dated on or before the
+/// range's start, or at the earliest reading the range holds when it has no
+/// start or no reading is that early.
 async fn recorded_miles(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
-    services: &[service_record::Model],
     range: CostRange,
 ) -> DomainResult<(Option<i64>, Option<chrono::NaiveDate>)> {
+    // The purchase reading is left out on purpose: the owner may have bought
+    // the car years before the records begin, and the costs cover only the
+    // miles driven since the first record.
+    let services = service_record::Entity::find()
+        .filter(service_record::Column::VehicleId.eq(vehicle_id))
+        .filter(service_record::Column::Mileage.is_not_null())
+        .all(db)
+        .await?;
     let readings = mileage_log::Entity::find()
         .filter(mileage_log::Column::VehicleId.eq(vehicle_id))
         .all(db)
@@ -305,9 +324,20 @@ async fn recorded_miles(
         .iter()
         .filter_map(|s| Some((s.service_date, s.mileage?)))
         .chain(readings.iter().map(|r| (r.recorded_at.day(), r.mileage)))
-        .filter(|(date, _)| range.holds(*date))
+        .filter(|(date, _)| range.to.is_none_or(|to| *date <= to))
         .collect();
-    let start = points.iter().min();
+    // A range that starts at a date starts its miles at the odometer on that
+    // date, which the latest reading up to it gives. Starting at the first
+    // reading inside the range would drop the miles driven before it.
+    let before_start = range
+        .from
+        .and_then(|from| points.iter().filter(|(date, _)| *date <= from).max());
+    let start = before_start.or_else(|| {
+        points
+            .iter()
+            .filter(|(date, _)| range.from.is_none_or(|from| *date >= from))
+            .min()
+    });
     let end = points.iter().map(|(_, m)| *m).max();
     let miles = start
         .zip(end)
@@ -441,8 +471,7 @@ pub async fn summary_in(
     let covered_cents: i64 = covered_by_service.values().sum();
     let covered_work =
         covered_work(db, &services, &lines_by_service, &out_of_pocket_by_service).await?;
-    let (miles_covered, history_starts_on) =
-        recorded_miles(db, vehicle_id, &services, range).await?;
+    let (miles_covered, history_starts_on) = recorded_miles(db, vehicle_id, range).await?;
     let cost_per_1000_miles_cents = miles_covered
         .filter(|miles| *miles >= MIN_MILES_FOR_COST_PER_1000)
         .map(|miles| (total_cost_cents * 1000 + miles / 2) / miles);
@@ -1346,7 +1375,8 @@ mod tests {
         }
     }
 
-    // Three services 2,000 miles apart and three parts, one of them undated.
+    // The fixture holds three services 2,000 miles apart and three parts, one
+    // of them undated.
     async fn seed_three_years(db: &DatabaseConnection) -> i32 {
         let vid = seed_vehicle(db, None).await;
         priced_service(db, vid, "2024-06-01", 10_000, 10_000, Payer::Owner).await;
@@ -1414,22 +1444,66 @@ mod tests {
         assert_eq!(all.miles_covered, Some(5_000));
         assert_eq!(all.history_starts_on, Some(date("2024-06-01")));
 
-        // 62,000 cents over the 2,000 miles from the 2025 service to the 2026
-        // one. The reading of September 2026 is outside the range.
+        // The miles start at the 2024 service, the latest reading on or before
+        // the range's start, and end at the 2026 service. The reading of
+        // September 2026 is after the range.
         let s = summary_in(&db, vid, range(Some("2025-01-01"), Some("2026-06-30")))
             .await
             .unwrap();
-        assert_eq!(s.miles_covered, Some(2_000));
-        assert_eq!(s.history_starts_on, Some(date("2025-06-01")));
-        assert_eq!(s.cost_per_1000_miles_cents, Some(31_000));
+        assert_eq!(s.total_cost_cents, 62_000);
+        assert_eq!(s.miles_covered, Some(4_000));
+        assert_eq!(s.history_starts_on, Some(date("2024-06-01")));
+        assert_eq!(s.cost_per_1000_miles_cents, Some(15_500));
 
-        // One service in the range covers no miles, so the rate is withheld.
+        // A range with one service still covers the miles driven up to it.
         let one = summary_in(&db, vid, range(Some("2025-01-01"), Some("2025-12-31")))
             .await
             .unwrap();
         assert_eq!(one.total_cost_cents, 22_000);
-        assert_eq!(one.miles_covered, None);
-        assert_eq!(one.cost_per_1000_miles_cents, None);
+        assert_eq!(one.miles_covered, Some(2_000));
+        assert_eq!(one.cost_per_1000_miles_cents, Some(11_000));
+
+        // No reading is as early as this range's start, so the miles start at
+        // the first reading inside it.
+        let early = summary_in(&db, vid, range(Some("2024-01-01"), Some("2025-12-31")))
+            .await
+            .unwrap();
+        assert_eq!(early.miles_covered, Some(2_000));
+        assert_eq!(early.history_starts_on, Some(date("2024-06-01")));
+
+        // A range with no start counts from the first reading up to its end.
+        let until = summary_in(&db, vid, range(None, Some("2025-12-31")))
+            .await
+            .unwrap();
+        assert_eq!(until.miles_covered, Some(2_000));
+        assert_eq!(until.history_starts_on, Some(date("2024-06-01")));
+    }
+
+    // A year's costs are spread over the miles driven in that year, which
+    // start at the odometer reading taken before the year began.
+    #[tokio::test]
+    async fn a_range_starts_its_miles_at_the_last_reading_before_it() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db, None).await;
+        mileage_log::ActiveModel {
+            vehicle_id: Set(vid),
+            mileage: Set(20_000),
+            recorded_at: Set(date("2025-12-20")),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        priced_service(&db, vid, "2026-06-15", 25_000, 30_000, Payer::Owner).await;
+        priced_service(&db, vid, "2026-12-10", 30_500, 33_000, Payer::Owner).await;
+
+        let year = summary_in(&db, vid, range(Some("2026-01-01"), Some("2026-12-31")))
+            .await
+            .unwrap();
+        assert_eq!(year.total_cost_cents, 63_000);
+        assert_eq!(year.miles_covered, Some(10_500));
+        assert_eq!(year.history_starts_on, Some(date("2025-12-20")));
+        assert_eq!(year.cost_per_1000_miles_cents, Some(6_000));
     }
 
     #[tokio::test]

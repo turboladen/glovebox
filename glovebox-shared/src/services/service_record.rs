@@ -652,13 +652,15 @@ pub async fn list_between(
 /// first and the later-recorded first within a day.
 ///
 /// # Errors
-/// `NotFound` for a missing vehicle or a `shop_id` that names no shop.
+/// `NotFound` for a missing vehicle or a `shop_id` that names no shop, and
+/// `Invalid` for a limit of zero.
 async fn filtered_rows(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     filter: &ServiceFilter,
 ) -> DomainResult<Vec<service_record::Model>> {
     super::vehicle::require(db, vehicle_id).await?;
+    super::validate_limit(filter.limit)?;
     let mut query =
         service_record::Entity::find().filter(service_record::Column::VehicleId.eq(vehicle_id));
     if let Some(from) = filter.from {
@@ -692,7 +694,8 @@ async fn filtered_rows(
 /// `work_kind` when any of its lines has that kind.
 ///
 /// # Errors
-/// `NotFound` for a missing vehicle or a `shop_id` that names no shop.
+/// `NotFound` for a missing vehicle or a `shop_id` that names no shop, and
+/// `Invalid` for a limit of zero.
 pub async fn list_filtered(
     db: &impl ConnectionTrait,
     vehicle_id: i32,

@@ -767,3 +767,74 @@ async fn list_incidents_filters_by_category_and_keeps_the_newest() {
         .await;
     assert!(err.contains("category"), "got: {err}");
 }
+
+#[tokio::test]
+async fn a_followup_needs_a_summary_and_a_list_needs_a_limit_of_at_least_one() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let iid = t
+        .call(
+            "log_incident",
+            json!({ "vehicle_id": v.id, "title": "Squeak", "category": "noise" }),
+        )
+        .await["id"]
+        .clone();
+    let err = t
+        .call_err(
+            "add_incident_followup",
+            json!({
+                "vehicle_id": v.id,
+                "incident_id": iid,
+                "occurred_at": "2026-06-02",
+                "summary": "  "
+            }),
+        )
+        .await;
+    assert_eq!(err, "summary: must not be blank");
+    let fid = t
+        .call(
+            "add_incident_followup",
+            json!({
+                "vehicle_id": v.id,
+                "incident_id": iid,
+                "occurred_at": "2026-06-02",
+                "summary": "Called the shop",
+                "contact_with": " Dana ",
+                "notes": " "
+            }),
+        )
+        .await;
+    assert_eq!(fid["contact_with"], "Dana");
+    assert!(fid["notes"].is_null(), "{fid}");
+
+    let args = |extra: serde_json::Value| {
+        let mut args = json!({
+            "vehicle_id": v.id,
+            "incident_id": iid,
+            "followup_id": fid["id"]
+        });
+        for (k, value) in extra.as_object().unwrap() {
+            args[k] = value.clone();
+        }
+        args
+    };
+    let err = t
+        .call_err("update_incident_followup", args(json!({ "summary": "" })))
+        .await;
+    assert_eq!(err, "summary: must not be blank");
+    let updated = t
+        .call(
+            "update_incident_followup",
+            args(json!({ "contact_with": "  " })),
+        )
+        .await;
+    assert!(updated["contact_with"].is_null(), "{updated}");
+    assert_eq!(updated["summary"], "Called the shop");
+
+    for tool in ["list_incidents", "list_services", "list_parts"] {
+        let err = t
+            .call_err(tool, json!({ "vehicle_id": v.id, "limit": 0 }))
+            .await;
+        assert_eq!(err, "limit: must be at least 1", "{tool}");
+    }
+}

@@ -391,7 +391,7 @@ pub async fn list(
 
 /// The vehicle's parts, most recently recorded first, each with its kit
 /// contents and its warranty as of `today`. `filter.limit` keeps that many
-/// from the top of the filtered list. A mileage bound is compared with the vehicle's
+/// from the top of the filtered list, and a limit of zero is `Invalid`. A mileage bound is compared with the vehicle's
 /// estimated mileage on that day.
 pub async fn list_on(
     db: &impl ConnectionTrait,
@@ -400,6 +400,7 @@ pub async fn list_on(
     today: NaiveDate,
 ) -> DomainResult<Vec<ListedPart>> {
     let vehicle = super::vehicle::require(db, vehicle_id).await?;
+    super::validate_limit(filter.limit)?;
     let mut query = part::Entity::find().filter(part::Column::VehicleId.eq(vehicle_id));
 
     if let Some(status) = filter.status {

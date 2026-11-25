@@ -565,8 +565,8 @@ async fn update_planned_work_names_the_incident_its_service_stopped_resolving() 
     assert_eq!(back["released_from_service_id"], service);
 }
 
-// A car long past its warranty date and still under the mileage limit: the
-// stricter reading says the warranty has ended.
+// The old car is long past its warranty date and still under the mileage
+// limit, so the stricter reading says its warranty has ended.
 #[tokio::test]
 async fn whats_coming_reports_each_warranty_bound() {
     let t = connect().await;

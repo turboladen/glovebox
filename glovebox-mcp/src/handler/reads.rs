@@ -90,15 +90,24 @@ impl GloveboxMcp {
                        `recall`, `fee`): `line_count`, `cost_cents`, and that amount split into \
                        `out_of_pocket_cents` and `covered_cents` by each line's payer. A kind \
                        with no line is left out, and the figures are the lines' own amounts, so \
-                       they add up to the service totals only when every invoice's lines do. \
-                       `from` and `to` (`YYYY-MM-DD`, inclusive; `from` after `to` is an error) \
-                       restrict every figure to one span, such as a calendar year: the services \
-                       dated inside it, and the parts bought inside it (by install date when a \
-                       part has no purchase date; a part with neither is left out of a ranged \
-                       summary). With a range, `miles_covered` and `history_starts_on` count only \
-                       the services and odometer readings dated inside it, so \
-                       `cost_per_1000_miles_cents` is the range's cost over the range's miles and \
-                       is null when those readings cover under 1,000 miles. The reply repeats \
+                       they add up to the service totals only when every invoice's lines do. The \
+                       per-kind split is by line and is not comparable with the top-level \
+                       `out_of_pocket_cents` and `covered_cents`, which leave out a service with \
+                       no total and hold each service's split inside its total, so never present \
+                       the per-kind figures as shares of those. `from` and `to` (`YYYY-MM-DD`, \
+                       inclusive; `from` after `to` is an error) restrict every figure to one \
+                       span, such as a calendar year: the services dated inside it, and the parts \
+                       bought inside it (by install date when a part has no purchase date; a part \
+                       with neither is left out of a ranged summary). With a range, \
+                       `miles_covered` ends at the highest odometer reading dated on or before \
+                       `to`. With a `from`, it starts at the latest reading (a service's mileage \
+                       or a logged one) dated on or before `from`, so the miles driven before the \
+                       first reading inside the range count; when no reading is that early it \
+                       starts at the earliest reading inside the range. `history_starts_on` is \
+                       the date of the starting reading, so it can be before `from`, and a date \
+                       after `from` means the miles from `from` up to it are missing and the rate \
+                       reads high: say so. `cost_per_1000_miles_cents` is the range's cost over \
+                       those miles and is null when they are under 1,000. The reply repeats \
                        `from` and `to`, null for an open end."
     )]
     async fn cost_summary(
