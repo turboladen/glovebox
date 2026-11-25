@@ -1,13 +1,13 @@
 //! Inputs for the shop directory tools.
 //!
-//! A field typed `Option<Option<T>>` follows the convention in `corrections`:
-//! an absent key leaves the value alone, `null` clears it, and a value sets it.
+//! A field typed `Option<Option<T>>` follows the convention in `schemas`: an
+//! absent key leaves the value alone, `null` clears it, and a value sets it.
 
 use glovebox_shared::inputs::shop::{NewShop, UpdateShop};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use super::corrections::nullable;
+use super::nullable;
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

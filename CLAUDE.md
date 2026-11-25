@@ -217,8 +217,10 @@ the field docs in `src/schemas*`, `docs/claude-desktop/glovebox-project-prompt.m
 them for Desktop) and the ADR that decided it. `rg` the rule's key phrase across `glovebox-mcp/src`
 and `docs/` to find them.
 
-Inputs are schemars-derived structs in `src/schemas.rs`, `src/schemas/corrections.rs`,
-`src/schemas/checklist.rs` and `src/schemas/shops.rs`; their doc
+Inputs are schemars-derived structs in `src/schemas/`, one module per handler file with the same
+name (`schemas/vehicles.rs` holds the inputs `handler/vehicles.rs` uses), and `src/schemas.rs`
+holds what more than one area uses (`EmptyParams`, `VehicleParams`, `PartContentInput`, the
+`nullable` deserializer and the shop argument helpers) and re-exports every module; their doc
 comments become the LLM-visible field descriptions. `Parameters<T>` defers deserialize errors
 so malformed arguments come back as actionable tool errors, not bare JSON-RPC `-32602`s, and
 reads them through `serde_path_to_error`, so the error names the argument at fault. The
@@ -686,8 +688,8 @@ Crate-level `#![allow]`s in `glovebox-shared/src/lib.rs` suppress intentional pe
   `clippy::implicit_hasher`: these target public-API surface, and the rationale is in a comment in
   `lib.rs`
 
-`glovebox-mcp/src/schemas.rs` allows `clippy::option_option` on its corrections, checklist and
-shops modules for the same reason. `[workspace.lints.clippy]` in the root `Cargo.toml` denies the pedantic group for every
+`glovebox-mcp/src/schemas.rs` allows `clippy::option_option` on each module that holds a correct
+or update input (every one but `reads` and `recalls`) for the same reason. `[workspace.lints.clippy]` in the root `Cargo.toml` denies the pedantic group for every
 crate. Run `cargo clippy --workspace --all-targets --locked -- -D warnings` to verify zero
 warnings; it lints test code too. Add a per-function `#[expect(..., reason = "...")]` for
 unavoidable cases, such as a test that tells one long story. A test checks a list is empty with
