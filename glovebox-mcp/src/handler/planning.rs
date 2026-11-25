@@ -114,8 +114,10 @@ impl GloveboxMcp {
                        still wait (each reads `open`, or `planned` with its job on no \
                        appointment; recalls are in `recalls`), most severe first and at most ten, \
                        and `open_findings_total` counts them all: when one fits the work being \
-                       discussed, say so and offer to `plan_work` it with `research_finding_id`, \
-                       and set one the owner rules out to `dismissed` with \
+                       discussed, say so. Offer to `plan_work` only one that reads `open`, with \
+                       `research_finding_id`; one that reads `planned` already has its job in \
+                       `work_item`, so put that job on the appointment with `update_planned_work` \
+                       and never plan it again. Set one the owner rules out to `dismissed` with \
                        `update_research_finding`. Group overdue and due-soon items into one shop \
                        trip when advising. For items worth doing, offer to plan_work them (linked \
                        via schedule_item_id); when recorded work satisfies an item, link it via \

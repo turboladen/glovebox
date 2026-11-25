@@ -36,8 +36,9 @@ crate::vocab::vocabulary! {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SearchHit {
     /// Domain record kind: `vehicle`, `service`, `incident`,
-    /// `incident_followup`, `research_finding`,
-    /// `schedule_item`, `work_item`, or `part`.
+    /// `incident_followup`, `research_finding`, `recall`,
+    /// `schedule_item`, `work_item`, or `part`. A finding whose category is
+    /// `recall` is a `recall` hit, and its `id` is the recall's finding id.
     pub kind: String,
     pub id: i32,
     pub vehicle_id: Option<i32>,
@@ -319,16 +320,7 @@ fn text_arms(scope: SearchScope, filt: bool) -> Vec<String> {
         ));
     }
     if want(SearchScope::Research) {
-        subs.push(subquery(
-            "research_finding",
-            "fts_research_findings",
-            "JOIN research_findings rf ON rf.id = fts_research_findings.rowid JOIN \
-             research_reports rr ON rr.id = rf.report_id",
-            "rf.id",
-            "rr.vehicle_id",
-            "rf.title",
-            filt,
-        ));
+        subs.extend(finding_arms(filt));
     }
     if want(SearchScope::Maintenance) {
         subs.push(schedule_item_arm(filt));
@@ -348,6 +340,32 @@ fn text_arms(scope: SearchScope, filt: bool) -> Vec<String> {
         subs.extend(part_text_arms(filt));
     }
     subs
+}
+
+/// The arms that find a research finding and a recall. Both are rows of one
+/// table and one index, and each kind has its own readers, so a hit says
+/// which of the two it is.
+fn finding_arms(filt: bool) -> Vec<String> {
+    use crate::entities::research_finding::FindingCategory;
+
+    let recall = FindingCategory::Recall.as_str();
+    [("research_finding", "<>"), ("recall", "=")]
+        .into_iter()
+        .map(|(kind, is)| {
+            subquery(
+                kind,
+                "fts_research_findings",
+                &format!(
+                    "JOIN research_findings rf ON rf.id = fts_research_findings.rowid AND \
+                     rf.category {is} '{recall}' JOIN research_reports rr ON rr.id = rf.report_id"
+                ),
+                "rf.id",
+                "rr.vehicle_id",
+                "rf.title",
+                filt,
+            )
+        })
+        .collect()
 }
 
 /// The arms that find a service by its own text, a line item's or its shop's.
@@ -919,6 +937,57 @@ mod tests {
             .await
             .unwrap();
         assert_kind(&hits, "research_finding", vid);
+    }
+
+    // A recall and a finding share a table, and each id works only in its
+    // own service, so a hit must say which one it found.
+    #[tokio::test]
+    async fn a_recall_hit_and_a_finding_hit_carry_different_kinds() {
+        use crate::{
+            entities::research_finding::FindingCategory,
+            inputs::finding::NewFinding,
+            services::{finding, recall},
+            test_support::{seed_recall, seed_vehicle},
+        };
+
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let recall_id = seed_recall(&db, vid, "24V110000", "Fuel pump module").await;
+        let finding_id = finding::file(
+            &db,
+            vid,
+            NewFinding {
+                category: FindingCategory::KnownIssue,
+                title: "Water pump housing leaks".into(),
+                description: None,
+                source_url: None,
+                severity: None,
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+
+        for scope in [SearchScope::All, SearchScope::Research] {
+            let hits = search(&db, "pump", scope, Some(vid)).await.unwrap();
+            let mut found: Vec<(&str, i32)> =
+                hits.iter().map(|h| (h.kind.as_str(), h.id)).collect();
+            found.sort_unstable();
+            assert_eq!(
+                found,
+                vec![("recall", recall_id), ("research_finding", finding_id)]
+            );
+        }
+
+        // Each kind's id is read by its own service and by no other.
+        assert_eq!(
+            finding::get(&db, vid, finding_id).await.unwrap().id,
+            finding_id
+        );
+        assert!(finding::get(&db, vid, recall_id).await.is_err());
+        let recalls = recall::list(&db, vid).await.unwrap();
+        let recall_ids: Vec<i32> = recalls.iter().map(|r| r.finding_id).collect();
+        assert_eq!(recall_ids, vec![recall_id]);
     }
 
     async fn seed_schedule_item(db: &impl ConnectionTrait, vehicle_id: i32, name: &str) -> i32 {

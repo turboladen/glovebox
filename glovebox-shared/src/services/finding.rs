@@ -436,14 +436,45 @@ pub async fn get(
     view(db, finding).await
 }
 
+/// The status to store when a caller asks a finding that reads `reads` to
+/// read `asked`, or `None` when the stored one stays.
+fn mark_for(
+    finding: &research_finding::Model,
+    reads: FiledFindingStatus,
+    asked: FiledFindingStatus,
+) -> DomainResult<Option<FindingStatus>> {
+    // A caller that sends back the status it read must not turn a status the
+    // jobs decide into a mark, which would outlast those jobs.
+    if asked == reads {
+        return Ok(None);
+    }
+    if asked != FiledFindingStatus::Open {
+        return Ok(Some(asked.stored()));
+    }
+    // Clearing a mark hands the finding back to its jobs. With no mark to
+    // clear, a done job is what makes it read `done`, and nothing would change.
+    if finding.status == FindingStatus::New {
+        return Err(DomainError::BadRequest(format!(
+            "Research finding {} has a job marked done, so it stays done until that job is \
+             planned again or dropped",
+            finding.id
+        )));
+    }
+    Ok(Some(FindingStatus::New))
+}
+
 /// Applies `input` to a finding and returns it as it reads afterwards.
 ///
 /// # Errors
 /// `NotFound` for an id that names no finding of the vehicle, a recall's id
-/// included. `Invalid` for the category `recall` and for a blank title. A
-/// finding whose job is done with none planned reads `done` until that job is
-/// planned again or dropped, so asking it to read `open` is a `BadRequest`.
+/// included. `Invalid` for the category `recall` and for a blank title.
+/// Asking a finding nobody marked to read `open` while its job is done with
+/// none planned is a `BadRequest`, because it would go on reading `done`.
 /// Nothing is written on any error.
+///
+/// A status the finding already reads leaves the stored mark as it is.
+/// `open` clears a mark of `done` or `dismissed`, and the finding then reads
+/// what its jobs say.
 pub async fn update<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -462,18 +493,13 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     let txn = super::begin_write(db).await?;
     let finding = require(&txn, vehicle_id, finding_id).await?;
 
-    if let Some(status) = input.status {
-        // The requested status goes through the derivation every read uses,
-        // so the refusal and the reads cannot disagree.
-        let mut proposed = finding.clone();
-        proposed.status = status.stored();
-        if view(&txn, proposed).await?.settled != status {
-            return Err(DomainError::BadRequest(format!(
-                "Research finding {finding_id} has a job marked done, so it stays done until that \
-                 job is planned again or dropped"
-            )));
+    let mark = match input.status {
+        Some(status) => {
+            let reads = view(&txn, finding.clone()).await?.settled;
+            mark_for(&finding, reads, status)?
         }
-    }
+        None => None,
+    };
 
     let mut active: research_finding::ActiveModel = finding.into();
     if let Some(title) = input.title {
@@ -491,8 +517,8 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     if let Some(source_url) = input.source_url {
         active.source_url = Set(blank_to_none(source_url.as_deref()));
     }
-    if let Some(status) = input.status {
-        active.status = Set(status.stored());
+    if let Some(mark) = mark {
+        active.status = Set(mark);
     }
     active.updated_at = Set(super::now());
     let updated = active.update(&txn).await?;
@@ -827,6 +853,116 @@ mod tests {
             (read.status, read.work_item),
             (ShownFindingStatus::Open, None)
         );
+    }
+
+    async fn stored_status(db: &DatabaseConnection, finding_id: i32) -> FindingStatus {
+        let finding = research_finding::Entity::find_by_id(finding_id)
+            .one(db)
+            .await;
+        finding.unwrap().unwrap().status
+    }
+
+    // A client that sends back the `done` it read must not pin the finding:
+    // the status came from the job, and it follows the job back to planned.
+    #[tokio::test]
+    async fn a_status_sent_back_as_read_stores_no_mark_and_follows_the_job() {
+        use crate::services::service_record::CompletedWork;
+
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let id = seed(&db, vid, "Water pump fails near 60k").await;
+        let job = plan_job(&db, vid, id, None).await;
+        let service = service_svc::create(
+            &db,
+            vid,
+            NewServiceRecord {
+                service_date: date("2026-03-25"),
+                work_item_ids: Some(vec![job]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let read = update(
+            &db,
+            vid,
+            id,
+            UpdateFinding {
+                title: Some("Water pump housing leaks near 60k".into()),
+                ..mark(FiledFindingStatus::Done)
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(read.status, ShownFindingStatus::Done);
+        assert_eq!(read.title, "Water pump housing leaks near 60k");
+        assert_eq!(stored_status(&db, id).await, FindingStatus::New);
+
+        service_svc::delete(
+            &db,
+            vid,
+            service.record.id,
+            Some(CompletedWork::DidNotHappen),
+        )
+        .await
+        .unwrap();
+        let read = get(&db, vid, id).await.unwrap();
+        assert_eq!(read.status, ShownFindingStatus::Planned);
+        assert_eq!(open(&db, vid).await.unwrap().total, 1);
+
+        // The same holds for `open` sent back while the job is planned.
+        update(&db, vid, id, mark(FiledFindingStatus::Open))
+            .await
+            .unwrap();
+        assert_eq!(stored_status(&db, id).await, FindingStatus::New);
+    }
+
+    // Undoing a dismissal clears the mark, and the finding reads what its
+    // job says, which is `done` here.
+    #[tokio::test]
+    async fn open_clears_a_dismissal_and_the_finding_reads_what_its_job_says() {
+        let db = test_db().await;
+        let vid = seed_vehicle(&db).await;
+        let id = seed(&db, vid, "Water pump fails near 60k").await;
+        let job = plan_job(&db, vid, id, None).await;
+        update(&db, vid, id, mark(FiledFindingStatus::Dismissed))
+            .await
+            .unwrap();
+        set_job_status(&db, vid, job, JobStatus::Done).await;
+        assert_eq!(
+            get(&db, vid, id).await.unwrap().status,
+            ShownFindingStatus::Dismissed
+        );
+
+        let read = update(&db, vid, id, mark(FiledFindingStatus::Open))
+            .await
+            .unwrap();
+        assert_eq!(read.status, ShownFindingStatus::Done);
+        assert_eq!(stored_status(&db, id).await, FindingStatus::New);
+
+        // With the mark gone, the done job is all that holds it, so asking
+        // again changes nothing and is refused.
+        let err = update(&db, vid, id, mark(FiledFindingStatus::Open))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("has a job marked done"), "{err}");
+
+        set_job_status(&db, vid, job, JobStatus::Planned).await;
+        assert_eq!(
+            get(&db, vid, id).await.unwrap().status,
+            ShownFindingStatus::Planned
+        );
+
+        // A dismissed finding with no job goes back to open.
+        let bare = seed(&db, vid, "Coil packs").await;
+        update(&db, vid, bare, mark(FiledFindingStatus::Dismissed))
+            .await
+            .unwrap();
+        let read = update(&db, vid, bare, mark(FiledFindingStatus::Open))
+            .await
+            .unwrap();
+        assert_eq!(read.status, ShownFindingStatus::Open);
     }
 
     #[tokio::test]

@@ -257,8 +257,10 @@ need has a decision, every decision has a reason, and every part ordered has arr
    Read `open_findings` as well: each is something an earlier conversation learned about the car
    and nobody has acted on, most severe first. It reads `open`, or `planned` when a job that is
    on no appointment addresses it (`work_item`). When one fits the trip, say so ("the water pump
-   is a known failure around 60k, do it with the 60k service") and offer to `plan_work` it with
-   `research_finding_id`. The list holds at most ten; when `open_findings_total` is larger, call
+   is a known failure around 60k, do it with the 60k service"). Offer to `plan_work` only a
+   finding that reads `open`, with `research_finding_id`. One that reads `planned` already has
+   its job: put that `work_item` on the appointment with `update_planned_work`, and never plan
+   it a second time. The list holds at most ten; when `open_findings_total` is larger, call
    `list_research_findings` for the rest. When Steve rules one out, set it `dismissed` with
    `update_research_finding`.
 3. When Steve says "I'm doing service X, what could I do while it's in the shop?", start from
@@ -341,6 +343,8 @@ second service to patch the first.
   show its status, the job planned from it and the service that completed that job. Set its
   status to `done` when it was acted on and no job records that, `dismissed` when Steve decided
   against it, or `open` to undo either; `planned` comes from a planned job and is never set.
+  Undoing a mark returns the finding to what its jobs say, so it may then read `planned` or
+  `done`.
   `delete_research_finding` removes one filed by mistake: the jobs planned from it stay and stop
   naming it, and the reply lists them in `unlinked_work_items`, so tell Steve. These tools do not
   find a recall's id, and a finding cannot become a recall.
@@ -353,6 +357,10 @@ second service to patch the first.
   linked. Use `update_planned_work` with `status: "done"` only for work that left no paperwork.
 
 ## Looking things up
+
+A `search_records` hit names its `kind`. A `research_finding` hit is read with
+`get_research_finding`. A `recall` hit is a recall: its `id` is the `finding_id` in
+`list_recalls`, and the finding tools do not find it.
 
 `summarize_recent_activity` gives recent history in one call. `get_vehicle` reads one car's full
 record (VIN, engine, transmission, purchase details, plate). `list_vehicle_attributes` lists

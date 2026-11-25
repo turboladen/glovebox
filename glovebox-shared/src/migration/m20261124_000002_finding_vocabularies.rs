@@ -161,17 +161,21 @@ async fn describe_unlisted(
 /// changes are written, so a second run writes none.
 async fn normalize(db: &impl ConnectionTrait, listed: &Listed) -> Result<(), DbErr> {
     let Listed { table, column, .. } = listed;
+    let plain = format!("lower(trim({column}))");
     if listed.nullable {
-        db.execute_unprepared(&format!(
-            "UPDATE {table} SET {column} = NULL WHERE trim({column}) = ''"
-        ))
-        .await?;
+        let blank_to_null = Query::update()
+            .table(Alias::new(*table))
+            .value(Alias::new(*column), Option::<String>::None)
+            .cond_where(Expr::cust(format!("trim({column}) = ''")))
+            .to_owned();
+        db.execute(&blank_to_null).await?;
     }
-    db.execute_unprepared(&format!(
-        "UPDATE {table} SET {column} = lower(trim({column})) WHERE {column} <> \
-         lower(trim({column}))"
-    ))
-    .await?;
+    let respell = Query::update()
+        .table(Alias::new(*table))
+        .value(Alias::new(*column), Expr::cust(plain.clone()))
+        .cond_where(Expr::cust(format!("{column} <> {plain}")))
+        .to_owned();
+    db.execute(&respell).await?;
     Ok(())
 }
 

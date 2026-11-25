@@ -321,6 +321,14 @@ pub async fn set_status<C: ConnectionTrait + TransactionTrait>(
         .await?
         .remove(0);
 
+    // A caller that sends back the status it read must not turn a status a
+    // job or a service decides into a stored one, which would outlast them.
+    let current = with_status(&txn, vec![finding.clone()]).await?.remove(0);
+    if current.settled == status {
+        txn.commit().await?;
+        return Ok(current);
+    }
+
     // The requested status goes through the derivation every list uses, so
     // the refusal and the lists cannot disagree.
     let mut proposed = finding.clone();
@@ -883,6 +891,28 @@ mod tests {
 
         set_job_status(&db, v, item.id, JobStatus::Dropped).await;
         assert_eq!(shown(&db, v).await, (ShownRecallStatus::Open, None, false));
+    }
+
+    // A client that sends back the `done` it read must not pin the recall:
+    // the status came from the job, and it follows the job back to planned.
+    #[tokio::test]
+    async fn a_status_sent_back_as_read_stores_nothing_and_follows_the_job() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let id = seed_recall(&db, v, "24V110000").await;
+        let item = plan_work_for_recall(&db, v, id).await;
+        set_job_status(&db, v, item.id, JobStatus::Done).await;
+
+        let read = set_status(&db, v, id, RecallStatus::Done).await.unwrap();
+        assert_eq!(read.status, ShownRecallStatus::Done);
+        let stored = research_finding::Entity::find_by_id(id).one(&db).await;
+        assert_eq!(stored.unwrap().unwrap().status, FindingStatus::New);
+
+        set_job_status(&db, v, item.id, JobStatus::Planned).await;
+        assert_eq!(
+            shown(&db, v).await,
+            (ShownRecallStatus::Planned, Some(item.id), false)
+        );
     }
 
     #[tokio::test]

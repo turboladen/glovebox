@@ -133,7 +133,8 @@ pub struct UpdateResearchFindingInput {
     #[schemars(with = "Option<String>")]
     pub source_url: Option<Option<String>>,
     /// `done` (it was acted on and no job records that), `dismissed` (the owner decided
-    /// against it), or `open` (undo either). Omit to leave the status alone.
+    /// against it), or `open` (undo either; the finding then reads what its jobs say, which
+    /// may be `planned` or `done`). Omit to leave the status alone.
     pub status: Option<FiledFindingStatus>,
 }
 

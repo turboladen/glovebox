@@ -153,13 +153,15 @@ impl GloveboxMcp {
         description = "Correct a research finding's title, description, category, severity or \
                        source URL, or set its status: `done` when it was acted on and no job \
                        records that, `dismissed` when the owner decided against it, `open` to \
-                       undo either. `planned` is never set: a finding reads it while a planned \
-                       job addresses it (`plan_work` with `research_finding_id`), and reads \
-                       `done` once that job is done. A finding whose job is marked done stays \
-                       done until that job is planned again or dropped, so setting it `open` is \
-                       an error. A finding cannot become a recall, and a recall's id is not found \
-                       here: use `set_recall_status` for a recall. Returns the finding as it \
-                       reads afterwards."
+                       undo either. Undoing a mark returns the finding to what its jobs say, so \
+                       it may then read `planned` or `done` rather than `open`. `planned` is \
+                       never set: a finding reads it while a planned job addresses it \
+                       (`plan_work` with `research_finding_id`), and reads `done` once that job \
+                       is done. A status the finding already reads changes nothing. A finding \
+                       with no mark whose job is done stays done until that job is planned again \
+                       or dropped, so setting it `open` is an error. A finding cannot become a \
+                       recall, and a recall's id is not found here: use `set_recall_status` for a \
+                       recall. Returns the finding as it reads afterwards."
     )]
     async fn update_research_finding(
         &self,

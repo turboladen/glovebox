@@ -40,8 +40,12 @@ impl GloveboxMcp {
                        or kit that carries it however the number is spaced or punctuated, and is \
                        listed first even when the query's other words do not match it; the whole \
                        stored number must match, and a number written in a note or an invoice \
-                       line matches as typed. Returns ranked hits with snippets. Narrow with \
-                       `scope` and/or `vehicle_id`."
+                       line matches as typed. Returns ranked hits with snippets, each with a \
+                       `kind` and an `id`. A `research_finding` hit is read with \
+                       `get_research_finding`; a `recall` hit is a recall, whose `id` is the \
+                       `finding_id` that `list_recalls` shows and `set_recall_status` takes, and \
+                       the finding tools do not find it. The `research` scope covers both kinds. \
+                       Narrow with `scope` and/or `vehicle_id`."
     )]
     async fn search_records(
         &self,

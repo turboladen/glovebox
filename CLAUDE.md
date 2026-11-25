@@ -434,7 +434,9 @@ A research finding and a recall are rows of one table, told apart by
 recall's id as the byte-identical `NotFound` a missing id gives, so the finding tools and the
 recall tools never touch each other's rows. A finding reads `open`, `planned`, `done` or
 `dismissed` (`finding::ShownFindingStatus`): a mark the owner set wins, then a planned job, then
-a done job with none planned. Every read shows the job filed from it and the service that
+a done job with none planned. A status sent back as read stores no mark (the same holds in
+`recall::set_status`), and `open` clears a mark. A search hit on a recall has the kind `recall`
+and one on a finding `research_finding`. Every read shows the job filed from it and the service that
 completed that job. `finding::delete` keeps the jobs, clears their link and names them, and
 deletes a report left with no finding. `whats_coming` lists in `open_findings` the findings that
 read `open`, or `planned` with the job on no appointment, by severity and then newest, at most

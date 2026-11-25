@@ -4,6 +4,8 @@ use common::{connect, new_vehicle, seed_recall};
 use glovebox_shared::services::vehicle;
 use serde_json::{Value, json};
 
+// `check_recalls` makes a live NHTSA request, so no test here calls it, and
+// every recall is stored by `seed_recall`.
 #[tokio::test]
 async fn a_recall_named_on_a_service_reads_as_done_with_that_service() {
     let t = connect().await;
@@ -166,7 +168,6 @@ async fn a_recall_job_marked_done_without_a_service_reads_done() {
     assert!(err.contains("has a job marked done"), "got: {err}");
 }
 
-// `check_recalls` makes a live NHTSA request, so it is not exercised here.
 async fn file_finding(t: &common::TestClient, vehicle_id: i32, title: &str) -> i64 {
     let filed = t
         .call(
@@ -609,4 +610,66 @@ async fn recalls_tools_reject_unknown_arguments() {
     ] {
         common::assert_unknown_field_rejected(&t, tool, args, field).await;
     }
+}
+
+// A search hit says whether it is a recall or a finding, and each kind's id
+// works in its own tools and is missing in the other's.
+#[tokio::test]
+async fn a_search_hit_names_its_kind_and_its_id_works_in_that_kinds_tools() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let recall = seed_recall(&t.db, v.id, "24V110000").await;
+    let finding = file_finding(&t, v.id, "Water pump housing leaks").await;
+
+    let hits = t
+        .call(
+            "search_records",
+            json!({ "query": "pump", "scope": "research", "vehicle_id": v.id }),
+        )
+        .await;
+    let id_of = |kind: &str| {
+        let found: Vec<&Value> = hits
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|h| h["kind"] == kind)
+            .collect();
+        assert_eq!(found.len(), 1, "one {kind} hit in {hits}");
+        found[0]["id"].clone()
+    };
+    assert_eq!(id_of("recall"), recall);
+    assert_eq!(id_of("research_finding"), finding);
+    assert_eq!(hits.as_array().map(Vec::len), Some(2));
+
+    let read = t
+        .call(
+            "get_research_finding",
+            json!({ "vehicle_id": v.id, "finding_id": id_of("research_finding") }),
+        )
+        .await;
+    assert_eq!(read["title"], "Water pump housing leaks");
+    let marked = t
+        .call(
+            "set_recall_status",
+            json!({
+                "vehicle_id": v.id, "finding_id": id_of("recall"), "status": "not_applicable"
+            }),
+        )
+        .await;
+    assert_eq!(marked["status"], "not_applicable");
+    let listed = t.call("list_recalls", json!({ "vehicle_id": v.id })).await;
+    assert_eq!(listed["recalls"][0]["finding_id"], id_of("recall"));
+
+    t.call_err(
+        "get_research_finding",
+        json!({ "vehicle_id": v.id, "finding_id": id_of("recall") }),
+    )
+    .await;
+    t.call_err(
+        "set_recall_status",
+        json!({
+            "vehicle_id": v.id, "finding_id": id_of("research_finding"), "status": "done"
+        }),
+    )
+    .await;
 }

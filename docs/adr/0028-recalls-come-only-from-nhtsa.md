@@ -53,8 +53,15 @@ adds a CHECK per column.
 One that is not marked reads `planned` while a planned job addresses it, `done` when a job from
 it is done with none planned, and `open` otherwise. A read shows the job (`work_item`: a planned
 one on an appointment, else the oldest planned one, else the latest done one) and the service
-that completed it (`done_service`). Setting a finding `open` while a done job holds it at `done`
-is refused, as it is for a recall.
+that completed it (`done_service`). Setting a status the finding already reads stores nothing,
+so a client that sends back the `done` it read does not turn a status the job decides into a
+mark that outlasts the job; `set_recall_status` follows the same rule. Setting `open` clears a
+mark, and the finding then reads what its jobs say. It is refused only for a finding with no
+mark that a done job holds at `done`, where nothing would change.
+
+**A search hit says which of the two it found.** `search_records` gives a finding the kind
+`research_finding` and a recall the kind `recall`, both under the `research` scope, so a client
+takes each id to the tools that read it.
 
 **Deleting a finding keeps the jobs filed from it.** Each job keeps its work and its status and
 stops naming the finding, and the reply lists those jobs. Two tables reference a finding:

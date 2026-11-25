@@ -450,7 +450,7 @@ mod tests {
         .await
         .unwrap();
         let u = upcoming(&db, v).await.unwrap();
-        assert!(u.open_findings.is_empty());
+        crate::test_support::assert_empty(&u.open_findings);
         assert_eq!((u.open_findings_total, u.recalls.len()), (0, 1));
     }
 
@@ -462,7 +462,7 @@ mod tests {
         let u = upcoming(&db, v).await.unwrap();
         assert!(u.reminders.reminders.is_empty());
         assert!(u.planned_work.is_empty() && u.recalls.is_empty() && u.open_incidents.is_empty());
-        assert!(u.open_findings.is_empty());
+        crate::test_support::assert_empty(&u.open_findings);
         assert_eq!(u.open_findings_total, 0);
         assert_eq!(u.budget.planned_work_cents, 0);
     }
