@@ -2,7 +2,8 @@
 
 use glovebox_shared::{
     entities::research_finding::{FindingCategory, FindingSeverity},
-    services::{recall::RecallStatus, research::NewFiledFinding},
+    inputs::finding::NewFinding,
+    services::recall::RecallStatus,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -26,9 +27,10 @@ pub struct FileResearchFindingInput {
     pub vehicle_id: i32,
     /// Finding kind: `forum_report` (what owners report), `suggested_maintenance` (work worth
     /// doing that the schedule does not list), `upgrade_idea`, `known_issue` (a failure this
-    /// model is known for), `service_bulletin` (a TSB), `recall`, or `other`.
+    /// model is known for), `service_bulletin` (a TSB) or `other`. `recall` is refused:
+    /// recalls come only from `check_recalls`.
     pub category: FindingCategory,
-    /// Short title, e.g. "DSG service interval is 40k, not 60k".
+    /// Short title, e.g. "DSG service interval is 40k, not 60k". It must not be blank.
     pub title: String,
     /// Longer description of what was found.
     pub description: Option<String>,
@@ -39,10 +41,10 @@ pub struct FileResearchFindingInput {
 }
 
 impl FileResearchFindingInput {
-    pub fn into_domain(self) -> (i32, NewFiledFinding) {
+    pub fn into_domain(self) -> (i32, NewFinding) {
         (
             self.vehicle_id,
-            NewFiledFinding {
+            NewFinding {
                 category: self.category,
                 title: self.title,
                 description: self.description,

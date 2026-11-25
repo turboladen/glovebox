@@ -78,7 +78,7 @@ async fn require_finding_owned(
     vehicle_id: i32,
     finding_id: i32,
 ) -> DomainResult<()> {
-    let not_found = || DomainError::NotFound(format!("Research finding {finding_id} not found"));
+    let not_found = || super::finding::not_found(finding_id);
     let finding = research_finding::Entity::find_by_id(finding_id)
         .one(db)
         .await?

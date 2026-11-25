@@ -522,11 +522,13 @@ mod tests {
             mileage_log, part, service_record_line_item, service_record_line_item::WorkKind,
         },
         inputs::{
+            finding::NewFinding,
             part::NewPart,
             service_record::{NewLineItem, NewServiceRecord},
             work_item::NewWorkItem,
         },
         services::{
+            finding,
             nhtsa::RecallInfo,
             research,
             service_record::{self as service_svc, ServiceRecordWithLinks},
@@ -634,10 +636,10 @@ mod tests {
     }
 
     async fn seed_non_recall(db: &DatabaseConnection, vehicle_id: i32) -> i32 {
-        research::file_finding(
+        finding::file(
             db,
             vehicle_id,
-            research::NewFiledFinding {
+            NewFinding {
                 category: FindingCategory::SuggestedMaintenance,
                 title: "Community fix".into(),
                 description: None,
@@ -758,20 +760,7 @@ mod tests {
         let v = seed_vehicle(&db).await;
         let other = seed_vehicle(&db).await;
         let foreign = seed_recall(&db, other, "24V999000").await;
-        let note = research::file_finding(
-            &db,
-            v,
-            research::NewFiledFinding {
-                category: FindingCategory::SuggestedMaintenance,
-                title: "Not a recall".into(),
-                description: None,
-                source_url: None,
-                severity: None,
-            },
-        )
-        .await
-        .unwrap()
-        .id;
+        let note = seed_non_recall(&db, v).await;
 
         let missing = set_status(&db, v, 9999, RecallStatus::Done)
             .await

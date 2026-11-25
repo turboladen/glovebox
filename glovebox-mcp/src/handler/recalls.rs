@@ -5,7 +5,7 @@ use rmcp::{ErrorData as McpError, model::CallToolResult, tool, tool_router};
 use serde::Serialize;
 
 use super::{GloveboxMcp, Parameters, domain_error, domain_result, tool_json_result};
-use glovebox_shared::services::{recall, research};
+use glovebox_shared::services::{finding, recall, research};
 
 use crate::schemas::{FileResearchFindingInput, SetRecallStatusInput, VehicleParams};
 
@@ -89,7 +89,10 @@ impl GloveboxMcp {
         name = "file_research_finding",
         description = "Save research you've done about this vehicle (forum consensus, TSBs, known \
                        issues, upgrade notes) as a persistent finding. Use after answering \
-                       research questions so the knowledge isn't lost when the conversation ends."
+                       research questions so the knowledge isn't lost when the conversation ends. \
+                       Returns the finding with its `id` and its status, `open`. A recall is \
+                       never filed here: the category `recall` is refused, because recalls come \
+                       only from `check_recalls`."
     )]
     async fn file_research_finding(
         &self,
@@ -97,6 +100,6 @@ impl GloveboxMcp {
     ) -> Result<CallToolResult, McpError> {
         let p = tool_input!(params, "file_research_finding");
         let (vehicle_id, input) = p.into_domain();
-        domain_result(research::file_finding(&*self.db, vehicle_id, input).await)
+        domain_result(finding::file(&*self.db, vehicle_id, input).await)
     }
 }

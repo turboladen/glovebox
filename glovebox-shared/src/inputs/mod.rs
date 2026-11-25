@@ -8,6 +8,7 @@
 
 pub mod appointment;
 pub mod checklist;
+pub mod finding;
 pub mod incident;
 pub mod mileage;
 pub mod need;
