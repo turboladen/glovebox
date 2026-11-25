@@ -1473,7 +1473,7 @@ async fn a_self_performed_service_records_an_ecu_flash() {
     .await
     .unwrap();
     assert_eq!(got.record.performed_by, Performer::Owner);
-    assert_eq!((got.record.shop_id, got.shop_name), (None, None));
+    assert_eq!((got.record.shop_id, got.shop), (None, None));
 }
 
 #[tokio::test]
