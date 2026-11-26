@@ -80,7 +80,8 @@ impl From<RecallStatus> for ShownRecallStatus {
     }
 }
 
-// What keeps a recall done whatever the owner set.
+// What makes a recall read `done`. A service holds it whatever mark is
+// stored, and a done job holds it only while no mark is stored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Held {
     ByService,
@@ -303,6 +304,8 @@ pub async fn list_for_vehicle(
 }
 
 /// Sets a recall to `open`, `done` or `not_applicable` without a service.
+/// A status the recall already reads stores nothing. `open` clears a mark of
+/// `done` or `not_applicable`, and the recall then reads what its jobs say.
 ///
 /// # Errors
 /// `NotFound` for a finding that is not a recall on this vehicle. A recall
@@ -310,10 +313,6 @@ pub async fn list_for_vehicle(
 /// it for another status is a `BadRequest`. So is asking a recall nobody
 /// marked to read `open` while its job is done with none planned, because it
 /// would go on reading `done`.
-///
-/// A status the recall already reads leaves the stored mark as it is. `open`
-/// clears a mark of `done` or `not_applicable`, and the recall then reads
-/// what its jobs say.
 pub async fn set_status<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -964,6 +963,24 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("has a job marked done"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn open_clears_a_mark_and_the_recall_reads_planned_from_its_planned_job() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let id = seed_recall(&db, v, "24V110000").await;
+        let item = plan_work_for_recall(&db, v, id).await;
+
+        for mark in [RecallStatus::NotApplicable, RecallStatus::Done] {
+            set_status(&db, v, id, mark).await.unwrap();
+            let read = set_status(&db, v, id, RecallStatus::Open).await.unwrap();
+            assert_eq!(
+                (read.status, read.work_item_id),
+                (ShownRecallStatus::Planned, Some(item.id)),
+                "after {mark:?}"
+            );
+        }
     }
 
     #[tokio::test]
