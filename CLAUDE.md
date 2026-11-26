@@ -64,6 +64,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings   # Rust lints, t
 # A forked `/code-review` that answers `(none)` found nothing
 # Parallel agent branches: cherry-pick each onto a branch from main, merge one at a time, rebase the next and
 # rerun `just ci`; a struct that gained a field on one branch breaks a full struct literal on another
+# Conflicts use diff3 markers (`merge.conflictstyle=diff3`): a scripted resolution must drop the `|||||||` base section too
 ```
 
 ## Environment
@@ -453,6 +454,8 @@ lists the items due by it, due now, by mileage or by the day the mileage rate re
 `is_factory_recommended`, with the factory items whose interval divides the mark that a recent
 service did in `done_recently`. It is derived on every read and never stored; `whats_coming` and
 the home page show it (`docs/adr/0029-a-milestone-service-is-derived.md`).
+Each `ReminderStatus` carries its schedule item in `item` (not serialized), so a reader that
+needs an interval, estimate or factory flag reads it there and never reloads the items.
 A research finding and a recall are rows of one table, told apart by
 `research_finding::FindingCategory`. Recalls come only from the NHTSA check: `finding::file` and
 `finding::update` refuse the category `recall`, and every function of `services::finding` reads a
@@ -732,6 +735,9 @@ role per control style, and `YYYY-MM-DD` dates.
   column skip when it is gone; `schema::has_column` is the test for one.
 - **Migration tests** start from `schema::testing::migrated_to(N)` (the N migrations before the one
   under test), insert rows, then run `Migrator::up`; `count` and `fts_integrity` live there too.
+- **A migration test that reads rows through an entity** selects only the columns it checks
+  (`select_only().column(..).into_tuple()`), because a later migration may add a column the
+  entity names and the test runs only up to its own migration.
 - **A change to a shared builder in `migration/schema.rs`** must leave the SQL of migrations that
   already ran unchanged: compare `sqlite_schema` from a fresh database with a backup's.
 - **SQLite cannot `DROP COLUMN` a column that a foreign key, CHECK, index or trigger names.**
@@ -758,7 +764,10 @@ role per control style, and `YYYY-MM-DD` dates.
   key's action on a copy.
 - **Verify a migration again with the binary built from the rebased tree**, and compare every
   content table (`select * from "<t>" order by rowid | shasum`) between `main`'s build and the
-  branch's on scratch copies of a backup.
+  branch's on scratch copies of a backup. To build `main`'s binary, run
+  `git worktree add --detach <scratch>/main-tree origin/main`, then
+  `CARGO_TARGET_DIR=<scratch>/main-target cargo build --release -p glovebox-mcp` there, and
+  `git worktree remove --force` after.
 - **When a read starts deriving a value from existing rows**, query a backup copy for the rows
   the new derivation counts that the stored data did not (a completed job with an incident and
   no `resolved` link), and state in the ADR how those records read after the upgrade.
