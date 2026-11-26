@@ -22,6 +22,7 @@ use glovebox_shared::{
         date_label,
         history::VehicleHistory,
         incident::ServiceRef,
+        milestone::{self, Milestone},
         need::{self, Stage},
         part as part_svc,
         reminders::{self, DueStatus},
@@ -1606,6 +1607,70 @@ impl HomeOutlook {
             activity: home.recent_activity.iter().map(Into::into).collect(),
             vehicle_href: crate::pages::vehicle_path(home.vehicle.id),
         })
+    }
+}
+
+/// The next milestone service, as the home page prints it.
+pub struct MilestoneView {
+    /// The milestone's name, such as `70k service`.
+    pub name: String,
+    /// Where it falls, such as `at 70,000 mi, around 2029-08-03`.
+    pub when: String,
+    /// The factory items first, then the others, then the factory items done
+    /// recently.
+    pub rows: Vec<MilestoneRow>,
+    /// How many items are due by the milestone.
+    pub due: usize,
+}
+
+/// One item of the next milestone.
+pub struct MilestoneRow {
+    pub name: String,
+    pub status: Tag,
+    pub due_at: String,
+    /// `Factory` or `Not factory`.
+    pub package: &'static str,
+    pub last_done: Option<String>,
+}
+
+impl MilestoneView {
+    pub fn of(m: &Milestone) -> Self {
+        let row = |item: &milestone::MilestoneItem, package, status| MilestoneRow {
+            name: item.name.clone(),
+            status,
+            due_at: reminders::due_at(item.due_at_miles, item.due_at_date),
+            package,
+            last_done: item.last_service.as_ref().map(milestone::last_done),
+        };
+        // An item not due yet is listed because it falls due by the mark.
+        let by_mark = |status| match status {
+            DueStatus::NotDue => Tag {
+                kind: PillKind::Plain.class(),
+                text: "By the mark".to_owned(),
+            },
+            due => Tag::of(due),
+        };
+        let done = || Tag {
+            kind: PillKind::Ok.class(),
+            text: "Done recently".to_owned(),
+        };
+        let rows = m
+            .factory_items
+            .iter()
+            .map(|i| row(i, "Factory", by_mark(i.status)))
+            .chain(
+                m.other_items
+                    .iter()
+                    .map(|i| row(i, "Not factory", by_mark(i.status))),
+            )
+            .chain(m.done_recently.iter().map(|i| row(i, "Factory", done())))
+            .collect();
+        Self {
+            name: m.name.clone(),
+            when: milestone::when(m),
+            rows,
+            due: m.due_count(),
+        }
     }
 }
 

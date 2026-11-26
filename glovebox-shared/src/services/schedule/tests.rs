@@ -601,9 +601,7 @@ async fn changing_an_inherited_item_keeps_its_history_and_planned_work() {
     let backlog = crate::services::upcoming::planned_work(&db, vid, today)
         .await
         .unwrap();
-    let f = budget::forecast_from(&db, &rems, &backlog, today)
-        .await
-        .unwrap();
+    let f = budget::forecast_from(&rems, &backlog, today);
     assert!(
         !f.lines.iter().any(|l| l.label == "Spark Plugs"),
         "first occurrence is already planned: {:?}",

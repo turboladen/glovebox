@@ -118,12 +118,23 @@ impl GloveboxMcp {
                        `research_finding_id`; one that reads `planned` already has its job in \
                        `work_item`, so put that job on the appointment with `update_planned_work` \
                        and never plan it again. Set one the owner rules out to `dismissed` with \
-                       `update_research_finding`. Group overdue and due-soon items into one shop \
-                       trip when advising. For items worth doing, offer to plan_work them (linked \
-                       via schedule_item_id); when recorded work satisfies an item, link it via \
-                       `record_service`'s `schedule_item_ids` so the reminder clears, or for \
-                       service records that already exist call `link_service_to_maintenance`; for \
-                       an item that does not apply to this vehicle, use `dismiss_schedule_item`."
+                       `update_research_finding`. `milestone` names the next 10,000-mile mark as \
+                       the shop would (`name`, such as `70k service`, with `mark_miles` and \
+                       `reached_around`, the day the car should reach it) and lists the tracked \
+                       items due by it (due now, by mileage or by that day): `factory_items` are \
+                       the ones the manufacturer recommends and `other_items` the rest. \
+                       `done_recently` lists the factory items whose interval puts them in the \
+                       manufacturer's package at that mark but that a recent service did, with \
+                       that `last_service`: tell the owner to ask the shop to leave them out so \
+                       they are not paid for twice. An item is listed whether or not a job is \
+                       planned for it, so check `planned_work` before offering to plan one. It is \
+                       null when nothing is due by the mark and nothing was done recently. Group \
+                       overdue and due-soon items into one shop trip when advising. For items \
+                       worth doing, offer to plan_work them (linked via schedule_item_id); when \
+                       recorded work satisfies an item, link it via `record_service`'s \
+                       `schedule_item_ids` so the reminder clears, or for service records that \
+                       already exist call `link_service_to_maintenance`; for an item that does \
+                       not apply to this vehicle, use `dismiss_schedule_item`."
     )]
     async fn whats_coming(
         &self,

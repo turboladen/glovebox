@@ -254,6 +254,13 @@ need has a decision, every decision has a reason, and every part ordered has arr
    say the total is a floor.
 2. Group the overdue and due-soon items into one shop trip. Say what each named service includes,
    and fold in the open recalls and planned work that fit the same trip.
+   When `milestone` is present, name the trip as the shop would ("your 70k service") and say
+   which items are the factory's (`factory_items`) and which are extras (`other_items`), so Steve
+   can ask for "the factory 70k items plus the alignment". `reached_around` is when the car should
+   reach the mark. Read `done_recently` aloud as items to take off the shop's package: the
+   manufacturer's 70k list includes them, but a recent service did them (`last_service`). The
+   milestone covers only the items glovebox tracks, not every line of the manufacturer's
+   inspection checklist, so say so if Steve asks whether it is the whole package.
    Read `open_findings` as well: each is something an earlier conversation learned about the car
    and nobody has acted on, most severe first. It reads `open`, or `planned` when a job that is
    on no appointment addresses it (`work_item`). When one fits the trip, say so ("the water pump

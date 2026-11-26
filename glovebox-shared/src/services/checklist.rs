@@ -718,6 +718,8 @@ pub struct VehicleHome {
     /// The 12-month cost forecast, judged from the same reminders and planned
     /// jobs as `waiting`.
     pub budget: BudgetForecast,
+    /// The next mileage milestone, judged from the same reminders.
+    pub milestone: Option<super::milestone::Milestone>,
     /// The latest [`HOME_ACTIVITY_LIMIT`] services, incidents and odometer
     /// readings, newest first.
     pub recent_activity: Vec<ActivityItem>,
@@ -779,7 +781,8 @@ pub async fn home(
         let planned = upcoming::planned_work(db, vehicle.id, today).await?;
         homes.push(VehicleHome {
             waiting: waiting::from_parts(db, vehicle.id, &reminders, &planned).await?,
-            budget: budget::forecast_from(db, &reminders, &planned, today).await?,
+            budget: budget::forecast_from(&reminders, &planned, today),
+            milestone: super::milestone::from_reminders(&reminders, today),
             recent_activity: activity::recent_of(db, &vehicle, HOME_ACTIVITY_LIMIT).await?,
             appointments: appointments
                 .remove(&vehicle.id)
