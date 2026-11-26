@@ -1,6 +1,6 @@
 mod common;
 
-use common::{connect, new_vehicle, seed_recall};
+use common::{connect, new_vehicle, seed_recall, seed_recall_under};
 use glovebox_shared::services::vehicle;
 use serde_json::{Value, json};
 
@@ -688,4 +688,51 @@ async fn a_search_hit_names_its_kind_and_its_id_works_in_that_kinds_tools() {
         }),
     )
     .await;
+}
+
+#[tokio::test]
+async fn every_recall_read_names_the_model_line_it_was_found_under() {
+    let t = connect().await;
+    let v = vehicle::create(&t.db, new_vehicle("Daily")).await.unwrap();
+    let by_line = seed_recall_under(&t.db, v.id, "24V110000", "Golf").await;
+    let own = seed_recall(&t.db, v.id, "24V220000").await;
+    let line_of = |list: &Value, id: i32| -> Value {
+        list.as_array()
+            .unwrap_or_else(|| panic!("a list; got: {list}"))
+            .iter()
+            .find(|r| r["finding_id"] == id)
+            .unwrap_or_else(|| panic!("no recall {id}; got: {list}"))["searched_model"]
+            .clone()
+    };
+
+    let listed = t.call("list_recalls", json!({ "vehicle_id": v.id })).await;
+    assert_eq!(
+        line_of(&listed["recalls"], by_line),
+        "Golf",
+        "got: {listed}"
+    );
+    assert_eq!(line_of(&listed["recalls"], own), Value::Null);
+
+    let coming = t.call("whats_coming", json!({ "vehicle_id": v.id })).await;
+    assert_eq!(
+        line_of(&coming["recalls"], by_line),
+        "Golf",
+        "got: {coming}"
+    );
+
+    let service = t
+        .call(
+            "record_service",
+            json!({
+                "vehicle_id": v.id,
+                "service_date": "2025-03-25",
+                "recall_finding_ids": [by_line]
+            }),
+        )
+        .await;
+    assert_eq!(
+        line_of(&service["performed_recalls"], by_line),
+        "Golf",
+        "got: {service}"
+    );
 }

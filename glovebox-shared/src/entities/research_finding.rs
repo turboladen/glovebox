@@ -49,6 +49,10 @@ pub struct Model {
     pub status: FindingStatus,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
+    /// The NHTSA model line a recall was found under when it is not the
+    /// vehicle's own model, such as `Golf` for a Golf GTI. Only a recall
+    /// carries one.
+    pub searched_model: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

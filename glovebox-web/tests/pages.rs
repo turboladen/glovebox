@@ -2600,3 +2600,42 @@ async fn home_shows_no_milestone_for_a_car_with_no_schedule() {
 
     assert!(!body.contains("Milestone at"), "{body}");
 }
+
+#[tokio::test]
+async fn a_recall_found_under_a_model_line_says_so_on_the_home_and_service_pages() {
+    use glovebox_shared::{
+        entities::service_record::Performer, inputs::service_record::NewServiceRecord,
+        services::service_record, test_support::seed_recall_under,
+    };
+    let db = db().await;
+    let v = VehicleFixture::new().name("Golf").insert_id(&db).await;
+    seed_recall_under(&db, v, "24V123", "Fuel pump", Some("Golf")).await;
+    let done = seed_recall_under(&db, v, "24V456", "Airbag", Some("Golf")).await;
+    let service = service_record::create(
+        &db,
+        v,
+        NewServiceRecord {
+            service_date: days_before_today(5),
+            performed_by: Some(Performer::Owner),
+            description: Some("Airbag recall".into()),
+            recall_finding_ids: Some(vec![done]),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .record
+    .id;
+    let note = r#"<span class="memo"><span class="line">Listed for the Golf line, so it may not apply to this car.</span></span>"#;
+
+    let (_, home) = page(app(db.clone(), "test"), get("/")).await;
+    let (_, sheet) = page(
+        app(db, "test"),
+        get(&format!("/vehicles/{v}/services/{service}")),
+    )
+    .await;
+
+    // The open recall on the home page, and the performed one on its service.
+    assert_eq!(home.matches(note).count(), 1, "{home}");
+    assert!(sheet.contains(note), "{sheet}");
+}

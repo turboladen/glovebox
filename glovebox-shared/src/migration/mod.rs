@@ -22,6 +22,7 @@ mod m20261121_000001_shops_search;
 mod m20261121_000002_shops_from_names;
 mod m20261124_000001_drop_unused_columns;
 mod m20261124_000002_finding_vocabularies;
+mod m20261125_000001_recall_model_line;
 mod schema;
 
 pub struct Migrator;
@@ -52,6 +53,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261121_000002_shops_from_names::Migration),
             Box::new(m20261124_000001_drop_unused_columns::Migration),
             Box::new(m20261124_000002_finding_vocabularies::Migration),
+            Box::new(m20261125_000001_recall_model_line::Migration),
         ]
     }
 }

@@ -146,7 +146,11 @@ passes `services::today()` and a web test passes `common::today()`.
 `vin_decode` and `nhtsa` make the only network calls, through one shared client
 (`nhtsa::get`). A recall lookup drops the model's last word until NHTSA lists the name, within
 one time budget for the whole lookup, and `check_recalls` names a broader line it asked about in
-`searched_model` (`docs/adr/0023-recalls-are-looked-up-by-model-line.md`).
+`searched_model`. Each recall stores the line it was last found under
+(`research_findings.searched_model`, NULL for the car's own model and on recalls only), every
+read built from `recall::RecallWithStatus`, `RecallRef` or `WaitingRecall` carries it (a search
+hit does not), and the web page prints `recall::line_note` under such a recall
+(`docs/adr/0023-recalls-are-looked-up-by-model-line.md`).
 
 **Money** (`money.rs`): `money::parse_dollars` reads a dollar amount the owner typed into whole
 cents, and `money::format_cents` prints cents as dollars. The web forms and the checklist's
@@ -197,7 +201,9 @@ its foreign key, builds `fts_service_records` again over `description` and `note
 `idx_service_records_shop`, and `m20261124_000002_finding_vocabularies`, which rewrites a
 finding's category or severity or a report's type that differs from a listed value only by ASCII
 case or surrounding spaces, turns a blank severity or report type into NULL, refuses to finish
-while a column holds any other value, and adds a CHECK per column. They run on startup.
+while a column holds any other value, and adds a CHECK per column, and `m20261125_000001_recall_model_line`, which adds
+`research_findings.searched_model` with a CHECK that only a recall carries it. They run on
+startup.
 
 **Test harness** (`test_support.rs`): `test_db()` is an in-memory SQLite database with migrations
 applied. It is compiled under `#[cfg(any(test, feature = "test-support"))]`; `glovebox-mcp` uses it
@@ -713,7 +719,7 @@ role per control style, and `YYYY-MM-DD` dates.
   `schedule::LinkMode` and `search::SearchScope`. A
   filter on a column never takes one of these.
   `docs/adr/0004-typed-vocabularies.md` records why.
-- **Migrations**: new migrations go after `m20261124_000002_finding_vocabularies`; the
+- **Migrations**: new migrations go after `m20261125_000001_recall_model_line`; the
   `new-migration` skill has the templates. Use `Expr::cust()` for expressions inside builder queries; raw
   `execute_unprepared` only where no builder form exists (FTS5 DDL, cross-table copies). A delete
   by a correlated subquery has one: `Query::delete().cond_where(Expr::exists(subquery))`, as

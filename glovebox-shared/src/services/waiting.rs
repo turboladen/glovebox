@@ -95,6 +95,9 @@ pub struct WaitingRecall {
     pub finding_id: i32,
     pub title: String,
     pub campaign_number: Option<String>,
+    /// The NHTSA model line the recall was found under, as
+    /// [`super::recall::RecallWithStatus::searched_model`] describes.
+    pub searched_model: Option<String>,
     /// The planned job that covers this recall.
     pub job_id: Option<i32>,
 }
@@ -208,6 +211,7 @@ pub(crate) async fn from_parts(
                 finding_id: r.finding_id,
                 title: r.title,
                 campaign_number: r.campaign_number,
+                searched_model: r.searched_model,
                 job_id,
             })
         })

@@ -81,17 +81,18 @@ where
 
     match lookup(make, model.clone(), year).await {
         Ok(result) => {
-            let mut check = record_recalls(db, vehicle_id, &result.recalls).await?;
             let own: Vec<&str> = model.split_whitespace().collect();
-            if !result.model.eq_ignore_ascii_case(&own.join(" ")) {
+            let line = (!result.model.eq_ignore_ascii_case(&own.join(" "))).then_some(result.model);
+            let mut check =
+                record_recalls_under(db, vehicle_id, &result.recalls, line.as_deref()).await?;
+            if let Some(line) = line {
                 if check.recalls.is_empty() {
                     check.message = Some(format!(
-                        "NHTSA does not list the {model}; it lists no recalls for the {} line of \
-                         this make and year.",
-                        result.model
+                        "NHTSA does not list the {model}; it lists no recalls for the {line} line \
+                         of this make and year."
                     ));
                 }
-                check.searched_model = Some(result.model);
+                check.searched_model = Some(line);
             }
             Ok(check)
         }
@@ -110,14 +111,29 @@ where
     }
 }
 
-/// Stores the recalls in `found` that this vehicle does not have yet and
-/// lists every recall on the vehicle with its status.
+/// [`record_recalls_under`] for recalls NHTSA listed under the vehicle's own
+/// model.
+#[cfg(test)]
 pub(crate) async fn record_recalls<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
     found: &[RecallInfo],
 ) -> DomainResult<RecallCheck> {
-    let newly_found = persist_recall_findings(db, vehicle_id, found).await?;
+    record_recalls_under(db, vehicle_id, found, None).await
+}
+
+/// Stores the recalls in `found` that this vehicle does not have yet and
+/// lists every recall on the vehicle with its status. `line` is the model
+/// line NHTSA listed them under when that is not the vehicle's own model, and
+/// `None` otherwise. Every recall in `found` records it, a stored one
+/// included, so a recall found again under the vehicle's own model loses it.
+pub(crate) async fn record_recalls_under<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    found: &[RecallInfo],
+    line: Option<&str>,
+) -> DomainResult<RecallCheck> {
+    let newly_found = persist_recall_findings(db, vehicle_id, found, line).await?;
     let recalls = recall::list(db, vehicle_id).await?;
     let message = if recalls.is_empty() {
         Some("NHTSA lists no recalls for this make, model and year.".to_owned())
@@ -158,6 +174,7 @@ async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
     recalls: &[RecallInfo],
+    line: Option<&str>,
 ) -> DomainResult<usize> {
     let txn = super::begin_write(db).await?;
     let db = &txn;
@@ -193,17 +210,24 @@ async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
         );
         if let Some(existing) = known.remove(&url) {
             // A campaign stored with a blank title, or with its raw NHTSA
-            // component as the title, gets the current one.
+            // component as the title, gets the current one. A campaign found
+            // again takes the model line it was found under this time.
             let stored_raw = recall
                 .component
                 .as_deref()
                 .is_some_and(|c| c.trim() == existing.title.trim());
-            if (existing.title.trim().is_empty() || stored_raw)
-                && !recall.title.trim().is_empty()
-                && recall.title != existing.title
-            {
+            let retitle =
+                (existing.title.trim().is_empty() || stored_raw) && !recall.title.trim().is_empty();
+            let title = if retitle {
+                &recall.title
+            } else {
+                &existing.title
+            };
+            if *title != existing.title || existing.searched_model.as_deref() != line {
+                let title = title.clone();
                 let mut active: research_finding::ActiveModel = existing.into();
-                active.title = Set(recall.title.clone());
+                active.title = Set(title);
+                active.searched_model = Set(line.map(str::to_owned));
                 active.updated_at = Set(super::now());
                 active.update(db).await?;
             }
@@ -245,6 +269,7 @@ async fn persist_recall_findings<C: ConnectionTrait + TransactionTrait>(
             source_url: Set(f.source_url),
             severity: Set(f.severity),
             status: Set(FindingStatus::New),
+            searched_model: Set(line.map(str::to_owned)),
             ..Default::default()
         };
         finding.insert(&txn).await?;
@@ -261,20 +286,43 @@ mod tests {
 
     use crate::test_support::seed_vehicle;
 
-    #[tokio::test]
-    async fn a_failed_lookup_still_returns_the_known_recalls() {
-        let db = test_db().await;
-        let vid = crate::entities::vehicle::ActiveModel {
+    // A 2017 Volkswagen Golf GTI, whose recalls NHTSA lists under the Golf
+    // line.
+    async fn golf_gti(db: &DatabaseConnection) -> i32 {
+        crate::entities::vehicle::ActiveModel {
             name: Set("GTI".into()),
             make: Set(Some("Volkswagen".into())),
             model: Set(Some("Golf GTI".into())),
             year: Set(Some(2017)),
             ..Default::default()
         }
-        .insert(&db)
+        .insert(db)
         .await
         .unwrap()
-        .id;
+        .id
+    }
+
+    // A lookup that answers with `recalls` listed under `model`.
+    fn listing(
+        model: &'static str,
+        recalls: Vec<RecallInfo>,
+    ) -> impl FnOnce(String, String, i32) -> std::future::Ready<Result<nhtsa::RecallCheckResult, String>>
+    {
+        move |make, _, model_year| {
+            std::future::ready(Ok(nhtsa::RecallCheckResult {
+                make,
+                model: model.to_owned(),
+                model_year,
+                recall_count: i32::try_from(recalls.len()).unwrap(),
+                recalls,
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_lookup_still_returns_the_known_recalls() {
+        let db = test_db().await;
+        let vid = golf_gti(&db).await;
         let known = RecallInfo {
             campaign_number: "24V110000".into(),
             manufacturer: None,
@@ -312,28 +360,8 @@ mod tests {
     #[tokio::test]
     async fn a_lookup_by_the_model_line_names_the_line_it_asked_about() {
         let db = test_db().await;
-        let vid = crate::entities::vehicle::ActiveModel {
-            name: Set("GTI".into()),
-            make: Set(Some("Volkswagen".into())),
-            model: Set(Some("Golf GTI".into())),
-            year: Set(Some(2017)),
-            ..Default::default()
-        }
-        .insert(&db)
-        .await
-        .unwrap()
-        .id;
-        let answer = |model: &'static str| {
-            move |make: String, _, model_year| async move {
-                Ok(nhtsa::RecallCheckResult {
-                    make,
-                    model: model.to_owned(),
-                    model_year,
-                    recall_count: 0,
-                    recalls: Vec::new(),
-                })
-            }
-        };
+        let vid = golf_gti(&db).await;
+        let answer = |model| listing(model, Vec::new());
 
         let by_line = check_recalls_with(&db, vid, answer("Golf")).await.unwrap();
         assert_eq!(by_line.searched_model.as_deref(), Some("Golf"));
@@ -353,6 +381,30 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(by_model.searched_model, None);
+    }
+
+    #[tokio::test]
+    async fn a_recall_records_the_line_it_was_last_found_under() {
+        let db = test_db().await;
+        let vid = golf_gti(&db).await;
+        let answer = |model| listing(model, vec![full_recall("17V1", "Fuel pump")]);
+        let line = |check: &RecallCheck| check.recalls[0].searched_model.clone();
+
+        let by_line = check_recalls_with(&db, vid, answer("Golf")).await.unwrap();
+        assert_eq!(line(&by_line).as_deref(), Some("Golf"));
+        // A read that does not look the vehicle up shows the stored line.
+        let listed = recall::list(&db, vid).await.unwrap();
+        assert_eq!(listed[0].searched_model.as_deref(), Some("Golf"));
+        // The vehicle's own model lists it now, so the line is cleared.
+        let by_model = check_recalls_with(&db, vid, answer("Golf GTI"))
+            .await
+            .unwrap();
+        assert_eq!(by_model.newly_found, 0);
+        assert_eq!(line(&by_model), None);
+        // A campaign stored without a line takes one when found under it.
+        let again = check_recalls_with(&db, vid, answer("Golf")).await.unwrap();
+        assert_eq!(line(&again).as_deref(), Some("Golf"));
+        assert_eq!(again.recalls.len(), 1);
     }
 
     fn full_recall(campaign: &str, title: &str) -> RecallInfo {

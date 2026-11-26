@@ -66,6 +66,7 @@
         <span class="key at-key">{{ r.title }}</span>
         <span class="at-wide" data-l="Campaign">{% if let Some(c) = r.campaign %}<span class="vh">Campaign </span>{{ c }}{% endif %}</span>
         <span class="at-job" data-l="Job"><span class="vh">Job </span>{% if let Some(id) = r.job_id %}<a href="/vehicles/{{ v.vehicle.id }}/jobs/{{ id }}">Job planned</a>{% else %}<span class="empty">Not planned</span>{% endif %}</span>
+        {% if let Some(n) = r.line_note %}<span class="memo"><span class="line">{{ n }}</span></span>{% endif %}
       </li>
       {% endfor %}
     </ul>
