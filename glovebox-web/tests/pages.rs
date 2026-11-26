@@ -2520,3 +2520,83 @@ async fn home_lists_no_budget_or_activity_of_an_archived_car() {
         assert!(!body.contains(absent), "{absent} is shown: {body}");
     }
 }
+
+#[tokio::test]
+async fn home_names_the_next_milestone_and_what_was_done_recently() {
+    use glovebox_shared::{
+        entities::service_record::Performer,
+        inputs::{schedule::NewScheduleItem, service_record::NewServiceRecord},
+        services::{schedule, service_record},
+    };
+    let db = db().await;
+    let v = VehicleFixture::new()
+        .name("Golf")
+        .purchase_date(&days_before_today(30))
+        .purchase_mileage(60_500)
+        .insert_id(&db)
+        .await;
+    let item = |name: &str, miles: i32, factory: bool| NewScheduleItem {
+        name: name.into(),
+        interval_miles: Some(miles),
+        is_factory_recommended: Some(factory),
+        ..Default::default()
+    };
+    let oil = schedule::create_for_vehicle(&db, v, item("Oil change", 10_000, true))
+        .await
+        .unwrap()
+        .id;
+    schedule::create_for_vehicle(&db, v, item("Wheel alignment", 5_000, false))
+        .await
+        .unwrap();
+    service_record::create(
+        &db,
+        v,
+        NewServiceRecord {
+            service_date: days_before_today(10),
+            performed_by: Some(Performer::Owner),
+            description: Some("Oil change".into()),
+            mileage: Some(60_500),
+            schedule_item_ids: Some(vec![oil]),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let (status, body) = page(app(db, "test"), get("/")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let done_on = format!("60,500 mi on {}", day_label(10));
+    for detail in [
+        "<h3>70k service</h3>",
+        "Milestone at 70,000 mi",
+        r#"<span class="key">Wheel alignment</span>"#,
+        r#"<span class="pill pill--plain">By the mark</span>"#,
+        "<span class=\"vh\">Package </span>Not factory",
+        r#"<span class="key">Oil change</span>"#,
+        r#"<span class="pill pill--ok">Done recently</span>"#,
+        "<span class=\"vh\">Due at </span>70,500 mi",
+        done_on.as_str(),
+    ] {
+        assert!(body.contains(detail), "missing {detail}: {body}");
+    }
+    let at = |text: &str| {
+        body.find(text)
+            .unwrap_or_else(|| panic!("no {text}: {body}"))
+    };
+    // The item due comes before the one done recently, and the panel sits
+    // after the waiting lists and before the budget.
+    assert!(at("Wheel alignment</span>") < at("Done recently"));
+    assert!(at("<h3>Open incidents</h3>") < at("<h3>70k service"));
+    assert!(at("<h3>70k service") < at("<h3>Budget and latest activity</h3>"));
+}
+
+#[tokio::test]
+async fn home_shows_no_milestone_for_a_car_with_no_schedule() {
+    let db = db().await;
+    VehicleFixture::new().name("Golf").insert_id(&db).await;
+
+    let (_, body) = page(app(db, "test"), get("/")).await;
+
+    assert!(!body.contains("Milestone at"), "{body}");
+}

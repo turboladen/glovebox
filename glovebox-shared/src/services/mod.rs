@@ -7,6 +7,7 @@ pub mod finding;
 pub mod history;
 pub mod incident;
 pub mod mileage;
+pub mod milestone;
 pub mod model_template;
 pub mod need;
 pub mod nhtsa;

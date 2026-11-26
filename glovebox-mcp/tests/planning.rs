@@ -21,10 +21,52 @@ async fn whats_coming_returns_every_section_for_a_bare_vehicle() {
         "open_findings",
         "open_findings_total",
         "open_incidents",
+        "milestone",
     ] {
         assert!(due.get(key).is_some(), "missing {key}; got: {due}");
     }
     assert!(due.get("estimated_mileage").is_some(), "got: {due}");
+    // A car with no schedule has no milestone.
+    assert!(due["milestone"].is_null(), "got: {due}");
+}
+
+#[tokio::test]
+async fn whats_coming_names_the_next_milestone_with_the_items_due_by_it() {
+    let t = connect().await;
+    let v = vehicle::create(
+        &t.db,
+        NewVehicle {
+            purchase_mileage: Some(60_500),
+            ..new_vehicle("Daily")
+        },
+    )
+    .await
+    .unwrap();
+    for (name, miles, factory) in [("Tire rotation", 5_000, true), ("Alignment", 9_000, false)] {
+        schedule_svc::create(
+            &t.db,
+            glovebox_shared::inputs::schedule::NewScheduleItem {
+                vehicle_id: Some(v.id),
+                name: name.into(),
+                interval_miles: Some(miles),
+                is_factory_recommended: Some(factory),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    let due = t.call("whats_coming", json!({ "vehicle_id": v.id })).await;
+    let m = &due["milestone"];
+    assert_eq!(m["mark_miles"], 70_000, "got: {due}");
+    assert_eq!(m["name"], "70k service");
+    assert_eq!(m["factory_items"][0]["name"], "Tire rotation");
+    assert_eq!(m["factory_items"][0]["due_at_miles"], 65_500);
+    assert_eq!(m["other_items"][0]["name"], "Alignment");
+    for key in ["reached_around", "done_recently"] {
+        assert!(m.get(key).is_some(), "missing {key}; got: {m}");
+    }
 }
 
 #[tokio::test]

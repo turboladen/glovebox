@@ -945,6 +945,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn demo_seed_names_the_next_milestone() {
+        let db = test_db().await;
+        let v = seeded_vehicle(&db).await;
+
+        let rems = crate::services::reminders::calculate_reminders_on(&db, v, day())
+            .await
+            .unwrap();
+        let m = crate::services::milestone::from_reminders(&rems, day())
+            .expect("the demo car has items due by its next milestone");
+
+        let names = |items: &[crate::services::milestone::MilestoneItem]| -> Vec<String> {
+            items.iter().map(|i| i.name.clone()).collect()
+        };
+        // The car is past 60,000 mi with its tire rotation overdue since
+        // 57,000, so the 60k service is still open. The oil change at 59,900
+        // is in the 60k package and was done recently.
+        assert_eq!(m.name, "60k service");
+        assert!(m.passed);
+        assert_eq!(
+            names(&m.factory_items),
+            [
+                "Tire Rotation",
+                "Wiper Blades",
+                "Air Filter",
+                "Brake Fluid Flush",
+                "Cabin Air Filter",
+            ]
+        );
+        crate::test_support::assert_empty(&m.other_items);
+        assert_eq!(names(&m.done_recently), ["Oil & Filter Change"]);
+    }
+
+    #[tokio::test]
     async fn demo_seed_fills_the_recall_incident_and_job_lists() {
         let db = test_db().await;
         let v = seeded_vehicle(&db).await;

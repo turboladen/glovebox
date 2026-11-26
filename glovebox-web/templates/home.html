@@ -91,6 +91,24 @@
     {% endif %}
   </section>
 
+  {% if let Some(m) = hv.milestone %}
+  <section class="sheet">
+    <div class="sheet-head"><h3>{{ m.name }}</h3>{% if m.due > 0 %}<span class="n">{{ m.due }}</span>{% endif %}<span class="aside l">Milestone {{ m.when }}</span></div>
+    <div class="cols cols--wait" aria-hidden="true"><span>Item</span><span>Status</span><span>Due at</span><span>Package</span><span class="at-date">Last done</span></div>
+    <ul class="needs">
+      {% for r in m.rows %}
+      <li class="row row--wait">
+        <span class="key">{{ r.name }}</span>
+        <span data-l="Status"><span class="vh">Status </span><span class="pill pill--{{ r.status.kind }}">{{ r.status.text }}</span></span>
+        <span data-l="Due at"><span class="vh">Due at </span>{{ r.due_at }}</span>
+        <span data-l="Package"><span class="vh">Package </span>{{ r.package }}</span>
+        <span class="at-date" data-l="Last done"><span class="vh">Last done </span>{% if let Some(d) = r.last_done %}{{ d }}{% else %}<span class="empty">No record</span>{% endif %}</span>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
   {% if let Some(o) = hv.outlook %}
   <section class="sheet">
     <div class="sheet-head"><h3>Budget and latest activity</h3><a class="aside" href="{{ o.vehicle_href }}">All costs and activity</a></div>

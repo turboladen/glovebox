@@ -119,6 +119,10 @@ pub struct ReminderStatus {
     /// The reading that makes the item due: the one whose status equals
     /// `status`, or both when the two match. It is `None` when the item is ok.
     pub trigger: Option<Trigger>,
+    /// The schedule item the vehicle tracks, for a reader that needs its
+    /// interval, estimate or factory flag.
+    #[serde(skip)]
+    pub item: maintenance_schedule_item::Model,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -515,6 +519,7 @@ fn reminder_for(
         miles_remaining,
         days_remaining,
         trigger,
+        item: item.clone(),
     }
 }
 
@@ -583,6 +588,22 @@ fn odometer_on(
         }
         (None, None) => None,
     }
+}
+
+/// The days it takes to drive `miles` at `avg_daily` miles a day, rounded up,
+/// or `None` with no rate or a count past a century.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the day count is capped before the cast"
+)]
+pub(crate) fn days_to_drive(miles: i32, avg_daily: f64) -> Option<i64> {
+    // The cap keeps the cast and any date arithmetic on the result in range.
+    const MAX_DAYS: f64 = 36_500.0;
+    if avg_daily <= 0.0 || !avg_daily.is_finite() {
+        return None;
+    }
+    let days = (f64::from(miles) / avg_daily).ceil();
+    (days <= MAX_DAYS).then_some(days as i64)
 }
 
 /// Writes a mileage with a comma between thousands, such as `61,200`.

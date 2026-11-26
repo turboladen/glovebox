@@ -8,16 +8,11 @@
 //! the rate machinery lives in `reminders::estimate_mileage`, which the
 //! reminders response surfaces as `avg_daily_miles`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
-use sea_orm::*;
 use serde::Serialize;
 
-use crate::{
-    entities::maintenance_schedule_item,
-    error::DomainResult,
-    services::{reminders::RemindersResponse, work_item::PlannedItem},
-};
+use crate::services::{reminders::RemindersResponse, work_item::PlannedItem};
 
 /// Forecast horizon: days `0..HORIZON_DAYS` from today (an occurrence
 /// landing exactly on day 365 is next year's spend).
@@ -129,8 +124,7 @@ fn planned_work_cost(backlog: &[PlannedItem]) -> (i64, Vec<UnestimatedWork>) {
 /// [`calculate_reminders`](crate::services::reminders::calculate_reminders)
 /// and from `backlog`, the vehicle's planned jobs as
 /// [`planned_work`](crate::services::upcoming::planned_work) lists them, where
-/// each job's schedule item is the one the vehicle tracks. It runs one query,
-/// for the schedule items' intervals and estimates.
+/// each job's schedule item is the one the vehicle tracks.
 ///
 /// For each enabled resolved schedule item carrying `est_cost_cents`:
 /// occurrences repeat at the item's interval — `interval_months`, and/or
@@ -138,28 +132,11 @@ fn planned_work_cost(backlog: &[PlannedItem]) -> (i64, Vec<UnestimatedWork>) {
 /// cycle is shorter). Overdue items count as one occurrence now. Items with
 /// no projectable due date (e.g. mileage-only interval on a vehicle with no
 /// mileage history) are skipped unless overdue.
-#[expect(clippy::cast_possible_truncation, reason = "day counts, not money")]
-pub(crate) async fn forecast_from(
-    db: &impl ConnectionTrait,
+pub(crate) fn forecast_from(
     rems: &RemindersResponse,
     backlog: &[PlannedItem],
     today: chrono::NaiveDate,
-) -> DomainResult<BudgetForecast> {
-    // The reminders response carries id + name; the intervals and est_cost
-    // live on the schedule items themselves.
-    let item_ids: Vec<i32> = rems.reminders.iter().map(|r| r.schedule_item.id).collect();
-    let items: HashMap<i32, maintenance_schedule_item::Model> = if item_ids.is_empty() {
-        HashMap::new()
-    } else {
-        maintenance_schedule_item::Entity::find()
-            .filter(maintenance_schedule_item::Column::Id.is_in(item_ids))
-            .all(db)
-            .await?
-            .into_iter()
-            .map(|i| (i.id, i))
-            .collect()
-    };
-
+) -> BudgetForecast {
     // The planned backlog: its estimates are the second bucket, and its
     // schedule links suppress first occurrences ("already planned").
     let planned_schedule_items: HashSet<i32> = backlog
@@ -168,16 +145,12 @@ pub(crate) async fn forecast_from(
         .collect();
 
     let avg_daily = rems.avg_daily_miles;
-    let miles_to_days = |miles: i32| -> Option<i64> {
-        (avg_daily > 0.0).then(|| (f64::from(miles) / avg_daily).ceil() as i64)
-    };
+    let miles_to_days = |miles: i32| super::reminders::days_to_drive(miles, avg_daily);
 
     let mut lines: Vec<ForecastLine> = Vec::new();
     let mut unestimated_items: Vec<UnestimatedItem> = Vec::new();
     for r in &rems.reminders {
-        let Some(item) = items.get(&r.schedule_item.id) else {
-            continue;
-        };
+        let item = &r.item;
 
         // Days until the first occurrence; an item at or past its due point
         // counts as one now, whatever the mileage rate.
@@ -244,7 +217,7 @@ pub(crate) async fn forecast_from(
 
     let (planned_work_cents, unestimated_planned_work) = planned_work_cost(backlog);
 
-    Ok(BudgetForecast {
+    BudgetForecast {
         horizon_months: HORIZON_MONTHS,
         projected_maintenance_cents,
         planned_work_cents,
@@ -254,15 +227,20 @@ pub(crate) async fn forecast_from(
         unestimated_items,
         unestimated_planned_work_count: unestimated_planned_work.len(),
         unestimated_planned_work,
-    })
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use sea_orm::*;
+
     use super::*;
     use crate::{
-        entities::{mileage_log, service_record, service_schedule_link, work_item::JobStatus},
-        error::DomainError,
+        entities::{
+            maintenance_schedule_item, mileage_log, service_record, service_schedule_link,
+            work_item::JobStatus,
+        },
+        error::{DomainError, DomainResult},
         inputs::work_item::{NewWorkItem, UpdateWorkItem},
         services::{reminders, work_item as work_item_svc},
         test_support::{VehicleFixture, days_ago, test_db},
@@ -272,7 +250,7 @@ mod tests {
         let today = crate::services::today();
         let rems = reminders::calculate_reminders(db, vehicle_id).await?;
         let backlog = crate::services::upcoming::planned_work(db, vehicle_id, today).await?;
-        forecast_from(db, &rems, &backlog, today).await
+        Ok(forecast_from(&rems, &backlog, today))
     }
 
     async fn seed_item(

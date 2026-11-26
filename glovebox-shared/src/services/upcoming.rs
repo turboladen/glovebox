@@ -16,6 +16,7 @@ use crate::{
         budget::{self, BudgetForecast},
         finding::{self, FindingView, OpenFindings},
         incident as incident_svc,
+        milestone::{self, Milestone},
         recall::{self, RecallWithStatus},
         reminders::{self, DueStatus, RemindersResponse},
         work_item::{self, PlannedItem},
@@ -31,6 +32,10 @@ pub struct Upcoming {
     pub reminders: RemindersResponse,
     /// The 12-month cost forecast.
     pub budget: BudgetForecast,
+    /// The next mileage milestone (`70k service`) with the tracked items due
+    /// by it, or `None` when nothing is due by it and nothing was done
+    /// recently.
+    pub milestone: Option<Milestone>,
     /// Open to-do items, most urgent revisit first. Items sharing a revisit
     /// status keep creation order, and items with no revisit status come last.
     pub planned_work: Vec<PlannedItem>,
@@ -63,7 +68,8 @@ pub async fn upcoming(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResul
     let today = crate::services::today();
     let reminders = reminders::calculate_reminders_on(db, vehicle_id, today).await?;
     let planned_work = planned_work(db, vehicle_id, today).await?;
-    let budget = budget::forecast_from(db, &reminders, &planned_work, today).await?;
+    let budget = budget::forecast_from(&reminders, &planned_work, today);
+    let milestone = milestone::from_reminders(&reminders, today);
     let recalls = open_recalls(db, vehicle_id).await?;
     let OpenFindings {
         findings: open_findings,
@@ -76,6 +82,7 @@ pub async fn upcoming(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResul
     Ok(Upcoming {
         reminders,
         budget,
+        milestone,
         planned_work,
         recalls,
         open_findings,

@@ -23,9 +23,10 @@ use crate::{
     AppState, DeletedTodo,
     view::{
         Banner, CardContext, Count, Failure, HistoryPageView, HomeAppointmentRow, HomeOutlook,
-        JobCard, ServicePageView, SheetCar, SheetJobCard, ShopLink, ShopPageView, ShopRow, Steps,
-        Tag, Target, TodoCard, TodoForm, UnsettledRow, VehicleLink, VehiclePageView, WaitingRows,
-        job_card, sheet_car, sheet_heading, sheet_jobs, steps, unsettled_rows,
+        JobCard, MilestoneView, ServicePageView, SheetCar, SheetJobCard, ShopLink, ShopPageView,
+        ShopRow, Steps, Tag, Target, TodoCard, TodoForm, UnsettledRow, VehicleLink,
+        VehiclePageView, WaitingRows, job_card, sheet_car, sheet_heading, sheet_jobs, steps,
+        unsettled_rows,
     },
 };
 
@@ -66,6 +67,7 @@ fn today_label(state: &AppState) -> String {
 struct HomeVehicle {
     home: VehicleHome,
     waiting: WaitingRows,
+    milestone: Option<MilestoneView>,
     outlook: Option<HomeOutlook>,
     appointments: Vec<HomeAppointmentRow>,
     todos: Vec<TodoCard>,
@@ -199,6 +201,7 @@ pub async fn home_response(state: &AppState, view: Page<'_>, status: StatusCode)
             .collect();
         vehicles.push(HomeVehicle {
             waiting: WaitingRows::from(&home.waiting),
+            milestone: home.milestone.as_ref().map(MilestoneView::of),
             outlook: HomeOutlook::of(&home),
             appointments: home.appointments.iter().map(Into::into).collect(),
             todo_form: TodoForm::after(vid, None, "/", failure.filter(|f| f.vid == vid)),
