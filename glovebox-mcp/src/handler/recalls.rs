@@ -74,11 +74,13 @@ impl GloveboxMcp {
         name = "set_recall_status",
         description = "Mark a recall (a `finding_id` from `whats_coming` or `list_recalls`) \
                        `done` when the work was done but left no paperwork, `not_applicable` when \
-                       it does not apply to this car, or `open` to undo either. A recall already \
-                       linked to a service stays done until that service is deleted, and one \
-                       whose job is marked done stays done until that job is planned again or \
-                       dropped, so changing either is an error. Returns the recall with its \
-                       status."
+                       it does not apply to this car, or `open` to undo either. Undoing a mark \
+                       returns the recall to what its jobs say, so it may then read `planned` or \
+                       `done` and not `open`. A status the recall already reads changes nothing. \
+                       A recall already linked to a service stays done until that service is \
+                       deleted, so changing it is an error. A recall with no mark whose job is \
+                       done stays done until that job is planned again or dropped, so setting it \
+                       `open` is an error. Returns the recall as it reads afterwards."
     )]
     async fn set_recall_status(
         &self,

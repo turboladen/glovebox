@@ -166,6 +166,22 @@ async fn a_recall_job_marked_done_without_a_service_reads_done() {
         )
         .await;
     assert!(err.contains("has a job marked done"), "got: {err}");
+
+    // A mark wins over the done job, and `open` clears it.
+    let marked = t
+        .call(
+            "set_recall_status",
+            json!({ "vehicle_id": v.id, "finding_id": recall, "status": "not_applicable" }),
+        )
+        .await;
+    assert_eq!(marked["status"], "not_applicable");
+    let cleared = t
+        .call(
+            "set_recall_status",
+            json!({ "vehicle_id": v.id, "finding_id": recall, "status": "open" }),
+        )
+        .await;
+    assert_eq!(cleared["status"], "done");
 }
 
 async fn file_finding(t: &common::TestClient, vehicle_id: i32, title: &str) -> i64 {

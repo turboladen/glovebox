@@ -337,7 +337,8 @@ second service to patch the first.
   give. Its records stay and can still be read by its id, but `list_vehicles` leaves it out unless
   `include_archived` is true, so do not plan work for it. `unarchive_vehicle` undoes a mistake.
 - `set_recall_status` marks a recall `done` when the work left no paperwork, `not_applicable` when
-  it does not apply to this car, or `open` to undo either.
+  it does not apply to this car, or `open` to undo either. After `open` the recall reads what its
+  jobs say, which can be `planned` or `done`.
 - A research finding is corrected with `update_research_finding` (title, description, category,
   severity, source URL) and read with `list_research_findings` or `get_research_finding`, which
   show its status, the job planned from it and the service that completed that job. Set its

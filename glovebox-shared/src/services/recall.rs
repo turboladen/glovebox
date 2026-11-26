@@ -80,7 +80,8 @@ impl From<RecallStatus> for ShownRecallStatus {
     }
 }
 
-// What keeps a recall done whatever the owner set.
+// What makes a recall read `done`. A service holds it whatever mark is
+// stored, and a done job holds it only while no mark is stored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Held {
     ByService,
@@ -303,13 +304,15 @@ pub async fn list_for_vehicle(
 }
 
 /// Sets a recall to `open`, `done` or `not_applicable` without a service.
+/// A status the recall already reads stores nothing. `open` clears a mark of
+/// `done` or `not_applicable`, and the recall then reads what its jobs say.
 ///
 /// # Errors
 /// `NotFound` for a finding that is not a recall on this vehicle. A recall
-/// linked to a service reads `done` for as long as the link exists, and one
-/// whose job is marked done with none planned reads `done` until that job is
-/// planned again or dropped, so asking either for another status is a
-/// `BadRequest`.
+/// linked to a service reads `done` for as long as the link exists, so asking
+/// it for another status is a `BadRequest`. So is asking a recall nobody
+/// marked to read `open` while its job is done with none planned, because it
+/// would go on reading `done`.
 pub async fn set_status<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     vehicle_id: i32,
@@ -329,27 +332,23 @@ pub async fn set_status<C: ConnectionTrait + TransactionTrait>(
         return Ok(current);
     }
 
-    // The requested status goes through the derivation every list uses, so
-    // the refusal and the lists cannot disagree.
-    let mut proposed = finding.clone();
-    proposed.status = status.stored();
-    let shown = with_status(&txn, vec![proposed]).await?.remove(0);
-    if shown.settled != status {
-        return Err(match shown.held {
-            Some(Held::ByService) => DomainError::BadRequest(format!(
+    match current.held {
+        Some(Held::ByService) => {
+            return Err(DomainError::BadRequest(format!(
                 "Recall {finding_id} is linked to a service, so it stays done until that service \
                  is deleted"
-            )),
-            Some(Held::ByDoneJob) => DomainError::BadRequest(format!(
+            )));
+        }
+        // A done job holds only a recall with no mark, so `open` has no mark
+        // to clear and nothing would change. Any other recall takes `open`,
+        // which hands it back to its jobs.
+        Some(Held::ByDoneJob) if status == RecallStatus::Open => {
+            return Err(DomainError::BadRequest(format!(
                 "Recall {finding_id} has a job marked done, so it stays done until that job is \
                  planned again or dropped"
-            )),
-            None => DomainError::Internal(format!(
-                "recall {finding_id} reads {} after being set to {}",
-                shown.settled.as_str(),
-                status.as_str()
-            )),
-        });
+            )));
+        }
+        Some(Held::ByDoneJob) | None => {}
     }
 
     let mut active: research_finding::ActiveModel = finding.into();
@@ -930,6 +929,58 @@ mod tests {
             list(&db, v).await.unwrap()[0].status,
             ShownRecallStatus::NotApplicable
         );
+    }
+
+    #[tokio::test]
+    async fn open_clears_a_mark_and_the_recall_reads_what_its_done_job_says() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let id = seed_recall(&db, v, "24V110000").await;
+        let item = plan_work_for_recall(&db, v, id).await;
+        set_job_status(&db, v, item.id, JobStatus::Done).await;
+
+        // The job already makes the recall read `done`, so a `done` mark is
+        // stored only when it replaces another mark.
+        let not_applicable = &[RecallStatus::NotApplicable][..];
+        let done = &[RecallStatus::NotApplicable, RecallStatus::Done][..];
+        for marks in [not_applicable, done] {
+            for mark in marks {
+                set_status(&db, v, id, *mark).await.unwrap();
+            }
+
+            let read = set_status(&db, v, id, RecallStatus::Open).await.unwrap();
+            assert_eq!(read.status, ShownRecallStatus::Done, "after {marks:?}");
+            let stored = research_finding::Entity::find_by_id(id).one(&db).await;
+            assert_eq!(
+                stored.unwrap().unwrap().status,
+                RecallStatus::Open.stored(),
+                "after {marks:?}"
+            );
+        }
+
+        // With no mark left to clear, the done job alone holds the recall.
+        let err = set_status(&db, v, id, RecallStatus::Open)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("has a job marked done"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn open_clears_a_mark_and_the_recall_reads_planned_from_its_planned_job() {
+        let db = test_db().await;
+        let v = seed_vehicle(&db).await;
+        let id = seed_recall(&db, v, "24V110000").await;
+        let item = plan_work_for_recall(&db, v, id).await;
+
+        for mark in [RecallStatus::NotApplicable, RecallStatus::Done] {
+            set_status(&db, v, id, mark).await.unwrap();
+            let read = set_status(&db, v, id, RecallStatus::Open).await.unwrap();
+            assert_eq!(
+                (read.status, read.work_item_id),
+                (ShownRecallStatus::Planned, Some(item.id)),
+                "after {mark:?}"
+            );
+        }
     }
 
     #[tokio::test]

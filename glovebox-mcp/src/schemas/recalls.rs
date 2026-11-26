@@ -18,10 +18,12 @@ use super::nullable;
 pub struct SetRecallStatusInput {
     /// Vehicle id, from `list_vehicles`.
     pub vehicle_id: i32,
-    /// Recall id: the `finding_id` from `whats_coming` or `check_recalls`.
+    /// Recall id: the `finding_id` from `whats_coming`, `list_recalls` or
+    /// `check_recalls`.
     pub finding_id: i32,
     /// `done` (the work was done and left no paperwork), `not_applicable`
-    /// (the recall does not apply to this car), or `open` (undo either).
+    /// (the recall does not apply to this car), or `open` (undo either; the
+    /// recall then reads what its jobs say).
     pub status: RecallStatus,
 }
 
