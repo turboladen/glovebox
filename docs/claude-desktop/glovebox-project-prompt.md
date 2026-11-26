@@ -256,8 +256,9 @@ need has a decision, every decision has a reason, and every part ordered has arr
    and fold in the open recalls and planned work that fit the same trip.
    When `milestone` is present, name the trip as the shop would ("your 70k service") and say
    which items are the factory's (`factory_items`) and which are extras (`other_items`), so Steve
-   can ask for "the factory 70k items plus the alignment". `reached_around` is when the car should
-   reach the mark. Read `done_recently` aloud as items to take off the shop's package: the
+   can ask for "the factory 70k items plus the alignment". When `passed` is true the car is past
+   the mark and that service is still open ("your 60k service, now due"); otherwise
+   `reached_around` is when the car should reach the mark. Read `done_recently` aloud as items to take off the shop's package: the
    manufacturer's 70k list includes them, but a recent service did them (`last_service`). The
    milestone covers only the items glovebox tracks, not every line of the manufacturer's
    inspection checklist, so say so if Steve asks whether it is the whole package.

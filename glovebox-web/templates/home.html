@@ -93,7 +93,7 @@
 
   {% if let Some(m) = hv.milestone %}
   <section class="sheet">
-    <div class="sheet-head"><h3>Next milestone: {{ m.name }}</h3>{% if m.due > 0 %}<span class="n">{{ m.due }}</span>{% endif %}<span class="aside l">Falls {{ m.when }}</span></div>
+    <div class="sheet-head"><h3>{{ m.name }}</h3>{% if m.due > 0 %}<span class="n">{{ m.due }}</span>{% endif %}<span class="aside l">Milestone {{ m.when }}</span></div>
     <div class="cols cols--wait" aria-hidden="true"><span>Item</span><span>Status</span><span>Due at</span><span>Package</span><span class="at-date">Last done</span></div>
     <ul class="needs">
       {% for r in m.rows %}

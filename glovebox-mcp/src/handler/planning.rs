@@ -118,15 +118,18 @@ impl GloveboxMcp {
                        `research_finding_id`; one that reads `planned` already has its job in \
                        `work_item`, so put that job on the appointment with `update_planned_work` \
                        and never plan it again. Set one the owner rules out to `dismissed` with \
-                       `update_research_finding`. `milestone` names the next 10,000-mile mark as \
-                       the shop would (`name`, such as `70k service`, with `mark_miles` and \
-                       `reached_around`, the day the car should reach it) and lists the tracked \
-                       items due by it (due now, by mileage or by that day): `factory_items` are \
-                       the ones the manufacturer recommends and `other_items` the rest. \
-                       `done_recently` lists the factory items whose interval puts them in the \
-                       manufacturer's package at that mark but that a recent service did, with \
-                       that `last_service`: tell the owner to ask the shop to leave them out so \
-                       they are not paid for twice. An item is listed whether or not a job is \
+                       `update_research_finding`. `milestone` names the 10,000-mile service the \
+                       car is due for as the shop would (`name`, such as `70k service`, with \
+                       `mark_miles`). It stays the mark the car has passed (`passed: true`) while \
+                       a factory item due by that mark is not done, because the owner often has \
+                       the service done after the mark; otherwise it is the next mark, and \
+                       `reached_around` is the day the car should reach it. It lists the items \
+                       due by it (due now, by mileage or by the day it reaches the next mark): \
+                       `factory_items` are the ones the manufacturer recommends and `other_items` \
+                       the rest. `done_recently` lists the factory items whose interval puts them \
+                       in the manufacturer's package at that mark but that a recent service did, \
+                       with that `last_service`: tell the owner to ask the shop to leave them out \
+                       so they are not paid for twice. An item is listed whether or not a job is \
                        planned for it, so check `planned_work` before offering to plan one. It is \
                        null when nothing is due by the mark and nothing was done recently. Group \
                        overdue and due-soon items into one shop trip when advising. For items \

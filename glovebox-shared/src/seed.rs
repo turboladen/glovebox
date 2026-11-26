@@ -315,7 +315,6 @@ async fn demo_shop(db: &(impl ConnectionTrait + TransactionTrait)) -> DomainResu
 
 // The template's items carry no cost, so the car gets its own priced copy of
 // three of them and the forecast has both priced and unpriced maintenance.
-// It also gets one item of the owner's own.
 async fn price_schedule(
     db: &(impl ConnectionTrait + TransactionTrait),
     v: i32,
@@ -336,21 +335,6 @@ async fn price_schedule(
         )
         .await?;
     }
-    // An item of the owner's own, which the next milestone lists apart from
-    // the factory items.
-    schedule::create_for_vehicle(
-        db,
-        v,
-        NewScheduleItem {
-            name: "Wheel Alignment".into(),
-            interval_miles: Some(15_000),
-            source: Some("owner".into()),
-            is_factory_recommended: Some(false),
-            est_cost_cents: Some(12_000),
-            ..Default::default()
-        },
-    )
-    .await?;
     Ok(())
 }
 
@@ -974,7 +958,11 @@ mod tests {
         let names = |items: &[crate::services::milestone::MilestoneItem]| -> Vec<String> {
             items.iter().map(|i| i.name.clone()).collect()
         };
-        assert_eq!(m.name, "70k service");
+        // The car is past 60,000 mi with its tire rotation overdue since
+        // 57,000, so the 60k service is still open. The oil change at 59,900
+        // is in the 60k package and was done recently.
+        assert_eq!(m.name, "60k service");
+        assert!(m.passed);
         assert_eq!(
             names(&m.factory_items),
             [
@@ -983,11 +971,10 @@ mod tests {
                 "Air Filter",
                 "Brake Fluid Flush",
                 "Cabin Air Filter",
-                "Oil & Filter Change",
             ]
         );
-        assert_eq!(names(&m.other_items), ["Wheel Alignment"]);
-        crate::test_support::assert_empty(&m.done_recently);
+        crate::test_support::assert_empty(&m.other_items);
+        assert_eq!(names(&m.done_recently), ["Oil & Filter Change"]);
     }
 
     #[tokio::test]

@@ -133,7 +133,7 @@ functions.
 `work_item`, `appointment`, `need`, `todo`, `schedule`, `recall`, `research`, `finding`, `shop`, ...) of free functions taking `db: &impl
 ConnectionTrait` first and returning `DomainResult<T>`. Composite reads: `upcoming` (the
 `whats_coming` answer: reminders, budget, planned work, recalls, open findings, open incidents), `reminders`,
-`budget`, `milestone` (the next 10,000-mile service and the items due by it), `costs`, `activity`, `search`, `work_sheet` (an appointment's sheet for the mechanic), `service_detail` (one service with its schedule items' names and the split of its total, for its page), `vehicle_detail` (one vehicle with its last odometer reading, the estimate for today, its cost summary and its recent activity, for its page), `history` (every service of a vehicle oldest first and the parts installed on it, for the printable history), and `checklist` (the checklist for an appointment, an
+`budget`, `milestone` (the 10,000-mile service the car is due for and the items due by it), `costs`, `activity`, `search`, `work_sheet` (an appointment's sheet for the mechanic), `service_detail` (one service with its schedule items' names and the split of its total, for its page), `vehicle_detail` (one vehicle with its last odometer reading, the estimate for today, its cost summary and its recent activity, for its page), `history` (every service of a vehicle oldest first and the parts installed on it, for the printable history), and `checklist` (the checklist for an appointment, an
 unscheduled job or one job, the past decisions across vehicles, and the home page's rows; the MCP
 tools and the web page both render it), and `waiting` (what is not yet on an appointment: due
 maintenance, planned jobs, open recalls and open incidents, for the home page). `whats_coming` lists each open appointment.
@@ -441,8 +441,9 @@ item counts from the model year, and the mileage estimate ignores a reading date
 `docs/adr/0022-a-reminder-with-no-purchase-date-counts-from-the-model-year.md`), the forecast names the schedule items
 and planned work it left unpriced, `bundle_suggestions` is one entry listing every overdue or
 due-soon item when there are two or more, and a stored recall title is the NHTSA component in title
-case. `milestone::from_reminders` names the next 10,000-mile mark (`70k service`) and lists the
-items due by it, by mileage or by the day the mileage rate reaches it, split by
+case. `milestone::from_reminders` names the 10,000-mile mark the car is due for (`70k service`):
+the last mark passed while a factory item due by it is not done (`passed`), else the next one. It
+lists the items due by it, due now, by mileage or by the day the mileage rate reaches it, split by
 `is_factory_recommended`, with the factory items whose interval divides the mark that a recent
 service did in `done_recently`. It is derived on every read and never stored; `whats_coming` and
 the home page show it (`docs/adr/0029-a-milestone-service-is-derived.md`).

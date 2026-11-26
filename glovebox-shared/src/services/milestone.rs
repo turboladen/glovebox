@@ -11,16 +11,22 @@ use crate::services::reminders::{
 /// The distance between two milestones.
 pub const MILESTONE_STEP_MILES: i32 = 10_000;
 
-/// The next mileage milestone and the tracked items that fall due by it.
+/// The milestone service the car is due for and the tracked items that fall
+/// due by it.
 #[derive(Debug, Serialize, Clone)]
 pub struct Milestone {
-    /// The first multiple of [`MILESTONE_STEP_MILES`] above the estimated
-    /// mileage.
+    /// The last multiple of [`MILESTONE_STEP_MILES`] the car has passed while
+    /// a factory item due by it is still not done, otherwise the first
+    /// multiple above the estimated mileage.
     pub mark_miles: i32,
     /// The milestone's name, such as `70k service`.
     pub name: String,
+    /// True when the car is past `mark_miles` and that milestone's service is
+    /// still open.
+    pub passed: bool,
     /// The day the car is expected to reach `mark_miles` at its average daily
-    /// mileage, or `None` when the car has no mileage rate.
+    /// mileage, or `None` when the mark is passed or the car has no mileage
+    /// rate.
     pub reached_around: Option<NaiveDate>,
     /// Items the manufacturer recommends that are due by the milestone: due
     /// or overdue now, due at or below `mark_miles`, or due on or before
@@ -73,14 +79,15 @@ pub fn label(mark_miles: i32) -> String {
     format!("{}k service", mark_miles / 1000)
 }
 
-/// Says where the milestone falls: `at 70,000 mi, around 2029-08-03`, or
-/// `at 70,000 mi` with no mileage rate.
+/// Says where the milestone falls: `at 70,000 mi, around 2029-08-03`,
+/// `at 70,000 mi` with no mileage rate, or `at 60,000 mi, already passed`.
 #[must_use]
 pub fn when(m: &Milestone) -> String {
     let at = format!("at {} mi", reminders::miles_label(m.mark_miles));
-    match m.reached_around {
-        Some(day) => format!("{at}, around {}", super::date_label(day)),
-        None => at,
+    match (m.passed, m.reached_around) {
+        (true, _) => format!("{at}, already passed"),
+        (false, Some(day)) => format!("{at}, around {}", super::date_label(day)),
+        (false, None) => at,
     }
 }
 
@@ -94,15 +101,29 @@ pub fn last_done(l: &LastServiceInfo) -> String {
     }
 }
 
-/// The next milestone for the vehicle the reminders describe, or `None` when
+/// The milestone the vehicle the reminders describe is due for, or `None` when
 /// no tracked item is due by it and none was done recently, or the mileage is
 /// too large for a mark.
+///
+/// An owner often has a milestone's service done after the car passes the
+/// mark, so the last mark passed stays the milestone while a factory item due
+/// at or before it is not done.
 #[must_use]
 pub fn from_reminders(rems: &RemindersResponse, today: NaiveDate) -> Option<Milestone> {
-    let mark_miles = next_mark(rems.estimated_mileage)?;
-    let reached_around =
-        reminders::days_to_drive(mark_miles - rems.estimated_mileage, rems.avg_daily_miles)
+    let passed_mark = last_mark(rems.estimated_mileage).filter(|mark| {
+        rems.reminders.iter().any(|r| {
+            r.item.is_factory_recommended == Some(true)
+                && r.due_at_miles.is_some_and(|due| due <= *mark)
+        })
+    });
+    let (mark_miles, passed, reached_around) = if let Some(mark) = passed_mark {
+        (mark, true, None)
+    } else {
+        let mark = next_mark(rems.estimated_mileage)?;
+        let reached = reminders::days_to_drive(mark - rems.estimated_mileage, rems.avg_daily_miles)
             .and_then(|days| today.checked_add_signed(chrono::Duration::days(days)));
+        (mark, false, reached)
+    };
     let mut factory_items = Vec::new();
     let mut other_items = Vec::new();
     let mut done_recently = Vec::new();
@@ -131,11 +152,19 @@ pub fn from_reminders(rems: &RemindersResponse, today: NaiveDate) -> Option<Mile
     Some(Milestone {
         mark_miles,
         name: label(mark_miles),
+        passed,
         reached_around,
         factory_items,
         other_items,
         done_recently,
     })
+}
+
+/// The last multiple of [`MILESTONE_STEP_MILES`] at or below `miles`, or
+/// `None` below the first one.
+fn last_mark(miles: i32) -> Option<i32> {
+    let mark = miles / MILESTONE_STEP_MILES * MILESTONE_STEP_MILES;
+    (mark > 0).then_some(mark)
 }
 
 /// The first multiple of [`MILESTONE_STEP_MILES`] above `miles`, or `None`
@@ -276,7 +305,7 @@ mod tests {
             0.0,
             vec![
                 Item::due(1, 10_000, Some(true), 69_900).done_at(59_900),
-                Item::due(2, 5_000, Some(true), 57_000),
+                Item::due(2, 5_000, Some(true), 61_000),
                 Item::due(3, 60_000, Some(false), 65_000),
                 Item::due(4, 60_000, None, 66_000),
                 Item::due(5, 20_000, Some(true), 72_000),
@@ -309,6 +338,116 @@ mod tests {
         );
         assert_eq!(ids(&m.factory_items), [1]);
         assert_eq!(when(&m), "at 70,000 mi, around 2029-08-03");
+    }
+
+    #[test]
+    fn a_passed_mark_stays_the_milestone_while_an_item_due_by_it_is_not_done() {
+        // At 64,500 with the oil due at 60,000 still not done.
+        let mut oil = Item::due(1, 10_000, Some(true), 60_000)
+            .done_at(50_000)
+            .reminder();
+        oil.status = DueStatus::Overdue;
+        let r = RemindersResponse {
+            reminders: vec![oil],
+            ..rems(64_500, 10.0, Vec::new())
+        };
+        let m = from_reminders(&r, today()).expect("the 60k service is open");
+        assert_eq!(m.name, "60k service");
+        assert!(m.passed);
+        assert_eq!(m.reached_around, None);
+        assert_eq!(when(&m), "at 60,000 mi, already passed");
+        assert_eq!(ids(&m.factory_items), [1]);
+    }
+
+    #[test]
+    fn a_service_after_the_mark_moves_the_milestone_on_and_counts_from_its_reading() {
+        // The 60k visit happened at 64,000: the oil is next due at 74,000 and
+        // the tire rotation at 69,000.
+        let r = rems(
+            64_500,
+            0.0,
+            vec![
+                Item::due(1, 10_000, Some(true), 74_000).done_at(64_000),
+                Item::due(2, 5_000, Some(true), 69_000).done_at(64_000),
+            ],
+        );
+        let m = from_reminders(&r, today()).expect("the tire rotation is due by 70k");
+        assert_eq!(m.name, "70k service");
+        assert!(!m.passed);
+        assert_eq!(ids(&m.factory_items), [2]);
+        assert_eq!(ids(&m.done_recently), [1]);
+    }
+
+    #[test]
+    fn an_item_due_just_past_the_mark_does_not_hold_it_open() {
+        // The tire rotation is due soon at 65,000, after the 60k mark.
+        let mut rotation = Item::due(1, 5_000, Some(true), 65_000)
+            .done_at(60_000)
+            .reminder();
+        rotation.status = DueStatus::DueSoon;
+        let r = RemindersResponse {
+            reminders: vec![rotation],
+            ..rems(64_500, 0.0, Vec::new())
+        };
+        let m = from_reminders(&r, today()).expect("the rotation is due now");
+        assert_eq!(m.name, "70k service");
+        assert_eq!(ids(&m.factory_items), [1]);
+    }
+
+    #[tokio::test]
+    async fn an_item_done_past_its_mark_is_next_due_one_interval_after_that_service() {
+        use crate::{
+            entities::service_record::Performer,
+            inputs::{schedule::NewScheduleItem, service_record::NewServiceRecord},
+            services::{schedule, service_record},
+            test_support::{VehicleFixture, test_db},
+        };
+        let db = test_db().await;
+        let v = VehicleFixture::new()
+            .purchase_date("2024-01-01")
+            .purchase_mileage(40_000)
+            .insert_id(&db)
+            .await;
+        let oil = schedule::create_for_vehicle(
+            &db,
+            v,
+            NewScheduleItem {
+                name: "Oil".into(),
+                interval_miles: Some(10_000),
+                interval_months: Some(12),
+                is_factory_recommended: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+        service_record::create(
+            &db,
+            v,
+            NewServiceRecord {
+                service_date: crate::test_support::date("2026-11-01"),
+                performed_by: Some(Performer::Owner),
+                mileage: Some(64_000),
+                schedule_item_ids: Some(vec![oil]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let rems = reminders::calculate_reminders_on(&db, v, today())
+            .await
+            .unwrap();
+        let reminder = &rems.reminders[0];
+        assert_eq!(reminder.due_at_miles, Some(74_000));
+        assert_eq!(
+            reminder.due_at_date,
+            Some(crate::test_support::date("2027-11-01"))
+        );
+        let m = from_reminders(&rems, today()).expect("the oil is in the 70k package");
+        assert_eq!(m.name, "70k service");
+        assert_eq!(ids(&m.done_recently), [oil]);
     }
 
     #[test]

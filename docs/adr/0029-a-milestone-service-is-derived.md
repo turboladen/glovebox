@@ -20,10 +20,13 @@ into one list or hard-codes the grouping.
 `milestone::from_reminders` takes the reply `reminders::calculate_reminders_on` gives and the
 day of the read.
 
-**The mark is the first multiple of 10,000 miles above the estimated mileage.** A car at 60,060
-reads `70k service`, and a car at exactly 60,000 reads `70k service` too, because its 60k is
-already here. `reached_around` is the day the car's average daily mileage reaches the mark, and
-none when the car has no rate.
+**The mark is the last multiple of 10,000 miles the car has passed while its service is open,
+else the next one.** An owner often has the 60k service done at 64,500, so a car at 64,500 whose
+factory items due at or before 60,000 are not done reads `60k service` with `passed: true`. Once
+a service does them it reads `70k service`, and each item counts from that service's reading, so
+oil done at 64,000 is next due at 74,000. An item due just past the mark (a 5,000-mile tire
+rotation due at 65,000) does not hold the mark open. `reached_around` is the day the car's
+average daily mileage reaches the next mark, and none for a passed mark or a car with no rate.
 
 **An item is in the milestone when its next due point falls by the mark**: it is overdue or due
 soon now, its due mileage is at or below the mark, or its due date is on or before
@@ -55,6 +58,9 @@ not print it: the sheet lists one appointment's jobs, and the milestone is a vie
   manufacturer's inspection checklist ("inspect brake pads", "check tire pressure"), and copying
   that list into a migration would invent intervals for items that have none. The milestone means
   "the tracked items due by 70k", and the project prompt tells Claude to say so.
+- **Always naming the next mark.** A car at 64,500 that has not had its 60k service would read
+  `70k service`, with the overdue 60k items under it, while the owner and the shop call the visit
+  the 60k service.
 - **Marking by miles only.** Brake fluid and wipers, which count only time, would never appear,
   and the shop would still do them on the visit.
 - **Counting an item done recently when its last service falls within some fixed window.** A

@@ -2568,8 +2568,8 @@ async fn home_names_the_next_milestone_and_what_was_done_recently() {
     assert_eq!(status, StatusCode::OK);
     let done_on = format!("60,500 mi on {}", day_label(10));
     for detail in [
-        "<h3>Next milestone: 70k service</h3>",
-        "Falls at 70,000 mi",
+        "<h3>70k service</h3>",
+        "Milestone at 70,000 mi",
         r#"<span class="key">Wheel alignment</span>"#,
         r#"<span class="pill pill--plain">By the mark</span>"#,
         "<span class=\"vh\">Package </span>Not factory",
@@ -2587,8 +2587,8 @@ async fn home_names_the_next_milestone_and_what_was_done_recently() {
     // The item due comes before the one done recently, and the panel sits
     // after the waiting lists and before the budget.
     assert!(at("Wheel alignment</span>") < at("Done recently"));
-    assert!(at("<h3>Open incidents</h3>") < at("<h3>Next milestone"));
-    assert!(at("<h3>Next milestone") < at("<h3>Budget and latest activity</h3>"));
+    assert!(at("<h3>Open incidents</h3>") < at("<h3>70k service"));
+    assert!(at("<h3>70k service") < at("<h3>Budget and latest activity</h3>"));
 }
 
 #[tokio::test]
@@ -2598,5 +2598,5 @@ async fn home_shows_no_milestone_for_a_car_with_no_schedule() {
 
     let (_, body) = page(app(db, "test"), get("/")).await;
 
-    assert!(!body.contains("Next milestone"), "{body}");
+    assert!(!body.contains("Milestone at"), "{body}");
 }
