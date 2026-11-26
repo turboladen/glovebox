@@ -316,6 +316,18 @@ pub async fn seed_recall<C: ConnectionTrait + TransactionTrait>(
     campaign: &str,
     title: &str,
 ) -> i32 {
+    seed_recall_under(db, vehicle_id, campaign, title, None).await
+}
+
+/// [`seed_recall`] for a recall NHTSA listed under the model line `line`.
+#[cfg(any(test, feature = "test-support"))]
+pub async fn seed_recall_under<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+    vehicle_id: i32,
+    campaign: &str,
+    title: &str,
+    line: Option<&str>,
+) -> i32 {
     let found = crate::services::nhtsa::RecallInfo {
         campaign_number: campaign.into(),
         manufacturer: None,
@@ -327,7 +339,7 @@ pub async fn seed_recall<C: ConnectionTrait + TransactionTrait>(
         component: None,
         action_number: None,
     };
-    crate::services::research::record_recalls(db, vehicle_id, &[found])
+    crate::services::research::record_recalls_under(db, vehicle_id, &[found], line)
         .await
         .expect("store test recall")
         .recalls

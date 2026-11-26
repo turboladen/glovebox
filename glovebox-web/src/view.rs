@@ -24,7 +24,7 @@ use glovebox_shared::{
         incident::ServiceRef,
         milestone::{self, Milestone},
         need::{self, Stage},
-        part as part_svc,
+        part as part_svc, recall,
         reminders::{self, DueStatus},
         service_detail::ServiceDetail,
         service_record::{IncidentRef, ServiceRecordWithLinks},
@@ -580,6 +580,8 @@ pub struct WaitingJobRow {
 pub struct RecallRow {
     pub title: String,
     pub campaign: Option<String>,
+    /// Says the recall was listed for a model line, when it was.
+    pub line_note: Option<String>,
     pub job_id: Option<i32>,
 }
 
@@ -646,6 +648,7 @@ impl From<&Waiting> for WaitingRows {
                 .map(|r| RecallRow {
                     title: r.title.clone(),
                     campaign: r.campaign_number.clone(),
+                    line_note: r.searched_model.as_deref().map(recall::line_note),
                     job_id: r.job_id,
                 })
                 .collect(),
@@ -1317,6 +1320,8 @@ pub struct ServicePartRow {
 pub struct ServiceRecallRow {
     pub title: String,
     pub campaign: Option<String>,
+    /// Says the recall was listed for a model line, when it was.
+    pub line_note: Option<String>,
 }
 
 /// A service's date linked to that service's page.
@@ -1494,6 +1499,7 @@ impl From<&ServiceDetail> for ServicePageView {
                 .map(|c| ServiceRecallRow {
                     title: c.title.clone(),
                     campaign: c.campaign_number.clone(),
+                    line_note: c.searched_model.as_deref().map(recall::line_note),
                 })
                 .collect(),
             resolved: incidents(&s.resolved_incidents),

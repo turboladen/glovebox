@@ -307,19 +307,28 @@ mod tests {
         );
     }
 
-    // Every stored row reads as its entity afterwards, which a value outside
-    // an enum's list would stop.
+    // Every stored row reads as its entity's enums afterwards, which a value
+    // outside an enum's list would stop. Only the rewritten columns are read,
+    // because a later migration may add a column the entity names.
     #[tokio::test]
     async fn every_row_reads_as_its_entity_afterwards() {
-        use sea_orm::EntityTrait;
+        use sea_orm::{EntityTrait, QueryOrder, QuerySelect};
 
         use crate::entities::{research_finding, research_report};
 
         let db = db_before().await;
         Migrator::up(&db, Some(1)).await.unwrap();
 
-        let findings = research_finding::Entity::find().all(&db).await.unwrap();
-        let read: Vec<_> = findings.iter().map(|f| (f.category, f.severity)).collect();
+        let read: Vec<(FindingCategory, Option<FindingSeverity>)> =
+            research_finding::Entity::find()
+                .select_only()
+                .column(research_finding::Column::Category)
+                .column(research_finding::Column::Severity)
+                .order_by_asc(research_finding::Column::Id)
+                .into_tuple()
+                .all(&db)
+                .await
+                .unwrap();
         assert_eq!(
             read,
             vec![
@@ -332,8 +341,14 @@ mod tests {
                 (FindingCategory::Other, None),
             ]
         );
-        let reports = research_report::Entity::find().all(&db).await.unwrap();
-        let read: Vec<_> = reports.iter().map(|r| r.report_type).collect();
+        let read: Vec<Option<ReportType>> = research_report::Entity::find()
+            .select_only()
+            .column(research_report::Column::ReportType)
+            .order_by_asc(research_report::Column::Id)
+            .into_tuple()
+            .all(&db)
+            .await
+            .unwrap();
         assert_eq!(
             read,
             vec![

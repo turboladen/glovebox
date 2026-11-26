@@ -112,6 +112,10 @@ pub struct RecallWithStatus {
     /// The NHTSA campaign number, when the recall's source URL carries one.
     pub campaign_number: Option<String>,
     pub title: String,
+    /// The NHTSA model line the recall was found under when it is not the
+    /// vehicle's own model, such as `Golf` for a Golf GTI. A recall of the
+    /// line may not apply to this car.
+    pub searched_model: Option<String>,
     pub description: Option<String>,
     pub source_url: Option<String>,
     pub status: ShownRecallStatus,
@@ -133,6 +137,16 @@ pub struct RecallRef {
     pub finding_id: i32,
     pub campaign_number: Option<String>,
     pub title: String,
+    /// The NHTSA model line the recall was found under, as
+    /// [`RecallWithStatus::searched_model`] describes.
+    pub searched_model: Option<String>,
+}
+
+/// Says that NHTSA listed a recall for a model line rather than the car's own
+/// model: `Listed for the Golf line, so it may not apply to this car.`
+#[must_use]
+pub fn line_note(searched_model: &str) -> String {
+    format!("Listed for the {searched_model} line, so it may not apply to this car.")
 }
 
 /// The value of the `nhtsaId` query parameter in a recall's source URL.
@@ -260,6 +274,7 @@ async fn with_status(
                 finding_id: f.id,
                 campaign_number: campaign_number(f.source_url.as_deref()),
                 title: f.title,
+                searched_model: f.searched_model,
                 description: f.description,
                 source_url: f.source_url,
                 status,
@@ -512,6 +527,7 @@ pub(crate) async fn load_performed(
                     finding_id: f.id,
                     campaign_number: campaign_number(f.source_url.as_deref()),
                     title: f.title.clone(),
+                    searched_model: f.searched_model.clone(),
                 });
         }
     }
@@ -544,6 +560,14 @@ mod tests {
         test_support::{set_job_status, test_db},
         vocab::Vocabulary,
     };
+
+    #[test]
+    fn a_line_note_names_the_line() {
+        assert_eq!(
+            line_note("Golf"),
+            "Listed for the Golf line, so it may not apply to this car."
+        );
+    }
 
     fn recall_info(campaign: &str, subject: &str) -> RecallInfo {
         RecallInfo {

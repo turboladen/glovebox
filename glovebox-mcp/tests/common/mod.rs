@@ -256,6 +256,23 @@ pub async fn seed_recall(db: &DatabaseConnection, vehicle_id: i32, campaign: &st
     glovebox_shared::test_support::seed_recall(db, vehicle_id, campaign, "Suction Jet Pump").await
 }
 
+/// [`seed_recall`] for a recall NHTSA listed under the model line `line`.
+pub async fn seed_recall_under(
+    db: &DatabaseConnection,
+    vehicle_id: i32,
+    campaign: &str,
+    line: &str,
+) -> i32 {
+    glovebox_shared::test_support::seed_recall_under(
+        db,
+        vehicle_id,
+        campaign,
+        "Suction Jet Pump",
+        Some(line),
+    )
+    .await
+}
+
 /// The `id` of a tool's payload. Panics when it carries none.
 pub fn id(value: &Value) -> i64 {
     value["id"]

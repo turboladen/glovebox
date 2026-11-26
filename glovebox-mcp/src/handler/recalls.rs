@@ -25,17 +25,21 @@ impl GloveboxMcp {
                        starting \"NHTSA lookup failed:\"; carry on with those. NHTSA lists \
                        recalls by model line, so when it does not list the car's own model \
                        `searched_model` names the line it was asked about (`Golf` for a Golf \
-                       GTI): say a recall may not apply to this car, and mark one that does not \
-                       with `set_recall_status`. Call it once per conversation; `whats_coming` \
-                       lists the open and planned recalls after that, and `list_recalls` lists \
-                       every recall with its status. NHTSA is queried by make, model and year, so \
-                       it cannot know whether a recall was already performed on this car: when an \
-                       invoice names a campaign number, match it to a recall here and pass its \
-                       `finding_id` in `record_service`'s `recall_finding_ids`. To act on an open \
-                       recall, `plan_work` it with `research_finding_id`; completing that work \
-                       through `record_service` links the service to the recall. Use \
-                       `set_recall_status` for a recall that was done without paperwork or does \
-                       not apply."
+                       GTI), on the reply and on each recall it found: say a recall may not apply \
+                       to this car, and mark one that does not with `set_recall_status`. Each \
+                       recall keeps the line of the last check that listed it, so a recall in \
+                       this reply that the check did not list may carry an older line than the \
+                       reply's; `list_recalls`, `whats_coming` and a service's \
+                       `performed_recalls` carry it too, and a `search_records` hit does not. \
+                       Call it once per conversation; `whats_coming` lists the open and planned \
+                       recalls after that, and `list_recalls` lists every recall with its status. \
+                       NHTSA is queried by make, model and year, so it cannot know whether a \
+                       recall was already performed on this car: when an invoice names a campaign \
+                       number, match it to a recall here and pass its `finding_id` in \
+                       `record_service`'s `recall_finding_ids`. To act on an open recall, \
+                       `plan_work` it with `research_finding_id`; completing that work through \
+                       `record_service` links the service to the recall. Use `set_recall_status` \
+                       for a recall that was done without paperwork or does not apply."
     )]
     async fn check_recalls(
         &self,
@@ -48,12 +52,14 @@ impl GloveboxMcp {
     #[tool(
         name = "list_recalls",
         description = "Every recall stored for this vehicle with its status (`open`, `planned`, \
-                       `done` or `not_applicable`), campaign number, title, the work item that \
-                       addresses or addressed it (`work_item_id`: the planned one, else the \
-                       latest completed one) and the service that performed it. Reads only what \
-                       is stored and makes no web request. Use this to see recall statuses, \
-                       including recalls already done; `check_recalls` is only for asking NHTSA \
-                       whether new recalls exist."
+                       `done` or `not_applicable`), campaign number, title, `searched_model` (the \
+                       NHTSA model line it was found under when that is not the car's own model, \
+                       so it may not apply to this car), the work item that addresses or \
+                       addressed it (`work_item_id`: the planned one, else the latest completed \
+                       one) and the service that performed it. Reads only what is stored and \
+                       makes no web request. Use this to see recall statuses, including recalls \
+                       already done; `check_recalls` is only for asking NHTSA whether new recalls \
+                       exist."
     )]
     async fn list_recalls(
         &self,

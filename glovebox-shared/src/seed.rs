@@ -488,8 +488,9 @@ async fn incidents(db: &(impl ConnectionTrait + TransactionTrait), at: &Visit) -
     Ok(())
 }
 
-// A recall stored the way a recall check stores what NHTSA lists. The
-// campaign number is made up.
+// A recall stored the way a recall check stores what NHTSA lists. NHTSA lists
+// a Golf GTI's recalls under the Golf line, so the recall records that line.
+// The campaign number is made up.
 async fn recall(db: &(impl ConnectionTrait + TransactionTrait), v: i32) -> DomainResult<()> {
     let found = RecallInfo {
         campaign_number: "00V000000".into(),
@@ -502,7 +503,7 @@ async fn recall(db: &(impl ConnectionTrait + TransactionTrait), v: i32) -> Domai
         component: Some("FUEL SYSTEM, GASOLINE:DELIVERY:FUEL PUMP".into()),
         action_number: None,
     };
-    research::record_recalls(db, v, &[found]).await?;
+    research::record_recalls_under(db, v, &[found], Some("Golf")).await?;
     Ok(())
 }
 
@@ -989,6 +990,7 @@ mod tests {
             waiting.recalls[0].campaign_number.as_deref(),
             Some("00V000000")
         );
+        assert_eq!(waiting.recalls[0].searched_model.as_deref(), Some("Golf"));
         let incidents: Vec<&str> = waiting.incidents.iter().map(|i| i.title.as_str()).collect();
         assert_eq!(incidents, ["Rock chip in the windshield"]);
         assert_eq!(waiting.incidents_booked, 1);
