@@ -42,6 +42,9 @@ just reset-env test       # Delete the named non-live environment's database fil
 just seed test            # Fill the named non-live environment with made-up demo data (glovebox seed --env test)
 just web                  # Serve the live page on 127.0.0.1:4827 and open it; `just web test` serves data/glovebox-test.db on 4828
 # Visual checks: `just seed <name>` then `just web <name>`; Playwright screenshots must go under .playwright-mcp/ (git-ignored), not the scratchpad
+# For an agent's check, serve without opening a tab: `GLOVEBOX_ENV=test cargo run --quiet --release -p glovebox-web` in the background,
+# and stop it with `kill $(lsof -tiTCP:4828 -sTCP:LISTEN)`
+# A size or alignment bug is settled by measuring (`getBoundingClientRect` through `browser_evaluate`) at 1200 and 1500 wide
 # The column layout starts above 1200 px: screenshot at 1500 wide for it, and at 1200 for the stacked rows
 # In a worktree, `just seed <name>` writes that worktree's own data/, and screenshots still land in the main checkout's .playwright-mcp/
 
@@ -52,10 +55,12 @@ cargo clippy --workspace --all-targets --locked -- -D warnings   # Rust lints, t
 # After `gh run watch` exits, `all-checks` can still read pending for a few seconds: poll `gh pr checks` until nothing is pending
 # Run `gh pr merge <N> --squash --delete-branch` as its own command; from inside the branch's
 # worktree it leaves the local branch, so remove the worktree and `git branch -D` from the main checkout
+# Run from another checkout, it removes the branch's worktree and local branch itself: join cleanup steps with `;`, not `&&`
 # Agent worktrees live in .claude/worktrees/ and stay locked while the agent's process lives:
 # `git worktree unlock <path>` before `git worktree remove --force <path>`
 # A branch stacked on a squash-merged PR: `git rebase --onto origin/main origin/<merged-branch>`
 # `/code-review <branch>` can leave that branch's worktree on a detached HEAD: check it out again
+# A forked `/code-review <branch>` runs in the session's current directory: start it from that branch's worktree so it can run the tests
 # A forked `/code-review` that answers `(none)` found nothing
 # Parallel agent branches: cherry-pick each onto a branch from main, merge one at a time, rebase the next and
 # rerun `just ci`; a struct that gained a field on one branch breaks a full struct literal on another
@@ -443,8 +448,9 @@ A research finding and a recall are rows of one table, told apart by
 recall's id as the byte-identical `NotFound` a missing id gives, so the finding tools and the
 recall tools never touch each other's rows. A finding reads `open`, `planned`, `done` or
 `dismissed` (`finding::ShownFindingStatus`): a mark the owner set wins, then a planned job, then
-a done job with none planned. A status sent back as read stores no mark (the same holds in
-`recall::set_status`), and `open` clears a mark. A search hit on a recall has the kind `recall`
+a done job with none planned. A status sent back as read stores no mark, and `open` clears a
+mark; `recall::set_status` follows both rules, and refuses every change to a recall a service
+link holds at `done`. A search hit on a recall has the kind `recall`
 and one on a finding `research_finding`. Every read shows the job filed from it and the service that
 completed that job. `finding::delete` keeps the jobs, clears their link and names them, and
 deletes a report left with no finding. `whats_coming` lists in `open_findings` the findings that
@@ -579,6 +585,9 @@ A page is a view of the shared library, and a future page follows the same rules
   target is at least 24 by 24 CSS pixels. `tests/accessibility.rs` follows every link from the
   home page over the demo seed and checks these on each page, so a new template is covered
   once the seed reaches it.
+
+- **Below 76rem a `[data-l]` cell is a subgrid**, so a boxed child (a pill, an `n--todo` count)
+  stretches across the value column unless the narrow rule gives it `justify-self: start`.
 
 The look lives in one inline stylesheet in `templates/base.html`, with the typeface served by
 `src/assets.rs`, and `docs/adr/0008-the-web-page-reads-as-a-ledger.md` states every visual rule:
