@@ -57,7 +57,9 @@ that completed it (`done_service`). Setting a status the finding already reads s
 so a client that sends back the `done` it read does not turn a status the job decides into a
 mark that outlasts the job; `set_recall_status` follows the same rule. Setting `open` clears a
 mark, and the finding then reads what its jobs say. It is refused only for a finding with no
-mark that a done job holds at `done`, where nothing would change.
+mark that a done job holds at `done`, where nothing would change. A recall's `open` clears its
+`done` or `not_applicable` mark under the same rule and the same refusal, and a recall linked to
+a service refuses every change, because the link holds it at `done`.
 
 **A search hit says which of the two it found.** `search_records` gives a finding the kind
 `research_finding` and a recall the kind `recall`, both under the `research` scope, so a client
