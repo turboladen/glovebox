@@ -51,7 +51,7 @@ fn with_limit(mut r: wear_reading::Model, value: f64, unit: LengthUnit) -> wear_
 // The car drives 20 miles a day and reads 50,000 on the day of the outlook.
 fn judge(
     readings: Vec<wear_reading::Model>,
-    installs: &BTreeMap<WearTag, Install>,
+    installs: &BTreeMap<WearTag, NaiveDate>,
 ) -> Vec<WearOutlook> {
     outlook_from(readings, installs, &[], 50_000, 20.0, date("2026-11-26"))
 }
@@ -165,13 +165,7 @@ fn the_tires_are_one_series_judged_by_the_lowest_reading_of_each_visit() {
 #[test]
 fn a_tagged_install_starts_a_new_series_and_axles_stay_apart() {
     let mut installs = BTreeMap::new();
-    installs.insert(
-        WearTag::BrakePads(Axle::Front),
-        Install {
-            day: date("2025-01-01"),
-            service_id: None,
-        },
-    );
+    installs.insert(WearTag::BrakePads(Axle::Front), date("2025-01-01"));
     let out = judge(
         vec![
             pads(1, Axle::Front, 10.0, "2023-01-01", 20_000),
@@ -552,26 +546,22 @@ fn readings_with_no_odometer_and_no_log_say_so() {
 }
 
 #[test]
-fn the_installing_services_own_readings_measured_the_old_part() {
+fn readings_on_the_install_day_measured_the_old_part() {
     let mut installs = BTreeMap::new();
-    installs.insert(
-        WearTag::BrakePads(Axle::Front),
-        Install {
-            day: date("2026-11-20"),
-            service_id: Some(7),
-        },
+    installs.insert(WearTag::BrakePads(Axle::Front), date("2026-03-01"));
+    let out = judge(
+        vec![
+            pads(1, Axle::Front, 2.0, "2026-03-01", 45_000),
+            pads(2, Axle::Front, 9.0, "2026-09-01", 49_000),
+        ],
+        &installs,
     );
-    let mut worn = pads(1, Axle::Front, 2.0, "2026-11-20", 49_000);
-    worn.service_id = Some(7);
-    let mut fresh = pads(2, Axle::Front, 12.0, "2026-11-20", 49_000);
-    fresh.service_id = Some(8);
-    let out = judge(vec![worn, fresh], &installs);
-    assert_eq!(out[0].latest, Measure::new(12.0, MM));
+    assert_eq!(out[0].latest, Measure::new(9.0, MM));
     assert_eq!(out[0].readings_in_series, 1);
-
-    let mut only_worn = pads(1, Axle::Front, 2.0, "2026-11-20", 49_000);
-    only_worn.service_id = Some(7);
-    crate::test_support::assert_empty(&judge(vec![only_worn], &installs));
+    crate::test_support::assert_empty(&judge(
+        vec![pads(1, Axle::Front, 2.0, "2026-03-01", 45_000)],
+        &installs,
+    ));
 }
 
 #[test]
@@ -661,4 +651,57 @@ async fn a_future_dated_service_keeps_its_readings() {
     input.service_date = crate::services::today() + chrono::Duration::days(1);
     let created = service_record::create(&db, vid, input).await.unwrap();
     assert_eq!(created.wear_readings.len(), 1);
+}
+
+#[tokio::test]
+async fn another_vehicles_service_reads_as_missing_in_a_correction_and_a_filter() {
+    let db = test_db().await;
+    let vid = seed_vehicle(&db).await;
+    let other = seed_vehicle(&db).await;
+    let theirs = seed_service(&db, other).await;
+    let mine = seed_service(&db, vid).await;
+    let reading = create(&db, vid, new_reading(Some(mine))).await.unwrap();
+    let relink = |service_id| UpdateWearReading {
+        service_id: Some(Some(service_id)),
+        ..Default::default()
+    };
+    let wrong = update(&db, vid, reading.id, relink(theirs))
+        .await
+        .unwrap_err();
+    let missing = update(&db, vid, reading.id, relink(999_999))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        wrong.to_string(),
+        missing.to_string().replace("999999", &theirs.to_string())
+    );
+    let filter = |service_id| WearFilter {
+        service_id: Some(service_id),
+        ..Default::default()
+    };
+    let wrong = list(&db, vid, filter(theirs)).await.unwrap_err();
+    let missing = list(&db, vid, filter(999_999)).await.unwrap_err();
+    assert_eq!(
+        wrong.to_string(),
+        missing.to_string().replace("999999", &theirs.to_string())
+    );
+}
+
+#[tokio::test]
+async fn a_vehicle_with_readings_is_not_deleted_and_future_readings_wait() {
+    let db = test_db().await;
+    let vid = seed_vehicle(&db).await;
+    let mut r = new_reading(None);
+    r.measured_on = Some(date("2025-01-01"));
+    create(&db, vid, r).await.unwrap();
+    let err = crate::services::vehicle::delete_unused(&db, vid)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("wear readings"), "{err}");
+
+    let today = date("2024-06-01");
+    let reminders = crate::services::reminders::calculate_reminders_on(&db, vid, today)
+        .await
+        .unwrap();
+    crate::test_support::assert_empty(&outlook(&db, vid, &reminders, today).await.unwrap());
 }

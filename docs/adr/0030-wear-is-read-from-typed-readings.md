@@ -34,10 +34,11 @@ that matters: when the set needs replacing.
 **A tagged part starts a new series.** A part carries an optional `wears_as`
 (`parts.wears_component` and `parts.wears_axle`): a brake tag names its axle, a tire tag names
 none, and a CHECK keeps the pair valid. The newest install of a tagged part that is installed or
-replaced starts its series on its install day; readings before it are history, and a series with
-no reading since is left out of the outlook. The readings the installing service took measured
-the part that came off ("front pads 2 mm, replaced"), so they are history too; another reading
-dated the install day counts as the new part's.
+replaced starts its series on its install day. Readings dated on or before that day are history,
+because a shop measures at inspection, before it replaces the part ("front pads 2 mm,
+replaced"); the rule holds whether the install names its service or not, and after the service
+is deleted. A series with no reading since is left out of the outlook, and so is a reading dated
+after today.
 
 **The limit is the newest one a shop stated in the series, else a default.** The defaults are
 3 mm for pads and 2/32 in for tread (the US legal minimum). Rotors have none, because a rotor's

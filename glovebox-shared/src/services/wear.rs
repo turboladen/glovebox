@@ -363,6 +363,24 @@ pub(crate) async fn delete_for_service(
     Ok(())
 }
 
+/// Takes the readings a service took off it, keeping them. Runs inside the
+/// caller's transaction, before the service row goes.
+pub(crate) async fn unlink_from_service(
+    db: &impl ConnectionTrait,
+    service_id: i32,
+) -> DomainResult<()> {
+    wear_reading::Entity::update_many()
+        .col_expr(
+            wear_reading::Column::ServiceId,
+            Expr::value(Option::<i32>::None),
+        )
+        .col_expr(wear_reading::Column::UpdatedAt, Expr::value(super::now()))
+        .filter(wear_reading::Column::ServiceId.eq(service_id))
+        .exec(db)
+        .await?;
+    Ok(())
+}
+
 /// The ids of the readings a service took, oldest first.
 pub(crate) async fn ids_of_service(
     db: &impl ConnectionTrait,
@@ -435,17 +453,21 @@ pub struct WearOutlook {
 const MIN_READINGS_FOR_RATE: usize = 2;
 
 /// The outlook of each series of the vehicle's readings, most urgent first,
-/// as of `today` and the estimated mileage `reminders` holds. A series whose
-/// every reading predates the install of a part tagged for it is left out:
-/// the part it measured is off the car.
+/// as of `today` and the estimated mileage `reminders` holds. A reading dated
+/// after `today` is left out, and so is a series whose every reading is
+/// dated on or before the install of a part tagged for it: the part it
+/// measured is off the car.
 pub async fn outlook(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
     reminders: &RemindersResponse,
     today: NaiveDate,
 ) -> DomainResult<Vec<WearOutlook>> {
+    // A reading dated ahead, from a service dated ahead, would become the
+    // newest of its series and every projection would start from it.
     let readings: Vec<wear_reading::Model> = wear_reading::Entity::find()
         .filter(wear_reading::Column::VehicleId.eq(vehicle_id))
+        .filter(wear_reading::Column::MeasuredOn.lte(today))
         .order_by_asc(wear_reading::Column::MeasuredOn)
         .order_by_asc(wear_reading::Column::Id)
         .all(db)
@@ -472,28 +494,19 @@ pub async fn outlook(
     ))
 }
 
-/// Where a series starts: the install of a tagged part.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Install {
-    day: NaiveDate,
-    /// The service that installed the part. Its own readings measured the
-    /// part that came off.
-    service_id: Option<i32>,
-}
-
 /// The newest install of each tag among the vehicle's parts that are or were
 /// on the car.
 async fn tagged_installs(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
-) -> DomainResult<BTreeMap<WearTag, Install>> {
+) -> DomainResult<BTreeMap<WearTag, NaiveDate>> {
     let parts = part::Entity::find()
         .filter(part::Column::VehicleId.eq(vehicle_id))
         .filter(part::Column::WearsComponent.is_not_null())
         .filter(part::Column::Status.is_in([PartStatus::Installed, PartStatus::Replaced]))
         .all(db)
         .await?;
-    let mut out: BTreeMap<WearTag, Install> = BTreeMap::new();
+    let mut out: BTreeMap<WearTag, NaiveDate> = BTreeMap::new();
     for p in parts {
         let (Some(tag), Some(day)) = (
             WearTag::of_columns(p.wears_component, p.wears_axle),
@@ -501,14 +514,8 @@ async fn tagged_installs(
         ) else {
             continue;
         };
-        let install = Install {
-            day,
-            service_id: p.installed_service_id,
-        };
-        let newest = out.entry(tag).or_insert(install);
-        if install.day > newest.day {
-            *newest = install;
-        }
+        let newest = out.entry(tag).or_insert(day);
+        *newest = Ord::max(*newest, day);
     }
     Ok(out)
 }
@@ -524,7 +531,7 @@ struct Point {
 /// The outlooks [`outlook`] returns, judged from rows already read.
 fn outlook_from(
     readings: Vec<wear_reading::Model>,
-    installs: &BTreeMap<WearTag, Install>,
+    installs: &BTreeMap<WearTag, NaiveDate>,
     odometers: &[(NaiveDate, i32)],
     estimated_mileage: i32,
     avg_daily_miles: f64,
@@ -546,11 +553,11 @@ fn outlook_from(
     let mut out: Vec<WearOutlook> = series
         .into_iter()
         .filter_map(|(tag, rows)| {
-            let install = installs.get(&tag).copied();
-            let points = points_of(rows, install, odometers, avg_daily_miles);
+            let starts_on = installs.get(&tag).copied();
+            let points = points_of(rows, starts_on, odometers, avg_daily_miles);
             judge_series(
                 tag,
-                install.map(|i| i.day),
+                starts_on,
                 &points,
                 estimated_mileage,
                 avg_daily_miles,
@@ -562,22 +569,20 @@ fn outlook_from(
     out
 }
 
-// Readings before the series starts are history only, and so are the ones
-// the installing service took, which measured the part that came off. The
-// rows arrive oldest first, so the points do too; the tires keep the lowest
+// Readings dated on or before the install day are history only: a shop
+// measures at inspection, before it replaces the part. The rows arrive
+// oldest first, so the points do too; the tires keep the lowest
 // reading of each day. An odometer is estimated only for a point that still
 // has none once its rows are merged.
 fn points_of(
     rows: Vec<wear_reading::Model>,
-    install: Option<Install>,
+    starts_on: Option<NaiveDate>,
     odometers: &[(NaiveDate, i32)],
     avg_daily_miles: f64,
 ) -> Vec<Point> {
     let mut points: Vec<Point> = Vec::new();
     for r in rows {
-        if install.is_some_and(|i| {
-            r.measured_on < i.day || (i.service_id.is_some() && r.service_id == i.service_id)
-        }) {
+        if starts_on.is_some_and(|start| r.measured_on <= start) {
             continue;
         }
         let point = Point {

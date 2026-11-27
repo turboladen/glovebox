@@ -498,8 +498,8 @@ pub async fn unarchive<C: ConnectionTrait + TransactionTrait>(
 }
 
 /// Deletes a vehicle that has no history yet, undoing a mistaken
-/// `create`. A vehicle with any service record, part, incident, work item,
-/// appointment, to-do or research finding is a `BadRequest` naming what it
+/// `create`. A vehicle with any service record, wear reading, part, incident,
+/// work item, appointment, to-do or research finding is a `BadRequest` naming what it
 /// has. Its odometer readings, own schedule items and decoded attributes go
 /// with it.
 pub async fn delete_unused<C: ConnectionTrait + TransactionTrait>(
@@ -521,6 +521,13 @@ pub async fn delete_unused<C: ConnectionTrait + TransactionTrait>(
             "service records",
             service_record::Entity::find()
                 .filter(service_record::Column::VehicleId.eq(id))
+                .count(db)
+                .await?,
+        ),
+        (
+            "wear readings",
+            crate::entities::wear_reading::Entity::find()
+                .filter(crate::entities::wear_reading::Column::VehicleId.eq(id))
                 .count(db)
                 .await?,
         ),
