@@ -80,7 +80,7 @@ macro_rules! vocabulary {
     ) => {
         $(#[$meta])*
         #[derive(
-            Clone, Copy, Debug, PartialEq, Eq, Hash,
+            Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash,
             sea_orm::DeriveValueType, serde::Serialize, serde::Deserialize,
         )]
         #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]

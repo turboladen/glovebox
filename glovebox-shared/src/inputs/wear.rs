@@ -8,7 +8,9 @@ use crate::{
 
 /// What a new part replaces, so its install starts a new wear series. A
 /// brake part is fitted to one axle; the tires are one set.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+///
+/// Tags order brake pads, then rotors, then tires, front before rear.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum WearTag {
     BrakePads(Axle),
     BrakeRotors(Axle),
@@ -41,6 +43,16 @@ impl WearTag {
     /// check would refuse reads as none.
     pub fn of_columns(component: Option<WearComponent>, axle: Option<Axle>) -> Option<Self> {
         component.and_then(|c| Self::new("wears_as", c, axle).ok())
+    }
+
+    /// The series a reading of `component` taken on `axle` belongs to: the
+    /// tires are one set whatever the axle.
+    pub const fn of_reading(component: WearComponent, axle: Axle) -> Self {
+        match component {
+            WearComponent::BrakePads => Self::BrakePads(axle),
+            WearComponent::BrakeRotors => Self::BrakeRotors(axle),
+            WearComponent::TireTread => Self::Tires,
+        }
     }
 
     pub const fn component(self) -> WearComponent {

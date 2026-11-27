@@ -733,8 +733,8 @@ role per control style, and `YYYY-MM-DD` dates.
   rebuilt with it, because an older binary cannot read a row that holds the new value. Removing
   or renaming one needs a migration that rewrites the rows, placed after
   `m20261115_000001_vocabulary_values`, whose lists stay as written.
-  An enum that no column stores lives in the service that uses it. Seven of them are derived
-  values (`recall::ShownRecallStatus`, `finding::ShownFindingStatus`, `appointment::AppointmentStatus`,
+  An enum that no column stores lives in the service that uses it. Eight of them are derived
+  values (`wear::LimitSource`, `recall::ShownRecallStatus`, `finding::ShownFindingStatus`, `appointment::AppointmentStatus`,
   `appointment::AppointmentPhase`, `reminders::DueStatus`, which reminders and planned work's
   revisit share, `reminders::Trigger` and `activity::ActivityKind`). The other five are
   arguments: `recall::RecallStatus` and `finding::FiledFindingStatus`, which their services map

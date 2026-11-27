@@ -6,19 +6,19 @@ use glovebox_shared::{
         part::Supplier,
         service_record::{Payer, Performer},
         service_record_line_item::WorkKind,
+        wear_reading::{Axle, WearComponent},
     },
     error::DomainResult,
     inputs::{
         part::NewPart,
         service_record::{NewLineItem, NewServiceRecord, ServiceFilter, UpdateServiceRecord},
+        wear::NewWearReading,
     },
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use super::{
-    PartContentInput, WearReadingInput, WearTagInput, kit_contents, nullable, shop_choice,
-};
+use super::{MeasureInput, PartContentInput, WearTagInput, kit_contents, nullable, shop_choice};
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -465,4 +465,36 @@ pub struct DeleteServiceInput {
     /// `done_another_way`. Needed only when the service recorded work as done; ask the owner.
     #[serde(default)]
     pub completed_work: Option<glovebox_shared::services::service_record::CompletedWork>,
+}
+
+/// One wear reading on an invoice: a brake pad or rotor thickness or a tire
+/// tread depth, for one axle.
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WearReadingInput {
+    /// `brake_pads`, `brake_rotors` or `tire_tread`.
+    pub component: WearComponent,
+    /// `front` or `rear`. An invoice that gives one figure for all four tires is two readings, one per axle.
+    pub axle: Axle,
+    /// The measurement as written, e.g. `{"value": 4, "unit": "mm"}` or `{"value": 7, "unit": "in_32"}`. A percentage is not a length: leave it in the notes.
+    pub reading: MeasureInput,
+    /// The minimum the shop stated beside it ("min spec 3 mm"), in its own unit. Omit when the invoice states none.
+    pub limit: Option<MeasureInput>,
+    /// Free text, e.g. "caution" or "FAIL" as the invoice marks it.
+    pub notes: Option<String>,
+}
+
+impl WearReadingInput {
+    fn into_domain(self) -> NewWearReading {
+        NewWearReading {
+            component: self.component,
+            axle: self.axle,
+            reading: self.reading.into(),
+            limit: self.limit.map(Into::into),
+            measured_on: None,
+            odometer: None,
+            service_id: None,
+            notes: self.notes,
+        }
+    }
 }

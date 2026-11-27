@@ -125,10 +125,7 @@ impl CorrectWearReadingInput {
                 axle: self.axle,
                 reading: self.reading.map(Into::into),
                 limit: self.limit.map(|l| l.map(Into::into)),
-                measured_on: self
-                    .measured_on
-                    .map(|d| dates::parse_date("measured_on", &d))
-                    .transpose()?,
+                measured_on: dates::parse_optional_date("measured_on", self.measured_on)?,
                 odometer: self.odometer,
                 service_id: self.service_id,
                 notes: self.notes,

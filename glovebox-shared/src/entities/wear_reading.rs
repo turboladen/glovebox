@@ -49,6 +49,20 @@ pub struct Model {
     pub updated_at: DateTimeUtc,
 }
 
+impl Model {
+    /// The reading as the shop wrote it.
+    pub const fn reading(&self) -> crate::units::Measure {
+        crate::units::Measure::new(self.value, self.unit)
+    }
+
+    /// The limit the shop stated beside it, if any.
+    pub fn limit(&self) -> Option<crate::units::Measure> {
+        self.limit_value
+            .zip(self.limit_unit)
+            .map(|(value, unit)| crate::units::Measure::new(value, unit))
+    }
+}
+
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
     #[sea_orm(

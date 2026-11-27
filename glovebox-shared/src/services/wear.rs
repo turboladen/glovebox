@@ -49,11 +49,8 @@ impl From<wear_reading::Model> for WearReading {
             service_id: m.service_id,
             component: m.component,
             axle: m.axle,
-            reading: Measure::new(m.value, m.unit),
-            limit: m
-                .limit_value
-                .zip(m.limit_unit)
-                .map(|(v, u)| Measure::new(v, u)),
+            reading: m.reading(),
+            limit: m.limit(),
             measured_on: m.measured_on,
             odometer: m.odometer,
             notes: m.notes,
@@ -312,22 +309,12 @@ pub(crate) async fn by_service(
 pub(crate) async fn delete_for_service(
     db: &impl ConnectionTrait,
     service_id: i32,
-) -> DomainResult<Vec<i32>> {
-    let ids: Vec<i32> = wear_reading::Entity::find()
-        .select_only()
-        .column(wear_reading::Column::Id)
+) -> DomainResult<()> {
+    wear_reading::Entity::delete_many()
         .filter(wear_reading::Column::ServiceId.eq(service_id))
-        .order_by_asc(wear_reading::Column::Id)
-        .into_tuple()
-        .all(db)
+        .exec(db)
         .await?;
-    if !ids.is_empty() {
-        wear_reading::Entity::delete_many()
-            .filter(wear_reading::Column::Id.is_in(ids.clone()))
-            .exec(db)
-            .await?;
-    }
-    Ok(ids)
+    Ok(())
 }
 
 /// The ids of the readings a service took, oldest first.
@@ -399,7 +386,7 @@ pub struct WearOutlook {
 }
 
 /// The fewest readings a series needs before it is projected.
-pub const MIN_READINGS_FOR_RATE: usize = 2;
+const MIN_READINGS_FOR_RATE: usize = 2;
 
 /// The outlook of each series of the vehicle's readings, most urgent first,
 /// as of `today` and the estimated mileage `reminders` holds. A series whose
@@ -420,9 +407,15 @@ pub async fn outlook(
     if readings.is_empty() {
         return Ok(Vec::new());
     }
-    let vehicle = super::vehicle::require(db, vehicle_id).await?;
     let installs = tagged_installs(db, vehicle_id).await?;
-    let odometers = reminders::dated_readings(db, &vehicle, today).await?;
+    // A reading a service took carries its mileage, so the log is read only
+    // for one that has none.
+    let odometers = if readings.iter().any(|r| r.odometer.is_none()) {
+        let vehicle = super::vehicle::require(db, vehicle_id).await?;
+        reminders::dated_readings(db, &vehicle, today).await?
+    } else {
+        Vec::new()
+    };
     Ok(outlook_from(
         readings,
         &installs,
@@ -438,14 +431,14 @@ pub async fn outlook(
 async fn tagged_installs(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
-) -> DomainResult<BTreeMap<SeriesKey, NaiveDate>> {
+) -> DomainResult<BTreeMap<WearTag, NaiveDate>> {
     let parts = part::Entity::find()
         .filter(part::Column::VehicleId.eq(vehicle_id))
         .filter(part::Column::WearsComponent.is_not_null())
         .filter(part::Column::Status.is_in([PartStatus::Installed, PartStatus::Replaced]))
         .all(db)
         .await?;
-    let mut out: BTreeMap<SeriesKey, NaiveDate> = BTreeMap::new();
+    let mut out: BTreeMap<WearTag, NaiveDate> = BTreeMap::new();
     for p in parts {
         let (Some(tag), Some(day)) = (
             WearTag::of_columns(p.wears_component, p.wears_axle),
@@ -453,46 +446,10 @@ async fn tagged_installs(
         ) else {
             continue;
         };
-        let key = SeriesKey::of_tag(tag);
-        let newest = out.entry(key).or_insert(day);
+        let newest = out.entry(tag).or_insert(day);
         *newest = Ord::max(*newest, day);
     }
     Ok(out)
-}
-
-/// A series: the component, with the axle for brakes and none for the tires.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct SeriesKey(u8, Option<u8>);
-
-impl SeriesKey {
-    const fn component_rank(c: WearComponent) -> u8 {
-        match c {
-            WearComponent::BrakePads => 0,
-            WearComponent::BrakeRotors => 1,
-            WearComponent::TireTread => 2,
-        }
-    }
-
-    const fn axle_rank(a: Axle) -> u8 {
-        match a {
-            Axle::Front => 0,
-            Axle::Rear => 1,
-        }
-    }
-
-    fn of_reading(r: &wear_reading::Model) -> Self {
-        match r.component {
-            WearComponent::TireTread => Self(2, None),
-            c => Self(Self::component_rank(c), Some(Self::axle_rank(r.axle))),
-        }
-    }
-
-    fn of_tag(tag: WearTag) -> Self {
-        Self(
-            Self::component_rank(tag.component()),
-            tag.axle().map(Self::axle_rank),
-        )
-    }
 }
 
 /// One visit's reading in a series: for the tires, the lowest of that day.
@@ -506,26 +463,26 @@ struct Point {
 /// The outlooks [`outlook`] returns, judged from rows already read.
 fn outlook_from(
     readings: Vec<wear_reading::Model>,
-    installs: &BTreeMap<SeriesKey, NaiveDate>,
+    installs: &BTreeMap<WearTag, NaiveDate>,
     odometers: &[(NaiveDate, i32)],
     estimated_mileage: i32,
     avg_daily_miles: f64,
     today: NaiveDate,
 ) -> Vec<WearOutlook> {
-    let mut series: BTreeMap<SeriesKey, Vec<wear_reading::Model>> = BTreeMap::new();
+    let mut series: BTreeMap<WearTag, Vec<wear_reading::Model>> = BTreeMap::new();
     for r in readings {
-        series.entry(SeriesKey::of_reading(&r)).or_default().push(r);
+        series
+            .entry(WearTag::of_reading(r.component, r.axle))
+            .or_default()
+            .push(r);
     }
     let mut out: Vec<WearOutlook> = series
         .into_iter()
-        .filter_map(|(key, rows)| {
-            let starts_on = installs.get(&key).copied();
-            let first = rows.first()?;
-            let (component, axle) = (first.component, (key.1.is_some()).then_some(first.axle));
+        .filter_map(|(tag, rows)| {
+            let starts_on = installs.get(&tag).copied();
             let points = points_of(rows, starts_on, odometers, avg_daily_miles);
             judge_series(
-                component,
-                axle,
+                tag,
                 starts_on,
                 &points,
                 estimated_mileage,
@@ -556,11 +513,8 @@ fn points_of(
             odometer: r
                 .odometer
                 .or_else(|| reminders::odometer_on(r.measured_on, odometers, avg_daily_miles)),
-            reading: Measure::new(r.value, r.unit),
-            limit: r
-                .limit_value
-                .zip(r.limit_unit)
-                .map(|(v, u)| Measure::new(v, u)),
+            reading: r.reading(),
+            limit: r.limit(),
         };
         match points.last_mut() {
             Some(last) if r.component == WearComponent::TireTread && last.day == point.day => {
@@ -593,8 +547,7 @@ fn slope_mm_per_mile(points: &[(f64, f64)]) -> Option<f64> {
     reason = "miles left is bounded by the f64 range check before the cast"
 )]
 fn judge_series(
-    component: WearComponent,
-    axle: Option<Axle>,
+    tag: WearTag,
     starts_on: Option<NaiveDate>,
     points: &[Point],
     estimated_mileage: i32,
@@ -602,16 +555,17 @@ fn judge_series(
     today: NaiveDate,
 ) -> Option<WearOutlook> {
     let latest = points.last()?;
-    let (limit, limit_source) = match points.iter().rev().find_map(|p| p.limit) {
-        Some(limit) => (Some(limit), Some(LimitSource::Shop)),
-        None => (
-            default_limit(component),
-            default_limit(component).map(|_| LimitSource::Default),
-        ),
-    };
+    let component = tag.component();
+    let (limit, limit_source) = points
+        .iter()
+        .rev()
+        .find_map(|p| p.limit)
+        .map(|l| (l, LimitSource::Shop))
+        .or_else(|| default_limit(component).map(|l| (l, LimitSource::Default)))
+        .unzip();
     let mut outlook = WearOutlook {
         component,
-        axle,
+        axle: tag.axle(),
         latest: latest.reading,
         latest_on: latest.day,
         limit,
@@ -644,16 +598,20 @@ fn judge_series(
                 .map(|o| (f64::from(o), millimeters(p.reading.length())))
         })
         .collect();
-    let wear_per_mile = if fitted.len() < MIN_READINGS_FOR_RATE {
+    if points.len() < MIN_READINGS_FOR_RATE {
         outlook.note = Some(match starts_on {
             Some(day) => format!("Only one reading since the part installed on {day}"),
             None => "One reading is not enough to tell a wear rate".into(),
         });
         return Some(outlook);
-    } else {
-        slope_mm_per_mile(&fitted).map(|s| -s)
-    };
-    let Some(wear_per_mile) = wear_per_mile.filter(|w| *w > 0.0) else {
+    }
+    if fitted.len() < MIN_READINGS_FOR_RATE {
+        outlook.note = Some(
+            "The readings carry no odometer and none can be estimated from the mileage log".into(),
+        );
+        return Some(outlook);
+    }
+    let Some(wear_per_mile) = slope_mm_per_mile(&fitted).map(|s| -s).filter(|w| *w > 0.0) else {
         outlook.note = Some(
             "The readings do not show wear; a replacement may be missing from the parts".into(),
         );
@@ -673,14 +631,12 @@ fn judge_series(
     let left = left.round() as i32;
     outlook.miles_left = Some(left);
     let by_miles = DueStatus::judge(i64::from(left), i64::from(DEFAULT_WARNING_MILES));
-    let days = reminders::days_to_drive(left.abs(), avg_daily_miles);
     // A limit projected past was reached that many days before today.
-    outlook.due_on = days.map(|d| today + chrono::Duration::days(if left < 0 { -d } else { d }));
+    let days = reminders::days_to_drive(left.abs(), avg_daily_miles)
+        .map(|d| if left < 0 { -d } else { d });
+    outlook.due_on = days.map(|d| today + chrono::Duration::days(d));
     let by_days = days.map_or(DueStatus::NotDue, |d| {
-        DueStatus::judge(
-            if left < 0 { -1 } else { d },
-            i64::from(DEFAULT_WARNING_DAYS),
-        )
+        DueStatus::judge(d, i64::from(DEFAULT_WARNING_DAYS))
     });
     outlook.status = DueStatus::most_urgent([outlook.status, by_miles, by_days]);
     Some(outlook)

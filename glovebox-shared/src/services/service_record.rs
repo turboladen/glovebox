@@ -1868,11 +1868,11 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         ..Default::default()
     };
     part_svc::release_from_service(&txn, work.parts, choice).await?;
-    outcome.wear_reading_ids = match choice {
-        CompletedWork::DidNotHappen => super::wear::delete_for_service(&txn, existing.id).await?,
-        // The key clears the service on delete.
-        CompletedWork::DoneAnotherWay => super::wear::ids_of_service(&txn, existing.id).await?,
-    };
+    outcome.wear_reading_ids = super::wear::ids_of_service(&txn, existing.id).await?;
+    // After `done_another_way` the key clears the service on delete.
+    if choice == CompletedWork::DidNotHappen {
+        super::wear::delete_for_service(&txn, existing.id).await?;
+    }
 
     // Remove the auto-created mileage log(s) — an orphaned log would keep
     // feeding reminders' mileage estimate while staying hidden from the feed.

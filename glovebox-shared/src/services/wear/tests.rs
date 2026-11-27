@@ -51,7 +51,7 @@ fn with_limit(mut r: wear_reading::Model, value: f64, unit: LengthUnit) -> wear_
 // The car drives 20 miles a day and reads 50,000 on the day of the outlook.
 fn judge(
     readings: Vec<wear_reading::Model>,
-    installs: &BTreeMap<SeriesKey, NaiveDate>,
+    installs: &BTreeMap<WearTag, NaiveDate>,
 ) -> Vec<WearOutlook> {
     outlook_from(readings, installs, &[], 50_000, 20.0, date("2026-11-26"))
 }
@@ -165,10 +165,7 @@ fn the_tires_are_one_series_judged_by_the_lowest_reading_of_each_visit() {
 #[test]
 fn a_tagged_install_starts_a_new_series_and_axles_stay_apart() {
     let mut installs = BTreeMap::new();
-    installs.insert(
-        SeriesKey::of_tag(WearTag::BrakePads(Axle::Front)),
-        date("2025-01-01"),
-    );
+    installs.insert(WearTag::BrakePads(Axle::Front), date("2025-01-01"));
     let out = judge(
         vec![
             pads(1, Axle::Front, 10.0, "2023-01-01", 20_000),
@@ -532,4 +529,18 @@ async fn a_bad_reading_on_record_service_writes_nothing() {
         .unwrap(),
     );
     crate::test_support::assert_empty(&list(&db, vid, WearFilter::default()).await.unwrap());
+}
+
+#[test]
+fn readings_with_no_odometer_and_no_log_say_so() {
+    let mut a = pads(1, Axle::Front, 9.0, "2025-01-01", 0);
+    let mut b = pads(2, Axle::Front, 7.0, "2026-01-01", 0);
+    a.odometer = None;
+    b.odometer = None;
+    let out = judge(vec![a, b], &BTreeMap::new());
+    assert_eq!(out[0].readings_in_series, 2);
+    assert_eq!(
+        out[0].note.as_deref(),
+        Some("The readings carry no odometer and none can be estimated from the mileage log")
+    );
 }
