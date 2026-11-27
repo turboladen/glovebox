@@ -58,6 +58,7 @@ fn minimal_part(name: &str, installed_service_id: Option<i32>) -> NewPart {
         order_ref: None,
         need_id: None,
         contents: Vec::new(),
+        wears_as: None,
     }
 }
 

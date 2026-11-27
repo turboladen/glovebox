@@ -93,6 +93,14 @@ you link.
      not part of the invoice total.
    - A part recorded earlier with `record_part`, such as one Steve bought before the visit, is
      attached with `part_ids`, not listed again under `parts`. `list_parts` has the ids.
+   - `wear_readings` has every brake pad, brake rotor and tire tread measurement the invoice
+     reports, one per component and axle, in the number and unit the shop wrote: `{"value": 4,
+     "unit": "mm"}` for 4 mm, `{"value": 7, "unit": "in_32"}` for 7/32 in. Put the minimum the
+     shop stated beside it ("min spec 3 mm") in `limit`, and a mark such as "caution" or "FAIL" in
+     its `notes`. A percentage ("front 50%") is not a length: leave it in the service's notes. When
+     the invoice replaces pads, rotors or tires, give that part `wears_as` (`{"component":
+     "brake_pads", "axle": "front"}`, or `{"component": "tire_tread"}` for tires, which are one
+     set), so the wear projection starts over from the install.
    - `schedule_item_ids` names every schedule item the work satisfies, not only the one Steve
      mentioned, `work_item_ids` the planned
      work it completes, `resolved_incident_ids` the incidents it fixed, `noticed_incident_ids` the
@@ -265,6 +273,12 @@ need has a decision, every decision has a reason, and every part ordered has arr
    manufacturer's 70k list includes them, but a recent service did them (`last_service`). The
    milestone covers only the items glovebox tracks, not every line of the manufacturer's
    inspection checklist, so say so if Steve asks whether it is the whole package.
+   Read `wear` too: one entry per brake axle and one for the tires as a set, most urgent first.
+   `latest` and `limit` carry a `text` to quote. When `miles_left` is present, say about when the
+   limit comes (`due_on`) and fold an `overdue` or `due_soon` entry into the trip; when it is
+   absent, read the `note` aloud, which says why there is no projection. A note that "the
+   readings do not show wear" means a replacement is missing from the parts: ask Steve when the
+   pads or tires were replaced, and record that part with `wears_as`.
    Read `open_findings` as well: each is something an earlier conversation learned about the car
    and nobody has acted on, most severe first. It reads `open`, or `planned` when a job that is
    on no appointment addresses it (`work_item`). When one fits the trip, say so ("the water pump

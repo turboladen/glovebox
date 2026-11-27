@@ -166,6 +166,8 @@ fn part_with(
         return_reason: None,
         order_ref: order_ref.map(Into::into),
         returned_from_need_id: None,
+        wears_component: None,
+        wears_axle: None,
     }
 }
 

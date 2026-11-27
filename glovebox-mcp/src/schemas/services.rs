@@ -16,7 +16,9 @@ use glovebox_shared::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use super::{PartContentInput, kit_contents, nullable, shop_choice};
+use super::{
+    PartContentInput, WearReadingInput, WearTagInput, kit_contents, nullable, shop_choice,
+};
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -66,6 +68,8 @@ pub struct RecordServiceInput {
     /// already installed by this service, at its mileage and date, so no
     /// separate `record_part` call is needed.
     pub parts: Option<Vec<InlinePartInput>>,
+    /// Wear readings the invoice reports: brake pad and rotor thickness and tire tread depth, one per component and axle, as the shop wrote them. Each takes this service's date and mileage. `whats_coming` projects from them when each reaches its limit.
+    pub wear_readings: Option<Vec<WearReadingInput>>,
     /// Ids of parts already recorded for this vehicle (from `record_part` or
     /// `list_parts`) that this service installed. Each is marked installed
     /// at this service's date and mileage. Do not list such a part again
@@ -183,6 +187,9 @@ impl RecordServiceInput {
                 performed_by: self.performed_by,
                 parts,
                 appointment_id: self.appointment_id,
+                wear_readings: self
+                    .wear_readings
+                    .map(|rs| rs.into_iter().map(WearReadingInput::into_domain).collect()),
             },
         ))
     }
@@ -230,6 +237,8 @@ pub struct InlinePartInput {
     /// own packaging, in the order the work sheet should list them. Omit for a
     /// part that is not a kit.
     pub contents: Option<Vec<PartContentInput>>,
+    /// For new brake pads, brake rotors or tires: what the part replaces, so the wear readings start a new series from this install. Omit for any other part.
+    pub wears_as: Option<WearTagInput>,
 }
 
 impl InlinePartInput {
@@ -252,6 +261,7 @@ impl InlinePartInput {
             order_ref: self.order_ref,
             need_id: self.need_id,
             contents: kit_contents(self.contents),
+            wears_as: self.wears_as.map(WearTagInput::into_domain).transpose()?,
             ..Default::default()
         })
     }

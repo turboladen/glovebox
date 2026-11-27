@@ -11,8 +11,12 @@ use crate::{
         part_content, service_record,
     },
     error::{DomainError, DomainResult},
-    inputs::part::{
-        Fitting, Install, InstallPatch, NewFitting, NewPart, NewPartContent, PartFilter, UpdatePart,
+    inputs::{
+        part::{
+            Fitting, Install, InstallPatch, NewFitting, NewPart, NewPartContent, PartFilter,
+            UpdatePart,
+        },
+        wear::WearTag,
     },
     services::{service_record::CompletedWork, warranty::WarrantyBounds},
 };
@@ -637,6 +641,13 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
     Ok(record(db, vehicle_id, input).await?.part)
 }
 
+// The tag's two columns are written only here, so they always hold a pair
+// `WearTag` can read back.
+fn write_wear_tag(active: &mut part::ActiveModel, tag: Option<WearTag>) {
+    active.wears_component = Set(tag.map(WearTag::component));
+    active.wears_axle = Set(tag.and_then(WearTag::axle));
+}
+
 async fn insert_part(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
@@ -676,6 +687,7 @@ async fn insert_part(
         order_ref: Set(input.order_ref),
         ..Default::default()
     };
+    write_wear_tag(&mut model, input.wears_as);
     state.write(&mut model);
     let out = model.insert(db).await?;
     let contents = insert_contents(db, out.id, 0, input.contents).await?;
@@ -788,6 +800,9 @@ async fn apply_update(
     }
     if let Some(v) = input.order_ref {
         active.order_ref = Set(v);
+    }
+    if let Some(v) = input.wears_as {
+        write_wear_tag(&mut active, v);
     }
 
     active.updated_at = Set(super::now());

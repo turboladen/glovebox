@@ -1,5 +1,5 @@
 //! The one-call answer to "what is coming for this car": scheduled
-//! maintenance, the to-do list, open recalls, the findings still waiting and
+//! maintenance, how worn the brakes and tires are, the to-do list, open recalls, the findings still waiting and
 //! unresolved incidents.
 
 use sea_orm::*;
@@ -19,6 +19,7 @@ use crate::{
         milestone::{self, Milestone},
         recall::{self, RecallWithStatus},
         reminders::{self, DueStatus, RemindersResponse},
+        wear::{self, WearOutlook},
         work_item::{self, PlannedItem},
     },
 };
@@ -36,6 +37,8 @@ pub struct Upcoming {
     /// by it, or `None` when nothing is due by it and nothing was done
     /// recently.
     pub milestone: Option<Milestone>,
+    /// Each series of wear readings with its projection, most urgent first.
+    pub wear: Vec<WearOutlook>,
     /// Open to-do items, most urgent revisit first. Items sharing a revisit
     /// status keep creation order, and items with no revisit status come last.
     pub planned_work: Vec<PlannedItem>,
@@ -70,6 +73,7 @@ pub async fn upcoming(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResul
     let planned_work = planned_work(db, vehicle_id, today).await?;
     let budget = budget::forecast_from(&reminders, &planned_work, today);
     let milestone = milestone::from_reminders(&reminders, today);
+    let wear = wear::outlook(db, vehicle_id, &reminders, today).await?;
     let recalls = open_recalls(db, vehicle_id).await?;
     let OpenFindings {
         findings: open_findings,
@@ -83,6 +87,7 @@ pub async fn upcoming(db: &impl ConnectionTrait, vehicle_id: i32) -> DomainResul
         reminders,
         budget,
         milestone,
+        wear,
         planned_work,
         recalls,
         open_findings,

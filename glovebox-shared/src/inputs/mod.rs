@@ -18,4 +18,5 @@ pub mod service_record;
 pub mod shop;
 pub mod todo;
 pub mod vehicle;
+pub mod wear;
 pub mod work_item;

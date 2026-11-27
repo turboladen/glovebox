@@ -540,7 +540,7 @@ fn model_year_start(v: &vehicle::Model) -> Option<NaiveDate> {
 /// The vehicle's odometer readings with their dates, oldest first: every
 /// logged reading dated no later than `today`, and the purchase reading when
 /// the vehicle has both a purchase date and a purchase mileage.
-async fn dated_readings(
+pub(crate) async fn dated_readings(
     db: &impl ConnectionTrait,
     v: &vehicle::Model,
     today: NaiveDate,
@@ -565,7 +565,7 @@ async fn dated_readings(
 /// reading or before the oldest one it moves away from that reading at
 /// `avg_daily_miles`, never below zero. `None` when there are no readings.
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-fn odometer_on(
+pub(crate) fn odometer_on(
     date: NaiveDate,
     readings: &[(NaiveDate, i32)],
     avg_daily_miles: f64,

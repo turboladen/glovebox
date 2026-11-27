@@ -55,6 +55,8 @@ pub struct Model {
     pub return_reason: Option<String>,
     pub order_ref: Option<String>,
     pub returned_from_need_id: Option<i32>,
+    pub wears_component: Option<super::wear_reading::WearComponent>,
+    pub wears_axle: Option<super::wear_reading::Axle>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

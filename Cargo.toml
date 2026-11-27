@@ -34,6 +34,7 @@ askama = "0.16"
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 schemars = "1.2"
+uom = { version = "0.38", default-features = false, features = ["f64", "si", "std"] }
 
 [profile.release]
 lto = "thin"

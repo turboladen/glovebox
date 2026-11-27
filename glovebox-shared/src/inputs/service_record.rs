@@ -59,6 +59,9 @@ pub struct NewServiceRecord {
     /// vehicle and be neither cancelled nor closed. Naming it installs and
     /// completes nothing; `work_item_ids` and `part_ids` do that.
     pub appointment_id: Option<i32>,
+    /// Wear readings the service took. Each takes the service's date and
+    /// mileage unless it gives its own.
+    pub wear_readings: Option<Vec<crate::inputs::wear::NewWearReading>>,
 }
 
 #[derive(Default)]

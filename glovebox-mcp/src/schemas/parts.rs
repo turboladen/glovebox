@@ -9,7 +9,7 @@ use glovebox_shared::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use super::{PartContentInput, kit_contents, nullable};
+use super::{PartContentInput, WearTagInput, kit_contents, nullable};
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -59,6 +59,8 @@ pub struct RecordPartInput {
     /// own packaging, in the order the work sheet should list them. Omit for a
     /// part that is not a kit.
     pub contents: Option<Vec<PartContentInput>>,
+    /// For new brake pads, brake rotors or tires: what the part replaces, so the wear readings start a new series from its install. Omit for any other part.
+    pub wears_as: Option<WearTagInput>,
 }
 
 impl RecordPartInput {
@@ -94,6 +96,7 @@ impl RecordPartInput {
                 order_ref: self.order_ref,
                 need_id: None,
                 contents: kit_contents(self.contents),
+                wears_as: self.wears_as.map(WearTagInput::into_domain).transpose()?,
             },
         ))
     }
@@ -252,6 +255,10 @@ pub struct CorrectPartInput {
     /// item, remove it and add it again; it then prints last. `null` removes
     /// nothing; to empty a kit, name every item.
     pub remove_contents: Option<Vec<i32>>,
+    /// For brake pads, brake rotors or tires: what the part replaces, so the wear readings start a new series from its install. Send `null` to clear it; omit the key to leave it unchanged.
+    #[serde(default, deserialize_with = "nullable")]
+    #[schemars(with = "Option<WearTagInput>")]
+    pub wears_as: Option<Option<WearTagInput>>,
 }
 
 impl CorrectPartInput {
@@ -291,6 +298,10 @@ impl CorrectPartInput {
                 received_on: dates::parse_date_change("received_on", self.received_on)?,
                 add_contents: super::kit_contents(self.add_contents),
                 remove_contents: self.remove_contents.unwrap_or_default(),
+                wears_as: self
+                    .wears_as
+                    .map(|t| t.map(WearTagInput::into_domain).transpose())
+                    .transpose()?,
                 ..Default::default()
             },
         ))
