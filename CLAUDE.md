@@ -154,9 +154,9 @@ hit does not), and the web page prints `recall::line_note` under such a recall
 (`docs/adr/0023-recalls-are-looked-up-by-model-line.md`).
 
 **Units** (`units.rs`): `units::Measure` is a length as the shop wrote it (a value and a
-`wear_reading::LengthUnit`: `mm`, `in_32`, `in`). It compares through `uom::si::f64::Length`,
-serializes as `value`, `unit` and `text` (`7/32 in`), and `units.rs` is the only module that names
-`uom`.
+`wear_reading::LengthUnit`: `mm`, `in_32`, `in`). It compares through `Measure::mm`, the
+length in millimeters, and serializes as `value`, `unit` and `text` (`7/32 in`). `units.rs` holds
+the only conversion factors; a units crate waits until a second kind of quantity is recorded.
 
 **Money** (`money.rs`): `money::parse_dollars` reads a dollar amount the owner typed into whole
 cents, and `money::format_cents` prints cents as dollars. The web forms and the checklist's

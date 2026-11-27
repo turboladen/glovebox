@@ -22,9 +22,9 @@ shape of the data:
 **A reading is stored as written.** `wear_readings` holds the component (`brake_pads`,
 `brake_rotors`, `tire_tread`), the axle (`front`, `rear`), the value and unit the shop wrote
 (`mm`, `in_32`, `in`), the limit the shop stated beside it if any, the day, the odometer and the
-service that took it. Every comparison and rate goes through `uom::si::f64::Length` on read
-(`units::Measure`), so 8/32 in and 6.35 mm agree, and a reply quotes a reading as the shop wrote
-it. `units.rs` is the only module that names `uom`.
+service that took it. Every comparison and rate converts to millimeters on read
+(`units::Measure::mm`), so 8/32 in and 6.35 mm agree, and a reply quotes a reading as the shop
+wrote it. `units.rs` holds the only conversion factors.
 
 **The tires are one set; brakes are per axle.** A brake series is one component on one axle,
 because front and rear brakes are replaced separately. The tires form one series judged by the
@@ -75,6 +75,11 @@ Percentages are not recorded; they stay in the notes.
   someone measures the new ones.
 - **An exact integer base unit (nanometers) or a fixed unit per component.** The integer form
   allows SQL math nothing needs; a fixed unit cannot hold 6.5 mm or a metric gauge.
+- **A units crate (`uom`).** Its typed `Length` catches mixed quantities in long arithmetic, but
+  wear records lengths only, every calculation runs in millimeters, and a wear rate (length over
+  distance driven) would cancel to a bare ratio. Three conversion factors do not justify a
+  dependency; a units crate is worth adopting once a second kind of quantity, such as tire
+  pressure or torque, is recorded.
 - **Converting percentages with a new-part thickness.** The answer is only as good as the guess.
 
 ## Consequences

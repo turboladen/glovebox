@@ -1,15 +1,11 @@
 //! Lengths as the shop wrote them, and the conversions that compare them.
 
 use serde::ser::{Serialize, SerializeStruct, Serializer};
-use uom::si::{
-    f64::Length,
-    length::{inch, millimeter},
-};
 
 pub use crate::entities::wear_reading::LengthUnit;
 
 /// A length in the number and unit it was written in, such as 7/32 in or
-/// 4 mm. It compares and subtracts through [`Measure::length`], so readings in
+/// 4 mm. It compares and subtracts through [`Measure::mm`], so readings in
 /// different units agree.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Measure {
@@ -22,22 +18,15 @@ impl Measure {
         Self { value, unit }
     }
 
-    /// The length this measure stands for.
-    pub fn length(self) -> Length {
-        match self.unit {
-            LengthUnit::Millimeter => Length::new::<millimeter>(self.value),
-            LengthUnit::ThirtySecondInch => Length::new::<inch>(self.value / 32.0),
-            LengthUnit::Inch => Length::new::<inch>(self.value),
-        }
+    /// The length in millimeters, the unit every comparison and wear rate
+    /// is reckoned in.
+    pub fn mm(self) -> f64 {
+        self.value * mm_per(self.unit)
     }
 
-    /// `length` written in `unit`, rounded to two decimal places of it.
-    pub fn of_length(length: Length, unit: LengthUnit) -> Self {
-        let value = match unit {
-            LengthUnit::Millimeter => length.get::<millimeter>(),
-            LengthUnit::ThirtySecondInch => length.get::<inch>() * 32.0,
-            LengthUnit::Inch => length.get::<inch>(),
-        };
+    /// `mm` millimeters written in `unit`, rounded to two decimal places of it.
+    pub fn from_mm(mm: f64, unit: LengthUnit) -> Self {
+        let value = mm / mm_per(unit);
         Self::new((value * 100.0).round() / 100.0, unit)
     }
 
@@ -62,9 +51,16 @@ impl Serialize for Measure {
     }
 }
 
-/// A length in millimeters, the unit wear rates are reckoned in.
-pub fn millimeters(length: Length) -> f64 {
-    length.get::<millimeter>()
+// The inch is defined as exactly 25.4 mm. A units library would earn its
+// place once glovebox records a second kind of quantity, such as pressure.
+const MM_PER_INCH: f64 = 25.4;
+
+const fn mm_per(unit: LengthUnit) -> f64 {
+    match unit {
+        LengthUnit::Millimeter => 1.0,
+        LengthUnit::ThirtySecondInch => MM_PER_INCH / 32.0,
+        LengthUnit::Inch => MM_PER_INCH,
+    }
 }
 
 #[cfg(test)]
@@ -75,13 +71,13 @@ mod tests {
     fn readings_in_different_units_compare_as_lengths() {
         let tread = Measure::new(8.0, LengthUnit::ThirtySecondInch);
         let metric = Measure::new(6.35, LengthUnit::Millimeter);
-        assert!((millimeters(tread.length()) - millimeters(metric.length())).abs() < 1e-9);
+        assert!((tread.mm() - metric.mm()).abs() < 1e-9);
         assert!(
-            Measure::new(4.0, LengthUnit::Millimeter).length()
-                > Measure::new(3.0, LengthUnit::ThirtySecondInch).length()
+            Measure::new(4.0, LengthUnit::Millimeter).mm()
+                > Measure::new(3.0, LengthUnit::ThirtySecondInch).mm()
         );
         assert_eq!(
-            Measure::of_length(tread.length(), LengthUnit::Inch),
+            Measure::from_mm(tread.mm(), LengthUnit::Inch),
             Measure::new(0.25, LengthUnit::Inch)
         );
     }

@@ -19,7 +19,7 @@ use crate::{
         reminders::{self, DueStatus, RemindersResponse},
         schedule::{DEFAULT_WARNING_DAYS, DEFAULT_WARNING_MILES},
     },
-    units::{Measure, millimeters},
+    units::Measure,
 };
 
 /// One wear reading as a reply shows it.
@@ -593,7 +593,7 @@ fn points_of(
         };
         match points.last_mut() {
             Some(last) if r.component == WearComponent::TireTread && last.day == point.day => {
-                if point.reading.length() < last.reading.length() {
+                if point.reading.mm() < last.reading.mm() {
                     last.reading = point.reading;
                 }
                 last.limit = point.limit.or(last.limit);
@@ -668,18 +668,15 @@ fn judge_series(
         );
         return Some(outlook);
     };
-    let latest_mm = millimeters(latest.reading.length());
-    let limit_mm = millimeters(limit.length());
+    let latest_mm = latest.reading.mm();
+    let limit_mm = limit.mm();
     if latest_mm <= limit_mm {
         outlook.status = DueStatus::Overdue;
     }
 
     let fitted: Vec<(f64, f64)> = points
         .iter()
-        .filter_map(|p| {
-            p.odometer
-                .map(|o| (f64::from(o), millimeters(p.reading.length())))
-        })
+        .filter_map(|p| p.odometer.map(|o| (f64::from(o), p.reading.mm())))
         .collect();
     if points.len() < MIN_READINGS_FOR_RATE {
         outlook.note = Some(match starts_on {
@@ -700,8 +697,8 @@ fn judge_series(
         );
         return Some(outlook);
     };
-    outlook.wear_per_10k_miles = Some(Measure::of_length(
-        Measure::new(wear_per_mile * 10_000.0, LengthUnit::Millimeter).length(),
+    outlook.wear_per_10k_miles = Some(Measure::from_mm(
+        wear_per_mile * 10_000.0,
         latest.reading.unit,
     ));
 
