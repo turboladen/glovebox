@@ -51,7 +51,7 @@ fn with_limit(mut r: wear_reading::Model, value: f64, unit: LengthUnit) -> wear_
 // The car drives 20 miles a day and reads 50,000 on the day of the outlook.
 fn judge(
     readings: Vec<wear_reading::Model>,
-    installs: &BTreeMap<WearTag, NaiveDate>,
+    installs: &BTreeMap<WearTag, Install>,
 ) -> Vec<WearOutlook> {
     outlook_from(readings, installs, &[], 50_000, 20.0, date("2026-11-26"))
 }
@@ -165,7 +165,13 @@ fn the_tires_are_one_series_judged_by_the_lowest_reading_of_each_visit() {
 #[test]
 fn a_tagged_install_starts_a_new_series_and_axles_stay_apart() {
     let mut installs = BTreeMap::new();
-    installs.insert(WearTag::BrakePads(Axle::Front), date("2025-01-01"));
+    installs.insert(
+        WearTag::BrakePads(Axle::Front),
+        Install {
+            day: date("2025-01-01"),
+            service_id: None,
+        },
+    );
     let out = judge(
         vec![
             pads(1, Axle::Front, 10.0, "2023-01-01", 20_000),
@@ -543,4 +549,116 @@ fn readings_with_no_odometer_and_no_log_say_so() {
         out[0].note.as_deref(),
         Some("The readings carry no odometer and none can be estimated from the mileage log")
     );
+}
+
+#[test]
+fn the_installing_services_own_readings_measured_the_old_part() {
+    let mut installs = BTreeMap::new();
+    installs.insert(
+        WearTag::BrakePads(Axle::Front),
+        Install {
+            day: date("2026-11-20"),
+            service_id: Some(7),
+        },
+    );
+    let mut worn = pads(1, Axle::Front, 2.0, "2026-11-20", 49_000);
+    worn.service_id = Some(7);
+    let mut fresh = pads(2, Axle::Front, 12.0, "2026-11-20", 49_000);
+    fresh.service_id = Some(8);
+    let out = judge(vec![worn, fresh], &installs);
+    assert_eq!(out[0].latest, Measure::new(12.0, MM));
+    assert_eq!(out[0].readings_in_series, 1);
+
+    let mut only_worn = pads(1, Axle::Front, 2.0, "2026-11-20", 49_000);
+    only_worn.service_id = Some(7);
+    crate::test_support::assert_empty(&judge(vec![only_worn], &installs));
+}
+
+#[test]
+fn the_estimate_is_never_below_the_newest_reading() {
+    // The log puts the car at 0, but a reading was taken at 50,000: 9 mm at
+    // 40,000 and 3.5 mm at 50,000 leave 0.5 mm, about 909 miles.
+    let out = outlook_from(
+        vec![
+            pads(1, Axle::Front, 9.0, "2025-01-01", 40_000),
+            pads(2, Axle::Front, 3.5, "2026-01-01", 50_000),
+        ],
+        &BTreeMap::new(),
+        &[],
+        0,
+        0.0,
+        date("2026-11-26"),
+    );
+    assert_eq!(out[0].miles_left, Some(909));
+    assert_eq!(out[0].status, DueStatus::DueSoon);
+}
+
+#[test]
+fn a_stated_odometer_wins_over_an_estimate_on_the_same_day() {
+    // The log says 45,000 that day; the rear reading says 50,000.
+    let mut front = tread(1, Axle::Front, 6.0, "2026-01-01", 0);
+    front.odometer = None;
+    let out = outlook_from(
+        vec![
+            tread(0, Axle::Front, 10.0, "2025-01-01", 40_000),
+            front,
+            tread(2, Axle::Rear, 7.0, "2026-01-01", 50_000),
+        ],
+        &BTreeMap::new(),
+        &[(date("2026-01-01"), 45_000)],
+        50_000,
+        20.0,
+        date("2026-11-26"),
+    );
+    // 10/32 to 6/32 over 10,000 miles is 4/32 per 10,000.
+    assert_eq!(out[0].wear_per_10k_miles, Some(Measure::new(4.0, IN32)));
+}
+
+#[tokio::test]
+async fn a_corrected_service_moves_the_readings_that_took_its_day_and_odometer() {
+    use crate::{inputs::service_record::UpdateServiceRecord, services::service_record};
+
+    let db = test_db().await;
+    let vid = seed_vehicle(&db).await;
+    let mut own = new_reading(None);
+    own.odometer = Some(57_000);
+    let created = service_record::create(
+        &db,
+        vid,
+        service_with_readings(vec![new_reading(None), own]),
+    )
+    .await
+    .unwrap();
+    service_record::update(
+        &db,
+        vid,
+        created.record.id,
+        UpdateServiceRecord {
+            service_date: Some(date("2025-10-30")),
+            mileage: Some(Some(57_153)),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let readings = list(&db, vid, WearFilter::default()).await.unwrap();
+    let by_id = |id: i32| readings.iter().find(|r| r.id == id).unwrap();
+    let taken = by_id(created.wear_readings[0].id);
+    assert_eq!(taken.measured_on, date::<NaiveDate>("2025-10-30"));
+    assert_eq!(taken.odometer, Some(57_153));
+    let kept = by_id(created.wear_readings[1].id);
+    assert_eq!(kept.measured_on, date::<NaiveDate>("2025-10-30"));
+    assert_eq!(kept.odometer, Some(57_000));
+}
+
+#[tokio::test]
+async fn a_future_dated_service_keeps_its_readings() {
+    use crate::services::service_record;
+
+    let db = test_db().await;
+    let vid = seed_vehicle(&db).await;
+    let mut input = service_with_readings(vec![new_reading(None)]);
+    input.service_date = crate::services::today() + chrono::Duration::days(1);
+    let created = service_record::create(&db, vid, input).await.unwrap();
+    assert_eq!(created.wear_readings.len(), 1);
 }

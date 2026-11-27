@@ -1447,6 +1447,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
 
     // Keep the auto-created mileage log in step with the record.
     sync_auto_mileage_log(&txn, vehicle_id, &record).await?;
+    super::wear::follow_service(&txn, before, &record).await?;
 
     // Jobs come first, with the work that hangs off each one; the lists the
     // call sends then apply as sent.

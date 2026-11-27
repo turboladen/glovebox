@@ -437,11 +437,12 @@ flat beside `possibly_covered`, which stays true while either bound holds; a cli
 **Wear readings** (`services::wear`, `docs/adr/0030-wear-is-read-from-typed-readings.md`): a
 brake series is one component on one axle, and the tires are one series judged by the lowest
 reading of each visit. The newest install of a part tagged `wears_as` (`inputs::wear::WearTag`,
-written only by `part::write_wear_tag`) starts its series; earlier readings are history. The limit
+written only by `part::write_wear_tag`) starts its series; earlier readings, and the ones its installing service took, are history. The limit
 is the newest one a shop stated in the series, else `wear::default_limit` (none for rotors), and
 `wear::outlook` fits thickness over odometer by least squares, needs two readings, and projects
 nothing from a flat or rising series, saying why in `note`. `record_service` writes inline
-`wear_readings` with its date and mileage, every service read lists them, and `delete_service`
+`wear_readings` with its date and mileage (`correct_service` moves the ones that took them,
+`wear::follow_service`), every service read lists them, and `delete_service`
 deletes them unless the work was done another way. Readings do not count as work done.
 
 **Schedule names** compare through `schedule::name_key` (ASCII case and surrounding spaces do not

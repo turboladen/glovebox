@@ -100,7 +100,9 @@ you link.
      its `notes`. A percentage ("front 50%") is not a length: leave it in the service's notes. When
      the invoice replaces pads, rotors or tires, give that part `wears_as` (`{"component":
      "brake_pads", "axle": "front"}`, or `{"component": "tire_tread"}` for tires, which are one
-     set), so the wear projection starts over from the install.
+     set), so the wear projection starts over from the install. A part attached by `part_ids`
+     cannot carry it in that call: tag it with `correct_part`'s `wears_as` afterwards. Readings
+     the same invoice took of the part it replaced stay with the old part.
    - `schedule_item_ids` names every schedule item the work satisfies, not only the one Steve
      mentioned, `work_item_ids` the planned
      work it completes, `resolved_incident_ids` the incidents it fixed, `noticed_incident_ids` the

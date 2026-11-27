@@ -35,8 +35,9 @@ that matters: when the set needs replacing.
 (`parts.wears_component` and `parts.wears_axle`): a brake tag names its axle, a tire tag names
 none, and a CHECK keeps the pair valid. The newest install of a tagged part that is installed or
 replaced starts its series on its install day; readings before it are history, and a series with
-no reading since is left out of the outlook. Readings taken on the install day count as the new
-part's.
+no reading since is left out of the outlook. The readings the installing service took measured
+the part that came off ("front pads 2 mm, replaced"), so they are history too; another reading
+dated the install day counts as the new part's.
 
 **The limit is the newest one a shop stated in the series, else a default.** The defaults are
 3 mm for pads and 2/32 in for tread (the US legal minimum). Rotors have none, because a rotor's
@@ -46,8 +47,10 @@ minimum is stamped on the rotor; a rotor series with no stated limit is shown an
 no odometer takes one estimated from the mileage log. Two readings are needed, and a rate that is
 flat or rising gives no projection and a `note` saying the readings do not show wear, which on
 real data means a replacement is missing from the parts. Miles left count from the latest
-reading to the limit at that rate, less the miles driven since; the day comes from the vehicle's
-daily rate. A latest reading at or below its limit is `overdue`; otherwise the status is judged
+reading to the limit at that rate, less the miles driven since, where the car's mileage is the
+estimate from the mileage log or the newest reading's odometer, whichever is higher; the day
+comes from the vehicle's daily rate. A newest reading with no odometer gives no projection.
+Correcting a service's date or mileage moves its readings that took them. A latest reading at or below its limit is `overdue`; otherwise the status is judged
 with the schedule's default 1,000-mile and 30-day warnings.
 
 **The outlook is derived on every read.** `wear::outlook` builds `whats_coming`'s `wear` from the

@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use chrono::NaiveDate;
-use sea_orm::*;
+use sea_orm::{sea_query::Expr, *};
 use serde::Serialize;
 
 use crate::{
@@ -143,28 +143,76 @@ async fn insert(
         validate_measure("limit", limit)?;
     }
     validate_odometer(input.odometer)?;
+    // A day taken from the service follows the service's own date rule.
+    if let Some(day) = input.measured_on {
+        validate_day(day)?;
+    }
     let measured_on = input
         .measured_on
         .or(service.map(|s| s.service_date))
         .ok_or_else(|| {
             DomainError::invalid("measured_on", "is needed for a reading no service took")
         })?;
-    validate_day(measured_on)?;
-    let model = wear_reading::ActiveModel {
+    let mut model = wear_reading::ActiveModel {
         vehicle_id: Set(vehicle_id),
         service_id: Set(service.map(|s| s.id)),
         component: Set(input.component),
         axle: Set(input.axle),
-        value: Set(input.reading.value),
-        unit: Set(input.reading.unit),
-        limit_value: Set(input.limit.map(|l| l.value)),
-        limit_unit: Set(input.limit.map(|l| l.unit)),
         measured_on: Set(measured_on),
         odometer: Set(input.odometer.or(service.and_then(|s| s.mileage))),
         notes: Set(input.notes.as_deref().and_then(super::trim_to_none)),
         ..Default::default()
     };
+    write_reading(&mut model, input.reading);
+    write_limit(&mut model, input.limit);
     Ok(model.insert(db).await?.into())
+}
+
+// A measure's two columns are written only by these two, so a value never
+// goes in without its unit.
+fn write_reading(active: &mut wear_reading::ActiveModel, reading: Measure) {
+    active.value = Set(reading.value);
+    active.unit = Set(reading.unit);
+}
+
+fn write_limit(active: &mut wear_reading::ActiveModel, limit: Option<Measure>) {
+    active.limit_value = Set(limit.map(|l| l.value));
+    active.limit_unit = Set(limit.map(|l| l.unit));
+}
+
+/// Moves the readings a service took that carry its old day or odometer to
+/// the corrected ones, as its mileage log follows it. A reading that gave its
+/// own day or odometer keeps it. Runs inside the caller's transaction.
+pub(crate) async fn follow_service(
+    db: &impl ConnectionTrait,
+    before: (NaiveDate, Option<i32>),
+    record: &service_record::Model,
+) -> DomainResult<()> {
+    let (day, mileage) = before;
+    if day != record.service_date {
+        wear_reading::Entity::update_many()
+            .col_expr(
+                wear_reading::Column::MeasuredOn,
+                Expr::value(record.service_date),
+            )
+            .col_expr(wear_reading::Column::UpdatedAt, Expr::value(super::now()))
+            .filter(wear_reading::Column::ServiceId.eq(record.id))
+            .filter(wear_reading::Column::MeasuredOn.eq(day))
+            .exec(db)
+            .await?;
+    }
+    if mileage != record.mileage {
+        let mut query = wear_reading::Entity::update_many()
+            .col_expr(wear_reading::Column::Odometer, Expr::value(record.mileage))
+            .col_expr(wear_reading::Column::UpdatedAt, Expr::value(super::now()))
+            .filter(wear_reading::Column::ServiceId.eq(record.id));
+        query = match mileage {
+            Some(miles) => query.filter(wear_reading::Column::Odometer.eq(miles)),
+            None => query.filter(wear_reading::Column::Odometer.is_null()),
+        };
+        query.exec(db).await?;
+    }
+    Ok(())
 }
 
 async fn require(
@@ -205,15 +253,13 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
     }
     if let Some(v) = input.reading {
         validate_measure("reading", v)?;
-        active.value = Set(v.value);
-        active.unit = Set(v.unit);
+        write_reading(&mut active, v);
     }
     if let Some(v) = input.limit {
         if let Some(limit) = v {
             validate_measure("limit", limit)?;
         }
-        active.limit_value = Set(v.map(|l| l.value));
-        active.limit_unit = Set(v.map(|l| l.unit));
+        write_limit(&mut active, v);
     }
     if let Some(v) = input.measured_on {
         validate_day(v)?;
@@ -426,19 +472,28 @@ pub async fn outlook(
     ))
 }
 
-/// The newest install day of each tag among the vehicle's parts that are or
-/// were on the car.
+/// Where a series starts: the install of a tagged part.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Install {
+    day: NaiveDate,
+    /// The service that installed the part. Its own readings measured the
+    /// part that came off.
+    service_id: Option<i32>,
+}
+
+/// The newest install of each tag among the vehicle's parts that are or were
+/// on the car.
 async fn tagged_installs(
     db: &impl ConnectionTrait,
     vehicle_id: i32,
-) -> DomainResult<BTreeMap<WearTag, NaiveDate>> {
+) -> DomainResult<BTreeMap<WearTag, Install>> {
     let parts = part::Entity::find()
         .filter(part::Column::VehicleId.eq(vehicle_id))
         .filter(part::Column::WearsComponent.is_not_null())
         .filter(part::Column::Status.is_in([PartStatus::Installed, PartStatus::Replaced]))
         .all(db)
         .await?;
-    let mut out: BTreeMap<WearTag, NaiveDate> = BTreeMap::new();
+    let mut out: BTreeMap<WearTag, Install> = BTreeMap::new();
     for p in parts {
         let (Some(tag), Some(day)) = (
             WearTag::of_columns(p.wears_component, p.wears_axle),
@@ -446,8 +501,14 @@ async fn tagged_installs(
         ) else {
             continue;
         };
-        let newest = out.entry(tag).or_insert(day);
-        *newest = Ord::max(*newest, day);
+        let install = Install {
+            day,
+            service_id: p.installed_service_id,
+        };
+        let newest = out.entry(tag).or_insert(install);
+        if install.day > newest.day {
+            *newest = install;
+        }
     }
     Ok(out)
 }
@@ -463,12 +524,18 @@ struct Point {
 /// The outlooks [`outlook`] returns, judged from rows already read.
 fn outlook_from(
     readings: Vec<wear_reading::Model>,
-    installs: &BTreeMap<WearTag, NaiveDate>,
+    installs: &BTreeMap<WearTag, Install>,
     odometers: &[(NaiveDate, i32)],
     estimated_mileage: i32,
     avg_daily_miles: f64,
     today: NaiveDate,
 ) -> Vec<WearOutlook> {
+    // The car has driven at least as far as its newest reading, whatever the
+    // mileage log says.
+    let estimated_mileage = readings
+        .iter()
+        .filter_map(|r| r.odometer)
+        .fold(estimated_mileage, Ord::max);
     let mut series: BTreeMap<WearTag, Vec<wear_reading::Model>> = BTreeMap::new();
     for r in readings {
         series
@@ -479,11 +546,11 @@ fn outlook_from(
     let mut out: Vec<WearOutlook> = series
         .into_iter()
         .filter_map(|(tag, rows)| {
-            let starts_on = installs.get(&tag).copied();
-            let points = points_of(rows, starts_on, odometers, avg_daily_miles);
+            let install = installs.get(&tag).copied();
+            let points = points_of(rows, install, odometers, avg_daily_miles);
             judge_series(
                 tag,
-                starts_on,
+                install.map(|i| i.day),
                 &points,
                 estimated_mileage,
                 avg_daily_miles,
@@ -495,24 +562,27 @@ fn outlook_from(
     out
 }
 
-// Readings before the series starts are history only. The rows arrive oldest
-// first, so the points do too; the tires keep the lowest reading of each day.
+// Readings before the series starts are history only, and so are the ones
+// the installing service took, which measured the part that came off. The
+// rows arrive oldest first, so the points do too; the tires keep the lowest
+// reading of each day. An odometer is estimated only for a point that still
+// has none once its rows are merged.
 fn points_of(
     rows: Vec<wear_reading::Model>,
-    starts_on: Option<NaiveDate>,
+    install: Option<Install>,
     odometers: &[(NaiveDate, i32)],
     avg_daily_miles: f64,
 ) -> Vec<Point> {
     let mut points: Vec<Point> = Vec::new();
     for r in rows {
-        if starts_on.is_some_and(|start| r.measured_on < start) {
+        if install.is_some_and(|i| {
+            r.measured_on < i.day || (i.service_id.is_some() && r.service_id == i.service_id)
+        }) {
             continue;
         }
         let point = Point {
             day: r.measured_on,
-            odometer: r
-                .odometer
-                .or_else(|| reminders::odometer_on(r.measured_on, odometers, avg_daily_miles)),
+            odometer: r.odometer,
             reading: r.reading(),
             limit: r.limit(),
         };
@@ -527,12 +597,20 @@ fn points_of(
             _ => points.push(point),
         }
     }
+    for p in &mut points {
+        if p.odometer.is_none() {
+            p.odometer = reminders::odometer_on(p.day, odometers, avg_daily_miles);
+        }
+    }
     points
 }
 
 /// The least-squares slope of millimeters over miles, or `None` when the
 /// points span no miles.
-#[allow(clippy::cast_precision_loss)]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "a series holds a handful of readings, far below f64's exact range"
+)]
 fn slope_mm_per_mile(points: &[(f64, f64)]) -> Option<f64> {
     let n = points.len() as f64;
     let mean_x = points.iter().map(|p| p.0).sum::<f64>() / n;
@@ -623,7 +701,13 @@ fn judge_series(
     ));
 
     let from_latest = (latest_mm - limit_mm) / wear_per_mile;
-    let latest_odometer = latest.odometer.unwrap_or(estimated_mileage);
+    let Some(latest_odometer) = latest.odometer else {
+        outlook.note = Some(
+            "The newest reading carries no odometer and none can be estimated from the mileage log"
+                .into(),
+        );
+        return Some(outlook);
+    };
     let left = f64::from(latest_odometer) + from_latest - f64::from(estimated_mileage);
     if !left.is_finite() || left.abs() > f64::from(i32::MAX) {
         return Some(outlook);

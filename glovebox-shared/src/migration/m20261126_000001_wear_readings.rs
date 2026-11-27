@@ -11,7 +11,9 @@ use super::{
 };
 
 // The table's rules as this migration writes them. A rule changes only
-// through a new migration.
+// through a new migration. The table is written as SQL because each CHECK
+// carries a name, which `schema::has_check` finds it by, and the builder
+// writes only unnamed ones.
 const CREATE_WEAR_READINGS: &str = "CREATE TABLE IF NOT EXISTS wear_readings (
     id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     vehicle_id INTEGER NOT NULL,
