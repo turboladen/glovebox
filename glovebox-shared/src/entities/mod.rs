@@ -48,4 +48,5 @@ pub mod shop;
 pub mod todo;
 pub mod vehicle;
 pub mod vehicle_attribute;
+pub mod wear_reading;
 pub mod work_item;

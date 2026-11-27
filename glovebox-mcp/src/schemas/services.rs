@@ -6,17 +6,19 @@ use glovebox_shared::{
         part::Supplier,
         service_record::{Payer, Performer},
         service_record_line_item::WorkKind,
+        wear_reading::{Axle, WearComponent},
     },
     error::DomainResult,
     inputs::{
         part::NewPart,
         service_record::{NewLineItem, NewServiceRecord, ServiceFilter, UpdateServiceRecord},
+        wear::NewWearReading,
     },
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use super::{PartContentInput, kit_contents, nullable, shop_choice};
+use super::{MeasureInput, PartContentInput, WearTagInput, kit_contents, nullable, shop_choice};
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -66,6 +68,8 @@ pub struct RecordServiceInput {
     /// already installed by this service, at its mileage and date, so no
     /// separate `record_part` call is needed.
     pub parts: Option<Vec<InlinePartInput>>,
+    /// Wear readings the invoice reports: brake pad and rotor thickness and tire tread depth, one per component and axle, as the shop wrote them. Each takes this service's date and mileage. `whats_coming` projects from them when each reaches its limit.
+    pub wear_readings: Option<Vec<WearReadingInput>>,
     /// Ids of parts already recorded for this vehicle (from `record_part` or
     /// `list_parts`) that this service installed. Each is marked installed
     /// at this service's date and mileage. Do not list such a part again
@@ -183,6 +187,9 @@ impl RecordServiceInput {
                 performed_by: self.performed_by,
                 parts,
                 appointment_id: self.appointment_id,
+                wear_readings: self
+                    .wear_readings
+                    .map(|rs| rs.into_iter().map(WearReadingInput::into_domain).collect()),
             },
         ))
     }
@@ -230,6 +237,8 @@ pub struct InlinePartInput {
     /// own packaging, in the order the work sheet should list them. Omit for a
     /// part that is not a kit.
     pub contents: Option<Vec<PartContentInput>>,
+    /// For new brake pads, brake rotors or tires: what the part replaces, so the wear readings start a new series from this install. Omit for any other part.
+    pub wears_as: Option<WearTagInput>,
 }
 
 impl InlinePartInput {
@@ -252,6 +261,7 @@ impl InlinePartInput {
             order_ref: self.order_ref,
             need_id: self.need_id,
             contents: kit_contents(self.contents),
+            wears_as: self.wears_as.map(WearTagInput::into_domain).transpose()?,
             ..Default::default()
         })
     }
@@ -455,4 +465,36 @@ pub struct DeleteServiceInput {
     /// `done_another_way`. Needed only when the service recorded work as done; ask the owner.
     #[serde(default)]
     pub completed_work: Option<glovebox_shared::services::service_record::CompletedWork>,
+}
+
+/// One wear reading on an invoice: a brake pad or rotor thickness or a tire
+/// tread depth, for one axle.
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WearReadingInput {
+    /// `brake_pads`, `brake_rotors` or `tire_tread`.
+    pub component: WearComponent,
+    /// `front` or `rear`. An invoice that gives one figure for all four tires is two readings, one per axle.
+    pub axle: Axle,
+    /// The measurement as written, e.g. `{"value": 4, "unit": "mm"}` or `{"value": 7, "unit": "in_32"}`. A percentage is not a length: leave it in the notes.
+    pub reading: MeasureInput,
+    /// The minimum the shop stated beside it ("min spec 3 mm"), in its own unit. Omit when the invoice states none.
+    pub limit: Option<MeasureInput>,
+    /// Free text, e.g. "caution" or "FAIL" as the invoice marks it.
+    pub notes: Option<String>,
+}
+
+impl WearReadingInput {
+    fn into_domain(self) -> NewWearReading {
+        NewWearReading {
+            component: self.component,
+            axle: self.axle,
+            reading: self.reading.into(),
+            limit: self.limit.map(Into::into),
+            measured_on: None,
+            odometer: None,
+            service_id: None,
+            notes: self.notes,
+        }
+    }
 }

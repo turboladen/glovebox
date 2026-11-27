@@ -120,6 +120,8 @@ fn part_model(status: PartStatus, received_on: Option<&str>) -> part::Model {
         return_reason: None,
         order_ref: None,
         returned_from_need_id: None,
+        wears_component: None,
+        wears_axle: None,
     }
 }
 

@@ -75,6 +75,7 @@ async fn create_wires_line_items_schedule_links_and_parts() {
             recall_finding_ids: None,
             parts: None,
             appointment_id: None,
+            wear_readings: None,
         },
     )
     .await
@@ -152,6 +153,7 @@ async fn update_replaces_line_items_and_relinks_parts() {
             recall_finding_ids: None,
             parts: None,
             appointment_id: None,
+            wear_readings: None,
         },
     )
     .await
@@ -232,6 +234,7 @@ async fn delete_unlinks_parts_and_removes_links() {
             recall_finding_ids: None,
             parts: None,
             appointment_id: None,
+            wear_readings: None,
         },
     )
     .await
@@ -535,6 +538,7 @@ fn minimal_record(schedule_item_ids: Option<Vec<i32>>) -> NewServiceRecord {
         recall_finding_ids: None,
         parts: None,
         appointment_id: None,
+        wear_readings: None,
     }
 }
 

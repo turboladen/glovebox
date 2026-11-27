@@ -10,8 +10,10 @@
 //! value sets it.
 
 use glovebox_shared::{
+    entities::wear_reading::{Axle, LengthUnit, WearComponent},
     error::{DomainError, DomainResult},
-    inputs::{part::NewPartContent, shop::ShopChoice},
+    inputs::{part::NewPartContent, shop::ShopChoice, wear::WearTag},
+    units::Measure,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer};
@@ -37,6 +39,8 @@ mod services;
 mod shops;
 #[allow(clippy::option_option)]
 mod vehicles;
+#[allow(clippy::option_option)]
+mod wear;
 
 pub use checklist::*;
 pub use incidents::*;
@@ -48,6 +52,7 @@ pub use schedule::*;
 pub use services::*;
 pub use shops::*;
 pub use vehicles::*;
+pub use wear::*;
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -141,4 +146,40 @@ where
     D: Deserializer<'de>,
 {
     Option::<T>::deserialize(deserializer).map(Some)
+}
+
+/// A length as the shop wrote it, such as 4 mm or 7/32 in.
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MeasureInput {
+    /// The number the shop wrote: `4` for 4 mm, `7` for 7/32 in.
+    pub value: f64,
+    /// `mm`, `in_32` for thirty-seconds of an inch (tread gauges), or `in`.
+    pub unit: LengthUnit,
+    /// The `text` a reply carries beside the value. It is ignored, so a
+    /// measure copied from a reply can be sent as it is.
+    pub text: Option<String>,
+}
+
+impl From<MeasureInput> for Measure {
+    fn from(m: MeasureInput) -> Self {
+        Measure::new(m.value, m.unit)
+    }
+}
+
+/// What a part replaces, so its install starts a new wear series.
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WearTagInput {
+    /// `brake_pads`, `brake_rotors` or `tire_tread`.
+    pub component: WearComponent,
+    /// `front` or `rear` for brake pads and rotors. Leave it out for tires,
+    /// which are tracked as one set.
+    pub axle: Option<Axle>,
+}
+
+impl WearTagInput {
+    pub(crate) fn into_domain(self) -> DomainResult<WearTag> {
+        WearTag::new("wears_as", self.component, self.axle)
+    }
 }

@@ -186,6 +186,7 @@ pub fn minimal_service(date: &(impl ToString + ?Sized), description: &str) -> Ne
         recall_finding_ids: None,
         parts: None,
         appointment_id: None,
+        wear_readings: None,
     }
 }
 

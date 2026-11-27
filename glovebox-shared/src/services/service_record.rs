@@ -20,6 +20,7 @@ use crate::{
         part::{Install, NewFitting, NewPart},
         service_record::{NewLineItem, NewServiceRecord, ServiceFilter, UpdateServiceRecord},
         shop::ShopChoice,
+        wear::NewWearReading,
     },
     services::{
         appointment,
@@ -81,6 +82,8 @@ pub struct ServiceRecordWithLinks {
     pub part_ids: Vec<i32>,
     /// The full rows behind `part_ids`, each with its kit contents.
     pub parts: Vec<part_svc::PartView>,
+    /// The wear readings the service took, in the order they were recorded.
+    pub wear_readings: Vec<super::wear::WearReading>,
     pub line_items: Vec<LineItemView>,
     /// Incidents first noticed during this service. Each one's
     /// `other_service` is the service that fixed it, if any.
@@ -422,6 +425,7 @@ impl ServiceRecordWithLinks {
             schedule_item_ids,
             part_ids: parts.iter().map(|p| p.part.id).collect(),
             parts,
+            wear_readings: Vec::new(),
             line_items,
             noticed_incidents,
             resolved_incidents,
@@ -536,6 +540,10 @@ async fn load_service_links(
     );
     links.completed_work_items = jobs.completed.remove(&links.record.id).unwrap_or_default();
     links.quoted_work_items = jobs.quoted.remove(&links.record.id).unwrap_or_default();
+    links.wear_readings = super::wear::by_service(db, [links.record.id])
+        .await?
+        .remove(&links.record.id)
+        .unwrap_or_default();
     links.shop = shop;
     Ok(links)
 }
@@ -734,6 +742,7 @@ pub async fn list_filtered(
     let mut performed = recall::load_performed(db, &record_ids).await?;
     let mut jobs = work_item::load_by_service(db, &record_ids).await?;
     let shops = super::shop::refs(db, records.iter().filter_map(|r| r.shop_id)).await?;
+    let mut wear_readings = super::wear::by_service(db, record_ids.iter().copied()).await?;
 
     let all_line_items = if record_ids.is_empty() {
         vec![]
@@ -782,6 +791,7 @@ pub async fn list_filtered(
             );
             links.completed_work_items = completed_work_items;
             links.quoted_work_items = quoted_work_items;
+            links.wear_readings = wear_readings.remove(&links.record.id).unwrap_or_default();
             links.shop = shop;
             links
         })
@@ -956,10 +966,11 @@ struct NewRecordLinks {
     part_ids: Vec<i32>,
     parts: Vec<NewPart>,
     line_items: Vec<NewLineItem>,
+    wear_readings: Vec<NewWearReading>,
 }
 
-/// Writes every link, part, line item and odometer reading of a record just
-/// inserted. It runs only inside the transaction that inserted the record.
+/// Writes every link, part, line item, wear reading and odometer reading of a
+/// record just inserted. It runs only inside the transaction that inserted the record.
 async fn link_new_record(
     txn: &(impl ConnectionTrait + TransactionTrait),
     vehicle_id: i32,
@@ -996,6 +1007,8 @@ async fn link_new_record(
     install_parts(txn, vehicle_id, record, links.part_ids, links.parts).await?;
 
     insert_line_items(txn, record.id, links.line_items).await?;
+
+    super::wear::insert_for_service(txn, record, links.wear_readings).await?;
 
     // The odometer reading is linked by FK (activity dedupe and
     // update/delete maintenance key on it); `source` is a display label.
@@ -1084,6 +1097,7 @@ pub async fn create<C: ConnectionTrait + TransactionTrait>(
         part_ids: input.part_ids.unwrap_or_default(),
         parts: input.parts.unwrap_or_default(),
         line_items: input.line_items.unwrap_or_default(),
+        wear_readings: input.wear_readings.unwrap_or_default(),
     };
     link_new_record(&txn, vehicle_id, &record, links).await?;
 
@@ -1433,6 +1447,7 @@ pub async fn update<C: ConnectionTrait + TransactionTrait>(
 
     // Keep the auto-created mileage log in step with the record.
     sync_auto_mileage_log(&txn, vehicle_id, &record).await?;
+    super::wear::follow_service(&txn, before, &record).await?;
 
     // Jobs come first, with the work that hangs off each one; the lists the
     // call sends then apply as sent.
@@ -1787,6 +1802,9 @@ pub struct DeletedService {
     /// Ids of the schedule items the service satisfied, in ascending order.
     /// Their reminders count from another service or from none.
     pub released_schedule_item_ids: Vec<i32>,
+    /// Ids of the wear readings the service took. They are deleted with it,
+    /// except after `done_another_way`, which keeps them with no service.
+    pub wear_reading_ids: Vec<i32>,
 }
 
 /// Deletes a service record and its owned rows.
@@ -1851,6 +1869,13 @@ pub async fn delete<C: ConnectionTrait + TransactionTrait>(
         ..Default::default()
     };
     part_svc::release_from_service(&txn, work.parts, choice).await?;
+    outcome.wear_reading_ids = super::wear::ids_of_service(&txn, existing.id).await?;
+    match choice {
+        CompletedWork::DidNotHappen => super::wear::delete_for_service(&txn, existing.id).await?,
+        CompletedWork::DoneAnotherWay => {
+            super::wear::unlink_from_service(&txn, existing.id).await?;
+        }
+    }
 
     // Remove the auto-created mileage log(s) — an orphaned log would keep
     // feeding reminders' mileage estimate while staying hidden from the feed.

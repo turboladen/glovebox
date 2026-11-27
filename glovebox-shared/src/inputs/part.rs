@@ -191,6 +191,8 @@ pub struct NewPart {
     pub need_id: Option<i32>,
     /// The items inside a part bought as a kit, in the order they print.
     pub contents: Vec<NewPartContent>,
+    /// What the part replaces, so its install starts a new wear series.
+    pub wears_as: Option<crate::inputs::wear::WearTag>,
 }
 
 /// One item inside a kit, with the number printed on its own packaging.
@@ -229,6 +231,8 @@ pub struct UpdatePart {
     pub add_contents: Vec<NewPartContent>,
     /// Ids of the kit items to remove.
     pub remove_contents: Vec<i32>,
+    /// What the part replaces; `Some(None)` clears the tag.
+    pub wears_as: Option<Option<crate::inputs::wear::WearTag>>,
 }
 
 /// Filter for listing parts within a vehicle.

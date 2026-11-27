@@ -82,7 +82,7 @@ MCP server, and its `--open` flag opens the browser.
 ### Workspace layout
 
 - **`glovebox-shared/`** (lib crate `glovebox_shared`) — the transport-agnostic domain:
-  `src/{db.rs,backup.rs,env.rs,dates.rs,money.rs,vocab.rs,seed.rs,entities,migration,services,inputs,error.rs,test_support.rs}`. All SQL, validation
+  `src/{db.rs,backup.rs,env.rs,dates.rs,money.rs,units.rs,vocab.rs,seed.rs,entities,migration,services,inputs,error.rs,test_support.rs}`. All SQL, validation
   and business logic live here. It never depends on axum or rmcp.
 - **`glovebox-mcp/`** (lib crate `glovebox_mcp` plus the `glovebox-mcp` binary) — the thin MCP
   surface. Every tool body is argument struct → shared-service call → serialize, with one
@@ -131,9 +131,9 @@ command does. Tests use `test_db()` or a temporary directory.
 functions.
 
 **Services** (`services/`): One module per domain (`vehicle`, `service_record`, `part`, `incident`,
-`work_item`, `appointment`, `need`, `todo`, `schedule`, `recall`, `research`, `finding`, `shop`, ...) of free functions taking `db: &impl
+`work_item`, `appointment`, `need`, `todo`, `schedule`, `recall`, `research`, `finding`, `shop`, `wear`, ...) of free functions taking `db: &impl
 ConnectionTrait` first and returning `DomainResult<T>`. Composite reads: `upcoming` (the
-`whats_coming` answer: reminders, budget, planned work, recalls, open findings, open incidents), `reminders`,
+`whats_coming` answer: reminders, budget, milestone, wear, planned work, recalls, open findings, open incidents), `reminders`,
 `budget`, `milestone` (the 10,000-mile service the car is due for and the items due by it), `costs`, `activity`, `search`, `work_sheet` (an appointment's sheet for the mechanic), `service_detail` (one service with its schedule items' names and the split of its total, for its page), `vehicle_detail` (one vehicle with its last odometer reading, the estimate for today, its cost summary and its recent activity, for its page), `history` (every service of a vehicle oldest first and the parts installed on it, for the printable history), and `checklist` (the checklist for an appointment, an
 unscheduled job or one job, the past decisions across vehicles, and the home page's rows; the MCP
 tools and the web page both render it), and `waiting` (what is not yet on an appointment: due
@@ -152,6 +152,11 @@ one time budget for the whole lookup, and `check_recalls` names a broader line i
 read built from `recall::RecallWithStatus`, `RecallRef` or `WaitingRecall` carries it (a search
 hit does not), and the web page prints `recall::line_note` under such a recall
 (`docs/adr/0023-recalls-are-looked-up-by-model-line.md`).
+
+**Units** (`units.rs`): `units::Measure` is a length as the shop wrote it (a value and a
+`wear_reading::LengthUnit`: `mm`, `in_32`, `in`). It compares through `Measure::mm`, the
+length in millimeters, and serializes as `value`, `unit` and `text` (`7/32 in`). `units.rs` holds
+the only conversion factors; a units crate waits until a second kind of quantity is recorded.
 
 **Money** (`money.rs`): `money::parse_dollars` reads a dollar amount the owner typed into whole
 cents, and `money::format_cents` prints cents as dollars. The web forms and the checklist's
@@ -203,7 +208,10 @@ its foreign key, builds `fts_service_records` again over `description` and `note
 finding's category or severity or a report's type that differs from a listed value only by ASCII
 case or surrounding spaces, turns a blank severity or report type into NULL, refuses to finish
 while a column holds any other value, and adds a CHECK per column, and `m20261125_000001_recall_model_line`, which adds
-`research_findings.searched_model` with a CHECK that only a recall carries it. They run on
+`research_findings.searched_model` with a CHECK that only a recall carries it, and
+`m20261126_000001_wear_readings`, which adds `wear_readings` (component, axle, the value and unit
+as written, an optional stated limit) and the part tag `parts.wears_component` and
+`parts.wears_axle` with a CHECK that a brake tag names an axle and a tire tag none. They run on
 startup.
 
 **Test harness** (`test_support.rs`): `test_db()` is an in-memory SQLite database with migrations
@@ -246,6 +254,8 @@ named as things a person would say:
 - `reads.rs`: `summarize_recent_activity`, `search_records`, `cost_summary`, `get_service`,
   `get_incident`
 - `shops.rs`: `list_shops`, `add_shop`, `get_shop`, `update_shop`, `merge_shops`, `delete_shop`
+- `wear.rs`: `record_wear_reading`, `list_wear_readings`, `correct_wear_reading`,
+  `delete_wear_reading`
 
 A change to what a tool asks or refuses updates every copy of the rule: the tool `description`,
 the field docs in `src/schemas*`, `docs/claude-desktop/glovebox-project-prompt.md` (which restates
@@ -424,6 +434,17 @@ The vehicle's `warranty` in `whats_coming` (`reminders::WarrantyStatus`) carries
 flat beside `possibly_covered`, which stays true while either bound holds; a client reports
 `in_force`. `docs/adr/0026-a-warranty-ends-at-its-first-bound.md` records why.
 
+**Wear readings** (`services::wear`, `docs/adr/0030-wear-is-read-from-typed-readings.md`): a
+brake series is one component on one axle, and the tires are one series judged by the lowest
+reading of each visit. The newest install of a part tagged `wears_as` (`inputs::wear::WearTag`,
+written only by `part::write_wear_tag`) starts its series; readings dated on or before its install day are history. The limit
+is the newest one a shop stated in the series, else `wear::default_limit` (none for rotors), and
+`wear::outlook` fits thickness over odometer by least squares, needs two readings, and projects
+nothing from a flat or rising series, saying why in `note`. `record_service` writes inline
+`wear_readings` with its date and mileage (`correct_service` moves the ones that took them,
+`wear::follow_service`), every service read lists them, and `delete_service`
+deletes them unless the work was done another way. Readings do not count as work done.
+
 **Schedule names** compare through `schedule::name_key` (ASCII case and surrounding spaces do not
 matter), so a vehicle's "Cabin air filter" shadows the inherited "Cabin Air Filter". A new item that shadows an inherited one takes that
 item's spelling of the name and, for every field the caller leaves out, its value
@@ -495,7 +516,7 @@ become opaque JSON-RPC internal errors with the detail kept in tracing.
 
 **Tests** (`glovebox-mcp/tests/`): `common/mod.rs` is the harness (an in-process client over an
 in-memory duplex stream and an in-memory database). One file per handler area (`vehicles`,
-`services`, `parts`, `incidents`, `planning`, `checklist`, `schedule`, `recalls`, `reads`, `shops`), plus
+`services`, `parts`, `incidents`, `planning`, `checklist`, `schedule`, `recalls`, `reads`, `shops`, `wear`), plus
 `stdio.rs` (the binary's stdout) and `rehearsal.rs` (a new owner's whole first session through
 tool calls only). Add coverage for a new tool to its area's file.
 
@@ -713,8 +734,8 @@ role per control style, and `YYYY-MM-DD` dates.
   rebuilt with it, because an older binary cannot read a row that holds the new value. Removing
   or renaming one needs a migration that rewrites the rows, placed after
   `m20261115_000001_vocabulary_values`, whose lists stay as written.
-  An enum that no column stores lives in the service that uses it. Seven of them are derived
-  values (`recall::ShownRecallStatus`, `finding::ShownFindingStatus`, `appointment::AppointmentStatus`,
+  An enum that no column stores lives in the service that uses it. Eight of them are derived
+  values (`wear::LimitSource`, `recall::ShownRecallStatus`, `finding::ShownFindingStatus`, `appointment::AppointmentStatus`,
   `appointment::AppointmentPhase`, `reminders::DueStatus`, which reminders and planned work's
   revisit share, `reminders::Trigger` and `activity::ActivityKind`). The other five are
   arguments: `recall::RecallStatus` and `finding::FiledFindingStatus`, which their services map
@@ -722,7 +743,7 @@ role per control style, and `YYYY-MM-DD` dates.
   `schedule::LinkMode` and `search::SearchScope`. A
   filter on a column never takes one of these.
   `docs/adr/0004-typed-vocabularies.md` records why.
-- **Migrations**: new migrations go after `m20261125_000001_recall_model_line`; the
+- **Migrations**: new migrations go after `m20261126_000001_wear_readings`; the
   `new-migration` skill has the templates. Use `Expr::cust()` for expressions inside builder queries; raw
   `execute_unprepared` only where no builder form exists (FTS5 DDL, cross-table copies). A delete
   by a correlated subquery has one: `Query::delete().cond_where(Expr::exists(subquery))`, as

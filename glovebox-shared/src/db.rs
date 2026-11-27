@@ -423,6 +423,7 @@ mod tests {
                 recall_finding_ids: None,
                 parts: None,
                 appointment_id: None,
+                wear_readings: None,
             },
         )
         .await

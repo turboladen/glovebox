@@ -62,6 +62,7 @@ mod schedule;
 mod services;
 mod shops;
 mod vehicles;
+mod wear;
 
 pub const VEHICLES_URI: &str = "glovebox://vehicles";
 
@@ -88,6 +89,7 @@ impl GloveboxMcp {
             + Self::recalls_router()
             + Self::shops_router()
             + Self::reads_router()
+            + Self::wear_router()
     }
 }
 
@@ -109,22 +111,23 @@ impl ServerHandler for GloveboxMcp {
                  Start with `list_vehicles` for ids (`add_vehicle` for a new car, \
                  `list_model_templates` to give it an inherited schedule). Four loops cover \
                  almost everything. (1) FILE AN INVOICE: `record_service` once per invoice, with \
-                 `invoice_ref`, `line_items` (each with a `work_kind`), `parts`, and the ids of \
-                 anything the work closes: `schedule_item_ids` from `whats_coming`, \
-                 `work_item_ids` from `list_planned_work`, `resolved_incident_ids`, \
-                 `recall_finding_ids` from the `recalls` in `whats_coming`. Filing the same \
-                 `invoice_ref` again returns the existing record; fix a record with \
-                 `correct_service`, remove one with `delete_service` (when it recorded work as \
-                 done, ask the owner whether that work did not happen or was done another way). \
-                 (2) CAPTURE AN ADVISORY: when a shop flags something it did not fix, \
-                 `log_incident` with category `shop_observation` and `noticed_during_service_id`, \
-                 then `plan_work` the fix with `revisit_by_date` or `revisit_by_miles`; progress \
-                 it with `update_incident`, `add_incident_followup` and `update_planned_work`. \
-                 (3) ANSWER \"WHAT'S COMING?\": call `whats_coming` before recommending any work; \
-                 it covers the schedule, planned work, open recalls, unresolved incidents, the \
-                 12-month forecast and warranty status. Tune the schedule with `list_schedule`, \
-                 `update_schedule_item` (any item, inherited ones included; history carries \
-                 over), `add_schedule_item` for a job the schedule lacks, and \
+                 `invoice_ref`, `line_items` (each with a `work_kind`), `parts`, the brake and \
+                 tire `wear_readings`, and the ids of anything the work closes: \
+                 `schedule_item_ids` from `whats_coming`, `work_item_ids` from \
+                 `list_planned_work`, `resolved_incident_ids`, `recall_finding_ids` from the \
+                 `recalls` in `whats_coming`. Filing the same `invoice_ref` again returns the \
+                 existing record; fix a record with `correct_service`, remove one with \
+                 `delete_service` (when it recorded work as done, ask the owner whether that work \
+                 did not happen or was done another way). (2) CAPTURE AN ADVISORY: when a shop \
+                 flags something it did not fix, `log_incident` with category `shop_observation` \
+                 and `noticed_during_service_id`, then `plan_work` the fix with `revisit_by_date` \
+                 or `revisit_by_miles`; progress it with `update_incident`, \
+                 `add_incident_followup` and `update_planned_work`. (3) ANSWER \"WHAT'S \
+                 COMING?\": call `whats_coming` before recommending any work; it covers the \
+                 schedule, brake and tire wear, planned work, open recalls, unresolved incidents, \
+                 the 12-month forecast and warranty status. Tune the schedule with \
+                 `list_schedule`, `update_schedule_item` (any item, inherited ones included; \
+                 history carries over), `add_schedule_item` for a job the schedule lacks, and \
                  `dismiss_schedule_item` / `restore_schedule_item`. (4) PLAN A JOB: \
                  `plan_appointment` for a shop trip, `plan_work` with its `appointment_id` for \
                  each job, `add_need` for each thing a job needs, `add_need_option` for every \
@@ -149,11 +152,11 @@ impl ServerHandler for GloveboxMcp {
                  lists the known recalls) and `set_recall_status` for recalls, and `list_shops`, \
                  `add_shop`, `get_shop` (a shop's history), `update_shop`, `merge_shops` (after \
                  the owner confirms two entries are one shop) and `delete_shop` for the shop \
-                 directory. Services, parts, incidents and planned work can each be listed, \
-                 corrected and deleted; a correct or update tool leaves absent fields alone and \
-                 clears a field sent as null, and an argument a tool does not define is an error. \
-                 All money is integer cents; all dates are YYYY-MM-DD, and a malformed date is an \
-                 error naming the field.",
+                 directory. Services, parts, incidents, wear readings and planned work can each \
+                 be listed, corrected and deleted; a correct or update tool leaves absent fields \
+                 alone and clears a field sent as null, and an argument a tool does not define is \
+                 an error. All money is integer cents; all dates are YYYY-MM-DD, and a malformed \
+                 date is an error naming the field.",
             )
     }
 
